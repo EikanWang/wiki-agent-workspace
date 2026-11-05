@@ -97,7 +97,7 @@ class JobManager:
             while True:
                 try:
                     ev = await asyncio.wait_for(q.get(), timeout=15)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     yield {"seq": last, "type": "heartbeat", "payload": {}, "job_id": job_id}
                     continue
                 if ev["seq"] <= last:
@@ -145,16 +145,16 @@ class JobManager:
             self._emit(job_id, "waiting", {"status": "queued", "message": "waiting for session: another job is using this agent session"})
         async with lock:
             log.info("job %s acquired session %s (cancel requested=%s)", job_id, session_id, job_id in self._cancel_requested)
-            if job_id in self._cancel_requested:
-                self._cancel_requested.discard(job_id)
-                with self.db.read() as s:
-                    cur = s.get(Job, job_id)
-                if cur is not None and cur.status not in TERMINAL:  # not already finished by cancel()
-                    self._finish(job_id, "cancelled", "CANCELLED", "cancelled before it started", "")
-                    self._emit(job_id, "cancelled", {"status": "cancelled"})
-                return
             try:
-                await self._run_locked(job_id)
+                if job_id in self._cancel_requested:
+                    self._cancel_requested.discard(job_id)
+                    with self.db.read() as s:
+                        cur = s.get(Job, job_id)
+                    if cur is not None and cur.status not in TERMINAL:  # not already finished by cancel()
+                        self._finish(job_id, "cancelled", "CANCELLED", "cancelled before it started", "")
+                        self._emit(job_id, "cancelled", {"status": "cancelled"})
+                else:
+                    await self._run_locked(job_id)
             except Exception as exc:  # pragma: no cover - defensive
                 log.exception("job %s crashed", job_id)
                 self._finish(job_id, "failed", "INTERNAL_ERROR", str(exc)[:500], "")

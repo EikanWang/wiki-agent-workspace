@@ -44,7 +44,7 @@ class Settings:
     bind: str = "127.0.0.1"
     port: int = 8765
     state_dir: Path = DEFAULT_STATE_DIR
-    workspace_root: Path = Path.cwd()
+    workspace_root: Path = field(default_factory=Path.cwd)
     default_provider: str | None = None
     providers: dict[str, ProviderConfig] = field(default_factory=dict)
     access_token: str = ""

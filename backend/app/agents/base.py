@@ -156,7 +156,7 @@ async def run_capture(args: list[str], cwd: Path | None = None, timeout: float =
     )
     try:
         out, err = await asyncio.wait_for(proc.communicate(stdin), timeout=timeout)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         proc.kill()
         await proc.wait()
         raise ProviderError("PROVIDER_UNAVAILABLE", f"{args[0]} timed out after {timeout}s")
@@ -237,7 +237,7 @@ class SubprocessTurn(TurnHandle):
             return
         try:
             await asyncio.wait_for(self.proc.wait(), timeout=5)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             try:
                 os.killpg(self.proc.pid, signal.SIGKILL)
             except ProcessLookupError:

@@ -50,3 +50,25 @@ async def test_copy_state_dir_and_move_wiki_restores_everything(running_app, set
         mine = [x for x in listing if x["id"] == t["id"]]
         assert mine and mine[0]["state"] == "live"
         await api2.delete(f"/api/v1/terminals/{t['id']}")
+
+
+async def test_pointing_state_dir_at_a_different_existing_wiki_keeps_old_data_separate(running_app, settings, workspace: Path, tmp_path: Path):
+    h = await running_app()
+    doc = await h.api.open_doc()
+    await h.api.put(f"/api/v1/documents/{doc['document_id']}/reading-state", json={"scroll_fraction": 0.2})
+    await h.stop()
+    other = tmp_path / "other-wiki"
+    from conftest import make_workspace
+
+    make_workspace(other)
+    s2 = make_settings(tmp_path / "cfg2", other)
+    s2.state_dir = settings.state_dir  # same state dir, different (still existing) wiki
+    h2 = await running_app(s2)
+    assert (await h2.api.get("/api/v1/recent")).json()["items"] == []  # old wiki's data is not mislabeled
+    d2 = await h2.api.open_doc()
+    assert d2["document_id"] != doc["document_id"]
+    await h2.stop()
+    # switching back to the original root brings the original data back
+    h3 = await running_app(settings)
+    assert [i["path"] for i in (await h3.api.get("/api/v1/recent")).json()["items"]] == ["docs/guide.md"]
+    assert (await h3.api.open_doc())["document_id"] == doc["document_id"]

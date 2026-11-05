@@ -140,3 +140,22 @@ async def test_codex_read_only_denial_is_shown_not_claimed_as_edit(running_app, 
     assert "# Guide" in (workspace / "docs" / "guide.md").read_text()
     t = (await api.threads(doc["document_id"]))["threads"][0]
     assert t["messages"][1]["status"] == "failed"
+
+
+async def test_cancelling_a_queued_preview_marks_it_failed_not_pending(api: Api, workspace: Path):
+    doc = await api.open_doc()
+    did = doc["document_id"]
+    # occupy the default session so the preview's job queues behind it... previews use their own session,
+    # so instead cancel the preview job itself right after creation while still queued/running.
+    r = await api.post(f"/api/v1/documents/{did}/previews", json={"instruction": "[[sleep:20]] slow", "base_sha256": doc["sha256"]})
+    pv = r.json()
+    await api.post(f"/api/v1/jobs/{pv['job_id']}/cancel")
+    ev = await api.wait_job(pv["job_id"])
+    assert ev[-1]["type"] == "cancelled"
+    for _ in range(50):
+        p = (await api.get(f"/api/v1/previews/{pv['preview_id']}")).json()
+        if p["status"] != "pending":
+            break
+        await asyncio.sleep(0.1)
+    assert p["status"] == "failed"  # on_complete ran: never stuck in "pending"
+    assert (workspace / "docs" / "guide.md").read_text() == doc["text"]

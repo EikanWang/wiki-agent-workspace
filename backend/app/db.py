@@ -70,9 +70,8 @@ class Database:
     def checkpoint(self) -> None:
         """Fold the WAL into the main database file so a plain copy of workspace.sqlite3 is complete."""
         try:
-            with self.write_lock:
-                with self.engine.connect() as conn:
-                    conn.exec_driver_sql("PRAGMA wal_checkpoint(TRUNCATE)")
+            with self.write_lock, self.engine.connect() as conn:
+                conn.exec_driver_sql("PRAGMA wal_checkpoint(TRUNCATE)")
         except Exception:  # pragma: no cover - best effort at shutdown
             pass
 

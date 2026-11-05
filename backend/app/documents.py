@@ -49,12 +49,16 @@ class DocumentService:
             ws = s.query(Workspace).filter_by(root_path=str(self.root)).one_or_none()
             if ws is None:
                 existing = s.query(Workspace).all()
-                if len(existing) == 1:
+                log = logging.getLogger("waw.documents")
+                if len(existing) == 1 and not Path(existing[0].root_path).exists():
+                    # the checkout itself was moved: follow it
                     ws = existing[0]
-                    logging.getLogger("waw.documents").warning(
-                        "workspace root changed from %s to %s; relocating existing documents and discussions", ws.root_path, self.root)
+                    log.warning("workspace root %s no longer exists; relocating its documents and discussions to %s", ws.root_path, self.root)
                     ws.root_path = str(self.root)
                 else:
+                    if existing:
+                        log.warning("configured workspace %s is new; data for %s stays in the database and reappears when that root is configured again",
+                                    self.root, ", ".join(w.root_path for w in existing))
                     ws = Workspace(id=new_id(), root_path=str(self.root))
                     s.add(ws)
                 s.flush()
@@ -190,7 +194,7 @@ class DocumentService:
     def current_content(self, doc: Document) -> tuple[str, bytes, str]:
         """Returns (text, bytes, sha256) of the current file. Marks the doc missing if gone."""
         try:
-            norm, data = self.read_bytes(doc.path)
+            _, data = self.read_bytes(doc.path)
         except ApiError as exc:
             if exc.code == "FILE_NOT_FOUND":
                 with self.db.write() as s:
@@ -502,7 +506,7 @@ class DocumentService:
 
     # ------------------------------------------------------------------ writes (preview apply)
     def write_atomic(self, rel: str, data: bytes) -> str:
-        norm, path = self.resolve(rel)
+        _, path = self.resolve(rel)
         if path.is_symlink():
             raise ApiError(403, "PATH_ESCAPES_WORKSPACE", "refusing to write through a symlink")
         mode = path.stat().st_mode & 0o777 if path.exists() else 0o644

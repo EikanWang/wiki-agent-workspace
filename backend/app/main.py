@@ -126,7 +126,7 @@ async def global_events(request: Request, ctx: AppContext = Depends(require_auth
                     return
                 try:
                     ev = await asyncio.wait_for(q.get(), timeout=15)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     yield ": keepalive\n\n"
                     continue
                 yield f"event: {ev.get('type', 'message')}\ndata: {json.dumps(ev, ensure_ascii=False)}\n\n"

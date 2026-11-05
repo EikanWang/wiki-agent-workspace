@@ -37,7 +37,7 @@ class ProviderRegistry:
     async def refresh(self) -> dict[str, Capabilities]:
         results = await asyncio.gather(*(a.capabilities() for a in self.adapters.values()), return_exceptions=True)
         out: dict[str, Capabilities] = {}
-        for name, res in zip(self.adapters.keys(), results):
+        for name, res in zip(self.adapters.keys(), results, strict=True):
             if isinstance(res, Exception):
                 out[name] = Capabilities(provider=name, available=False, error=str(res))
             else:

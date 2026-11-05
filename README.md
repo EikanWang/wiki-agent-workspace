@@ -168,8 +168,10 @@ All references inside the database are relative to this folder, so to relocate o
    `workspace.root = "/new/place/wiki"`. Copy the config file as well if you move to another machine — it holds
    the access token and the server secret (your login cookie stays valid only with the same secret).
 4. `scripts/start.sh`. Documents, discussions, reading positions, version history and *Recent* are all back. If
-   `workspace.root` changed, the single workspace record is relocated to the new path automatically (logged at
-   startup), so document identities and discussions follow the moved checkout. Live tmux terminals survive a
+   `workspace.root` changed because the checkout itself was moved (the old path no longer exists), the single
+   workspace record is relocated to the new path automatically (logged at startup), so document identities and
+   discussions follow the moved checkout. Pointing the same state directory at a *different, still existing* wiki
+   keeps the old wiki's data untouched in the database; it reappears when that root is configured again. Live tmux terminals survive a
    move on the same host because the socket name is stored in the folder.
 
 `wiki-agent-workspace print-config` (via `.venv/bin/python -m backend.app.cli print-config`) shows the effective
@@ -190,7 +192,7 @@ paths with secrets redacted.
 ## Running the tests
 
 ```bash
-scripts/test.sh            # backend: pytest (51 tests; real git + tmux + fake agents), ~25 s
+scripts/test.sh            # backend: pytest (53 tests; real git + tmux + fake agents), ~25 s
 scripts/test.sh --e2e      # + Playwright browser suite (13 scenarios) against the production build
 # or individually
 .venv/bin/python -m pytest tests/backend -q

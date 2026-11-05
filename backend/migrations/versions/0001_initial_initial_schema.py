@@ -1,7 +1,7 @@
 """initial schema
 
 Revision ID: 0001_initial
-Revises: 
+Revises:
 Create Date: 2026-11-05 02:25:23.917424
 """
 from alembic import op

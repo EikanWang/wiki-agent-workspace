@@ -61,7 +61,7 @@ class PreviewService:
 
     async def create(self, doc_id: str, body: "PreviewCreateIn") -> dict[str, Any]:
         doc = self.docs.get_document(doc_id)
-        text, data, sha = self.docs.current_content(doc)
+        _, _, sha = self.docs.current_content(doc)
         if sha != body.base_sha256:
             raise conflict(DOCUMENT_VERSION_CONFLICT, "document changed; reload before requesting a preview", current_sha256=sha)
         assert self.ctx.providers

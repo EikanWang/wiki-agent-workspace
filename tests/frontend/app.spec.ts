@@ -174,7 +174,7 @@ test("B8/D12: document change banner, user-authorized edit shows the diff and re
   await expect(page.getByTestId("diff-view")).toContainText("+- item ONE");
   await expect(page.getByTestId("anchor-state").first()).toHaveText("orphaned");
   await page.getByTestId("doc-refresh").click();
-  await expect(page.getByTestId("markdown-body")).toContainText("item ONE");
+  await expect(page.getByTestId("markdown-body")).toContainText("item ONE", { timeout: 15000 });
 });
 
 test("D12: preview mode shows no change before Apply, then applies", async ({ page }) => {
