@@ -142,6 +142,39 @@ WantedBy=default.target
 ```
 `systemctl --user enable --now wiki-agent-workspace` (run `loginctl enable-linger $USER` to keep it alive after logout).
 
+## Where your data lives, and how to move it
+
+Everything the app stores is in **one self-contained folder**, the state directory (`server.state_dir`, default
+`~/.local/share/wiki-agent-workspace`), separate from the wiki checkout and from the config file:
+
+```
+<state_dir>/
+├── workspace.sqlite3      # documents, discussions (threads/messages), agent sessions, jobs, reading state,
+│                          # review marks, previews, terminal tabs, login sessions
+├── snapshots/             # exact bytes of every document version a discussion or preview refers to
+├── tmux-socket            # name of the app-owned tmux socket (kept across moves so terminals reconnect)
+├── tmux.conf              # generated tmux config for that socket
+└── server.log             # if you redirect the server output there (scripts/start.sh does not by default)
+```
+
+All references inside the database are relative to this folder, so to relocate or clone your setup:
+
+1. Stop the server (`Ctrl-C` / `pkill -f "backend.app.cli serve"`); a clean stop folds the SQLite write-ahead log
+   into `workspace.sqlite3`. (If you must copy while running, use the **Backup** button / `GET /api/v1/export`,
+   which produces a consistent `tar.gz` of the database and `snapshots/`, and extract that instead.)
+2. Copy the folder: `cp -a ~/.local/share/wiki-agent-workspace /new/place/state`.
+3. Edit the config file (`~/.config/wiki-agent-workspace/config.toml`, or any file passed with `--config` /
+   `WAW_CONFIG`): set `server.state_dir = "/new/place/state"` and, if the wiki checkout moved too,
+   `workspace.root = "/new/place/wiki"`. Copy the config file as well if you move to another machine — it holds
+   the access token and the server secret (your login cookie stays valid only with the same secret).
+4. `scripts/start.sh`. Documents, discussions, reading positions, version history and *Recent* are all back. If
+   `workspace.root` changed, the single workspace record is relocated to the new path automatically (logged at
+   startup), so document identities and discussions follow the moved checkout. Live tmux terminals survive a
+   move on the same host because the socket name is stored in the folder.
+
+`wiki-agent-workspace print-config` (via `.venv/bin/python -m backend.app.cli print-config`) shows the effective
+paths with secrets redacted.
+
 ## Security model (summary)
 
 - Single access token → HttpOnly, SameSite=Strict cookie (Secure when HTTPS). Mutating requests need `X-CSRF-Token`
@@ -157,7 +190,7 @@ WantedBy=default.target
 ## Running the tests
 
 ```bash
-scripts/test.sh            # backend: pytest (50 tests; real git + tmux + fake agents), ~25 s
+scripts/test.sh            # backend: pytest (51 tests; real git + tmux + fake agents), ~25 s
 scripts/test.sh --e2e      # + Playwright browser suite (13 scenarios) against the production build
 # or individually
 .venv/bin/python -m pytest tests/backend -q

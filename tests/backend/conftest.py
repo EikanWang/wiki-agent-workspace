@@ -154,6 +154,13 @@ class AppHandle:
         self.app = app
         self.api = api
         self.ctx = app.state.ctx
+        self._stop = None
+
+    async def stop(self) -> None:
+        """Shut the app down cleanly (lifespan exit, DB checkpoint) as a server restart would."""
+        if self._stop is not None:
+            fn, self._stop = self._stop, None
+            await fn()
 
 
 @pytest.fixture
@@ -173,7 +180,19 @@ async def running_app(settings):
             r = await api.login()
             assert r.status_code == 200, r.text
         handle = AppHandle(app, api)
-        stack.append((lifespan, client))
+        entry = (lifespan, client)
+        stack.append(entry)
+
+        async def _stop(entry=entry):
+            if entry in stack:
+                stack.remove(entry)
+            await entry[1].aclose()
+            try:
+                await entry[0].__aexit__(None, None, None)
+            except Exception:
+                pass
+
+        handle._stop = _stop
         return handle
 
     yield start

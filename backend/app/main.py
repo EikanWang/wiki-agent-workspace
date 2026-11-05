@@ -203,6 +203,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             yield
         finally:
             await ctx.watcher.stop()
+            db.checkpoint()
+            db.engine.dispose()
 
     app = FastAPI(title="Wiki Agent Workspace", version="0.1.0", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.ctx = ctx

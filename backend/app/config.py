@@ -72,11 +72,28 @@ class Settings:
 
     @property
     def tmux_socket_name(self) -> str:
-        """App-owned tmux socket, unique per state directory so that two instances (e.g. a test
-        server and the production server) never see or kill each other's sessions."""
-        import hashlib
+        """App-owned tmux socket name. Stored in the state directory (``tmux-socket``) so it stays
+        the same when the folder is moved or copied, and differs between two state directories so two
+        instances never see or kill each other's sessions."""
+        import secrets as _secrets
 
-        return "waw-" + hashlib.sha1(str(self.state_dir.resolve()).encode("utf-8")).hexdigest()[:8]
+        marker = self.state_dir / "tmux-socket"
+        try:
+            name = marker.read_text("utf-8").strip()
+            if name.startswith("waw-") and name.isascii() and len(name) <= 40:
+                return name
+        except OSError:
+            pass
+        name = "waw-" + _secrets.token_hex(4)
+        try:
+            self.state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+            marker.write_text(name + "\n", encoding="utf-8")
+        except OSError:
+            # read-only or missing state dir: fall back to a path-derived name
+            import hashlib
+
+            return "waw-" + hashlib.sha1(str(self.state_dir.resolve()).encode("utf-8")).hexdigest()[:8]
+        return name
 
     @property
     def tmux_conf_path(self) -> Path:

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import difflib
 import hashlib
+import logging
 import os
 from pathlib import Path
 from typing import Any
@@ -38,11 +39,24 @@ class DocumentService:
 
     # ------------------------------------------------------------------ workspace
     def _ensure_workspace(self) -> str:
+        """Find or create the workspace row for the configured root.
+
+        The app is single-workspace: if the database already holds exactly one workspace whose
+        root differs from the configured one (the wiki checkout was moved, or the state folder
+        was copied to another machine), that row is relocated so documents, discussions and
+        reading state follow the new path instead of silently starting from scratch."""
         with self.db.write() as s:
             ws = s.query(Workspace).filter_by(root_path=str(self.root)).one_or_none()
             if ws is None:
-                ws = Workspace(id=new_id(), root_path=str(self.root))
-                s.add(ws)
+                existing = s.query(Workspace).all()
+                if len(existing) == 1:
+                    ws = existing[0]
+                    logging.getLogger("waw.documents").warning(
+                        "workspace root changed from %s to %s; relocating existing documents and discussions", ws.root_path, self.root)
+                    ws.root_path = str(self.root)
+                else:
+                    ws = Workspace(id=new_id(), root_path=str(self.root))
+                    s.add(ws)
                 s.flush()
             return ws.id
 
