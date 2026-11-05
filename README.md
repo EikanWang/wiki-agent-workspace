@@ -15,6 +15,7 @@ Design specification: [`DESIGN.md`](DESIGN.md). Visual reference (mockup only): 
 | --- | --- |
 | `backend/app/` | FastAPI server: auth, documents, anchors, agent adapters, job runner, tmux terminals, previews, watcher |
 | `backend/migrations/` | Alembic migrations (applied automatically at startup) |
+| `docs/SCHEMA.md` | Column-by-column reference of the SQLite database (checked by a test) |
 | `frontend/` | React + TypeScript + Vite UI (markdown-it + DOMPurify reader, xterm.js terminal) |
 | `tests/backend/` | pytest suite (real Git + real tmux + controllable fake `opencode`/`codex` executables) |
 | `tests/frontend/` | Playwright browser tests against the production build |
@@ -150,7 +151,7 @@ Everything the app stores is in **one self-contained folder**, the state directo
 ```
 <state_dir>/
 ├── workspace.sqlite3      # documents, discussions (threads/messages), agent sessions, jobs, reading state,
-│                          # review marks, previews, terminal tabs, login sessions
+│                          # review marks, previews, terminal tabs, login sessions — see docs/SCHEMA.md
 ├── snapshots/             # exact bytes of every document version a discussion or preview refers to
 ├── tmux-socket            # name of the app-owned tmux socket (kept across moves so terminals reconnect)
 ├── tmux.conf              # generated tmux config for that socket
@@ -192,7 +193,7 @@ paths with secrets redacted.
 ## Running the tests
 
 ```bash
-scripts/test.sh            # backend: pytest (53 tests; real git + tmux + fake agents), ~25 s
+scripts/test.sh            # backend: pytest (54 tests; real git + tmux + fake agents), ~25 s
 scripts/test.sh --e2e      # + Playwright browser suite (13 scenarios) against the production build
 # or individually
 .venv/bin/python -m pytest tests/backend -q

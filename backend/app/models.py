@@ -1,4 +1,9 @@
-"""SQLAlchemy ORM models (DESIGN §12)."""
+"""SQLAlchemy ORM models (DESIGN §12).
+
+Column-by-column documentation lives in docs/SCHEMA.md; tests/backend/test_schema_doc.py keeps
+that file in sync with the migrated schema. Schema changes need an Alembic migration in
+backend/migrations/versions/ plus an update to docs/SCHEMA.md.
+"""
 
 from __future__ import annotations
 
