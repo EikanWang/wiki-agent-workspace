@@ -9,6 +9,7 @@ import time
 
 import pytest
 from starlette.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from conftest import ORIGIN, TOKEN, requires_tmux
 from backend.app.main import create_app
@@ -109,15 +110,15 @@ def test_unauthenticated_websocket_cannot_run_commands(settings):
         tid = client.post("/api/v1/terminals", json={}, headers={"origin": ORIGIN, "x-csrf-token": csrf}).json()["id"]
         # no cookie
         anon = TestClient(app, base_url=ORIGIN)
-        with pytest.raises(Exception):
+        with pytest.raises(WebSocketDisconnect):
             with anon.websocket_connect(f"/api/v1/terminals/{tid}/ws", subprotocols=[f"waw-csrf.{csrf}"], headers={"origin": ORIGIN}) as ws:
                 ws.receive_text()
         # cookie but no CSRF subprotocol
-        with pytest.raises(Exception):
+        with pytest.raises(WebSocketDisconnect):
             with client.websocket_connect(f"/api/v1/terminals/{tid}/ws", headers={"origin": ORIGIN}) as ws:
                 ws.receive_text()
         # wrong origin
-        with pytest.raises(Exception):
+        with pytest.raises(WebSocketDisconnect):
             with client.websocket_connect(f"/api/v1/terminals/{tid}/ws", subprotocols=[f"waw-csrf.{csrf}"], headers={"origin": "http://evil.example"}) as ws:
                 ws.receive_text()
         client.delete(f"/api/v1/terminals/{tid}", headers={"origin": ORIGIN, "x-csrf-token": csrf})
@@ -162,7 +163,7 @@ def test_terminal_survives_browser_disconnect_and_server_restart(tc, settings, w
         r = tc2.post("/api/v1/auth/login", json={"token": TOKEN}, headers={"origin": ORIGIN})
         csrf2 = r.json()["csrf_token"]
         listing = tc2.get("/api/v1/terminals").json()
-        mine = [x for x in listing["terminals"] if x["id"] == t["id"]][0]
+        mine = next(x for x in listing["terminals"] if x["id"] == t["id"])
         assert mine["state"] == "live" and mine["label"] == "work"
         term3 = Term(tc2, csrf2, t["id"])
         term3.expect_state("connected")
@@ -202,9 +203,9 @@ def test_resize_ctrl_c_colors_unicode_and_binary_input(tc):
     term.send_bytes(b"echo term-is-$TERM\n")
     assert b"term-is-tmux-256color" in term.read_until(b"term-is-tmux") or b"term-is-screen-256color" in term.read_until(b"term-is-screen")
     # Unicode output arrives intact even if split across chunks
-    term.send_bytes("echo 'unicode-测试-émoji-😀-do'\"\"'ne'\n".encode("utf-8"))
-    out = term.read_until("😀-done".encode("utf-8"))
-    assert "unicode-测试-émoji-😀-done".encode("utf-8") in out
+    term.send_bytes("echo 'unicode-测试-émoji-😀-do'\"\"'ne'\n".encode())
+    out = term.read_until("😀-done".encode())
+    assert "unicode-测试-émoji-😀-done".encode() in out
     # binary (non-UTF-8) input bytes are accepted by the relay; tmux, a UTF-8 terminal, may discard
     # invalid UTF-8 key bytes itself (byte transparency of the PTY relay is covered in test_pty_relays_raw_bytes)
     term.send_bytes(b"\xa1\xb5")
@@ -266,8 +267,8 @@ def test_killed_tmux_session_shows_exited_not_resumed(tc):
     # simulate host reboot / tmux server death
     ctx.terminals.tmux.kill_session(t["tmux_session"])
     listing = tc.get("/api/v1/terminals").json()["terminals"]
-    assert [x for x in listing if x["id"] == t["id"]][0]["state"] == "exited"
-    with pytest.raises(Exception):
+    assert next(x for x in listing if x["id"] == t["id"])["state"] == "exited"
+    with pytest.raises(WebSocketDisconnect):
         with tc.websocket_connect(f"/api/v1/terminals/{t['id']}/ws", subprotocols=[f"waw-csrf.{tc.csrf}"], headers={"origin": ORIGIN}) as ws:
             msg = json.loads(ws.receive_text())
             assert msg["type"] == "state" and msg["state"] == "exited"

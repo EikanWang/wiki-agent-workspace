@@ -51,6 +51,7 @@ async def test_cross_line_selection_anchor(api: Api):
     assert r.status_code == 201, r.text
     t = (await api.threads(doc["document_id"]))["threads"][0]
     assert t["anchor"]["quote"] == quote and t["anchor_state"] == "attached"
+    await api.wait_job(r.json()["job_id"])
 
 
 async def test_two_threads_share_default_session_and_explicit_new_session(api: Api, fake_env: Path):
@@ -92,7 +93,7 @@ async def test_two_threads_share_default_session_and_explicit_new_session(api: A
     r = await api.post(f"/api/v1/threads/{tid1}/messages", json={"text": "after switch"})
     assert r.json()["session_id"] == new_sid
     await api.wait_job(r.json()["job_id"])
-    t1 = [t for t in (await api.threads(did))["threads"] if t["id"] == tid1][0]
+    t1 = next(t for t in (await api.threads(did))["threads"] if t["id"] == tid1)
     sess_per_msg = [m["session_id"] for m in t1["messages"]]
     assert sess_per_msg[:4] == [r1.json()["session_id"]] * 4
     assert sess_per_msg[4:] == [new_sid] * 4
@@ -349,3 +350,36 @@ async def test_cancel_queued_job_takes_effect_immediately(api: Api):
     assert ev1[-1]["type"] == "completed"  # the running job is unaffected
     t = (await api.threads(doc["document_id"]))["threads"][0]
     assert [m["status"] for m in t["messages"] if m["role"] == "agent"] == ["completed", "cancelled"]
+
+
+async def test_server_shutdown_interrupts_running_jobs_and_ends_children(running_app, settings):
+    import subprocess
+
+    h = await running_app()
+    doc = await h.api.open_doc()
+    a = anchor_for(doc["text"], "TorchDynamo")
+    r = await h.api.post(f"/api/v1/documents/{doc['document_id']}/threads", json={**a, "version_sha256": doc["sha256"], "question": "[[sleep:60]] long"})
+    for _ in range(50):
+        await asyncio.sleep(0.1)
+        if (await h.api.get(f"/api/v1/jobs/{r.json()['job_id']}")).json()["status"] == "running":
+            break
+    def fake_pids() -> list[str]:
+        # processes whose own argv[0]/argv[1] is the fake agent (pgrep -f would match this shell too)
+        pids = []
+        for p in subprocess.run(["pgrep", "-f", "fake-opencode"], capture_output=True, text=True).stdout.split():
+            try:
+                argv = Path(f"/proc/{p}/cmdline").read_bytes().split(b"\0")
+            except OSError:
+                continue
+            if any(a.endswith(b"tests/fakes/fake-opencode") for a in argv[:2]):
+                pids.append(p)
+        return pids
+
+    assert fake_pids()
+    await h.stop()  # clean server stop
+    assert not fake_pids()
+    h2 = await running_app(settings)
+    j = (await h2.api.get(f"/api/v1/jobs/{r.json()['job_id']}")).json()
+    assert j["status"] == "interrupted" and j["error_code"] == "INTERRUPTED"
+    t = (await h2.api.threads(doc["document_id"]))["threads"][0]
+    assert t["messages"][0]["content"].endswith("long") and t["messages"][1]["status"] == "interrupted"

@@ -125,12 +125,8 @@ class Api:
         return r.json()
 
     async def wait_job(self, job_id: str, timeout: float = 30) -> list[dict]:
-        events = []
         async with self.c.stream("GET", f"/api/v1/jobs/{job_id}/events", params={"after": 0}, timeout=timeout) as resp:
-            async for line in resp.aiter_lines():
-                if line.startswith("data:"):
-                    events.append(json.loads(line[5:]))
-        return events
+            return [json.loads(line[5:]) async for line in resp.aiter_lines() if line.startswith("data:")]
 
     async def threads(self, doc_id: str):
         r = await self.c.get(f"/api/v1/documents/{doc_id}/threads")

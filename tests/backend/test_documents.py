@@ -124,7 +124,7 @@ async def test_missing_document_and_relink(api: Api, workspace: Path):
     r = await api.get(f"/api/v1/documents/{doc['document_id']}/threads")
     assert r.status_code == 200 and r.json()["missing"] is True
     r = await api.get("/api/v1/documents")
-    assert [d for d in r.json()["documents"] if d["id"] == doc["document_id"]][0]["missing"] is True
+    assert next(d for d in r.json()["documents"] if d["id"] == doc["document_id"])["missing"] is True
     # same filename elsewhere is NOT auto-linked
     (workspace / "other").mkdir()
     (workspace / "other" / "guide.md").write_text("# different\n")

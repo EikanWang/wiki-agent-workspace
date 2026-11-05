@@ -5,7 +5,20 @@ import react from "@vitejs/plugin-react";
 // `npm run dev` proxies API and WebSocket traffic to a running backend on 127.0.0.1:8765.
 export default defineConfig({
   plugins: [react()],
-  build: { outDir: "dist", sourcemap: false, target: "es2020" },
+  build: {
+    outDir: "dist",
+    sourcemap: false,
+    target: "es2020",
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          xterm: ["@xterm/xterm", "@xterm/addon-fit"],
+          markdown: ["markdown-it", "dompurify"],
+          react: ["react", "react-dom"],
+        },
+      },
+    },
+  },
   server: {
     port: 5173,
     proxy: {

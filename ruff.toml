@@ -1,0 +1,13 @@
+# Lint configuration used in review: `.venv/bin/ruff check backend tests`
+target-version = "py311"
+line-length = 160
+[lint]
+select = ["F", "E9", "W", "B", "UP", "SIM", "PERF", "RUF"]
+ignore = [
+  "B008",   # FastAPI Depends() in defaults is the framework idiom
+  "B904",   # re-raise without `from` is intentional for API errors
+  "SIM102", "SIM105", "SIM108", "SIM117",
+  "UP006", "UP007", "UP017", "UP035", "UP037", "UP045",
+  "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF100",
+  "W505",
+]

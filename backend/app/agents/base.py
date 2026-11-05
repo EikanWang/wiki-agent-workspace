@@ -174,6 +174,7 @@ class SubprocessTurn(TurnHandle):
         self.proc: asyncio.subprocess.Process | None = None
         self._cancelled = False
         self.stderr_tail: list[str] = []
+        self._stderr_task: asyncio.Task | None = None
 
     async def start(self) -> None:
         self.proc = await asyncio.create_subprocess_exec(
@@ -193,7 +194,7 @@ class SubprocessTurn(TurnHandle):
             except (BrokenPipeError, ConnectionResetError):
                 pass
             self.proc.stdin.close()
-        asyncio.get_running_loop().create_task(self._drain_stderr())
+        self._stderr_task = asyncio.get_running_loop().create_task(self._drain_stderr())
 
     async def _drain_stderr(self) -> None:
         assert self.proc and self.proc.stderr
@@ -220,8 +221,24 @@ class SubprocessTurn(TurnHandle):
             yield raw.decode("utf-8", "replace").rstrip("\n")
 
     async def wait(self) -> int:
+        """Wait for exit, finish draining stderr and release the transport (no GC-time cleanup)."""
         assert self.proc
-        return await self.proc.wait()
+        rc = await self.proc.wait()
+        if self._stderr_task is not None:
+            try:
+                await asyncio.wait_for(self._stderr_task, timeout=5)
+            except (TimeoutError, asyncio.CancelledError):
+                self._stderr_task.cancel()
+        self._close_transport()
+        return rc
+
+    def _close_transport(self) -> None:
+        transport = getattr(self.proc, "_transport", None)
+        if transport is not None:
+            try:
+                transport.close()
+            except Exception:  # pragma: no cover - best effort
+                pass
 
     @property
     def cancelled(self) -> bool:

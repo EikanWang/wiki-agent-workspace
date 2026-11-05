@@ -203,6 +203,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             yield
         finally:
             await ctx.watcher.stop()
+            n = await ctx.jobs.shutdown()
+            if n:
+                log.info("marked %d running jobs as interrupted at shutdown", n)
             db.checkpoint()
             db.engine.dispose()
 

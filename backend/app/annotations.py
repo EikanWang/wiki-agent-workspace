@@ -39,8 +39,7 @@ def build_prompt(*, question: str, quote: str, document_path: str, sha256: str, 
     parts.append("<<<SELECTED_PASSAGE\n" + quote + "\nSELECTED_PASSAGE>>>")
     if prior:
         parts.append("Earlier messages in this discussion thread (for context):")
-        for m in prior[-8:]:
-            parts.append(f"[{m['role']}] {m['content'][:2000]}")
+        parts.extend(f"[{m['role']}] {m['content'][:2000]}" for m in prior[-8:])
     parts.append("User message:")
     parts.append(question)
     parts.append(

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
 import sqlalchemy as sa
 
@@ -32,7 +31,5 @@ def test_every_table_and_column_is_documented(settings):
         start = sections[table]
         end = min([p for p in sections.values() if p > start] + [len(text)])
         section = text[start:end]
-        for col in insp.get_columns(table):
-            if f"`{col['name']}`" not in section:
-                missing.append(f"{table}.{col['name']}")
+        missing.extend(f"{table}.{col['name']}" for col in insp.get_columns(table) if f"`{col['name']}`" not in section)
     assert not missing, "undocumented in docs/SCHEMA.md: " + ", ".join(missing)

@@ -38,4 +38,8 @@ testpaths = ["tests/backend"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 timeout = 120
-filterwarnings = ["ignore::DeprecationWarning"]
+filterwarnings = [
+  "ignore::DeprecationWarning",
+  # starlette.testclient warns about httpx vs the not-yet-stable httpx2; harmless for our tests
+  "ignore:Using `httpx` with `starlette.testclient` is deprecated:Warning",
+]

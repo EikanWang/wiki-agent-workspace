@@ -35,6 +35,7 @@ class JobManager:
         self._cancel_requested: set[str] = set()
         self._pending_permissions: dict[str, dict[str, Any]] = {}
         self._on_complete: dict[str, Any] = {}
+        self._shutting_down = False
 
     # ------------------------------------------------------------------ startup
     def mark_interrupted(self) -> int:
@@ -52,6 +53,41 @@ class JobManager:
                     if m and m.status not in TERMINAL:
                         m.status = "interrupted"
                 self._append_event_locked(s, j.id, "failed", {"code": "INTERRUPTED", "message": j.error_message, "status": "interrupted"})
+                n += 1
+        return n
+
+    async def shutdown(self, timeout: float = 5.0) -> int:
+        """Server stop: terminate app-owned child processes and settle their jobs as `interrupted`.
+
+        The user did not cancel these turns, so they are not recorded as `cancelled`; nothing is
+        re-run automatically on restart (DESIGN §16). Returns the number of interrupted jobs."""
+        self._shutting_down = True
+        tasks = list(self._tasks.values())
+        affected = set(self._tasks.keys())
+        for job_id, handle in list(self._handles.items()):
+            self._cancel_requested.add(job_id)
+            try:
+                await handle.cancel()
+            except Exception:  # pragma: no cover - best effort
+                log.debug("cancel during shutdown failed for %s", job_id, exc_info=True)
+        if tasks:
+            _, pending = await asyncio.wait(tasks, timeout=timeout)
+            for t in pending:
+                t.cancel()
+        n = 0
+        with self.db.write() as s:
+            for job_id in affected:
+                j = s.get(Job, job_id)
+                if j is None or j.status in ("completed", "failed", "interrupted"):
+                    continue
+                j.status = "interrupted"
+                j.error_code = "INTERRUPTED"
+                j.error_message = "server stopped while the job was in progress"
+                j.finished_at = j.finished_at or utcnow()
+                if j.agent_message_id:
+                    m = s.get(Message, j.agent_message_id)
+                    if m and m.status not in ("completed", "failed"):
+                        m.status = "interrupted"
                 n += 1
         return n
 
@@ -211,8 +247,9 @@ class JobManager:
         texts: dict[str, str] = {}
         order: list[str] = []
         final: AgentEvent | None = None
+        events = handle.events()
         try:
-            async for ev in handle.events():
+            async for ev in events:
                 if ev.type == "started":
                     nid = ev.payload.get("native_session_id")
                     if nid:
@@ -252,6 +289,13 @@ class JobManager:
         except Exception as exc:  # adapter bug or transport failure
             log.exception("adapter failure in job %s", job_id)
             final = AgentEvent("failed", {"code": "PROVIDER_FAILED", "message": f"adapter error: {exc.__class__.__name__}"})
+        finally:
+            # We leave the loop on the terminal event; close the generator now so the adapter runs its
+            # cleanup (process wait, transport close) deterministically instead of at garbage collection.
+            try:
+                await events.aclose()
+            except Exception:  # pragma: no cover - adapter cleanup must never mask the result
+                log.debug("closing adapter event stream for job %s failed", job_id, exc_info=True)
 
         text = final.payload.get("text") if final and final.type == "completed" else None
         if text is None:
