@@ -116,7 +116,14 @@ export interface FileItem {
   path: string;
   name: string;
   type: "dir" | "file";
+  /** dir | markdown | image | pdf | notebook | code | shell | data | text | archive | binary | file | broken_link */
+  kind: string;
+  size?: number | null;
+  openable?: boolean;
   git_status: string | null;
+  symlink?: boolean;
+  link_target?: string | null;
+  escapes?: boolean;
 }
 
 export interface ReadingState {
@@ -132,6 +139,7 @@ export interface RecentItem {
   document_id: string;
   path: string;
   missing: boolean;
+  hidden: boolean;
   last_activity: string;
   thread_count: number;
   message_count: number;
@@ -181,6 +189,7 @@ export interface Thread {
   original_anchor: Anchor;
   anchor: Anchor;
   anchor_state: "attached" | "moved" | "ambiguous" | "orphaned";
+  diff?: { base: string; target: string; side: string; line_no: number | null; line_text: string; anchored: boolean } | null;
   current_start: number | null;
   current_end: number | null;
   candidates?: number;
@@ -299,4 +308,42 @@ export function subscribeGlobal(onEvent: (ev: Record<string, any>) => void): () 
     es.addEventListener(t, handler as EventListener);
   }
   return () => es.close();
+}
+
+// ---------------------------------------------------------------- diff review
+
+export interface DiffFile {
+  path: string;
+  status: "added" | "deleted" | "modified" | "untracked" | string;
+  unified: string;
+  additions: number;
+  deletions: number;
+  identical: boolean;
+  document_id: string | null;
+  target_sha256: string | null;
+  is_markdown: boolean;
+}
+
+export interface DiffComment {
+  thread_id: string;
+  diff: { base: string; target: string; side: string; line_no: number | null; line_text: string; anchored: boolean };
+  question: string;
+  last_status: string | null;
+  message_count: number;
+}
+
+export interface DiffResult {
+  path: string;
+  is_dir: boolean;
+  base: string;
+  target: string;
+  git: GitSummary;
+  files: DiffFile[];
+  summary: { files: number; additions: number; deletions: number };
+  comments: Record<string, DiffComment[]>;
+}
+
+export interface GitRefs {
+  commits: { sha: string; short: string; subject: string; date: string }[];
+  branches: string[];
 }

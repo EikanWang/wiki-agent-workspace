@@ -60,6 +60,7 @@ def thread_dict(t: Thread, messages: list[Message], jobs_by_message: dict[str, J
         "original_anchor": anchoring.Anchor(t.orig_version_sha256, t.orig_quote, t.orig_prefix, t.orig_suffix, t.orig_start, t.orig_end, t.orig_heading).as_dict(),
         "anchor": anchoring.Anchor(t.cur_version_sha256, t.cur_quote, t.cur_prefix, t.cur_suffix, t.cur_start, t.cur_end, t.cur_heading).as_dict(),
         "anchor_state": t.anchor_state,
+        "diff": json.loads(t.diff_json) if t.diff_json else None,
         "last_session_id": t.last_session_id,
         "created_at": iso(t.created_at),
         "updated_at": iso(t.updated_at),

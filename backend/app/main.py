@@ -13,7 +13,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
-from . import annotations, documents, previews, sessions
+from . import annotations, diffs, documents, previews, sessions
 from .agents.jobs import JobManager
 from .agents.registry import ProviderRegistry
 from .auth import AuthManager
@@ -225,6 +225,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     api.include_router(annotations.router)
     api.include_router(sessions.router)
     api.include_router(previews.router)
+    api.include_router(diffs.router)
     api.include_router(terminal.router)
     app.include_router(api)
 

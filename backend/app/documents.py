@@ -18,7 +18,20 @@ from .db import Database, iso, new_id, utcnow
 from .deps import AppContext, require_auth, require_auth_mutating
 from .errors import ApiError, bad_request, conflict, not_found, DOCUMENT_VERSION_CONFLICT, INVALID_ANCHOR
 from .gitinfo import GitInfo, git_info, git_show
-from .models import AgentSession, Document, DocumentVersion, Message, ReadingState, ReviewMark, Thread, Workspace
+from .models import (
+    AgentSession,
+    AnchorHistory,
+    Document,
+    DocumentVersion,
+    Job,
+    JobEvent,
+    Message,
+    Preview,
+    ReadingState,
+    ReviewMark,
+    Thread,
+    Workspace,
+)
 from .textmodel import build_text_model
 
 MARKDOWN_SUFFIXES = {".md", ".markdown"}
@@ -111,21 +124,66 @@ class DocumentService:
             if e.name in EXCLUDED_DIRS or e.name.startswith(".waw"):
                 continue
             rel_item = f"{norm}/{e.name}" if norm else e.name
-            if e.is_dir(follow_symlinks=False):
-                items.append({"path": rel_item, "name": e.name, "type": "dir", "git_status": self._dir_status(info, rel_item)})
-            elif e.is_file(follow_symlinks=False) or (e.is_symlink() and e.is_file()):
-                if Path(e.name).suffix.lower() in MARKDOWN_SUFFIXES:
-                    items.append({
-                        "path": rel_item,
-                        "name": e.name,
-                        "type": "file",
-                        "git_status": self._file_status(info, rel_item),
-                    })
+            is_link = e.is_symlink()
+            link_target: str | None = None
+            escapes = False
+            broken = False
+            if is_link:
+                try:
+                    link_target = os.readlink(e.path)
+                    real = Path(e.path).resolve(strict=True)
+                    escapes = real != self.root and self.root not in real.parents
+                except OSError:
+                    broken = True
+            if not broken and e.is_dir(follow_symlinks=True):
+                items.append({"path": rel_item, "name": e.name, "type": "dir", "kind": "dir", "git_status": self._dir_status(info, rel_item),
+                              "symlink": is_link, "link_target": link_target, "escapes": escapes})
+            else:
+                kind = "broken_link" if broken else self.classify(e.name)
+                size = None
+                if not broken:
+                    try:
+                        size = e.stat(follow_symlinks=True).st_size
+                    except OSError:
+                        size = None
+                items.append({
+                    "path": rel_item, "name": e.name, "type": "file", "kind": kind, "size": size,
+                    "openable": kind == "markdown" and not broken and not escapes,
+                    "git_status": self._file_status(info, rel_item),
+                    "symlink": is_link, "link_target": link_target, "escapes": escapes,
+                })
         return {
             "path": norm,
             "items": items,
             "git": self.git_summary(info),
         }
+
+    KINDS: dict[str, set[str]] = {
+        "markdown": {".md", ".markdown"},
+        "image": {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp", ".ico", ".avif"},
+        "pdf": {".pdf"},
+        "notebook": {".ipynb"},
+        "code": {".py", ".js", ".ts", ".tsx", ".jsx", ".c", ".cc", ".cpp", ".h", ".hpp", ".cu", ".rs", ".go", ".java", ".kt", ".swift",
+                 ".rb", ".php", ".cs", ".scala", ".lua", ".pl", ".r", ".m", ".mm", ".cl", ".glsl", ".asm", ".s"},
+        "shell": {".sh", ".bash", ".zsh", ".fish", ".ps1", ".bat", ".cmd"},
+        "data": {".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf", ".xml", ".csv", ".tsv", ".parquet", ".sqlite", ".sqlite3", ".db"},
+        "text": {".txt", ".rst", ".adoc", ".org", ".log", ".tex", ".bib", ".html", ".htm", ".css"},
+        "archive": {".zip", ".tar", ".gz", ".tgz", ".bz2", ".xz", ".zst", ".7z", ".rar"},
+        "binary": {".bin", ".so", ".o", ".a", ".dll", ".exe", ".wasm", ".pt", ".pth", ".onnx", ".npy", ".npz", ".pkl"},
+    }
+    SPECIAL_NAMES = {"makefile": "shell", "dockerfile": "shell", "license": "text", "readme": "text", ".gitignore": "data",
+                     ".gitattributes": "data", ".editorconfig": "data", ".env": "data"}
+
+    @classmethod
+    def classify(cls, name: str) -> str:
+        lower = name.lower()
+        if lower in cls.SPECIAL_NAMES:
+            return cls.SPECIAL_NAMES[lower]
+        suffix = Path(lower).suffix
+        for kind, exts in cls.KINDS.items():
+            if suffix in exts:
+                return kind
+        return "file"
 
     @staticmethod
     def _file_status(info: GitInfo, rel: str) -> str | None:
@@ -329,12 +387,15 @@ class DocumentService:
             return self._reading_state_dict(rs) or {}
 
     # ------------------------------------------------------------------ recent work
-    def recent(self, limit: int = 50) -> list[dict[str, Any]]:
+    def recent(self, limit: int = 50, include_hidden: bool = False) -> list[dict[str, Any]]:
         """Documents the user worked on, most recent activity first (reading, discussions, edits)."""
         from collections import defaultdict
 
         with self.db.read() as s:
-            docs = {d.id: d for d in s.query(Document).filter_by(workspace_id=self.workspace_id).all()}
+            q = s.query(Document).filter_by(workspace_id=self.workspace_id)
+            if not include_hidden:
+                q = q.filter(Document.hidden.is_(False))
+            docs = {d.id: d for d in q.all()}
             states = {rs.document_id: rs for rs in s.query(ReadingState).filter(ReadingState.document_id.in_(list(docs))).all()} if docs else {}
             threads_by_doc: dict[str, list[Thread]] = defaultdict(list)
             for t in s.query(Thread).filter(Thread.document_id.in_(list(docs))).all() if docs else []:
@@ -369,6 +430,7 @@ class DocumentService:
                     "document_id": d.id,
                     "path": d.path,
                     "missing": d.missing,
+                    "hidden": d.hidden,
                     "last_activity": iso(last_activity),
                     "thread_count": len(threads),
                     "message_count": msg_count.get(did, 0),
@@ -382,6 +444,61 @@ class DocumentService:
                 })
             out.sort(key=lambda e: e["last_activity"], reverse=True)
             return out[:limit]
+
+    def set_hidden(self, doc_id: str, hidden: bool) -> dict[str, Any]:
+        with self.db.write() as s:
+            d = s.get(Document, doc_id)
+            if d is None:
+                raise not_found("document not found", "DOCUMENT_NOT_FOUND")
+            d.hidden = hidden
+            return {"document_id": doc_id, "hidden": hidden}
+
+    def delete_history(self, doc_id: str) -> dict[str, Any]:
+        """Permanently delete a document's app history: discussions, messages, jobs, versions, reading state,
+        review marks, previews and snapshot files. The file in the wiki is never touched."""
+        with self.db.write() as s:
+            d = s.get(Document, doc_id)
+            if d is None:
+                raise not_found("document not found", "DOCUMENT_NOT_FOUND")
+            running = s.query(Job).filter(Job.thread_id.in_(s.query(Thread.id).filter_by(document_id=doc_id)),
+                                          Job.status.in_(["queued", "running", "waiting_provider_permission"])).count()
+            if running:
+                raise conflict("DOCUMENT_BUSY", "an agent turn is still running for this document; cancel it first")
+            thread_ids = [t.id for t in s.query(Thread).filter_by(document_id=doc_id).all()]
+            counts = {"threads": len(thread_ids), "messages": 0, "versions": 0}
+            if thread_ids:
+                counts["messages"] = s.query(Message).filter(Message.thread_id.in_(thread_ids)).delete(synchronize_session=False)
+                s.query(AnchorHistory).filter(AnchorHistory.thread_id.in_(thread_ids)).delete(synchronize_session=False)
+                job_ids = [j.id for j in s.query(Job).filter(Job.thread_id.in_(thread_ids)).all()]
+                if job_ids:
+                    s.query(JobEvent).filter(JobEvent.job_id.in_(job_ids)).delete(synchronize_session=False)
+                    s.query(Job).filter(Job.id.in_(job_ids)).delete(synchronize_session=False)
+                s.query(Thread).filter(Thread.id.in_(thread_ids)).delete(synchronize_session=False)
+            preview_job_ids = [p.job_id for p in s.query(Preview).filter_by(document_id=doc_id).all()]
+            snapshot_refs = [p.proposed_snapshot_ref for p in s.query(Preview).filter_by(document_id=doc_id).all() if p.proposed_snapshot_ref]
+            s.query(Preview).filter_by(document_id=doc_id).delete(synchronize_session=False)
+            if preview_job_ids:
+                s.query(JobEvent).filter(JobEvent.job_id.in_(preview_job_ids)).delete(synchronize_session=False)
+                s.query(Job).filter(Job.id.in_(preview_job_ids)).delete(synchronize_session=False)
+            s.query(ReviewMark).filter_by(document_id=doc_id).delete(synchronize_session=False)
+            s.query(ReadingState).filter_by(document_id=doc_id).delete(synchronize_session=False)
+            versions = s.query(DocumentVersion).filter_by(document_id=doc_id).all()
+            counts["versions"] = len(versions)
+            snapshot_refs += [v.snapshot_ref for v in versions]
+            s.query(DocumentVersion).filter_by(document_id=doc_id).delete(synchronize_session=False)
+            d.default_session_id = None
+            d.last_sha256 = None
+            d.hidden = False
+        for ref in snapshot_refs:
+            try:
+                (self.snapshots_dir / ref).unlink(missing_ok=True)
+            except OSError:
+                pass
+        try:
+            (self.snapshots_dir / doc_id).rmdir()
+        except OSError:
+            pass
+        return {"document_id": doc_id, "deleted": counts}
 
 
     # ------------------------------------------------------------------ review marks
@@ -639,8 +756,22 @@ def relink_document(doc_id: str, body: RelinkIn, ctx: AppContext = Depends(requi
 
 
 @router.get("/recent")
-def recent_work(limit: int = Query(50, ge=1, le=500), ctx: AppContext = Depends(require_auth)):
-    return {"items": _svc(ctx).recent(limit)}
+def recent_work(limit: int = Query(50, ge=1, le=500), include_hidden: bool = Query(False), ctx: AppContext = Depends(require_auth)):
+    return {"items": _svc(ctx).recent(limit, include_hidden)}
+
+
+class HiddenIn(BaseModel):
+    hidden: bool
+
+
+@router.put("/documents/{doc_id}/hidden")
+def put_hidden(doc_id: str, body: HiddenIn, ctx: AppContext = Depends(require_auth_mutating)):
+    return _svc(ctx).set_hidden(doc_id, body.hidden)
+
+
+@router.delete("/documents/{doc_id}/history")
+def delete_history(doc_id: str, ctx: AppContext = Depends(require_auth_mutating)):
+    return _svc(ctx).delete_history(doc_id)
 
 
 @router.get("/documents")

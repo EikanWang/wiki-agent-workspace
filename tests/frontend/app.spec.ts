@@ -388,16 +388,98 @@ test("Recent work lists documents newest first and restores document, position a
   const first = page.getByTestId("recent-item").first();
   await expect(first).toContainText("docs/guide.md");
   await expect(first).toContainText("discussion");
-  await page.locator('[data-testid="recent-dialog"] .icon-btn').click();
+  await page.locator('[data-testid="recent-dialog"] .modal-head .icon-btn').click();
   // open another document, then restore through Recent
   await page.getByTestId("tree-file-docs/long.md").click();
   await expect(page.getByTestId("markdown-body").locator("h1")).toHaveText("Long");
   await page.getByTestId("recent-button").click();
-  await page.getByTestId("recent-item").filter({ hasText: "docs/guide.md" }).click();
+  await page.getByTestId("recent-item").filter({ hasText: "docs/guide.md" }).locator(".recent-main").click();
   await expect(page.getByTestId("markdown-body").locator("h1")).toContainText("Guide");
   await expect(page.getByTestId("thread-quote")).toHaveText(quote!); // same discussion reopened
   // after a full reload the same discussion is restored from the server-side reading state
   await page.reload();
   await expect(page.getByTestId("markdown-body").locator("h1")).toContainText("Guide");
   await expect(page.getByTestId("thread-quote")).toHaveText(quote!);
+});
+
+test("file tree shows distinct icons per kind; non-markdown entries are not openable", async ({ page }) => {
+  await login(page);
+  const ws = workspaceDir();
+  fs.writeFileSync(path.join(ws, "docs", "diagram.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+  fs.writeFileSync(path.join(ws, "docs", "tool.py"), "print(1)\n");
+  fs.writeFileSync(path.join(ws, "docs", "config-with-a-very-long-name-that-hides-the-extension.json"), "{}\n");
+  try { fs.symlinkSync("guide.md", path.join(ws, "docs", "alias.md")); } catch { /* exists */ }
+  await page.getByTestId("tree-refresh").click();
+  const dir = page.locator(".tree-row.dir", { hasText: "docs" });
+  if ((await page.getByTestId("tree-file-docs/guide.md").count()) === 0) await dir.click();
+  await expect(page.getByTestId("tree-file-docs/diagram.png")).toHaveAttribute("data-kind", "image");
+  await expect(page.getByTestId("tree-file-docs/tool.py")).toHaveAttribute("data-kind", "code");
+  await expect(page.getByTestId("tree-file-docs/config-with-a-very-long-name-that-hides-the-extension.json")).toHaveAttribute("data-kind", "data");
+  await expect(page.getByTestId("tree-file-docs/guide.md")).toHaveAttribute("data-kind", "markdown");
+  await expect(page.getByTestId("tree-file-docs/alias.md").locator(".fi-badge")).toHaveCount(1); // symlink badge
+  // icons differ per kind (different SVG content)
+  const svg = async (id: string) => page.getByTestId(id).locator("svg.fi").innerHTML();
+  expect(await svg("tree-file-docs/diagram.png")).not.toBe(await svg("tree-file-docs/tool.py"));
+  expect(await svg("tree-file-docs/tool.py")).not.toBe(await svg("tree-file-docs/guide.md"));
+  await expect(page.getByTestId("tree-file-docs/tool.py").locator("button.tree-main")).toBeDisabled();
+});
+
+test("Recent: hide, show hidden, unhide, delete history", async ({ page }) => {
+  await login(page);
+  await page.getByTestId("recent-button").click();
+  const dialog = page.getByTestId("recent-dialog");
+  const item = (p: string) => dialog.getByTestId("recent-item").filter({ has: page.locator(".recent-path", { hasText: new RegExp("^" + p.replace(".", "\\.") + "( |$)") }) });
+  const guide = item("docs/guide.md");
+  await expect(guide).toHaveCount(1);
+  await guide.getByTestId("recent-hide").click();
+  await expect(item("docs/guide.md")).toHaveCount(0);
+  await dialog.getByTestId("recent-show-hidden").check();
+  await expect(item("docs/guide.md")).toHaveAttribute("data-hidden", "1");
+  await item("docs/guide.md").getByTestId("recent-unhide").click();
+  await expect(item("docs/guide.md")).toHaveAttribute("data-hidden", "0");
+  // filter
+  await dialog.getByTestId("recent-filter").fill("long.md");
+  await expect(dialog.getByTestId("recent-item")).toHaveCount(await dialog.getByTestId("recent-item").filter({ hasText: "long.md" }).count());
+  await dialog.getByTestId("recent-filter").fill("");
+  // delete history of long.md (no discussions needed)
+  const long = item("docs/long.md");
+  if ((await long.count()) > 0) {
+    await long.getByTestId("recent-delete").click();
+    await expect(page.getByTestId("recent-delete-confirm")).toContainText("docs/long.md");
+    await page.getByTestId("recent-delete-confirm-yes").click();
+    await expect(item("docs/long.md")).toHaveCount(0);
+    expect(fs.existsSync(path.join(workspaceDir(), "docs", "long.md"))).toBe(true); // file untouched
+  }
+});
+
+test("Diff review of a folder with line comments that become discussions", async ({ page }) => {
+  await login(page);
+  const ws = workspaceDir();
+  const cp = (await import("child_process")).execSync;
+  cp("git add -A && git commit -q -m snapshot", { cwd: ws });
+  const guide = path.join(ws, "docs", "guide.md");
+  fs.writeFileSync(guide, fs.readFileSync(guide, "utf-8").replace(/- item (one|ONE)\n/, "- item ONE (reviewed)\n"));
+  fs.writeFileSync(path.join(ws, "docs", "draft.md"), "# Draft\n\nbrand new\n");
+  await page.getByTestId("tree-refresh").click();
+  await page.getByTestId("tree-diff-root").click();
+  const review = page.getByTestId("diff-review");
+  await expect(review).toBeVisible();
+  await expect(page.locator('[data-testid="diff-file"][data-path="docs/draft.md"]')).toBeVisible({ timeout: 10000 });
+  await expect(page.locator('[data-testid="diff-file"][data-path="docs/draft.md"]')).toContainText("untracked");
+  await expect(page.locator('[data-testid="diff-file"][data-path="docs/guide.md"]')).toContainText("modified");
+  // comment on the added line
+  const added = page.locator('[data-testid="diff-file"][data-path="docs/guide.md"] tr.diff-line.add').first();
+  await expect(added).toContainText("item ONE (reviewed)");
+  await added.click();
+  await page.getByTestId("diff-comment-input").fill("Is '(reviewed)' really needed here?");
+  await page.getByTestId("diff-comment-send").click();
+  // lands in the document view with the discussion open and the diff origin shown
+  await expect(page.getByTestId("thread-quote")).toContainText("item ONE (reviewed)", { timeout: 15000 });
+  await expect(page.getByTestId("thread-diff-origin")).toContainText("added line");
+  await expect(page.locator('[data-testid="message-agent"][data-status="completed"]')).toContainText("reviewing a diff", { timeout: 20000 });
+  // back in the diff view the comment marker is listed on that file
+  await page.getByTestId("view-diff").click();
+  await expect(page.getByTestId("diff-comment-marker").first()).toContainText("really needed", { timeout: 10000 });
+  await page.getByTestId("diff-comment-marker").first().click();
+  await expect(page.getByTestId("thread-quote")).toContainText("item ONE (reviewed)");
 });

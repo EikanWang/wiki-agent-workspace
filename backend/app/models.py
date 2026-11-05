@@ -47,6 +47,7 @@ class Document(Base):
     default_session_id: Mapped[str | None] = mapped_column(ForeignKey("agent_sessions.id"), nullable=True)
     last_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     missing: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    hidden: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 
@@ -102,6 +103,8 @@ class Thread(Base):
     cur_end: Mapped[int] = mapped_column(Integer, nullable=False)
     cur_heading: Mapped[str | None] = mapped_column(Text, nullable=True)
     anchor_state: Mapped[str] = mapped_column(String(16), default="attached")  # attached|moved|ambiguous|orphaned
+    # set for comments made in the diff review: {base, target, side, line_no, line_text, hunk}
+    diff_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_session_id: Mapped[str | None] = mapped_column(ForeignKey("agent_sessions.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)

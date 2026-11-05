@@ -97,3 +97,24 @@ def git_show(root: Path, ref: str, rel_path: str) -> tuple[bool, str]:
         return True, p.stdout.decode("utf-8")
     except UnicodeDecodeError:
         return False, "content is not valid UTF-8"
+
+
+def git_run(root: Path, args: list[str], timeout: float = 30) -> tuple[int, bytes, str]:
+    """Run a read-only git command returning raw stdout bytes (diff output may be any encoding).
+
+    Callers pass fixed subcommands and validated refs/paths; user-supplied values never appear as options."""
+    try:
+        p = subprocess.run(["git", *args], cwd=str(root), capture_output=True, timeout=timeout, check=False)
+    except FileNotFoundError:
+        return 127, b"", "git executable not found"
+    except subprocess.TimeoutExpired:
+        return 124, b"", "git timed out"
+    return p.returncode, p.stdout, p.stderr.decode("utf-8", "replace").strip()
+
+
+def valid_ref(root: Path, ref: str) -> bool:
+    """True when `ref` names an existing commit-ish and cannot be mistaken for an option."""
+    if not ref or ref.startswith("-") or any(c in ref for c in " \t\n\0"):
+        return False
+    code, _ = _run(["rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], root)
+    return code == 0

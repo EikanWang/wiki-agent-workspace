@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -166,3 +167,64 @@ async def test_recent_work_sorted_by_activity_and_restores_thread(api: Api, work
     assert r2.status_code == 200 and r2.json()["active_thread_id"] == "thread-x" and r2.json()["scroll_fraction"] == pytest.approx(0.3)
     items = (await api.get("/api/v1/recent")).json()["items"]
     assert items[0]["path"] == "docs/guide.md"  # touching the reading state is activity
+
+
+async def test_file_tree_lists_all_kinds_with_icons_metadata(api: Api, workspace: Path, tmp_path: Path):
+    import os
+
+    (workspace / "docs" / "pic.png").write_bytes(b"\x89PNG\r\n")
+    (workspace / "docs" / "script.py").write_text("print(1)\n")
+    (workspace / "docs" / "data.json").write_text("{}\n")
+    (workspace / "docs" / "notes.txt").write_text("x\n")
+    (workspace / "docs" / "paper.pdf").write_bytes(b"%PDF-1.4\n")
+    os.symlink("guide.md", workspace / "docs" / "alias.md")          # link inside the workspace
+    os.symlink("does-not-exist.md", workspace / "docs" / "dangling.md")
+    (tmp_path / "outside.md").write_text("# out\n")
+    os.symlink(tmp_path / "outside.md", workspace / "docs" / "escape.md")
+    items = {i["name"]: i for i in (await api.get("/api/v1/files", params={"path": "docs"})).json()["items"]}
+    assert items["guide.md"]["kind"] == "markdown" and items["guide.md"]["openable"] is True
+    assert items["pic.png"]["kind"] == "image" and items["pic.png"]["openable"] is False and items["pic.png"]["size"] == 6
+    assert items["script.py"]["kind"] == "code" and items["data.json"]["kind"] == "data" and items["notes.txt"]["kind"] == "text" and items["paper.pdf"]["kind"] == "pdf"
+    assert items["alias.md"]["symlink"] is True and items["alias.md"]["link_target"] == "guide.md" and items["alias.md"]["openable"] is True
+    assert items["dangling.md"]["kind"] == "broken_link" and items["dangling.md"]["openable"] is False
+    assert items["escape.md"]["escapes"] is True and items["escape.md"]["openable"] is False
+    # opening a non-markdown or escaping entry is still refused by the API
+    assert (await api.get("/api/v1/documents/open", params={"path": "docs/script.py"})).status_code == 400
+    assert (await api.get("/api/v1/documents/open", params={"path": "docs/escape.md"})).status_code == 403
+
+
+async def test_recent_hide_unhide_and_delete_history(api: Api, workspace: Path):
+    from conftest import anchor_for as _anchor
+
+    doc = await api.open_doc()
+    did = doc["document_id"]
+    anc = _anchor(doc["text"], "TorchDynamo")
+    r = await api.post(f"/api/v1/documents/{did}/threads", json={**anc, "version_sha256": doc["sha256"], "question": "q"})
+    await api.wait_job(r.json()["job_id"])
+    assert [i["path"] for i in (await api.get("/api/v1/recent")).json()["items"]] == ["docs/guide.md"]
+    # hide: gone from the default list, present with include_hidden, history intact
+    assert (await api.put(f"/api/v1/documents/{did}/hidden", json={"hidden": True})).status_code == 200
+    assert (await api.get("/api/v1/recent")).json()["items"] == []
+    hidden = (await api.get("/api/v1/recent", params={"include_hidden": "true"})).json()["items"]
+    assert hidden[0]["hidden"] is True and hidden[0]["thread_count"] == 1
+    assert len((await api.threads(did))["threads"]) == 1
+    await api.put(f"/api/v1/documents/{did}/hidden", json={"hidden": False})
+    assert (await api.get("/api/v1/recent")).json()["items"][0]["hidden"] is False
+    # delete history: everything app-side goes, the file stays, the document can be used again
+    before = (workspace / "docs" / "guide.md").read_bytes()
+    snaps = list((api.c._transport.app.state.ctx.settings.snapshots_dir / did).glob("*.md"))
+    assert snaps
+    r = await api.delete(f"/api/v1/documents/{did}/history")
+    assert r.status_code == 200 and r.json()["deleted"]["threads"] == 1 and r.json()["deleted"]["messages"] == 2
+    assert (workspace / "docs" / "guide.md").read_bytes() == before
+    assert (await api.get("/api/v1/recent", params={"include_hidden": "true"})).json()["items"] == []
+    assert (await api.threads(did))["threads"] == []
+    assert not list((api.c._transport.app.state.ctx.settings.snapshots_dir / did).glob("*.md"))
+    doc2 = await api.open_doc()
+    assert doc2["document_id"] == did and doc2["default_session_id"] is None
+    # a running job blocks deletion
+    r = await api.post(f"/api/v1/documents/{did}/threads", json={**anc, "version_sha256": doc2["sha256"], "question": "[[sleep:5]] slow"})
+    await asyncio.sleep(0.3)
+    assert (await api.delete(f"/api/v1/documents/{did}/history")).json()["error"]["code"] == "DOCUMENT_BUSY"
+    await api.post(f"/api/v1/jobs/{r.json()['job_id']}/cancel")
+    await api.wait_job(r.json()["job_id"])

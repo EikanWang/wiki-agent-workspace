@@ -226,6 +226,13 @@ export default function DiscussionPanel({
             </div>
           )}
           {thread.original_anchor.quote !== thread.anchor.quote && <div className="muted small">Original quote: "{thread.original_anchor.quote.slice(0, 80)}"</div>}
+          {thread.diff && (
+            <div className="diff-origin small" data-testid="thread-diff-origin">
+              <span className="chip">diff comment</span> on {thread.diff.side === "deleted" ? "removed" : thread.diff.side === "added" ? "added" : "unchanged"} line {thread.diff.line_no ?? "?"} ({thread.diff.base} → {thread.diff.target}):
+              <code className={`diff-origin-line ${thread.diff.side}`}>{thread.diff.side === "deleted" ? "−" : thread.diff.side === "added" ? "+" : " "}{thread.diff.line_text}</code>
+              {!thread.diff.anchored && <span className="muted"> · this line is not in the current file; the discussion is attached to the document, not to a passage</span>}
+            </div>
+          )}
         </section>
         <section className="session-box">
           <span className="label">Session for this thread</span>

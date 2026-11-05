@@ -24,10 +24,11 @@ import SessionPicker from "./components/SessionPicker";
 import TerminalPanel from "./components/TerminalPanel";
 import PreviewDialog from "./components/PreviewDialog";
 import RecentList from "./components/RecentList";
+import DiffReview from "./components/DiffReview";
 import { SelectionAnchor } from "./textmodel";
 import { FONT_STACKS, FontSettings, Prefs, Resizer, loadPrefs, savePrefs } from "./components/Layout";
 
-type View = "document" | "terminal";
+type View = "document" | "terminal" | "diff";
 
 export default function App() {
   const [boot, setBoot] = useState<Bootstrap | null>(null);
@@ -70,6 +71,11 @@ export default function App() {
   const [showRecent, setShowRecent] = useState(false);
   const [recentKey, setRecentKey] = useState(0);
   const restoreThreadRef = useRef<string | null>(null);
+  const [diffTarget, setDiffTarget] = useState<{ path: string; isDir: boolean } | null>(null);
+  const openDiff = useCallback((path: string, isDir: boolean) => {
+    setDiffTarget({ path, isDir });
+    setView("diff");
+  }, []);
   const pendingSelection = useRef<SelectionAnchor | null>(null);
 
   const notify = useCallback((m: string) => {
@@ -379,6 +385,7 @@ export default function App() {
         <nav className="view-tabs">
           <button className={view === "document" ? "active" : ""} onClick={() => setView("document")} data-testid="view-document">Document</button>
           <button className={view === "terminal" ? "active" : ""} onClick={() => setView("terminal")} data-testid="view-terminal">Terminal</button>
+          <button className={view === "diff" ? "active" : ""} onClick={() => openDiff(diffTarget?.path ?? (doc?.path ?? ""), diffTarget?.isDir ?? !doc)} data-testid="view-diff" title="Review uncommitted changes and comment on them">Diff</button>
         </nav>
         <button className="btn small" onClick={() => { setRecentKey((k) => k + 1); setShowRecent(true); }} title="Documents and discussions you worked on, newest first" data-testid="recent-button">Recent</button>
         <span className="font-settings-anchor">
@@ -393,9 +400,9 @@ export default function App() {
       {boot.settings.watcher_error && <div className="banner warn">{boot.settings.watcher_error}</div>}
       {!watcherReady && <div className="banner">The file watcher is still indexing this workspace; until it finishes, use the ↻ button in the file tree to see new files and changes.</div>}
 
-      <main className={`layout view-${view}`}>
+      <main className={`layout view-${view === "diff" ? "terminal" : view} ${view === "diff" ? "view-diff" : ""}`}>
         <aside className="sidebar">
-          <FileTree workspaceName={boot.workspace.name} selectedPath={doc?.path ?? null} onOpen={(p) => void openDocument(p)} refreshKey={treeKey} />
+          <FileTree workspaceName={boot.workspace.name} selectedPath={doc?.path ?? null} onOpen={(p) => void openDocument(p)} onOpenDiff={openDiff} refreshKey={treeKey} />
           {sidebarOpen && <Resizer side="right" onResize={resizeSidebar} onEnd={persistPrefs} />}
         </aside>
 
@@ -446,8 +453,26 @@ export default function App() {
               <h2>Open a Markdown file</h2>
               <p className="muted">Pick a document from the file tree. Files appear as soon as they exist in the working tree — no commit or push required.</p>
               <h3>Recent work</h3>
-              <RecentList onOpen={openRecent} refreshKey={recentKey} />
+              <RecentList onOpen={openRecent} refreshKey={recentKey} onNotify={notify} />
             </div>
+          )}
+        </section>
+
+        <section className="center" style={{ display: view === "diff" ? undefined : "none" }}>
+          {view === "diff" && diffTarget && (
+            <DiffReview
+              path={diffTarget.path}
+              isDir={diffTarget.isDir}
+              sessions={sessions}
+              defaultProvider={boot.default_provider}
+              refreshKey={treeKey}
+              onOpenDocument={(p) => void openDocument(p)}
+              onOpenThread={(p, tid) => {
+                restoreThreadRef.current = tid;
+                void openDocument(p);
+              }}
+              onClose={() => setView(doc ? "document" : "document")}
+            />
           )}
         </section>
 
@@ -505,7 +530,7 @@ export default function App() {
               <button className="icon-btn" onClick={() => setShowRecent(false)}>×</button>
             </div>
             <div className="muted small">Newest activity first. Opening an entry restores the document, your reading position and the discussion you had open.</div>
-            <RecentList onOpen={openRecent} refreshKey={recentKey} />
+            <RecentList onOpen={openRecent} refreshKey={recentKey} onNotify={notify} />
           </div>
         </div>
       )}

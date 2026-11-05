@@ -1,0 +1,302 @@
+"""Diff review: unified diffs for a file or a whole folder, and comments anchored to diff lines.
+
+Bases: `HEAD` or any valid Git ref (committed state), or an app snapshot id/sha for a single file.
+Target: the working tree (default) or another ref. Untracked Markdown files appear as whole-file additions
+so new drafts can be reviewed too. All Git access is read-only.
+"""
+
+from __future__ import annotations
+
+import difflib
+import json
+from pathlib import Path
+from typing import Any
+
+from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel, Field
+
+from .annotations import ThreadService, build_prompt
+from .db import new_id
+from .deps import AppContext, require_auth, require_auth_mutating
+from .documents import MARKDOWN_SUFFIXES, DocumentService, sha256_bytes
+from .errors import ApiError, bad_request
+from .gitinfo import git_info, git_run, valid_ref
+from .models import Document, Message, Thread
+
+router = APIRouter()
+
+MAX_FILES = 400
+MAX_DIFF_BYTES = 4 * 1024 * 1024
+
+
+class DiffService:
+    def __init__(self, ctx: AppContext):
+        self.ctx = ctx
+        assert ctx.documents
+        self.docs: DocumentService = ctx.documents
+        self.root = self.docs.root
+
+    # ------------------------------------------------------------------ helpers
+    def _rel(self, path: str) -> str:
+        return self.docs.normalize_rel(path) if path else ""
+
+    def _text_at_ref(self, ref: str, rel: str) -> str | None:
+        code, out, _ = git_run(self.root, ["show", f"{ref}:{rel}"])
+        if code != 0:
+            return None
+        return out.decode("utf-8", "replace")
+
+    def _text_in_worktree(self, rel: str) -> str | None:
+        p = self.root / rel
+        if not p.is_file():
+            return None
+        try:
+            return p.read_bytes().decode("utf-8", "replace")
+        except OSError:
+            return None
+
+    def _unified(self, a: str | None, b: str | None, rel: str, a_label: str, b_label: str) -> str:
+        return "".join(difflib.unified_diff(
+            (a or "").splitlines(keepends=True), (b or "").splitlines(keepends=True),
+            fromfile=f"a/{rel} ({a_label})" if a is not None else "/dev/null",
+            tofile=f"b/{rel} ({b_label})" if b is not None else "/dev/null", n=3,
+        ))
+
+    def _changed_files(self, base: str, target: str | None, rel_dir: str, markdown_only: bool) -> list[dict[str, Any]]:
+        """Files that differ between base and target (worktree when None), with Git status letters."""
+        pathspec = [rel_dir] if rel_dir else []
+        args = ["diff", "--name-status", "-z", "--no-renames", base] + ([target] if target else []) + ["--"] + pathspec
+        code, out, err = git_run(self.root, args)
+        if code != 0:
+            raise ApiError(400, "GIT_ERROR", f"git diff failed: {err[:300]}")
+        files: list[dict[str, Any]] = []
+        parts = out.split(b"\0")
+        i = 0
+        while i + 1 < len(parts):
+            status, rel = parts[i].decode("utf-8", "replace"), parts[i + 1].decode("utf-8", "replace")
+            i += 2
+            if not rel:
+                continue
+            files.append({"path": rel, "status": {"A": "added", "D": "deleted", "M": "modified"}.get(status[:1], status)})
+        if target is None:
+            # untracked files are not part of `git diff`; include them as additions
+            code, out, _ = git_run(self.root, ["ls-files", "--others", "--exclude-standard", "-z", "--"] + pathspec)
+            if code == 0:
+                for raw in out.split(b"\0"):
+                    rel = raw.decode("utf-8", "replace")
+                    if rel and (self.root / rel).is_file():
+                        files.append({"path": rel, "status": "untracked"})
+        if markdown_only:
+            files = [f for f in files if Path(f["path"]).suffix.lower() in MARKDOWN_SUFFIXES]
+        files.sort(key=lambda f: f["path"])
+        return files
+
+    # ------------------------------------------------------------------ public
+    def diff(self, path: str, base: str, target: str | None, markdown_only: bool) -> dict[str, Any]:
+        rel = self._rel(path)
+        info = git_info(self.root)
+        if not info.is_repo:
+            raise ApiError(409, "NOT_A_GIT_REPO", "the workspace is not a Git repository; folder diffs need Git history")
+        full = self.root / rel if rel else self.root
+        if rel:
+            self.docs.resolve(rel)  # traversal/symlink checks
+        if not valid_ref(self.root, base):
+            raise bad_request(f"unknown base ref: {base}", "REF_NOT_FOUND")
+        if target is not None and not valid_ref(self.root, target):
+            raise bad_request(f"unknown target ref: {target}", "REF_NOT_FOUND")
+        is_dir = full.is_dir()
+        if is_dir:
+            files = self._changed_files(base, target, rel, markdown_only)
+        else:
+            files = [{"path": rel, "status": "modified"}]
+            if target is None:
+                st = info.statuses.get(rel, "clean")
+                files[0]["status"] = {"untracked": "untracked", "deleted": "deleted"}.get(st, "modified")
+        if len(files) > MAX_FILES:
+            raise ApiError(413, "DIFF_TOO_LARGE", f"{len(files)} changed files; narrow the folder (limit {MAX_FILES})")
+        total = 0
+        out_files: list[dict[str, Any]] = []
+        with self.ctx.db.read() as s:
+            doc_ids = {d.path: d.id for d in s.query(Document).filter_by(workspace_id=self.docs.workspace_id).all()}
+        for f in files:
+            frel = f["path"]
+            a = None if f["status"] in ("untracked", "added") else self._text_at_ref(base, frel)
+            b = self._text_at_ref(target, frel) if target else self._text_in_worktree(frel)
+            if f["status"] == "deleted":
+                b = None
+            if a is None and b is None:
+                continue
+            unified = self._unified(a, b, frel, base, target or "worktree")
+            total += len(unified)
+            if total > MAX_DIFF_BYTES:
+                raise ApiError(413, "DIFF_TOO_LARGE", "diff output exceeds 4 MiB; narrow the folder or review file by file")
+            adds = sum(1 for ln in unified.splitlines() if ln.startswith("+") and not ln.startswith("+++"))
+            dels = sum(1 for ln in unified.splitlines() if ln.startswith("-") and not ln.startswith("---"))
+            out_files.append({
+                "path": frel, "status": f["status"], "unified": unified, "additions": adds, "deletions": dels,
+                "identical": a == b, "document_id": doc_ids.get(frel),
+                "target_sha256": sha256_bytes(b.encode("utf-8")) if b is not None and target is None else None,
+                "is_markdown": Path(frel).suffix.lower() in MARKDOWN_SUFFIXES,
+            })
+        return {
+            "path": rel, "is_dir": is_dir, "base": base, "target": target or "worktree",
+            "git": self.docs.git_summary(info), "files": out_files,
+            "summary": {"files": len(out_files), "additions": sum(f["additions"] for f in out_files), "deletions": sum(f["deletions"] for f in out_files)},
+        }
+
+    # ------------------------------------------------------------------ comments
+    async def comment(self, body: "DiffCommentIn") -> dict[str, Any]:
+        """A comment on a diff line becomes a normal discussion on the target document, so the agent can answer
+        with the same workflow (session, streaming, retry). The anchor is the commented line's text when it exists
+        in the current file; otherwise the thread records the diff context only."""
+        rel = self._rel(body.path)
+        if Path(rel).suffix.lower() not in MARKDOWN_SUFFIXES:
+            raise bad_request("comments can only be attached to Markdown files", "NOT_MARKDOWN")
+        doc = self.docs.get_or_create_document(rel)
+        try:
+            text, data, sha = self.docs.current_content(doc)
+        except ApiError as exc:
+            if exc.code != "DOCUMENT_MISSING":
+                raise
+            raise ApiError(409, "DOCUMENT_MISSING", "the file no longer exists in the worktree; comments need a current file")
+        self.docs.record_version(doc.id, data, sha)
+        svc = ThreadService(self.ctx)
+        from .textmodel import build_text_model
+
+
+        model = build_text_model(text)
+        line_text = body.line_text.strip()
+        start = end = 0
+        quote = line_text
+        anchored = False
+        if line_text and body.side != "deleted":
+            # Diff lines are Markdown *source*; the anchor model is *rendered* text. Try the raw line first,
+            # then the line without block markers (bullets, numbering, heading #, quote >, emphasis).
+            for cand in _rendered_candidates(line_text):
+                idx = model.text.find(cand)
+                if idx >= 0 and model.text.find(cand, idx + 1) < 0:
+                    start, end = idx, idx + len(cand)
+                    quote = cand
+                    anchored = True
+                    break
+        if not anchored:
+            # Fall back to the first non-empty rendered line so the thread still has a valid anchor.
+            first = next((ln for ln in model.text.split("\n") if ln.strip()), None)
+            if first is None:
+                raise ApiError(409, "EMPTY_DOCUMENT", "the document renders to no text; cannot attach a comment")
+            start = model.text.index(first)
+            end = start + len(first)
+            quote = first
+        prefix = model.text[max(0, start - 40):start]
+        suffix = model.text[end:end + 40]
+        heading = model.heading_for(start)
+        sess = await svc._session_for_new_thread(doc, body.session_id)
+        diff_ctx = {"base": body.base, "target": body.target, "side": body.side, "line_no": body.line_no, "line_text": body.line_text,
+                    "hunk": body.hunk[:4000] if body.hunk else None, "anchored": anchored}
+        question = body.question
+        prompt_question = (
+            f"[Comment made while reviewing a diff of {rel} ({body.base} → {body.target}); "
+            f"commented {'removed' if body.side == 'deleted' else 'added' if body.side == 'added' else 'context'} line "
+            f"{body.line_no or '?'}: {body.line_text.strip()!r}]\n\n" + question
+        )
+        if body.hunk:
+            prompt_question += "\n\nDiff hunk for reference:\n```diff\n" + body.hunk[:4000] + "\n```"
+        thread_id, user_msg_id, agent_msg_id = new_id(), new_id(), new_id()
+        with self.ctx.db.write() as s:
+            t = Thread(
+                id=thread_id, document_id=doc.id,
+                orig_version_sha256=sha, orig_quote=quote, orig_prefix=prefix, orig_suffix=suffix, orig_start=start, orig_end=end, orig_heading=heading,
+                cur_version_sha256=sha, cur_quote=quote, cur_prefix=prefix, cur_suffix=suffix, cur_start=start, cur_end=end, cur_heading=heading,
+                anchor_state="attached" if anchored else "orphaned", diff_json=json.dumps(diff_ctx, ensure_ascii=False), last_session_id=sess.id,
+            )
+            s.add(t)
+            s.flush()
+            s.add(Message(id=user_msg_id, thread_id=thread_id, session_id=sess.id, role="user", content=question, status="completed"))
+            s.add(Message(id=agent_msg_id, thread_id=thread_id, session_id=sess.id, role="agent", content="", status="queued"))
+        prompt = build_prompt(question=prompt_question, quote=quote, document_path=rel, sha256=sha, heading=heading, prior=None,
+                              versions=self.docs.list_versions(doc.id))
+        assert self.ctx.jobs
+        job_id = self.ctx.jobs.enqueue_turn(session_id=sess.id, thread_id=thread_id, prompt=prompt,
+                                            context={"document_id": doc.id, "document_path": rel, "sha256": sha, "quote": quote, "diff": diff_ctx},
+                                            agent_message_id=agent_msg_id)
+        with self.ctx.db.write() as s:
+            m = s.get(Message, agent_msg_id)
+            if m:
+                m.job_id = job_id
+        return {"thread_id": thread_id, "job_id": job_id, "session_id": sess.id, "document_id": doc.id, "anchored": anchored}
+
+    def comments_for(self, paths: list[str]) -> dict[str, list[dict[str, Any]]]:
+        """Diff comments (threads with diff_json) per path, for showing markers in the diff view."""
+        with self.ctx.db.read() as s:
+            docs = {d.id: d.path for d in s.query(Document).filter(Document.workspace_id == self.docs.workspace_id, Document.path.in_(paths)).all()}
+            if not docs:
+                return {}
+            threads = s.query(Thread).filter(Thread.document_id.in_(list(docs)), Thread.diff_json.isnot(None)).order_by(Thread.created_at).all()
+            out: dict[str, list[dict[str, Any]]] = {}
+            for t in threads:
+                first = s.query(Message).filter_by(thread_id=t.id).order_by(Message.created_at).first()
+                last = s.query(Message).filter_by(thread_id=t.id).order_by(Message.created_at.desc()).first()
+                out.setdefault(docs[t.document_id], []).append({
+                    "thread_id": t.id, "diff": json.loads(t.diff_json or "{}"), "question": first.content if first else "",
+                    "last_status": last.status if last else None, "message_count": s.query(Message).filter_by(thread_id=t.id).count(),
+                })
+            return out
+
+
+def _rendered_candidates(line: str) -> list[str]:
+    """Plausible rendered forms of a Markdown source line, most specific first."""
+    import re
+
+    out: list[str] = [line]
+    stripped = re.sub(r"^(\s*([-*+]|\d+[.)])\s+|\s*#{1,6}\s+|\s*>\s*)+", "", line).strip()
+    stripped = re.sub(r"^\s*[-*+]\s+\[[ xX]\]\s+", "", stripped)  # task list
+    if stripped and stripped not in out:
+        out.append(stripped)
+    plain = re.sub(r"(\*\*|__|\*|_|`|~~)", "", stripped)
+    plain = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", plain).strip()
+    if plain and plain not in out:
+        out.append(plain)
+    return out
+
+
+class DiffCommentIn(BaseModel):
+    path: str
+    base: str = "HEAD"
+    target: str = "worktree"
+    side: str = Field("added", pattern="^(added|deleted|context)$")
+    line_no: int | None = None
+    line_text: str = Field("", max_length=4000)
+    hunk: str | None = Field(None, max_length=20000)
+    question: str = Field(min_length=1, max_length=100000)
+    session_id: str | None = None
+
+
+@router.get("/diff")
+def get_diff(path: str = Query(""), base: str = Query("HEAD"), target: str | None = Query(None), markdown_only: bool = Query(True),
+             ctx: AppContext = Depends(require_auth)):
+    svc = DiffService(ctx)
+    result = svc.diff(path, base, target, markdown_only)
+    result["comments"] = svc.comments_for([f["path"] for f in result["files"]])
+    return result
+
+
+@router.post("/diff/comments", status_code=201)
+async def post_diff_comment(body: DiffCommentIn, ctx: AppContext = Depends(require_auth_mutating)):
+    return await DiffService(ctx).comment(body)
+
+
+@router.get("/refs")
+def list_refs(ctx: AppContext = Depends(require_auth)):
+    """Recent commits and branches to pick a diff base from."""
+    assert ctx.documents
+    root = ctx.documents.root
+    code, out, _ = git_run(root, ["log", "--max-count=50", "--format=%H%x00%h%x00%s%x00%cI", "--"])
+    commits = []
+    if code == 0:
+        for line in out.decode("utf-8", "replace").splitlines():
+            parts = line.split("\0")
+            if len(parts) == 4:
+                commits.append({"sha": parts[0], "short": parts[1], "subject": parts[2], "date": parts[3]})
+    code, out, _ = git_run(root, ["for-each-ref", "--format=%(refname:short)", "refs/heads", "refs/remotes"])
+    branches = out.decode("utf-8", "replace").split() if code == 0 else []
+    return {"commits": commits, "branches": branches}

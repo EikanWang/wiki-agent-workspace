@@ -91,11 +91,22 @@ body.resizing { cursor: col-resize; user-select: none; }
 /* file tree */
 .file-tree { font-size: 14px; }
 .tree-header { display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; border-bottom: 1px solid var(--border); font-weight: 600; }
-.tree-row { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; border: none; background: transparent; padding: 4px 8px; cursor: pointer; border-radius: 6px; }
+.tree-row { display: flex; align-items: center; gap: 4px; width: 100%; text-align: left; border: none; background: transparent; padding: 2px 8px 2px 8px; border-radius: 6px; }
 .tree-row:hover { background: var(--accent); }
 .tree-row.selected { background: var(--accent); color: var(--primary); font-weight: 600; }
+.tree-row.inert .name { color: var(--muted); }
+.tree-row.escapes .name { text-decoration: underline dotted var(--warn); }
+.tree-main { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; border: none; background: transparent; padding: 2px 0; text-align: left; cursor: pointer; color: inherit; }
+.tree-main:disabled { cursor: default; }
 .tree-row .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tree-row .chev { width: 12px; color: var(--muted); }
+.tree-row .chev { width: 12px; color: var(--muted); flex: none; }
+.tree-action { border: none; background: transparent; color: var(--muted); cursor: pointer; padding: 0 4px; border-radius: 4px; font-weight: 700; visibility: hidden; }
+.tree-row:hover .tree-action { visibility: visible; }
+.tree-action:hover { color: var(--primary); background: var(--bg); }
+.fi-wrap { position: relative; display: inline-flex; flex: none; width: 16px; height: 16px; }
+.fi { display: block; }
+.fi-badge { position: absolute; right: -3px; bottom: -3px; }
+.ws-name { display: inline-flex; align-items: center; gap: 6px; }
 .git-badge { font-size: 10px; padding: 0 6px; border-radius: 999px; background: var(--accent); color: var(--muted); }
 .git-badge.untracked, .git-badge.modified, .git-badge.deleted { background: var(--warn-bg); color: var(--warn); }
 .tree-loading, .tree-empty, .tree-error { padding: 6px 8px; color: var(--muted); font-size: 13px; }
@@ -257,11 +268,52 @@ mark.waw-hl.review.needs_review { border-bottom: 2px dashed var(--warn); }
 }
 
 /* recent work */
+.recent-toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 8px; }
+.recent-toolbar input[type="search"] { flex: 1; border: 1px solid var(--border); border-radius: 8px; padding: 5px 8px; background: var(--bg); }
 .recent-list { display: flex; flex-direction: column; gap: 6px; max-height: 70vh; overflow: auto; }
-.recent-item { text-align: left; border: 1px solid var(--border); background: var(--card); border-radius: 10px; padding: 8px 12px; cursor: pointer; display: flex; flex-direction: column; gap: 3px; }
+.recent-item { display: flex; align-items: stretch; gap: 4px; border: 1px solid var(--border); background: var(--card); border-radius: 10px; }
 .recent-item:hover { border-color: var(--primary); }
+.recent-item.hidden { opacity: 0.6; }
+.recent-main { flex: 1; min-width: 0; text-align: left; border: none; background: transparent; padding: 8px 12px; cursor: pointer; display: flex; flex-direction: column; gap: 3px; color: inherit; }
+.recent-actions { display: flex; flex-direction: column; justify-content: center; padding: 4px; }
+.recent-actions .icon-btn.danger:hover { color: var(--red); }
+.confirm-box { margin-top: 10px; padding: 10px 12px; border-radius: 10px; background: var(--warn-bg); font-size: 14px; }
+.btn.danger { color: var(--red); border-color: var(--red); }
 .recent-head { display: flex; justify-content: space-between; gap: 8px; }
 .recent-path { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .recent-quote { font-size: 12px; color: var(--muted); border-left: 2px solid var(--primary); padding-left: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .recent-last { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .empty .recent-list { max-width: 760px; }
+
+/* diff review */
+.diff-review { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.diff-summary { padding: 6px 16px; border-bottom: 1px solid var(--border); }
+.diff-summary .add, .diff-file-head .add { color: var(--green); }
+.diff-summary .del, .diff-file-head .del { color: var(--red); }
+.link-btn { border: none; background: transparent; color: var(--primary); cursor: pointer; padding: 0; font-size: inherit; }
+.diff-body { flex: 1; overflow: auto; padding: 8px 16px 120px; }
+.diff-file { border: 1px solid var(--border); border-radius: 10px; margin-bottom: 12px; overflow: hidden; }
+.diff-file-head { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: var(--card); cursor: pointer; font-size: 13px; }
+.diff-file-head .chev { width: 12px; color: var(--muted); }
+.diff-path { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.diff-table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 12.5px; }
+.diff-line td { padding: 0 8px; white-space: pre-wrap; word-break: break-word; vertical-align: top; }
+.diff-line td.no { width: 3.5em; text-align: right; color: var(--muted); user-select: none; border-right: 1px solid var(--border); font-size: 11px; }
+.diff-line td.code .marker { display: inline-block; width: 1.2em; color: var(--muted); user-select: none; }
+.diff-line.add td.code { background: rgba(0, 162, 64, 0.12); }
+.diff-line.del td.code { background: rgba(224, 46, 42, 0.10); }
+.diff-line.hunk td { background: var(--accent); color: var(--primary); font-size: 11px; padding: 2px 8px; }
+.diff-line.add:hover td.code, .diff-line.del:hover td.code, .diff-line.ctx:hover td.code { outline: 1px solid var(--primary); cursor: pointer; }
+.diff-line.composing td.code { outline: 2px solid var(--primary); }
+.diff-line.has-comments td.no:first-child { border-left: 3px solid var(--primary); }
+.diff-comment-row td, .diff-composer-row td { padding: 4px 8px 8px 3.5em; background: var(--bg); }
+.diff-comment { display: block; width: 100%; text-align: left; border: 1px solid var(--border); border-left: 3px solid var(--primary); background: var(--card); border-radius: 8px; padding: 6px 10px; cursor: pointer; font-family: inherit; font-size: 13px; color: inherit; }
+.diff-comment:hover { border-color: var(--primary); }
+.diff-comment .who { font-weight: 600; }
+.diff-composer { border: 1px solid var(--primary); border-radius: 10px; padding: 8px 10px; background: var(--card); font-family: inherit; }
+.diff-composer textarea { width: 100%; border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; background: var(--bg); font-family: inherit; }
+.layout.view-diff { grid-template-columns: var(--sidebar-width, 260px) 1fr; }
+.diff-origin { margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
+.diff-origin-line { display: block; font-family: var(--mono); padding: 2px 6px; border-radius: 4px; white-space: pre-wrap; }
+.diff-origin-line.added { background: rgba(0, 162, 64, 0.12); }
+.diff-origin-line.deleted { background: rgba(224, 46, 42, 0.10); }
