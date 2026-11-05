@@ -113,7 +113,7 @@ body.resizing { cursor: col-resize; user-select: none; }
 .toc-item:hover { background: var(--accent); color: var(--fg); }
 .toc-item.l1 { font-weight: 600; color: var(--fg); }
 .toc-item.l3 { padding-left: 14px; } .toc-item.l4 { padding-left: 22px; } .toc-item.l5, .toc-item.l6 { padding-left: 30px; }
-.markdown-body { max-width: var(--reader-width, 820px); line-height: 1.7; flex: 1; min-width: 0; -webkit-user-select: text; user-select: text; font-family: var(--reader-font, inherit); font-size: var(--reader-size, 15px); }
+.markdown-body { max-width: var(--reader-width, none); width: 100%; line-height: 1.7; flex: 1; min-width: 0; -webkit-user-select: text; user-select: text; font-family: var(--reader-font, inherit); font-size: var(--reader-size, 15px); }
 .markdown-body h1, .markdown-body h2 { border-bottom: 1px solid var(--border); padding-bottom: 4px; }
 .markdown-body pre { background: var(--card); padding: 12px; border-radius: 8px; overflow: auto; }
 .markdown-body code { background: var(--card); padding: 1px 5px; border-radius: 4px; font-size: 0.9em; }
@@ -206,6 +206,9 @@ mark.waw-hl.review.needs_review { border-bottom: 2px dashed var(--warn); }
 .term-tabs .btn { background: #22252c; border-color: rgba(255, 255, 255, 0.12); color: #ddd; }
 .term-tab { border: 1px solid transparent; background: transparent; color: #bbb; padding: 4px 10px; border-radius: 8px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
 .term-tab.active { background: #2a2e37; color: #fff; border-color: rgba(255, 255, 255, 0.15); }
+.term-tab.exited, .term-tab.unavailable { color: #888; }
+.tab-x { border: none; background: transparent; color: #aaa; cursor: pointer; padding: 0 2px; margin-left: 2px; font-size: 14px; line-height: 1; border-radius: 4px; }
+.tab-x:hover { color: #fff; background: rgba(255, 255, 255, 0.15); }
 .term-tab .dot { width: 8px; height: 8px; border-radius: 50%; background: #666; }
 .term-tab .dot.connected, .term-tab .dot.live { background: var(--green); }
 .term-tab .dot.detached, .term-tab .dot.connecting { background: #e0a800; }

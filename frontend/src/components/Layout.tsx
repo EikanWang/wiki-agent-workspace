@@ -47,7 +47,7 @@ export function Resizer({ onResize, onEnd, side }: { onResize: (dx: number) => v
 export interface Prefs {
   readerFont: "system" | "serif" | "mono";
   readerSize: number; // px
-  readerWidth: number; // max content width px
+  readerWidth: number; // max content width px; 0 = fill the available width
   terminalSize: number; // px
   sidebarWidth: number;
   panelWidth: number;
@@ -59,7 +59,7 @@ export interface Prefs {
 export const DEFAULT_PREFS: Prefs = {
   readerFont: "system",
   readerSize: 15,
-  readerWidth: 820,
+  readerWidth: 0,
   terminalSize: 13,
   sidebarWidth: 260,
   panelWidth: 380,
@@ -74,7 +74,9 @@ export function loadPrefs(): Prefs {
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return { ...DEFAULT_PREFS };
-    return { ...DEFAULT_PREFS, ...(JSON.parse(raw) as Partial<Prefs>) };
+    const stored = JSON.parse(raw) as Partial<Prefs>;
+    if (stored.readerWidth === 820) stored.readerWidth = 0; // migrate the old fixed default to "fill"
+    return { ...DEFAULT_PREFS, ...stored };
   } catch {
     return { ...DEFAULT_PREFS };
   }
@@ -121,8 +123,9 @@ export function FontSettings({ prefs, onChange, onClose }: { prefs: Prefs; onCha
       <label className="pref-row">
         <span>Content width</span>
         <span className="stepper">
-          <input type="range" min={560} max={1400} step={20} value={prefs.readerWidth} onChange={(e) => onChange({ readerWidth: Number(e.target.value) })} />
-          <span className="muted small">{prefs.readerWidth}px</span>
+          <label className="small"><input type="checkbox" checked={prefs.readerWidth === 0} onChange={(e) => onChange({ readerWidth: e.target.checked ? 0 : 820 })} data-testid="pref-fill" /> fill</label>
+          <input type="range" min={560} max={1600} step={20} value={prefs.readerWidth || 1600} disabled={prefs.readerWidth === 0} onChange={(e) => onChange({ readerWidth: Number(e.target.value) })} />
+          <span className="muted small">{prefs.readerWidth ? `${prefs.readerWidth}px` : "fill"}</span>
         </span>
       </label>
       <label className="pref-row">

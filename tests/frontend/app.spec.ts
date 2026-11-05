@@ -313,3 +313,54 @@ test("layout: font settings, foldable/resizable file tree and discussion panel, 
   await expect(page.locator(".sidebar")).toBeVisible();
   await page.screenshot({ path: "/tmp/opencode/shot5.png" });
 });
+
+test("folding the file tree and discussion panel enlarges the document area", async ({ page }) => {
+  await login(page);
+  await openGuide(page);
+  // make sure both side panels are open first (previous test folded them)
+  if ((await page.locator(".sidebar").isHidden())) await page.getByTestId("toggle-sidebar").click();
+  if ((await page.getByTestId("panel-expand").count()) > 0) await page.getByTestId("panel-expand").click();
+  const body = page.getByTestId("markdown-body");
+  const w0 = (await body.boundingBox())!.width;
+  await page.getByTestId("toggle-sidebar").click();
+  await expect.poll(async () => (await body.boundingBox())!.width).toBeGreaterThan(w0 + 100);
+  const w1 = (await body.boundingBox())!.width;
+  await page.getByTestId("panel-collapse").click();
+  await expect.poll(async () => (await body.boundingBox())!.width).toBeGreaterThan(w1 + 150);
+  // nearly the whole viewport is now used by the document (minus outline, paddings, collapsed tab)
+  const vw = page.viewportSize()!.width;
+  expect((await body.boundingBox())!.width).toBeGreaterThan(vw * 0.75);
+  await page.screenshot({ path: "/tmp/opencode/shot6.png" });
+});
+
+
+test("a terminal whose shell exited is shown as exited and can be dismissed without a confirmation", async ({ page }) => {
+  await login(page);
+  await page.getByTestId("view-terminal").click();
+  // start from a clean slate: close terminals left over from earlier tests
+  while ((await page.getByTestId("terminal-tab").count()) > 0) {
+    await page.getByTestId("terminal-tab").first().click();
+    page.once("dialog", (d) => d.accept());
+    await page.getByTestId("terminal-close").click();
+    await page.waitForTimeout(300);
+  }
+  await page.getByTestId("terminal-new").click();
+  await expect(page.getByTestId("terminal-tab")).toHaveCount(1);
+  const view = page.locator(".term-view.active");
+  await expect(view).toHaveAttribute("data-state", "connected", { timeout: 15000 });
+  await page.locator(".term-view.active .xterm-helper-textarea").focus();
+  await page.keyboard.type("exit\n");
+  await expect(view).toHaveAttribute("data-state", "exited", { timeout: 15000 });
+  await expect(page.getByTestId("terminal-tab").first()).toContainText("(exited)");
+  page.on("dialog", (d) => { throw new Error("no confirmation expected for an exited terminal: " + d.message()); });
+  await page.getByTestId("terminal-dismiss").first().click();
+  await expect(page.getByTestId("terminal-tab")).toHaveCount(0);
+  // the "Clear exited" bulk action
+  await page.getByTestId("terminal-new").click();
+  await expect(page.locator(".term-view.active")).toHaveAttribute("data-state", "connected", { timeout: 15000 });
+  await page.locator(".term-view.active .xterm-helper-textarea").focus();
+  await page.keyboard.type("exit\n");
+  await expect(page.locator(".term-view.active")).toHaveAttribute("data-state", "exited", { timeout: 15000 });
+  await page.getByTestId("terminal-clear-exited").click();
+  await expect(page.getByTestId("terminal-tab")).toHaveCount(0);
+});

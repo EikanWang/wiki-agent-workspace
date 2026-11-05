@@ -323,7 +323,7 @@ export default function App() {
       style={{
         ["--reader-font" as string]: FONT_STACKS[prefs.readerFont],
         ["--reader-size" as string]: `${prefs.readerSize}px`,
-        ["--reader-width" as string]: `${prefs.readerWidth}px`,
+        ["--reader-width" as string]: prefs.readerWidth ? `${prefs.readerWidth}px` : "none",
         ["--sidebar-width" as string]: sidebarOpen ? `${prefs.sidebarWidth}px` : "0px",
         ["--panel-width" as string]: panelOpen ? `${prefs.panelWidth}px` : "36px",
       }}

@@ -40,11 +40,21 @@ export default function TerminalPanel({
   };
 
   const close = async (t: TerminalInfo) => {
-    if (!window.confirm(`Close terminal "${t.label}"? This terminates its shell and any running processes. Disconnecting the browser never closes terminals.`)) return;
+    // A live terminal has running processes: ask once. An exited/unavailable one has nothing to kill: just dismiss it.
+    if (t.state === "live" && !window.confirm(`Close terminal "${t.label}"? This terminates its shell and any running processes. Disconnecting the browser never closes terminals.`)) return;
     try {
       await del(`/terminals/${t.id}`);
       await onChanged();
       if (activeId === t.id) onActive(null);
+    } catch (e) {
+      setError((e as ApiError).message);
+    }
+  };
+
+  const clearExited = async () => {
+    try {
+      for (const t of terminals.filter((x) => x.state !== "live")) await del(`/terminals/${t.id}`);
+      await onChanged();
     } catch (e) {
       setError((e as ApiError).message);
     }
@@ -81,22 +91,28 @@ export default function TerminalPanel({
     <div className="terminal-panel" data-testid="terminal-panel">
       <div className="term-tabs">
         {terminals.map((t) => (
-          <button key={t.id} className={`term-tab ${t.id === activeId ? "active" : ""} ${t.state}`} onClick={() => onActive(t.id)} onDoubleClick={() => void rename(t)} title={`${t.cwd} · tmux ${t.tmux_session}`} data-testid="terminal-tab">
+          <span key={t.id} className={`term-tab ${t.id === activeId ? "active" : ""} ${t.state}`} onClick={() => onActive(t.id)} onDoubleClick={() => void rename(t)} title={`${t.cwd} · tmux ${t.tmux_session}`} data-testid="terminal-tab" role="tab">
             <span className={`dot ${states[t.id] ?? t.state}`} />
             {t.label}
             {t.state !== "live" && <span className="muted small"> ({t.state})</span>}
-          </button>
+            {t.state !== "live" && (
+              <button className="tab-x" onClick={(e) => { e.stopPropagation(); void close(t); }} title="Dismiss this exited terminal" data-testid="terminal-dismiss" aria-label="Dismiss">×</button>
+            )}
+          </span>
         ))}
         <button className="btn small" onClick={() => void create()} disabled={!info?.tmux_available} title={info?.install_hint ?? "Create a new tmux-backed terminal"} data-testid="terminal-new">
           + New terminal
         </button>
+        {terminals.some((t) => t.state !== "live") && (
+          <button className="btn small" onClick={() => void clearExited()} title="Remove all exited terminals from the list" data-testid="terminal-clear-exited">Clear exited</button>
+        )}
         <span className="spacer" />
         {active && (
           <>
             <button className="btn small" onClick={() => void move(active, -1)} title="Move tab left">◂</button>
             <button className="btn small" onClick={() => void move(active, 1)} title="Move tab right">▸</button>
             <button className="btn small" onClick={() => void showHistory(active)} title="Snapshot of the tmux pane history (server-side), distinct from the browser scrollback">tmux history</button>
-            <button className="btn small danger" onClick={() => void close(active)} data-testid="terminal-close">Close terminal</button>
+            <button className="btn small danger" onClick={() => void close(active)} data-testid="terminal-close">{active.state === "live" ? "Close terminal" : "Dismiss"}</button>
           </>
         )}
       </div>
@@ -118,6 +134,7 @@ export default function TerminalPanel({
             active={visible && t.id === activeId}
             onState={(s) => setStates((m) => ({ ...m, [t.id]: s }))}
             onExited={() => void onChanged()}
+            onDismiss={() => void close(t)}
             fontSize={fontSize}
           />
         ))}
@@ -156,7 +173,7 @@ function b64decode(s: string): Uint8Array {
   return out;
 }
 
-function TerminalView({ terminal, active, onState, onExited, fontSize }: { terminal: TerminalInfo; active: boolean; onState: (s: ConnState) => void; onExited: () => void; fontSize: number }) {
+function TerminalView({ terminal, active, onState, onExited, onDismiss, fontSize }: { terminal: TerminalInfo; active: boolean; onState: (s: ConnState) => void; onExited: () => void; onDismiss: () => void; fontSize: number }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -308,6 +325,9 @@ function TerminalView({ terminal, active, onState, onExited, fontSize }: { termi
         <span className="spacer" />
         {(state === "detached" || state === "connecting") && terminal.state === "live" && (
           <button className="btn small" onClick={connect} data-testid="terminal-reconnect">Reconnect</button>
+        )}
+        {(state === "exited" || state === "closed") && (
+          <button className="btn small" onClick={onDismiss} data-testid="terminal-dismiss-status">Dismiss</button>
         )}
       </div>
       <div className="xterm-host" ref={hostRef} onFocus={() => fitRef.current?.fit()} />
