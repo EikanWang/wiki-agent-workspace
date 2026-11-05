@@ -22,6 +22,18 @@ Design specification: [`DESIGN.md`](DESIGN.md). Visual reference (mockup only): 
 | `tests/fakes/` | `fake-opencode`, `fake-codex`: emit the providers' documented JSON protocols without credentials |
 | `scripts/setup.sh`, `scripts/start.sh`, `scripts/test.sh` | one setup command, one start command, test runner |
 | `config.example.toml`, `requirements.lock`, `frontend/package-lock.json` | configuration template and dependency locks |
+| `docs/` | deployment, configuration, operations, schema and architecture guides (index below) |
+
+## Documentation
+
+| Guide | Read it when… |
+| --- | --- |
+| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | you are installing on a new machine: prerequisites with install commands, setup, configuration decisions, service unit, remote access (tunnel / HTTPS proxy), provider login, upgrade, uninstall |
+| [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | you need the meaning and default of every `config.toml` key and environment variable, or want several wikis on one host |
+| [docs/OPERATIONS.md](docs/OPERATIONS.md) | day-to-day: logs, backup/restore, moving the state directory, maintenance, and a troubleshooting table of every error/banner the app can show |
+| [docs/SCHEMA.md](docs/SCHEMA.md) | you want to query or understand the SQLite database (every table and column, kept in sync by a test) |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | you are changing the code: module map, request/turn flow, text-model rules, security boundaries, dev workflow, how to add a migration or provider |
+| [DESIGN.md](DESIGN.md) | the behavioural specification the implementation follows |
 
 ## Requirements (server)
 
@@ -30,11 +42,13 @@ Design specification: [`DESIGN.md`](DESIGN.md). Visual reference (mockup only): 
 - Optional: `opencode` and/or `codex` on `PATH`, already logged in. Without them the reader and terminal still work.
 
 `scripts/setup.sh` does **not** install system packages; it names any missing dependency and how to install it.
+Install commands per distro, the recommended `fs.inotify.max_user_watches` increase for large wikis, and a
+step-by-step walkthrough are in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ## Setup (one command) and start (one command)
 
 ```bash
-git clone <this repository> wiki-agent-workspace && cd wiki-agent-workspace
+git clone https://github.com/EikanWang/wiki-agent-workspace.git && cd wiki-agent-workspace
 scripts/setup.sh --workspace /path/to/your/wiki        # creates .venv, builds the UI, writes config, prints the token ONCE
 scripts/start.sh                                        # http://127.0.0.1:8765
 ```
@@ -44,7 +58,7 @@ token and server secret, and creates `~/.local/share/wiki-agent-workspace/` for 
 snapshots and the app-owned tmux configuration — all outside your Git checkout. Options:
 
 ```
-scripts/setup.sh --workspace DIR [--port 8765] [--bind 127.0.0.1] [--default-provider opencode|codex]
+scripts/setup.sh --workspace DIR [--port 8765] [--bind 127.0.0.1] [--state-dir DIR] [--default-provider opencode|codex]
                  [--codex-sandbox read-only|workspace-write|danger-full-access] [--show-token]
 ```
 
@@ -105,78 +119,24 @@ Alternative token source: `WAW_ACCESS_TOKEN=... scripts/start.sh`. Other env ove
 
 All processes are started with argument arrays; document text never passes through a shell string.
 
-## Remote access (two options; none requires a new account)
+## Remote access
 
 The server binds to `127.0.0.1:8765` by default and must never be exposed unauthenticated on a public interface.
+Two supported options, neither requiring a new account — details and proxy snippets in
+[docs/DEPLOYMENT.md §8](docs/DEPLOYMENT.md#8-remote-access):
 
-**Option A — private network / tunnel (simplest).** Reach the loopback port over something you already have:
+- **Private network / tunnel**: `ssh -N -L 8765:127.0.0.1:8765 user@remote-host`, or `--bind` a VPN/LAN address.
+- **HTTPS via an authenticated reverse proxy** (Caddy/nginx): set `cookie_secure = true`, `trusted_proxies`,
+  `allowed_origins`; optional `gateway_auth` for gateways that already authenticate you.
 
-```bash
-# SSH tunnel from your laptop
-ssh -N -L 8765:127.0.0.1:8765 user@remote-host     # then open http://127.0.0.1:8765
-```
-or bind to a VPN/Tailscale/WireGuard address: `scripts/setup.sh --bind 100.64.0.5` (set `cookie_secure = false`
-unless that path is HTTPS). The token login still applies.
+## Where your data lives
 
-**Option B — HTTPS through an authenticated reverse proxy.** Example with Caddy (terminates TLS, forwards WebSockets):
-
-```
-wiki.example.internal {
-    basic_auth { you <hash from `caddy hash-password`> }   # optional second factor in front of the token login
-    reverse_proxy 127.0.0.1:8765
-}
-```
-Then in `config.toml`: `cookie_secure = true`, `trusted_proxies = ["127.0.0.1"]`, and add the public origin to
-`allowed_origins` if the proxy rewrites `Host`. If the gateway already authenticates the user and sets a header
-(e.g. Authelia/oauth2-proxy → `X-Forwarded-User`), you may set `gateway_auth = true` and `gateway_user_header =
-"X-Forwarded-User"`; only requests from `trusted_proxies` carrying that header skip the token login.
-
-An optional user-level systemd unit (not required):
-
-```ini
-# ~/.config/systemd/user/wiki-agent-workspace.service
-[Service]
-ExecStart=%h/wiki-agent-workspace/scripts/start.sh
-Restart=on-failure
-[Install]
-WantedBy=default.target
-```
-`systemctl --user enable --now wiki-agent-workspace` (run `loginctl enable-linger $USER` to keep it alive after logout).
-
-## Where your data lives, and how to move it
-
-Everything the app stores is in **one self-contained folder**, the state directory (`server.state_dir`, default
-`~/.local/share/wiki-agent-workspace`), separate from the wiki checkout and from the config file:
-
-```
-<state_dir>/
-├── workspace.sqlite3      # documents, discussions (threads/messages), agent sessions, jobs, reading state,
-│                          # review marks, previews, terminal tabs, login sessions — see docs/SCHEMA.md
-├── snapshots/             # exact bytes of every document version a discussion or preview refers to
-├── tmux-socket            # name of the app-owned tmux socket (kept across moves so terminals reconnect)
-├── tmux.conf              # generated tmux config for that socket
-└── server.log             # if you redirect the server output there (scripts/start.sh does not by default)
-```
-
-All references inside the database are relative to this folder, so to relocate or clone your setup:
-
-1. Stop the server (`Ctrl-C` / `pkill -f "backend.app.cli serve"`); a clean stop folds the SQLite write-ahead log
-   into `workspace.sqlite3`. (If you must copy while running, use the **Backup** button / `GET /api/v1/export`,
-   which produces a consistent `tar.gz` of the database and `snapshots/`, and extract that instead.)
-2. Copy the folder: `cp -a ~/.local/share/wiki-agent-workspace /new/place/state`.
-3. Edit the config file (`~/.config/wiki-agent-workspace/config.toml`, or any file passed with `--config` /
-   `WAW_CONFIG`): set `server.state_dir = "/new/place/state"` and, if the wiki checkout moved too,
-   `workspace.root = "/new/place/wiki"`. Copy the config file as well if you move to another machine — it holds
-   the access token and the server secret (your login cookie stays valid only with the same secret).
-4. `scripts/start.sh`. Documents, discussions, reading positions, version history and *Recent* are all back. If
-   `workspace.root` changed because the checkout itself was moved (the old path no longer exists), the single
-   workspace record is relocated to the new path automatically (logged at startup), so document identities and
-   discussions follow the moved checkout. Pointing the same state directory at a *different, still existing* wiki
-   keeps the old wiki's data untouched in the database; it reappears when that root is configured again. Live tmux terminals survive a
-   move on the same host because the socket name is stored in the folder.
-
-`wiki-agent-workspace print-config` (via `.venv/bin/python -m backend.app.cli print-config`) shows the effective
-paths with secrets redacted.
+Everything the app stores is in one self-contained, relocatable folder — the state directory
+(`server.state_dir`, default `~/.local/share/wiki-agent-workspace`): `workspace.sqlite3` (see
+[docs/SCHEMA.md](docs/SCHEMA.md)), `snapshots/`, `tmux-socket`, `tmux.conf`. The config file with the token lives
+separately (`~/.config/wiki-agent-workspace/config.toml`). Backup, restore and moving are described in
+[docs/OPERATIONS.md](docs/OPERATIONS.md); in short: stop, copy the folder, point `server.state_dir` (and
+`workspace.root` if the wiki moved) at the new place, start.
 
 ## Security model (summary)
 
@@ -193,7 +153,7 @@ paths with secrets redacted.
 ## Running the tests
 
 ```bash
-scripts/test.sh            # backend: pytest (54 tests; real git + tmux + fake agents), ~25 s
+scripts/test.sh            # backend: pytest (57 tests; real git + tmux + fake agents), ~25 s
 scripts/test.sh --e2e      # + Playwright browser suite (13 scenarios) against the production build
 # or individually
 .venv/bin/python -m pytest tests/backend -q

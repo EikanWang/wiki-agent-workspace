@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # User-level setup for Wiki Agent Workspace. No sudo, no system packages installed.
-# Usage: scripts/setup.sh [--workspace DIR] [--port N] [--bind ADDR] [--default-provider opencode|codex]
+# Usage: scripts/setup.sh [--workspace DIR] [--port N] [--bind ADDR] [--state-dir DIR] [--default-provider opencode|codex]
 #                         [--codex-sandbox read-only|workspace-write|danger-full-access] [--show-token]
 set -euo pipefail
 cd "$(dirname "$0")/.."

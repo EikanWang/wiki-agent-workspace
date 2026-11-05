@@ -195,7 +195,7 @@ def load_settings(path: Path | None = None, env: dict[str, str] | None = None) -
 
     workspace_root = Path(env.get("WAW_WORKSPACE") or ws.get("root") or os.getcwd()).expanduser()
     state_dir = Path(env.get("WAW_STATE_DIR") or server.get("state_dir") or DEFAULT_STATE_DIR).expanduser()
-    frontend_dist = server.get("frontend_dist") or env.get("WAW_FRONTEND_DIST")
+    frontend_dist = env.get("WAW_FRONTEND_DIST") or server.get("frontend_dist") or None
 
     return Settings(
         config_path=cfg_path,
