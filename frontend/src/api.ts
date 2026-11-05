@@ -124,7 +124,22 @@ export interface ReadingState {
   heading: string | null;
   offset: number;
   scroll_fraction: number;
+  active_thread_id: string | null;
   updated_at: string;
+}
+
+export interface RecentItem {
+  document_id: string;
+  path: string;
+  missing: boolean;
+  last_activity: string;
+  thread_count: number;
+  message_count: number;
+  last_thread_id: string | null;
+  last_thread_quote: string | null;
+  last_message: { role: string; content: string; status: string; created_at: string } | null;
+  reading_state: ReadingState | null;
+  session: { provider: string; short_id: string | null; display_name: string | null; status: string } | null;
 }
 
 export interface OpenDocument {

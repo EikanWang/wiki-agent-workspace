@@ -255,3 +255,13 @@ mark.waw-hl.review.needs_review { border-bottom: 2px dashed var(--warn); }
   .topbar .view-tabs { display: none; }
   .sel-popover { width: calc(100vw - 24px); }
 }
+
+/* recent work */
+.recent-list { display: flex; flex-direction: column; gap: 6px; max-height: 70vh; overflow: auto; }
+.recent-item { text-align: left; border: 1px solid var(--border); background: var(--card); border-radius: 10px; padding: 8px 12px; cursor: pointer; display: flex; flex-direction: column; gap: 3px; }
+.recent-item:hover { border-color: var(--primary); }
+.recent-head { display: flex; justify-content: space-between; gap: 8px; }
+.recent-path { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recent-quote { font-size: 12px; color: var(--muted); border-left: 2px solid var(--primary); padding-left: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recent-last { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.empty .recent-list { max-width: 760px; }

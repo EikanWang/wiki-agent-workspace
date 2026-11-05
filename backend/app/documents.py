@@ -18,7 +18,7 @@ from .db import Database, iso, new_id, utcnow
 from .deps import AppContext, require_auth, require_auth_mutating
 from .errors import ApiError, bad_request, conflict, not_found, DOCUMENT_VERSION_CONFLICT, INVALID_ANCHOR
 from .gitinfo import GitInfo, git_info, git_show
-from .models import Document, DocumentVersion, ReadingState, ReviewMark, Thread, Workspace
+from .models import AgentSession, Document, DocumentVersion, Message, ReadingState, ReviewMark, Thread, Workspace
 from .textmodel import build_text_model
 
 MARKDOWN_SUFFIXES = {".md", ".markdown"}
@@ -291,23 +291,67 @@ class DocumentService:
             "heading": rs.heading,
             "offset": rs.offset,
             "scroll_fraction": rs.scroll_fraction,
+            "active_thread_id": rs.active_thread_id,
             "updated_at": iso(rs.updated_at),
         }
 
     def save_reading_state(self, doc_id: str, body: "ReadingStateIn") -> dict[str, Any]:
+        """Partial update: only the fields present in the request are changed."""
         self.get_document(doc_id)
+        fields = body.model_dump(exclude_unset=True)
         with self.db.write() as s:
             rs = s.get(ReadingState, doc_id)
             if rs is None:
-                rs = ReadingState(document_id=doc_id)
+                rs = ReadingState(document_id=doc_id, offset=0, scroll_fraction=0.0)
                 s.add(rs)
-            rs.version_sha256 = body.version_sha256
-            rs.heading = body.heading
-            rs.offset = body.offset
-            rs.scroll_fraction = body.scroll_fraction
+            for key in ("version_sha256", "heading", "offset", "scroll_fraction", "active_thread_id"):
+                if key in fields:
+                    setattr(rs, key, fields[key])
             rs.updated_at = utcnow()
             s.flush()
             return self._reading_state_dict(rs) or {}
+
+    # ------------------------------------------------------------------ recent work
+    def recent(self, limit: int = 50) -> list[dict[str, Any]]:
+        """Documents the user worked on, most recent activity first (reading, discussions, edits)."""
+        with self.db.read() as s:
+            docs = s.query(Document).filter_by(workspace_id=self.workspace_id).all()
+            out: list[dict[str, Any]] = []
+            for d in docs:
+                rs = s.get(ReadingState, d.id)
+                threads = s.query(Thread).filter_by(document_id=d.id).all()
+                tids = [t.id for t in threads]
+                last_msg = (s.query(Message).filter(Message.thread_id.in_(tids)).order_by(Message.created_at.desc()).first()
+                            if tids else None)
+                msg_count = s.query(Message).filter(Message.thread_id.in_(tids)).count() if tids else 0
+                candidates = [x for x in (rs.updated_at if rs else None, last_msg.created_at if last_msg else None,
+                                          max((t.updated_at for t in threads), default=None)) if x is not None]
+                if not candidates:
+                    continue  # merely opened once with nothing saved: not "work"
+                last_activity = max(candidates)
+                last_thread = None
+                if rs and rs.active_thread_id and any(t.id == rs.active_thread_id for t in threads):
+                    last_thread = next(t for t in threads if t.id == rs.active_thread_id)
+                elif last_msg:
+                    last_thread = next((t for t in threads if t.id == last_msg.thread_id), None)
+                sess = s.get(AgentSession, d.default_session_id) if d.default_session_id else None
+                out.append({
+                    "document_id": d.id,
+                    "path": d.path,
+                    "missing": d.missing,
+                    "last_activity": iso(last_activity),
+                    "thread_count": len(threads),
+                    "message_count": msg_count,
+                    "last_thread_id": last_thread.id if last_thread else None,
+                    "last_thread_quote": last_thread.cur_quote[:120] if last_thread else None,
+                    "last_message": ({"role": last_msg.role, "content": last_msg.content[:160], "status": last_msg.status,
+                                      "created_at": iso(last_msg.created_at)} if last_msg else None),
+                    "reading_state": self._reading_state_dict(rs),
+                    "session": ({"provider": sess.provider, "short_id": sess.native_id[-8:] if sess.native_id else None,
+                                 "display_name": sess.display_name, "status": sess.status} if sess else None),
+                })
+            out.sort(key=lambda e: e["last_activity"], reverse=True)
+            return out[:limit]
 
     # ------------------------------------------------------------------ review marks
     def add_review_mark(self, doc_id: str, version_sha256: str, anchor: dict[str, Any]) -> dict[str, Any]:
@@ -451,8 +495,9 @@ class DocumentService:
 class ReadingStateIn(BaseModel):
     version_sha256: str | None = None
     heading: str | None = None
-    offset: int = 0
-    scroll_fraction: float = Field(0.0, ge=0.0, le=1.0)
+    offset: int | None = Field(None, ge=0)
+    scroll_fraction: float | None = Field(None, ge=0.0, le=1.0)
+    active_thread_id: str | None = None
 
 
 class AnchorIn(BaseModel):
@@ -560,6 +605,11 @@ def get_diff(doc_id: str, from_: str = Query(alias="from"), to: str = Query("cur
 @router.post("/documents/{doc_id}/relink")
 def relink_document(doc_id: str, body: RelinkIn, ctx: AppContext = Depends(require_auth_mutating)):
     return _svc(ctx).relink(doc_id, body.path)
+
+
+@router.get("/recent")
+def recent_work(limit: int = Query(50, ge=1, le=500), ctx: AppContext = Depends(require_auth)):
+    return {"items": _svc(ctx).recent(limit)}
 
 
 @router.get("/documents")

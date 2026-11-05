@@ -134,3 +134,35 @@ async def test_missing_document_and_relink(api: Api, workspace: Path):
     assert r.status_code == 200 and r.json()["path"] == "docs/renamed.md"
     r = await api.get(f"/api/v1/documents/{doc['document_id']}/threads")
     assert r.json()["missing"] is False
+
+
+async def test_recent_work_sorted_by_activity_and_restores_thread(api: Api, workspace: Path):
+    from conftest import anchor_for as _anchor
+
+    (workspace / "docs" / "second.md").write_text("# Second\n\nSome text here.\n")
+    assert (await api.get("/api/v1/recent")).json()["items"] == []
+    a = await api.open_doc("docs/guide.md")
+    b = await api.open_doc("docs/second.md")
+    # merely opening is not "work"; saving a reading position is
+    assert (await api.get("/api/v1/recent")).json()["items"] == []
+    await api.put(f"/api/v1/documents/{a['document_id']}/reading-state", json={"version_sha256": a["sha256"], "heading": "Capture", "offset": 10, "scroll_fraction": 0.3})
+    import asyncio as _a
+
+    await _a.sleep(0.05)
+    # a discussion on the second document makes it the most recent
+    anc = _anchor(b["text"], "Some text")
+    r = await api.post(f"/api/v1/documents/{b['document_id']}/threads", json={**anc, "version_sha256": b["sha256"], "question": "what?"})
+    await api.wait_job(r.json()["job_id"])
+    items = (await api.get("/api/v1/recent")).json()["items"]
+    assert [i["path"] for i in items] == ["docs/second.md", "docs/guide.md"]
+    assert items[0]["thread_count"] == 1 and items[0]["message_count"] == 2
+    assert items[0]["last_thread_id"] == r.json()["thread_id"] and items[0]["last_thread_quote"] == "Some text"
+    assert items[0]["last_message"]["role"] == "agent" and items[0]["last_message"]["content"].startswith("echo:")
+    assert items[0]["session"]["provider"] == "opencode"
+    assert items[1]["reading_state"]["heading"] == "Capture" and items[1]["reading_state"]["scroll_fraction"] == pytest.approx(0.3)
+    # partial reading-state update: remembering the open discussion does not clobber the position
+    await _a.sleep(0.05)
+    r2 = await api.put(f"/api/v1/documents/{a['document_id']}/reading-state", json={"active_thread_id": "thread-x"})
+    assert r2.status_code == 200 and r2.json()["active_thread_id"] == "thread-x" and r2.json()["scroll_fraction"] == pytest.approx(0.3)
+    items = (await api.get("/api/v1/recent")).json()["items"]
+    assert items[0]["path"] == "docs/guide.md"  # touching the reading state is activity

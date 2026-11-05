@@ -168,6 +168,7 @@ class ReadingState(Base):
     heading: Mapped[str | None] = mapped_column(Text, nullable=True)
     offset: Mapped[int] = mapped_column(Integer, default=0)
     scroll_fraction: Mapped[float] = mapped_column(Float, default=0.0)
+    active_thread_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 
 

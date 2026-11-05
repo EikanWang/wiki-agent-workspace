@@ -4,6 +4,7 @@ import {
   ApiError,
   Bootstrap,
   OpenDocument,
+  RecentItem,
   ReviewMark,
   SessionList,
   TerminalInfo,
@@ -22,6 +23,7 @@ import DiscussionPanel, { LiveJob, SessionChip, useJobStream } from "./component
 import SessionPicker from "./components/SessionPicker";
 import TerminalPanel from "./components/TerminalPanel";
 import PreviewDialog from "./components/PreviewDialog";
+import RecentList from "./components/RecentList";
 import { SelectionAnchor } from "./textmodel";
 import { FONT_STACKS, FontSettings, Prefs, Resizer, loadPrefs, savePrefs } from "./components/Layout";
 
@@ -65,6 +67,9 @@ export default function App() {
   const persistPrefs = useCallback(() => setPrefs((p) => { savePrefs(p); return p; }), []);
   const [watcherReady, setWatcherReady] = useState(true);
   const [pendingFragment, setPendingFragment] = useState<string | null>(null);
+  const [showRecent, setShowRecent] = useState(false);
+  const [recentKey, setRecentKey] = useState(0);
+  const restoreThreadRef = useRef<string | null>(null);
   const pendingSelection = useRef<SelectionAnchor | null>(null);
 
   const notify = useCallback((m: string) => {
@@ -140,7 +145,12 @@ export default function App() {
         const d = await get<OpenDocument>(`/documents/open?path=${encodeURIComponent(path)}`);
         setDoc(d);
         setChanged(null);
-        if (!keepThread) setActiveThread(null);
+        if (!keepThread) {
+          // restore the discussion that was open the last time this document was read
+          const wanted = restoreThreadRef.current ?? d.reading_state?.active_thread_id ?? null;
+          restoreThreadRef.current = null;
+          setActiveThread(wanted);
+        }
         localStorage.setItem("waw.lastPath", path);
         await refreshThreads(d.document_id);
         setView("document");
@@ -309,6 +319,28 @@ export default function App() {
   };
 
   const activeThreadObj = useMemo(() => threads.find((t) => t.id === activeThread) ?? null, [threads, activeThread]);
+
+  // Remember which discussion is open so "Recent" can restore it later (server-side, per document).
+  const lastSavedThread = useRef<string | null | undefined>(undefined);
+  useEffect(() => {
+    if (!doc) return;
+    if (lastSavedThread.current === activeThread) return;
+    lastSavedThread.current = activeThread;
+    void put(`/documents/${doc.document_id}/reading-state`, { active_thread_id: activeThread }).catch(() => undefined);
+  }, [doc, activeThread]);
+  useEffect(() => {
+    lastSavedThread.current = undefined;
+  }, [doc?.document_id]);
+
+  const openRecent = useCallback(
+    (item: RecentItem) => {
+      setShowRecent(false);
+      restoreThreadRef.current = item.last_thread_id;
+      void openDocument(item.path);
+      if (item.last_thread_id) setMobilePane("chat");
+    },
+    [openDocument],
+  );
   const defaultSession = useMemo(() => sessions.find((s) => s.id === doc?.default_session_id), [sessions, doc?.default_session_id]);
 
   if (authed === null) return <div className="loading-screen">Loading…</div>;
@@ -348,6 +380,7 @@ export default function App() {
           <button className={view === "document" ? "active" : ""} onClick={() => setView("document")} data-testid="view-document">Document</button>
           <button className={view === "terminal" ? "active" : ""} onClick={() => setView("terminal")} data-testid="view-terminal">Terminal</button>
         </nav>
+        <button className="btn small" onClick={() => { setRecentKey((k) => k + 1); setShowRecent(true); }} title="Documents and discussions you worked on, newest first" data-testid="recent-button">Recent</button>
         <span className="font-settings-anchor">
           <button className="btn small" onClick={() => setShowFonts((v) => !v)} title="Font style and size" data-testid="font-button">Aa</button>
           {showFonts && <FontSettings prefs={prefs} onChange={updatePrefs} onClose={() => setShowFonts(false)} />}
@@ -412,6 +445,8 @@ export default function App() {
             <div className="empty">
               <h2>Open a Markdown file</h2>
               <p className="muted">Pick a document from the file tree. Files appear as soon as they exist in the working tree — no commit or push required.</p>
+              <h3>Recent work</h3>
+              <RecentList onOpen={openRecent} refreshKey={recentKey} />
             </div>
           )}
         </section>
@@ -463,6 +498,18 @@ export default function App() {
         <button className={view === "terminal" ? "active" : ""} onClick={() => setView("terminal")}>Terminal</button>
       </nav>
 
+      {showRecent && (
+        <div className="modal-backdrop" onClick={() => setShowRecent(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()} data-testid="recent-dialog">
+            <div className="modal-head">
+              <span>Recent work</span>
+              <button className="icon-btn" onClick={() => setShowRecent(false)}>×</button>
+            </div>
+            <div className="muted small">Newest activity first. Opening an entry restores the document, your reading position and the discussion you had open.</div>
+            <RecentList onOpen={openRecent} refreshKey={recentKey} />
+          </div>
+        </div>
+      )}
       {showSessions && doc && (
         <SessionPicker
           docId={doc.document_id}

@@ -69,6 +69,12 @@ async function selectText(page: Page, needle: string, endNeedle?: string) {
   );
 }
 
+async function ensureThreadList(page: Page) {
+  // the panel restores the last open discussion; go back to the list when needed
+  const back = page.locator('.panel-head .icon-btn[title="Back to the discussion list"]');
+  if ((await back.count()) > 0) await back.click();
+}
+
 test.describe.configure({ mode: "serial" });
 
 test("A3: unauthenticated UI shows login; one login then repeated actions without prompts", async ({ page }) => {
@@ -120,6 +126,7 @@ test("B5: both discussions use the document default session; header shows provid
   await expect(page.getByTestId("session-area")).toContainText("opencode");
   await expect(page.getByTestId("session-area")).toContainText("#");
   // reply in the second thread uses the same session, visible on each message
+  await ensureThreadList(page);
   await page.getByTestId("thread-item").nth(1).click();
   await page.getByTestId("reply-input").fill("follow-up");
   await page.getByTestId("reply-send").click();
@@ -363,4 +370,34 @@ test("a terminal whose shell exited is shown as exited and can be dismissed with
   await expect(page.locator(".term-view.active")).toHaveAttribute("data-state", "exited", { timeout: 15000 });
   await page.getByTestId("terminal-clear-exited").click();
   await expect(page.getByTestId("terminal-tab")).toHaveCount(0);
+});
+
+test("Recent work lists documents newest first and restores document, position and open discussion", async ({ page }) => {
+  await login(page);
+  // make sure the discussion panel is visible for this test
+  await openGuide(page);
+  if ((await page.getByTestId("panel-expand").count()) > 0) await page.getByTestId("panel-expand").click();
+  // open the first discussion so it becomes the "active" one, and scroll a bit
+  await ensureThreadList(page);
+  await page.getByTestId("thread-item").first().click();
+  const quote = await page.getByTestId("thread-quote").textContent();
+  await page.locator(".reader-body").evaluate((el) => { el.scrollTop = 40; });
+  await page.waitForTimeout(1300); // reading position saves after 1 s idle
+  // the Recent dialog lists the guide first with its discussion summary
+  await page.getByTestId("recent-button").click();
+  const first = page.getByTestId("recent-item").first();
+  await expect(first).toContainText("docs/guide.md");
+  await expect(first).toContainText("discussion");
+  await page.locator('[data-testid="recent-dialog"] .icon-btn').click();
+  // open another document, then restore through Recent
+  await page.getByTestId("tree-file-docs/long.md").click();
+  await expect(page.getByTestId("markdown-body").locator("h1")).toHaveText("Long");
+  await page.getByTestId("recent-button").click();
+  await page.getByTestId("recent-item").filter({ hasText: "docs/guide.md" }).click();
+  await expect(page.getByTestId("markdown-body").locator("h1")).toContainText("Guide");
+  await expect(page.getByTestId("thread-quote")).toHaveText(quote!); // same discussion reopened
+  // after a full reload the same discussion is restored from the server-side reading state
+  await page.reload();
+  await expect(page.getByTestId("markdown-body").locator("h1")).toContainText("Guide");
+  await expect(page.getByTestId("thread-quote")).toHaveText(quote!);
 });
