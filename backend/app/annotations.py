@@ -12,9 +12,9 @@ from pydantic import BaseModel, Field
 from . import anchors as anchoring
 from .db import iso, new_id, utcnow
 from .deps import AppContext, require_auth, require_auth_mutating
-from .errors import ApiError, bad_request, conflict, not_found, DOCUMENT_VERSION_CONFLICT, INVALID_ANCHOR, SESSION_NOT_FOUND
+from .errors import ApiError, bad_request, conflict, not_found, DOCUMENT_VERSION_CONFLICT, INVALID_ANCHOR
 from .models import AgentSession, AnchorHistory, Document, Job, Message, Thread
-from .sessions import SessionService, session_dict
+from .sessions import SessionService
 from .textmodel import build_text_model
 
 router = APIRouter()

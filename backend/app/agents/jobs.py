@@ -13,7 +13,7 @@ from typing import Any, AsyncIterator
 from ..db import Database, iso, new_id, utcnow
 from ..errors import ApiError, conflict, not_found
 from ..events import EventBus
-from ..models import AgentSession, Job, JobEvent, Message, Thread
+from ..models import AgentSession, Job, JobEvent, Message
 from .base import AgentAdapter, AgentEvent, ProviderError, TurnContext, TurnHandle
 from .registry import ProviderRegistry
 
@@ -137,7 +137,7 @@ class JobManager:
         with self.db.read() as s:
             job = s.get(Job, job_id)
             assert job is not None
-            session = s.get(AgentSession, job.session_id)
+            s.get(AgentSession, job.session_id)
             session_id = job.session_id
         lock = self._lock_for(session_id)
         if lock.locked():

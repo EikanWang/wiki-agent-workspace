@@ -7,7 +7,6 @@ import base64
 import binascii
 import json
 import logging
-import shutil
 import uuid
 from pathlib import Path
 from typing import Any
@@ -16,8 +15,8 @@ from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 from starlette.websockets import WebSocketState
 
-from ..db import Database, iso, utcnow
-from ..deps import AppContext, get_ctx, require_auth, require_auth_mutating
+from ..db import Database, iso
+from ..deps import AppContext, require_auth, require_auth_mutating
 from ..errors import ApiError, bad_request, not_found, TERMINAL_GONE
 from ..events import EventBus
 from ..models import Terminal

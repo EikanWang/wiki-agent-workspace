@@ -47,7 +47,6 @@ class OpenCodeCliTurn(SubprocessTurn):
     async def events(self) -> AsyncIterator[AgentEvent]:
         await self.start()
         native_id: str | None = None
-        completed = False
         failed: AgentEvent | None = None
         texts: dict[str, str] = {}
         order: list[str] = []
@@ -109,7 +108,6 @@ class OpenCodeCliTurn(SubprocessTurn):
             err = self.stderr_text() or "opencode produced no output"
             yield AgentEvent("failed", {"code": classify_error(err), "message": err[:4000], "exit_code": rc})
             return
-        completed = True
         yield AgentEvent("completed", {"text": full, "exit_code": rc})
 
 

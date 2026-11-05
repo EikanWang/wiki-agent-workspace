@@ -5,11 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
-import shutil
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
 
 from fastapi import APIRouter, Depends, FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
@@ -22,9 +19,10 @@ from .agents.registry import ProviderRegistry
 from .auth import AuthManager
 from .config import Settings, ensure_state_dir, load_settings
 from .db import Database
-from .deps import AppContext, get_ctx, require_auth, require_auth_mutating
+from .deps import AppContext, get_ctx, require_auth
 from .errors import ApiError, api_error_handler, unauthorized, unexpected_error_handler
 from .events import EventBus
+from .gitinfo import git_info
 from .idempotency import IdempotencyMiddleware
 from .terminal import manager as terminal
 from .terminal.tmux import Tmux
@@ -95,7 +93,7 @@ def health():
 async def bootstrap(request: Request, ctx: AppContext = Depends(require_auth)):
     assert ctx.providers and ctx.terminals and ctx.documents
     caps = await ctx.providers.summary()
-    git = ctx.documents.git_summary(await asyncio.to_thread(__import__("backend.app.gitinfo", fromlist=["git_info"]).git_info, ctx.documents.root))
+    git = ctx.documents.git_summary(await asyncio.to_thread(git_info, ctx.documents.root))
     return {
         "workspace": {"id": ctx.workspace_id, "root": str(ctx.settings.workspace_root), "name": ctx.settings.workspace_root.name, "git": git},
         "default_provider": ctx.providers.default_provider(),

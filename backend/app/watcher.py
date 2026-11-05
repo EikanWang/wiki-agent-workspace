@@ -9,7 +9,6 @@ The server stays responsive; until registration completes the UI's manual refres
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import multiprocessing as mp
 import time

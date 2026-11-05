@@ -481,7 +481,6 @@ export default function App() {
               if (id === null) setMobilePane("doc");
             }}
             docId={doc.document_id}
-            docSha={doc.sha256}
             onRequestReanchor={() => {
               setReanchorArmed((a) => !a);
               setMobilePane("doc");

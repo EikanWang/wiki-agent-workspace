@@ -5,12 +5,11 @@ from __future__ import annotations
 
 import difflib
 import hashlib
-import json
 import os
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 
 from . import anchors as anchoring
@@ -314,16 +313,29 @@ class DocumentService:
     # ------------------------------------------------------------------ recent work
     def recent(self, limit: int = 50) -> list[dict[str, Any]]:
         """Documents the user worked on, most recent activity first (reading, discussions, edits)."""
+        from collections import defaultdict
+
         with self.db.read() as s:
-            docs = s.query(Document).filter_by(workspace_id=self.workspace_id).all()
+            docs = {d.id: d for d in s.query(Document).filter_by(workspace_id=self.workspace_id).all()}
+            states = {rs.document_id: rs for rs in s.query(ReadingState).filter(ReadingState.document_id.in_(list(docs))).all()} if docs else {}
+            threads_by_doc: dict[str, list[Thread]] = defaultdict(list)
+            for t in s.query(Thread).filter(Thread.document_id.in_(list(docs))).all() if docs else []:
+                threads_by_doc[t.document_id].append(t)
+            thread_doc = {t.id: t.document_id for ts in threads_by_doc.values() for t in ts}
+            last_msg_by_doc: dict[str, Message] = {}
+            msg_count: dict[str, int] = defaultdict(int)
+            if thread_doc:
+                for m in s.query(Message).filter(Message.thread_id.in_(list(thread_doc))).order_by(Message.created_at).all():
+                    did = thread_doc[m.thread_id]
+                    msg_count[did] += 1
+                    last_msg_by_doc[did] = m  # ascending order: the last assignment is the newest
+            sessions = {x.id: x for x in s.query(AgentSession).filter(AgentSession.workspace_id == self.workspace_id).all()}
+
             out: list[dict[str, Any]] = []
-            for d in docs:
-                rs = s.get(ReadingState, d.id)
-                threads = s.query(Thread).filter_by(document_id=d.id).all()
-                tids = [t.id for t in threads]
-                last_msg = (s.query(Message).filter(Message.thread_id.in_(tids)).order_by(Message.created_at.desc()).first()
-                            if tids else None)
-                msg_count = s.query(Message).filter(Message.thread_id.in_(tids)).count() if tids else 0
+            for did, d in docs.items():
+                rs = states.get(did)
+                threads = threads_by_doc.get(did, [])
+                last_msg = last_msg_by_doc.get(did)
                 candidates = [x for x in (rs.updated_at if rs else None, last_msg.created_at if last_msg else None,
                                           max((t.updated_at for t in threads), default=None)) if x is not None]
                 if not candidates:
@@ -334,14 +346,14 @@ class DocumentService:
                     last_thread = next(t for t in threads if t.id == rs.active_thread_id)
                 elif last_msg:
                     last_thread = next((t for t in threads if t.id == last_msg.thread_id), None)
-                sess = s.get(AgentSession, d.default_session_id) if d.default_session_id else None
+                sess = sessions.get(d.default_session_id) if d.default_session_id else None
                 out.append({
                     "document_id": d.id,
                     "path": d.path,
                     "missing": d.missing,
                     "last_activity": iso(last_activity),
                     "thread_count": len(threads),
-                    "message_count": msg_count,
+                    "message_count": msg_count.get(did, 0),
                     "last_thread_id": last_thread.id if last_thread else None,
                     "last_thread_quote": last_thread.cur_quote[:120] if last_thread else None,
                     "last_message": ({"role": last_msg.role, "content": last_msg.content[:160], "status": last_msg.status,
@@ -352,6 +364,7 @@ class DocumentService:
                 })
             out.sort(key=lambda e: e["last_activity"], reverse=True)
             return out[:limit]
+
 
     # ------------------------------------------------------------------ review marks
     def add_review_mark(self, doc_id: str, version_sha256: str, anchor: dict[str, Any]) -> dict[str, Any]:

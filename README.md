@@ -67,9 +67,21 @@ Alternative token source: `WAW_ACCESS_TOKEN=... scripts/start.sh`. Other env ove
    configuration → the reader shows a "document changed" banner, **View diff** shows the real change, and anchors are
    re-resolved. No extra app approval dialog. Prefer to review first? **Preview change** runs the edit in an isolated
    temporary copy and shows the diff; **Apply** writes it only if the file is still at the same SHA-256.
-5. Come back later: discussions, reading position, review marks and version snapshots are restored; discussions whose
-   text moved are re-anchored deterministically, and changed/duplicated passages are flagged instead of being
-   attached to the wrong place.
+5. Come back later: **Recent** (top bar, or the start screen) lists every document you worked on, newest activity
+   first, with where you were and the last discussion; opening an entry restores the document, your reading position
+   and the discussion you had open. Discussions whose text moved are re-anchored deterministically, and
+   changed/duplicated passages are flagged instead of being attached to the wrong place.
+
+### Layout and appearance
+
+- `Aa` opens the Appearance popover: document font (sans/serif/mono), font size, optional content-width cap (the
+  document fills the available width by default), terminal font size.
+- The file tree (`☰`) and the discussion panel (`›`) fold; both are resizable by dragging their edge; the outline
+  folds with `▾ Outline`. The document area always expands into the freed space. Settings persist per browser.
+- Links to sections (`#heading`, `page.md#heading`) scroll inside the reader; heading ids use GitHub's slug rules.
+- Agent replies are rendered as sanitized Markdown; your own messages stay verbatim.
+- Exited terminals (shell ended) stay visible as `(exited)` so nothing is silently replaced; dismiss them with `×`
+  or **Clear exited**. Live terminals ask once before being closed.
 
 ### Agent sessions
 
@@ -145,8 +157,8 @@ WantedBy=default.target
 ## Running the tests
 
 ```bash
-scripts/test.sh            # backend: pytest (48 tests; real git + tmux + fake agents), ~25 s
-scripts/test.sh --e2e      # + Playwright browser suite (8 scenarios) against the production build
+scripts/test.sh            # backend: pytest (50 tests; real git + tmux + fake agents), ~25 s
+scripts/test.sh --e2e      # + Playwright browser suite (13 scenarios) against the production build
 # or individually
 .venv/bin/python -m pytest tests/backend -q
 cd frontend && npx playwright install chromium && npm run test:e2e

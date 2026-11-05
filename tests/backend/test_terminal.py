@@ -6,7 +6,6 @@ import base64
 import json
 import subprocess
 import time
-from pathlib import Path
 
 import pytest
 from starlette.testclient import TestClient
@@ -177,7 +176,7 @@ def test_terminal_survives_browser_disconnect_and_server_restart(tc, settings, w
         assert r.status_code == 200
         time.sleep(0.5)
         assert not app2.state.ctx.terminals.tmux.has_session(t["tmux_session"])
-        assert not subprocess.run(["pgrep", "-f", f"sleep 600"], capture_output=True, text=True).stdout.strip() or not [
+        assert not subprocess.run(["pgrep", "-f", "sleep 600"], capture_output=True, text=True).stdout.strip() or not [
             p for p in subprocess.run(["pgrep", "-P", str(pane_pids[0])], capture_output=True).stdout.split()]
 
 

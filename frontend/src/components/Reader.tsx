@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AgentSession, ApiError, OpenDocument, ReviewMark, Thread, put } from "../api";
 import { renderMarkdown, slugify } from "../markdown";
-import { SelectionAnchor, TextModel, anchorFromSelection, buildTextModel, headingFor, rangeFromOffsets, resolveAnchor } from "../textmodel";
+import { SelectionAnchor, TextModel, anchorFromSelection, buildTextModel, rangeFromOffsets, resolveAnchor } from "../textmodel";
 
 export interface ReaderProps {
   doc: OpenDocument;
@@ -586,5 +586,3 @@ function SelectionPopover({ anchor, style, sessions, defaultSessionId, defaultPr
     </div>
   );
 }
-
-export { headingFor };

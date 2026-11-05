@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AgentSession, ApiError, JobEvent, Message, Thread, get, post, subscribeJob } from "../api";
+import { AgentSession, ApiError, JobEvent, Message, Thread, get, subscribeJob } from "../api";
 import DiffView from "./DiffView";
 import MarkdownView from "./MarkdownView";
 
@@ -105,7 +105,6 @@ export default function DiscussionPanel({
   onPermission,
   onSelectThread,
   docId,
-  docSha,
   onRequestReanchor,
   reanchorArmed,
   onCollapse,
@@ -122,7 +121,6 @@ export default function DiscussionPanel({
   onPermission: (jobId: string, requestId: string, decision: string) => Promise<void>;
   onSelectThread: (id: string | null) => void;
   docId: string | null;
-  docSha: string | null;
   onRequestReanchor: () => void;
   reanchorArmed: boolean;
   onCollapse?: () => void;

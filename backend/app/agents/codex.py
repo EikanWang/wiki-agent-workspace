@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import AsyncIterator
 
 from ..config import ProviderConfig
 from .base import (

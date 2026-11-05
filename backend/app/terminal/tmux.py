@@ -7,7 +7,6 @@ with its own configuration file written into the state directory.
 from __future__ import annotations
 
 import asyncio
-import locale
 import os
 import shutil
 import subprocess

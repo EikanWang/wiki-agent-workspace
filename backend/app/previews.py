@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import difflib
-import os
 import shutil
 import tempfile
 from pathlib import Path
@@ -21,7 +20,7 @@ from .db import iso, new_id, utcnow
 from .deps import AppContext, require_auth, require_auth_mutating
 from .documents import sha256_bytes
 from .errors import ApiError, conflict, not_found, DOCUMENT_VERSION_CONFLICT, PREVIEW_UNAVAILABLE
-from .models import Document, Job, Message, Preview
+from .models import Document, Job, Preview
 from .sessions import SessionService
 
 router = APIRouter()
@@ -101,10 +100,9 @@ class PreviewService:
             "instruction below, then briefly summarize the change. Do not modify other files.\n\n"
             f"Document SHA-256 before the change: {sha}\n\nInstruction:\n{body.instruction}"
         )
-        agent_msg_id = None
         job_id = self.jobs.enqueue_turn(
             session_id=sess.id, thread_id=None, prompt=prompt, context={"document_id": doc_id, "document_path": doc.path, "sha256": sha, "preview_id": preview_id},
-            agent_message_id=agent_msg_id, kind="preview", cwd=tmpdir, on_complete=self._make_on_complete(preview_id, tmpdir, doc.path),
+            agent_message_id=None, kind="preview", cwd=tmpdir, on_complete=self._make_on_complete(preview_id, tmpdir, doc.path),
         )
         with self.ctx.db.write() as s:
             s.add(Preview(id=preview_id, document_id=doc_id, job_id=job_id, base_sha256=sha, status="pending"))

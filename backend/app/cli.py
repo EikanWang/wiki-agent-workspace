@@ -11,7 +11,6 @@ from pathlib import Path
 from .config import (
     DEFAULT_CONFIG_PATH,
     ProviderConfig,
-    Settings,
     detect_default_provider,
     ensure_secrets,
     ensure_state_dir,

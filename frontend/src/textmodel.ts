@@ -15,7 +15,6 @@ export interface NodeSpan {
   node: Text;
   start: number; // model offset of node text start
   end: number;
-  skipLeading: number; // number of leading chars of the node not represented (e.g. "\n" after <br>)
 }
 
 export interface HeadingInfo {
@@ -57,23 +56,18 @@ export function buildTextModel(root: HTMLElement): TextModel {
   const walk = (node: Node, parentTag: string | null) => {
     if (node.nodeType === Node.TEXT_NODE) {
       const t = node as Text;
-      let data = t.data.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+      const data = t.data.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
       if (data.trim() === "" && data.includes("\n") && (parentTag === null || CONTAINER_TAGS.has(parentTag))) {
         return;
       }
-      let skipLeading = 0;
       if (pendingBr) {
         pendingBr = false;
-        if (data.startsWith("\n")) {
-          // the newline is the <br>'s newline; the text node's own "\n" is represented by it
-          skipLeading = 0;
-        } else {
-          append("\n");
-        }
+        // a serialized "\n" right after <br> *is* the <br>'s newline; otherwise emit one
+        if (!data.startsWith("\n")) append("\n");
       }
       const start = length;
       append(data);
-      spans.push({ node: t, start, end: length, skipLeading });
+      spans.push({ node: t, start, end: length });
       return;
     }
     if (node.nodeType !== Node.ELEMENT_NODE) return;

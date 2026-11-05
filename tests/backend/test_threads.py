@@ -6,7 +6,6 @@ import asyncio
 import json
 from pathlib import Path
 
-import pytest
 
 from conftest import Api, anchor_for
 
@@ -348,5 +347,5 @@ async def test_cancel_queued_job_takes_effect_immediately(api: Api):
     assert ev[-1]["type"] == "cancelled"
     ev1 = await api.wait_job(r1.json()["job_id"])
     assert ev1[-1]["type"] == "completed"  # the running job is unaffected
-    t = (await api.threads(did := doc["document_id"]))["threads"][0]
+    t = (await api.threads(doc["document_id"]))["threads"][0]
     assert [m["status"] for m in t["messages"] if m["role"] == "agent"] == ["completed", "cancelled"]
