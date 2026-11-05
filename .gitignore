@@ -1,0 +1,29 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/test-results/
+frontend/playwright-report/
+tests/frontend/node_modules
+
+# Local configuration and secrets (the real config lives in ~/.config/wiki-agent-workspace/)
+config.toml
+.env
+.env.*
+
+# Runtime data
+*.sqlite3*
+*.db
+*.log
+
+# Editors / OS
+.DS_Store
+*.swp

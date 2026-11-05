@@ -1,0 +1,123 @@
+#!/usr/bin/env python3
+"""Controllable fake `codex` executable for tests. Emits the documented `codex exec --json`
+JSONL events. Session records are written under $CODEX_HOME like the real CLI
+(session_index.jsonl + sessions/.../rollout-*.jsonl with a session_meta line).
+
+Prompt directives: [[fail:msg]] [[auth]] [[sleep:N]] [[edit:rel:::old:::new]] — else echo.
+"""
+import json
+import os
+import sys
+import time
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+
+HOME = Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex"))
+STATE = Path(os.environ.get("FAKE_AGENT_STATE", "/tmp/fake-agent-state"))
+STATE.mkdir(parents=True, exist_ok=True)
+
+
+def emit(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+
+def record_session(sid, cwd):
+    HOME.mkdir(parents=True, exist_ok=True)
+    with (HOME / "session_index.jsonl").open("a") as fh:
+        fh.write(json.dumps({"id": sid, "thread_name": "fake thread", "updated_at": datetime.now(timezone.utc).isoformat()}) + "\n")
+    d = HOME / "sessions" / "2026" / "01" / "01"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"rollout-2026-01-01T00-00-00-{sid}.jsonl").write_text(json.dumps({
+        "timestamp": datetime.now(timezone.utc).isoformat(), "type": "session_meta",
+        "payload": {"id": sid, "cwd": cwd, "originator": "fake-codex", "cli_version": "0.0.0-fake"},
+    }) + "\n")
+
+
+def known(sid):
+    idx = HOME / "session_index.jsonl"
+    if not idx.exists():
+        return False
+    return any(json.loads(l).get("id") == sid for l in idx.read_text().splitlines() if l.strip())
+
+
+def main(argv):
+    with (STATE / "codex_calls.log").open("a") as fh:
+        fh.write(json.dumps(argv) + "\n")
+    if argv[:1] == ["--version"]:
+        print("codex-cli 0.0.0-fake")
+        return 0
+    if argv[:1] != ["exec"]:
+        print("unknown command", file=sys.stderr)
+        return 2
+    args = argv[1:]
+    resume = False
+    if args[:1] == ["resume"]:
+        resume = True
+        args = args[1:]
+    cwd = os.getcwd()
+    sandbox = None
+    positional = []
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a in ("-C", "--cd"):
+            cwd = args[i + 1]
+            i += 2
+            continue
+        if a in ("-s", "--sandbox"):
+            sandbox = args[i + 1]
+            i += 2
+            continue
+        if a in ("-c", "--config", "--profile", "-p"):
+            if a in ("-c", "--config") and args[i + 1].startswith("sandbox_mode="):
+                sandbox = args[i + 1].split("=", 1)[1].strip('"')
+            i += 2
+            continue
+        if a.startswith("-") and a != "-":
+            i += 1
+            continue
+        positional.append(a)
+        i += 1
+    prompt = sys.stdin.read() if (positional and positional[-1] == "-") or not positional else positional[-1]
+    sid = None
+    if resume:
+        sid = positional[0]
+        if not known(sid):
+            emit({"type": "error", "message": f"No session found with id {sid}"})
+            return 1
+    else:
+        sid = str(uuid.uuid4())
+        record_session(sid, cwd)
+    (STATE / "codex_last_sandbox").write_text(sandbox or "")
+    user_msg = prompt.split("User message:", 1)[1].split("\n\nInstructions:", 1)[0].strip() if "User message:" in prompt else prompt.strip()
+    if "[[auth]]" in user_msg:
+        emit({"type": "error", "message": "401 Unauthorized: please run `codex login`"})
+        return 1
+    emit({"type": "thread.started", "thread_id": sid})
+    emit({"type": "turn.started"})
+    if "[[sleep:" in user_msg:
+        time.sleep(float(user_msg.split("[[sleep:", 1)[1].split("]]", 1)[0]))
+    if "[[fail:" in user_msg:
+        msg = user_msg.split("[[fail:", 1)[1].split("]]", 1)[0]
+        emit({"type": "turn.failed", "error": {"message": msg}})
+        return 1
+    text = f"echo: {user_msg}"
+    if "[[edit:" in user_msg:
+        if sandbox == "read-only":
+            emit({"type": "item.completed", "item": {"id": "item_0", "type": "command_execution", "command": "apply_patch", "status": "failed"}})
+            emit({"type": "turn.failed", "error": {"message": "sandbox read-only: writing files is not permitted"}})
+            return 1
+        rel, old, new = user_msg.split("[[edit:", 1)[1].split("]]", 1)[0].split(":::")
+        p = Path(cwd) / rel
+        p.write_text(p.read_text().replace(old, new))
+        emit({"type": "item.completed", "item": {"id": "item_0", "type": "file_change", "changes": [{"path": rel, "kind": "update"}], "status": "completed"}})
+        text = f"edited {rel}"
+    emit({"type": "item.completed", "item": {"id": "item_1", "type": "agent_message", "text": text}})
+    emit({"type": "turn.completed", "usage": {"input_tokens": 1, "output_tokens": 1}})
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
