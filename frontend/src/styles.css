@@ -348,3 +348,10 @@ mark.waw-hl.review.needs_review { border-bottom: 2px dashed var(--warn); }
 .flat-quote .quote-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .flat-target { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-bottom: 6px; }
 .flat-target-select { font-size: 12px; max-width: 220px; }
+
+/* model picker */
+.model-picker { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 6px; }
+.model-picker.compact { font-size: 12px; margin-top: 4px; }
+.model-picker select, .model-picker input { max-width: 260px; font-size: 12px; }
+.model-picker input { border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; background: var(--bg); width: 180px; }
+.model-tag { opacity: 0.85; }

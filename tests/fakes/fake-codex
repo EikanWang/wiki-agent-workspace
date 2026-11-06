@@ -70,9 +70,15 @@ def main(argv):
             sandbox = args[i + 1]
             i += 2
             continue
+        if a in ("-m", "--model"):
+            (STATE / "codex_last_model").write_text(args[i + 1])
+            i += 2
+            continue
         if a in ("-c", "--config", "--profile", "-p"):
             if a in ("-c", "--config") and args[i + 1].startswith("sandbox_mode="):
                 sandbox = args[i + 1].split("=", 1)[1].strip('"')
+            if a in ("-c", "--config") and args[i + 1].startswith("model_reasoning_effort="):
+                (STATE / "codex_last_effort").write_text(args[i + 1].split("=", 1)[1].strip('"'))
             i += 2
             continue
         if a.startswith("-") and a != "-":

@@ -402,3 +402,40 @@ async def test_stale_offsets_are_relocated_by_context_even_for_repeated_quotes(a
     bad = {**a, "start": 0, "end": 4, "prefix": "", "suffix": ""}
     r = await api.post(f"/api/v1/documents/{doc['document_id']}/threads", json={**bad, "version_sha256": doc["sha256"], "question": "q"})
     assert r.status_code == 400 and r.json()["error"]["details"]["state"] == "ambiguous"
+
+
+async def test_model_switch_per_session_is_passed_to_both_providers(api: Api, fake_env: Path):
+    doc = await api.open_doc()
+    did = doc["document_id"]
+    # model lists
+    oc = (await api.get("/api/v1/providers/opencode/models")).json()
+    assert [m["id"] for m in oc["models"]] == ["fake/alpha", "fake/beta", "other/gamma"] and "high" in oc["variants"]
+    cx = (await api.get("/api/v1/providers/codex/models")).json()
+    assert cx["can_select_model"] and any(m["id"] == "gpt-5" for m in cx["models"])
+    assert (await api.get("/api/v1/providers/nope/models")).status_code == 404
+    # default: no model flag
+    a = anchor_for(doc["text"], "TorchDynamo")
+    r = await api.post(f"/api/v1/documents/{did}/threads", json={**a, "version_sha256": doc["sha256"], "question": "one"})
+    await api.wait_job(r.json()["job_id"])
+    sid = r.json()["session_id"]
+    assert not (fake_env / "opencode_last_model").exists()
+    # switch the session's model + effort; the next turn uses it, the first message is untouched
+    r2 = await api.put(f"/api/v1/agent-sessions/{sid}/model", json={"model": "fake/beta", "variant": "high"})
+    assert r2.status_code == 200 and r2.json()["model"] == "fake/beta" and r2.json()["variant"] == "high"
+    tid = r.json()["thread_id"]
+    r3 = await api.post(f"/api/v1/threads/{tid}/messages", json={"text": "two"})
+    ev = await api.wait_job(r3.json()["job_id"])
+    assert ev[-1]["type"] == "completed"
+    assert (fake_env / "opencode_last_model").read_text() == "fake/beta" and (fake_env / "opencode_last_variant").read_text() == "high"
+    assert any(e["type"] == "running" and e["payload"].get("model") == "fake/beta" for e in ev)
+    # back to default
+    await api.put(f"/api/v1/agent-sessions/{sid}/model", json={"model": "", "variant": ""})
+    assert (await api.get(f"/api/v1/agent-sessions/{sid}")).json()["model"] is None
+    # invalid ids are rejected (never become argv options)
+    assert (await api.put(f"/api/v1/agent-sessions/{sid}/model", json={"model": "--dangerous"})).status_code == 400
+    # codex: -m and model_reasoning_effort; also settable at session creation
+    r = await api.post("/api/v1/agent-sessions", json={"provider": "codex", "display_name": "cx", "model": "gpt-5", "variant": "low"})
+    assert r.json()["model"] == "gpt-5"
+    r4 = await api.post(f"/api/v1/threads/{tid}/messages", json={"text": "three", "session_id": r.json()["id"]})
+    await api.wait_job(r4.json()["job_id"])
+    assert (fake_env / "codex_last_model").read_text() == "gpt-5" and (fake_env / "codex_last_effort").read_text() == "low"

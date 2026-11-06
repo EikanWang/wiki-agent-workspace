@@ -34,6 +34,9 @@ def main(argv):
     if argv[:1] == ["--version"]:
         print("0.0.0-fake")
         return 0
+    if argv[:1] == ["models"]:
+        print("fake/alpha\nfake/beta\nother/gamma")
+        return 0
     if argv[:2] == ["session", "list"]:
         print(json.dumps([{"id": s["id"], "title": s["title"], "updated": s["updated"], "created": s["updated"], "directory": s["directory"]} for s in load()]))
         return 0
@@ -49,6 +52,10 @@ def main(argv):
     while i < len(args):
         a = args[i]
         if a in ("--format", "--agent"):
+            i += 2
+            continue
+        if a in ("--model", "--variant"):
+            (STATE / f"opencode_last_{a[2:]}").write_text(args[i + 1])
             i += 2
             continue
         if a == "--session":

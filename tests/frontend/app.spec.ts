@@ -554,3 +554,29 @@ test("flat discussion mode shows all threads as one stream; Enter sends, Ctrl+En
   await page.getByTestId("mode-individual").click();
   await expect(page.getByTestId("discussion-panel")).not.toHaveAttribute("data-mode", "flat");
 });
+
+test("selection popover offers Copy; the model of a session can be switched from the panel", async ({ page, context }) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await login(page);
+  await openGuide(page);
+  await selectText(page, "AOTAutograd");
+  await page.getByTestId("selection-copy").click();
+  await expect(page.getByTestId("selection-copy")).toHaveText(/Copied/);
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("AOTAutograd");
+  await page.keyboard.press("Escape");
+  // model switch in individual mode
+  if ((await page.getByTestId("panel-expand").count()) > 0) await page.getByTestId("panel-expand").click();
+  await page.getByTestId("mode-individual").click();
+  await ensureThreadList(page);
+  await page.getByTestId("thread-item").first().click();
+  const select = page.getByTestId("model-select");
+  await expect(select).toBeVisible();
+  await select.selectOption("fake/beta");
+  await expect(page.getByTestId("session-model-tag").first()).toContainText("beta", { timeout: 10000 });
+  await page.getByTestId("variant-select").selectOption("high");
+  await expect(page.getByTestId("session-model-tag").first()).toContainText("(high)");
+  // the next reply runs with that model (visible in the header chip too)
+  await expect(page.getByTestId("session-area")).toContainText("beta");
+  await page.getByTestId("model-select").selectOption("");
+  await expect(page.getByTestId("session-model-tag")).toHaveCount(0, { timeout: 10000 });
+});

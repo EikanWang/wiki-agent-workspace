@@ -38,6 +38,7 @@ class Capabilities:
     can_stream_deltas: bool = False
     can_cancel: bool = False
     can_relay_permissions: bool = False
+    can_select_model: bool = False
     uses_local_service: bool = False
     eager_session_ids: bool = False      # native id known at create_session()
     preview_isolation: str = "copy"       # copy | unavailable
@@ -56,6 +57,7 @@ class Capabilities:
             "can_stream_deltas": self.can_stream_deltas,
             "can_cancel": self.can_cancel,
             "can_relay_permissions": self.can_relay_permissions,
+            "can_select_model": self.can_select_model,
             "uses_local_service": self.uses_local_service,
             "eager_session_ids": self.eager_session_ids,
             "preview_isolation": self.preview_isolation,
@@ -93,6 +95,8 @@ class TurnContext:
     title: str | None = None
     cwd: Path | None = None  # overrides workspace cwd (preview copies)
     sandbox: str | None = None
+    model: str | None = None     # provider model id; None = provider default
+    variant: str | None = None   # reasoning effort / variant; None = default
 
 
 class TurnHandle(ABC):
@@ -123,6 +127,14 @@ class AgentAdapter(ABC):
 
     @abstractmethod
     async def resume_turn(self, ctx: TurnContext) -> TurnHandle: ...
+
+    async def list_models(self) -> list[dict[str, Any]]:
+        """Models selectable for app-driven turns: [{id, label, default?}]. Empty when the provider cannot list."""
+        return []
+
+    def variants(self) -> list[str]:
+        """Reasoning-effort / variant names the provider accepts (empty when unsupported)."""
+        return []
 
     async def session_exists(self, workspace: Path, native_id: str) -> bool | None:
         """True/False when determinable, None when the provider cannot tell."""

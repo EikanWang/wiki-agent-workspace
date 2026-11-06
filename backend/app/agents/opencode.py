@@ -123,7 +123,7 @@ class OpenCodeCliAdapter(AgentAdapter):
         if self._caps is not None:
             return self._caps
         caps = Capabilities(provider="opencode", available=False, mode="cli", executable=self.exe,
-                            can_stream_deltas=False, can_cancel=True, can_resume=True, can_list_sessions=True)
+                            can_stream_deltas=False, can_cancel=True, can_resume=True, can_list_sessions=True, can_select_model=True)
         if not self.exe:
             caps.error = "opencode executable not found on PATH; install OpenCode or set agents.opencode.bin"
             self._caps = caps
@@ -178,9 +178,27 @@ class OpenCodeCliAdapter(AgentAdapter):
             args += ["--title", ctx.title[:120]]
         if self.cfg.profile:
             args += ["--agent", self.cfg.profile]
+        if ctx.model:
+            args += ["--model", ctx.model]
+        if ctx.variant:
+            args += ["--variant", ctx.variant]
         args += list(self.cfg.extra_args)
         args.append(ctx.prompt)
         return OpenCodeCliTurn(args, cwd=ctx.cwd or ctx.workspace)
+
+    async def list_models(self) -> list[dict[str, Any]]:
+        if not self.exe:
+            return []
+        try:
+            rc, out, _err = await run_capture([self.exe, "models"], timeout=60)
+        except ProviderError:
+            return []
+        if rc != 0:
+            return []
+        return [{"id": ln.strip(), "label": ln.strip()} for ln in out.splitlines() if ln.strip() and "/" in ln and " " not in ln.strip()]
+
+    def variants(self) -> list[str]:
+        return ["minimal", "low", "medium", "high", "max"]
 
 
 # ---------------------------------------------------------------------- server mode
@@ -206,6 +224,14 @@ class OpenCodeServerTurn(TurnHandle):
                 yield AgentEvent("failed", {"code": "SESSION_BUSY", "message": "OpenCode reports this session is already running a turn"})
                 return
             yield AgentEvent("started", {"native_session_id": self.native_id})
+            if self.ctx.model:
+                prov, _, mid = self.ctx.model.partition("/")
+                body: dict[str, Any] = {"providerID": prov, "modelID": mid}
+                if self.ctx.variant:
+                    body["variant"] = self.ctx.variant
+                r = await client.post(a.api(f"/session/{self.native_id}/model"), json=body, timeout=20)
+                if r.status_code >= 400:
+                    yield AgentEvent("notice", {"message": f"could not switch model to {self.ctx.model}: HTTP {r.status_code} {r.text[:200]}"})
             texts: dict[str, str] = {}
             order: list[str] = []
             async with client.stream("GET", a.api("/event"), timeout=httpx.Timeout(None, connect=10)) as resp:
@@ -343,7 +369,7 @@ class OpenCodeServerAdapter(AgentAdapter):
             return self._caps
         caps = Capabilities(provider="opencode", available=False, mode="server", executable=self.base,
                             can_list_sessions=True, can_resume=True, can_stream_deltas=True, can_cancel=True,
-                            can_relay_permissions=True, uses_local_service=True, eager_session_ids=True)
+                            can_relay_permissions=True, uses_local_service=True, eager_session_ids=True, can_select_model=True)
         if not self.base:
             caps.error = "agents.opencode.server_url is not configured"
             self._caps = caps
@@ -453,3 +479,27 @@ class OpenCodeServerAdapter(AgentAdapter):
 
     async def resume_turn(self, ctx: TurnContext) -> TurnHandle:
         return OpenCodeServerTurn(self, ctx)
+
+    async def list_models(self) -> list[dict[str, Any]]:
+        try:
+            r = await self.client().get(self.api("/provider"), timeout=20)
+        except httpx.HTTPError:
+            return []
+        if r.status_code != 200:
+            return []
+        data = self._unwrap(r)
+        providers = data.get("all") if isinstance(data, dict) and "all" in data else data
+        if isinstance(providers, dict):
+            providers = list(providers.values())
+        out: list[dict[str, Any]] = []
+        for p in providers or []:
+            if not isinstance(p, dict):
+                continue
+            pid = p.get("id")
+            models = p.get("models") or {}
+            items = models.values() if isinstance(models, dict) else models
+            out.extend({"id": f"{pid}/{m['id']}", "label": f"{pid}/{m.get('name') or m['id']}"} for m in items if isinstance(m, dict) and m.get("id") and pid)
+        return out
+
+    def variants(self) -> list[str]:
+        return ["minimal", "low", "medium", "high", "max"]

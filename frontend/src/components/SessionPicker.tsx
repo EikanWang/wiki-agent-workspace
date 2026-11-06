@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { AgentSession, ApiError, ProviderSession, SessionList, get, post, put } from "../api";
 import { SessionChip, statusLabel } from "./DiscussionPanel";
+import ModelPicker from "./ModelPicker";
 
 export default function SessionPicker({
   docId,
@@ -94,6 +95,10 @@ export default function SessionPicker({
         <section>
           <div className="label">Current</div>
           <SessionChip session={sessions.find((s) => s.id === defaultSessionId)} />
+          {(() => {
+            const cur = sessions.find((s) => s.id === defaultSessionId);
+            return cur ? <ModelPicker session={cur} onChanged={() => void onChanged()} /> : <div className="muted small">The model can be chosen once a session exists (it is created on the first question).</div>;
+          })()}
         </section>
         <section>
           <div className="label">New session</div>
@@ -114,7 +119,7 @@ export default function SessionPicker({
           <div className="list">
             {sessions.filter((s) => s.origin !== "preview").map((s) => (
               <button key={s.id} className={`list-item ${s.id === defaultSessionId ? "selected" : ""}`} disabled={busy} onClick={() => void setDefault(s.id)}>
-                <span>{s.provider} · {s.display_name ?? "session"}</span>
+                <span>{s.provider} · {s.display_name ?? "session"}{s.model ? <span className="muted small"> · {s.model}{s.variant ? ` (${s.variant})` : ""}</span> : null}</span>
                 <span className="muted small">{s.native_id ? `#${s.short_id}` : statusLabel(s.status)}{s.status !== "ready" && s.native_id ? ` · ${statusLabel(s.status)}` : ""}</span>
               </button>
             ))}

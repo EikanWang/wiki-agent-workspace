@@ -223,9 +223,19 @@ export interface AgentSession {
   display_name: string | null;
   status: string;
   origin: string;
+  model: string | null;
+  variant: string | null;
   short_id: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface ModelList {
+  provider: string;
+  models: { id: string; label: string; default?: boolean }[];
+  variants: string[];
+  can_select_model: boolean;
+  note: string | null;
 }
 
 export interface ProviderSession {

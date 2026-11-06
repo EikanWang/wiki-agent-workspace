@@ -96,6 +96,8 @@ only ever sent back to the same `provider`.
 | `display_name` | nullable | Title shown in the UI (e.g. `Wiki: docs/guide.md`). |
 | `status` | see below | `uninitialized` (no native id yet) · `ready` (provider confirmed/used) · `missing` (provider no longer has it) · `unavailable` · `availability_unknown` (linked externally, not yet exercised). |
 | `origin` | `app` \| `linked` \| `preview` | Created by the app, linked from the provider's list/by id, or an isolated preview session. |
+| `model` | TEXT, nullable | Model override for app-driven turns in this session (`opencode run --model`, `codex exec -m`); NULL = provider default. Changed via `PUT /agent-sessions/{id}/model`; past messages are unaffected. |
+| `variant` | TEXT, nullable | Reasoning effort / variant passed with the model (`--variant`, `model_reasoning_effort`). |
 | `created_at`, `updated_at` | DATETIME | Lifecycle. |
 
 ## `threads` — a discussion anchored to a passage

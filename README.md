@@ -98,6 +98,10 @@ Alternative token source: `WAW_ACCESS_TOKEN=... scripts/start.sh`. Other env ove
 - The discussion panel has two modes: **Individual** (one discussion at a time, with its diff and anchor tools) and
   **Flat** (all discussions of the document as one chronological stream, grouped by quoted passage; the composer
   continues the chosen discussion — default the newest — so related questions flow without switching).
+- The selection box has a **Copy** button (Ctrl/⌘+C works too — opening the box never clears the selection).
+- **Model switching**: each agent session has a model (and reasoning effort) used for its future turns — pick it in
+  the session dialog or next to the session in the discussion panel (`opencode models` list / Codex config +
+  common ids, or type any id). Past answers keep the model they were produced with.
 - In every question/reply box **Enter sends** and **Ctrl/⌘+Enter** (or Shift+Enter) inserts a new paragraph; Enter
   during IME composition never sends.
 - Exited terminals (shell ended) stay visible as `(exited)` so nothing is silently replaced; dismiss them with `×`
@@ -176,8 +180,8 @@ separately (`~/.config/wiki-agent-workspace/config.toml`). Backup, restore and m
 ## Running the tests
 
 ```bash
-scripts/test.sh            # backend: pytest (68 tests; real git + tmux + fake agents), ~25 s
-scripts/test.sh --e2e      # + Playwright browser suite (18 scenarios) against the production build
+scripts/test.sh            # backend: pytest (69 tests; real git + tmux + fake agents), ~25 s
+scripts/test.sh --e2e      # + Playwright browser suite (19 scenarios) against the production build
 # or individually
 .venv/bin/python -m pytest tests/backend -q
 cd frontend && npx playwright install chromium && npm run test:e2e

@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
 
 from ..config import ProviderConfig
 from .base import (
@@ -116,7 +116,7 @@ class CodexAdapter(AgentAdapter):
         if self._caps is not None:
             return self._caps
         caps = Capabilities(provider="codex", available=False, mode="cli", executable=self.exe,
-                            can_list_sessions=True, can_resume=True, can_stream_deltas=False, can_cancel=True)
+                            can_list_sessions=True, can_resume=True, can_stream_deltas=False, can_cancel=True, can_select_model=True)
         if not self.exe:
             caps.error = "codex executable not found on PATH; install Codex CLI or set agents.codex.bin"
             self._caps = caps
@@ -196,6 +196,30 @@ class CodexAdapter(AgentAdapter):
     async def create_session(self, workspace: Path, title: str | None = None) -> str | None:
         return None  # thread id is allocated by `codex exec` on the first turn
 
+    async def list_models(self) -> list[dict[str, Any]]:
+        """Codex has no model-listing command; offer the configured default plus well-known ids and remember the
+        user's recent choices (any free-text id is accepted by the UI)."""
+        out: list[dict[str, Any]] = []
+        try:
+            import tomllib
+
+            cfg = tomllib.loads((codex_home() / "config.toml").read_text("utf-8"))
+            default = cfg.get("model")
+            if default:
+                out.append({"id": default, "label": f"{default} (configured default)", "default": True})
+            for name, prof in (cfg.get("profiles") or {}).items():
+                if isinstance(prof, dict) and prof.get("model") and prof["model"] != default:
+                    out.append({"id": prof["model"], "label": f"{prof['model']} (profile {name})"})
+        except (OSError, ValueError):
+            pass
+        for mid in ("gpt-5", "gpt-5-codex", "o3", "o4-mini", "gpt-4.1"):
+            if not any(m["id"] == mid for m in out):
+                out.append({"id": mid, "label": mid})
+        return out
+
+    def variants(self) -> list[str]:
+        return ["minimal", "low", "medium", "high"]
+
     def _sandbox(self, ctx: TurnContext) -> str:
         sb = ctx.sandbox or self.cfg.sandbox or "workspace-write"
         if sb not in VALID_SANDBOXES:
@@ -210,6 +234,10 @@ class CodexAdapter(AgentAdapter):
         common = ["--json", "--skip-git-repo-check"]
         if self.cfg.profile:
             common += ["--profile", self.cfg.profile]
+        if ctx.model:
+            common += ["-m", ctx.model]
+        if ctx.variant:
+            common += ["-c", f'model_reasoning_effort="{ctx.variant}"']
         common += list(self.cfg.extra_args)
         if ctx.native_session_id:
             args = [self.exe, "exec", "resume", *common, "-c", f'sandbox_mode="{sandbox}"', ctx.native_session_id, "-"]

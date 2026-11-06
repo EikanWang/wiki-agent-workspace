@@ -20,6 +20,7 @@ def session_dict(s: AgentSession) -> dict[str, Any]:
     return {
         "id": s.id, "provider": s.provider, "native_id": s.native_id, "workspace_id": s.workspace_id,
         "display_name": s.display_name, "status": s.status, "origin": s.origin,
+        "model": s.model, "variant": s.variant,
         "short_id": (s.native_id[-8:] if s.native_id else None),
         "created_at": iso(s.created_at), "updated_at": iso(s.updated_at),
     }
@@ -130,6 +131,44 @@ class SessionCreateIn(BaseModel):
     workspace_id: str | None = None
     display_name: str | None = None
     native_id: str | None = None  # when set: link an existing provider session
+    model: str | None = None
+    variant: str | None = None
+
+
+class SessionModelIn(BaseModel):
+    model: str | None = None   # None/"" = provider default
+    variant: str | None = None
+
+
+@router.get("/providers/{provider}/models")
+async def list_models(provider: str, ctx: AppContext = Depends(require_auth)):
+    assert ctx.providers is not None
+    try:
+        adapter = ctx.providers.get(provider)
+    except ProviderError as exc:
+        raise ApiError(404, exc.code, exc.message)
+    caps = await ctx.providers.capabilities(provider)
+    models = await adapter.list_models() if caps.available else []
+    return {"provider": provider, "models": models, "variants": adapter.variants(), "can_select_model": caps.can_select_model,
+            "note": None if models else "The provider did not return a model list; type a model id manually."}
+
+
+@router.put("/agent-sessions/{session_id}/model")
+def set_session_model(session_id: str, body: SessionModelIn, ctx: AppContext = Depends(require_auth_mutating)):
+    """Change the model used for future app-driven turns in this session. Past messages are unchanged."""
+    with ctx.db.write() as s:
+        row = s.get(AgentSession, session_id)
+        if row is None:
+            raise not_found("agent session not found", SESSION_NOT_FOUND)
+        model = (body.model or "").strip() or None
+        if model and (model.startswith("-") or any(c in model for c in " \t\n")):
+            raise bad_request("invalid model id", "INVALID_MODEL")
+        variant = (body.variant or "").strip() or None
+        if variant and (variant.startswith("-") or not variant.replace("-", "").replace("_", "").isalnum()):
+            raise bad_request("invalid variant", "INVALID_MODEL")
+        row.model = model
+        row.variant = variant
+        return session_dict(row)
 
 
 @router.get("/agent-sessions")
@@ -149,6 +188,13 @@ async def create_session(body: SessionCreateIn, ctx: AppContext = Depends(requir
             row = await svc.create_for_provider(body.provider, body.display_name)
     except ProviderError as exc:
         raise ApiError(502, exc.code, exc.message)
+    if body.model or body.variant:
+        with ctx.db.write() as s:
+            r = s.get(AgentSession, row.id)
+            if r is not None:
+                r.model = (body.model or "").strip() or None
+                r.variant = (body.variant or "").strip() or None
+                row = r
     return session_dict(row)
 
 

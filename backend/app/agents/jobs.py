@@ -224,11 +224,12 @@ class JobManager:
             provider = session.provider
             native_id = session.native_id
             display_name = session.display_name
+            model, variant = session.model, session.variant
             prompt = job.prompt
             context = json.loads(job.context_json or "{}")
             thread_id = job.thread_id
             kind = job.kind
-        self._emit(job_id, "running", {"status": "running", "provider": provider, "native_session_id": native_id})
+        self._emit(job_id, "running", {"status": "running", "provider": provider, "native_session_id": native_id, "model": model, "variant": variant})
 
         try:
             adapter: AgentAdapter = self.providers.get(provider)
@@ -256,7 +257,7 @@ class JobManager:
                     pre_sha = None
             turn = TurnContext(prompt=prompt, workspace=self.workspace, native_session_id=native_id,
                                title=display_name or (doc_path and f"Wiki: {doc_path}"),
-                               cwd=cwd, sandbox=sandbox)
+                               cwd=cwd, sandbox=sandbox, model=model, variant=variant)
             handle = await adapter.resume_turn(turn)
         except ProviderError as exc:
             self._finish(job_id, "failed", exc.code, exc.message, "")

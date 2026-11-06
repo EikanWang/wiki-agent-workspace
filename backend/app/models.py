@@ -78,6 +78,10 @@ class AgentSession(Base):
     # uninitialized | ready | missing | unavailable | availability_unknown
     status: Mapped[str] = mapped_column(String(32), default="uninitialized", nullable=False)
     origin: Mapped[str] = mapped_column(String(32), default="app")  # app | linked | preview
+    # Model override for app-driven turns in this session (provider's own id, e.g. "openai/gpt-5" or "o3");
+    # NULL = the provider's configured default. `variant` = reasoning effort / variant where supported.
+    model: Mapped[str | None] = mapped_column(Text, nullable=True)
+    variant: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 

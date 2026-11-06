@@ -518,6 +518,7 @@ export default function Reader(props: ReaderProps) {
         <div className="mobile-ask-bar" data-testid="mobile-ask-bar">
           <span className="quote">"{mobileSel.quote.slice(0, 60)}{mobileSel.quote.length > 60 ? "…" : ""}"</span>
           <button className="btn primary small" onClick={() => { setSheet(mobileSel); setMobileSel(null); }}>Ask</button>
+          <button className="btn small" onClick={() => { void navigator.clipboard?.writeText(mobileSel.quote); setMobileSel(null); }}>Copy</button>
           <button className="btn small" onClick={() => { onMarkReviewed(mobileSel); setMobileSel(null); }}>Mark reviewed</button>
         </div>
       )}
@@ -573,6 +574,7 @@ function SelectionPopover({ anchor, style, sessions, defaultSessionId, defaultPr
   const [session, setSession] = useState<string>(defaultSessionId ?? "__default__");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
   const taRef = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
     // focusing the input must not clear the document selection; we only move focus after a tick
@@ -630,6 +632,25 @@ function SelectionPopover({ anchor, style, sessions, defaultSessionId, defaultPr
       {error && <div className="error-text" role="alert" data-testid="selection-error">{error}</div>}
       <div className="sel-actions">
         <button className="btn primary" onClick={() => void send()} disabled={busy || !question.trim()} data-testid="selection-send">{busy ? "Sending…" : "Send"}</button>
+        <button
+          className="btn"
+          onClick={async () => {
+            try {
+              await navigator.clipboard.writeText(anchor.quote);
+              setCopied(true);
+              window.setTimeout(() => setCopied(false), 1500);
+            } catch {
+              // clipboard API unavailable (insecure context): fall back to the document selection + execCommand
+              const ok = document.execCommand && document.execCommand("copy");
+              setCopied(!!ok);
+              window.setTimeout(() => setCopied(false), 1500);
+            }
+          }}
+          title="Copy the selected text to the clipboard (Ctrl/⌘+C also works while this box is open)"
+          data-testid="selection-copy"
+        >
+          {copied ? "Copied ✓" : "Copy"}
+        </button>
         <button className="btn" onClick={onMark} title="Explicitly mark as reviewed; scrolling never marks automatically">Mark reviewed</button>
         {onReanchor && <button className="btn" onClick={onReanchor}>Reanchor current discussion here</button>}
       </div>

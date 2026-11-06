@@ -3,6 +3,7 @@ import { COMPOSER_HINT, composerKeyDown } from "./keys";
 import { AgentSession, ApiError, JobEvent, Message, Thread, get, subscribeJob } from "../api";
 import DiffView from "./DiffView";
 import MarkdownView from "./MarkdownView";
+import ModelPicker from "./ModelPicker";
 
 export interface LiveJob {
   jobId: string;
@@ -112,6 +113,7 @@ export default function DiscussionPanel({
   resizer,
   mode = "individual",
   onModeChange,
+  onSessionChanged,
 }: {
   thread: Thread | null;
   threads: Thread[];
@@ -130,6 +132,8 @@ export default function DiscussionPanel({
   resizer?: React.ReactNode;
   mode?: "individual" | "flat";
   onModeChange?: (mode: "individual" | "flat") => void;
+  /** Called after a session's model/variant was changed so the caller can refresh its session list. */
+  onSessionChanged?: (s: AgentSession) => void;
 }) {
   const [text, setText] = useState("");
   const [sessionChoice, setSessionChoice] = useState<string>("__last__");
@@ -173,6 +177,7 @@ export default function DiscussionPanel({
         onCollapse={onCollapse}
         resizer={resizer}
         modeSwitch={modeSwitch}
+        onSessionChanged={onSessionChanged}
       />
     );
   }
@@ -273,6 +278,7 @@ export default function DiscussionPanel({
           <span className="label">Session for this thread</span>
           <SessionChip session={lastSess} />
           {differs && <span className="chip warn">differs from the document session</span>}
+          {lastSess && onSessionChanged && <ModelPicker session={lastSess} onChanged={onSessionChanged} compact />}
         </section>
         <section className="messages">
           {thread.messages.map((m) => (
@@ -320,8 +326,9 @@ export default function DiscussionPanel({
 export function SessionChip({ session }: { session: AgentSession | undefined }) {
   if (!session) return <span className="chip">No session bound</span>;
   return (
-    <span className={`chip session ${session.status}`} title={session.native_id ?? "No native session id from the provider yet"}>
+    <span className={`chip session ${session.status}`} title={`${session.native_id ?? "No native session id from the provider yet"}${session.model ? `\nmodel: ${session.model}${session.variant ? ` (${session.variant})` : ""}` : "\nmodel: provider default"}`}>
       {session.provider} · {session.display_name ?? "session"} {session.short_id ? `#${session.short_id}` : `(${statusLabel(session.status)})`}
+      {session.model && <span className="model-tag" data-testid="session-model-tag"> · {session.model.split("/").pop()}{session.variant ? ` (${session.variant})` : ""}</span>}
     </span>
   );
 }
@@ -438,7 +445,7 @@ export function jobStatusLabel(s: string): string {
 /** Flat mode: every discussion of the document in one chronological stream. Each thread is a group headed by its
  *  quoted passage; messages keep their thread/session. The composer continues the selected thread (default: the
  *  most recent one) so related questions can be asked without switching threads. */
-function FlatPanel({ threads, sessions, sessionsById, defaultSessionId, liveJob, activeThreadId, onReply, onRetry, onCancel, onPermission, onSelectThread, onCollapse, resizer, modeSwitch }: {
+function FlatPanel({ threads, sessions, sessionsById, defaultSessionId, liveJob, activeThreadId, onReply, onRetry, onCancel, onPermission, onSelectThread, onCollapse, resizer, modeSwitch, onSessionChanged }: {
   threads: Thread[];
   sessions: AgentSession[];
   sessionsById: Record<string, AgentSession>;
@@ -453,6 +460,7 @@ function FlatPanel({ threads, sessions, sessionsById, defaultSessionId, liveJob,
   onCollapse?: () => void;
   resizer?: React.ReactNode;
   modeSwitch: React.ReactNode;
+  onSessionChanged?: (s: AgentSession) => void;
 }) {
   const ordered = useMemo(() => [...threads].sort((a, b) => a.created_at.localeCompare(b.created_at)), [threads]);
   const newest = ordered.length ? ordered[ordered.length - 1] : null;
@@ -536,6 +544,7 @@ function FlatPanel({ threads, sessions, sessionsById, defaultSessionId, liveJob,
               </select>
             )}
             <span> · select text in the document to start a new one</span>
+            {targetSess && onSessionChanged && <ModelPicker session={targetSess} onChanged={onSessionChanged} compact />}
           </div>
         ) : (
           <div className="muted small">Select text in the document to start the first discussion.</div>
