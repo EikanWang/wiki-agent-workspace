@@ -160,7 +160,9 @@ separately (`~/.config/wiki-agent-workspace/config.toml`). Backup, restore and m
   (HMAC-SHA-256 of the cookie with the server secret, returned by `/bootstrap`) and a matching `Origin`. WebSockets
   require the cookie, the CSRF token as subprotocol `waw-csrf.<token>` and an allowed origin.
 - Rendered Markdown is sanitized with DOMPurify (no raw HTML, scripts, event handlers or `javascript:` URLs); the API
-  rejects path traversal and symlinks escaping the workspace; `Idempotency-Key` prevents duplicate threads/jobs.
+  rejects `..` traversal everywhere and refuses to *write* through a symlink that leaves the workspace. Reading
+  through such symlinks is allowed (wikis commonly link to source corpora) and the tree marks those entries;
+  `Idempotency-Key` prevents duplicate threads/jobs.
 - Tokens are never logged or placed in URLs; `/api/v1/health` exposes process health only; `/api/v1/export` downloads
   a backup (SQLite + snapshots) for the authenticated user.
 - The terminal is the user's own shell with the user's own rights — no artificial sandbox, no per-command prompts.
@@ -169,7 +171,7 @@ separately (`~/.config/wiki-agent-workspace/config.toml`). Backup, restore and m
 ## Running the tests
 
 ```bash
-scripts/test.sh            # backend: pytest (67 tests; real git + tmux + fake agents), ~25 s
+scripts/test.sh            # backend: pytest (68 tests; real git + tmux + fake agents), ~25 s
 scripts/test.sh --e2e      # + Playwright browser suite (17 scenarios) against the production build
 # or individually
 .venv/bin/python -m pytest tests/backend -q

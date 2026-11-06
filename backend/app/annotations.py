@@ -35,8 +35,11 @@ def build_prompt(*, question: str, quote: str, document_path: str, sha256: str, 
         refs = ", ".join(f"{v['sha256'][:12]} ({v.get('git_commit') or 'uncommitted'}{', ' + v['git_branch'] if v.get('git_branch') else ''})" for v in versions[:5])
         parts.append(f"Known earlier recorded versions of this file (content hashes, Git commit if any): {refs}. "
                      "Only Git history and these recorded snapshots are available as history; do not claim to know earlier reasoning that is not in them.")
-    parts.append("The user selected this exact passage in the rendered document (verbatim):")
-    parts.append("<<<SELECTED_PASSAGE\n" + quote + "\nSELECTED_PASSAGE>>>")
+    if quote == document_path:
+        parts.append("The user is asking about this document as a whole (no specific passage selected; e.g. a PDF).")
+    else:
+        parts.append("The user selected this exact passage in the rendered document (verbatim):")
+        parts.append("<<<SELECTED_PASSAGE\n" + quote + "\nSELECTED_PASSAGE>>>")
     if prior:
         parts.append("Earlier messages in this discussion thread (for context):")
         parts.extend(f"[{m['role']}] {m['content'][:2000]}" for m in prior[-8:])
@@ -113,7 +116,11 @@ class ThreadService:
                         if j:
                             jobs[m.id] = j
                 d = thread_dict(t, msgs, jobs)
-                if model is not None and sha is not None:
+                if t.anchor_state == "document":
+                    d["anchor_state"] = "document"
+                    d["current_start"] = None
+                    d["current_end"] = None
+                elif model is not None and sha is not None:
                     res = anchoring.resolve(anchoring.Anchor(t.cur_version_sha256, t.cur_quote, t.cur_prefix, t.cur_suffix, t.cur_start, t.cur_end, t.cur_heading), model, sha)
                     d["anchor_state"] = res.state
                     d["current_start"] = res.start
@@ -163,11 +170,17 @@ class ThreadService:
                            current_sha256=sha, submitted_sha256=body.version_sha256)
         err = anchoring.validate_offsets(model.text, body.start, body.end, body.quote)
         if err:
-            # Offsets did not match the server model; accept if the quote occurs exactly once (client-side
-            # model and server-side model can differ in rare renderer edge cases).
-            occurrences = model.text.count(body.quote)
-            if occurrences != 1:
-                raise bad_request(f"invalid anchor: {err}", INVALID_ANCHOR, occurrences=occurrences)
+            # Offsets did not match the server model (stale selection after a re-render, or a renderer edge case).
+            # Re-locate the quote with its stored context exactly like re-anchoring does; accept a unique hit.
+            res = anchoring.resolve(
+                anchoring.Anchor(body.version_sha256 + "-stale", body.quote, body.prefix, body.suffix, body.start, body.end, body.heading),
+                model.text, sha,
+            )
+            if res.start is None or res.end is None:
+                raise bad_request(f"invalid anchor: {err}", INVALID_ANCHOR, occurrences=model.text.count(body.quote), state=res.state)
+            body.start, body.end = res.start, res.end
+            body.prefix = res.prefix if res.prefix is not None else body.prefix
+            body.suffix = res.suffix if res.suffix is not None else body.suffix
         sess = await self._session_for_new_thread(doc, body.session_id)
         heading = body.heading or model.heading_for(body.start)
         user_msg_id = new_id()
@@ -179,7 +192,7 @@ class ThreadService:
                 orig_version_sha256=sha, orig_quote=body.quote, orig_prefix=body.prefix, orig_suffix=body.suffix,
                 orig_start=body.start, orig_end=body.end, orig_heading=heading,
                 cur_version_sha256=sha, cur_quote=body.quote, cur_prefix=body.prefix, cur_suffix=body.suffix,
-                cur_start=body.start, cur_end=body.end, cur_heading=heading, anchor_state="attached",
+                cur_start=body.start, cur_end=body.end, cur_heading=heading, anchor_state="attached" if not body.whole_document else "document",
                 last_session_id=sess.id,
             )
             s.add(t)
@@ -277,8 +290,11 @@ class ThreadService:
         if sha != body.version_sha256:
             raise conflict(DOCUMENT_VERSION_CONFLICT, "document changed; reload before reanchoring", current_sha256=sha)
         err = anchoring.validate_offsets(model.text, body.start, body.end, body.quote)
-        if err and model.text.count(body.quote) != 1:
-            raise bad_request(f"invalid anchor: {err}", INVALID_ANCHOR)
+        if err:
+            res = anchoring.resolve(anchoring.Anchor(sha + "-stale", body.quote, body.prefix, body.suffix, body.start, body.end, body.heading), model.text, sha)
+            if res.start is None or res.end is None:
+                raise bad_request(f"invalid anchor: {err}", INVALID_ANCHOR, state=res.state)
+            body.start, body.end = res.start, res.end
         with self.ctx.db.write() as s:
             tt = s.get(Thread, thread_id)
             assert tt is not None
@@ -318,14 +334,16 @@ class ThreadService:
 
 class ThreadCreateIn(BaseModel):
     version_sha256: str
-    quote: str = Field(min_length=1, max_length=20000)
+    quote: str = Field("", max_length=20000)
     prefix: str = Field("", max_length=80)
     suffix: str = Field("", max_length=80)
-    start: int = Field(ge=0)
-    end: int = Field(ge=1)
+    start: int = Field(0, ge=0)
+    end: int = Field(0, ge=0)
     heading: str | None = None
     question: str = Field(min_length=1, max_length=100000)
     session_id: str | None = None  # app session id, or "new"
+    # A discussion about the document as a whole (no passage): used for PDFs and other formats without text anchors.
+    whole_document: bool = False
 
 
 class MessageIn(BaseModel):

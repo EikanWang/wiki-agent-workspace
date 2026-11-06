@@ -383,3 +383,22 @@ async def test_server_shutdown_interrupts_running_jobs_and_ends_children(running
     assert j["status"] == "interrupted" and j["error_code"] == "INTERRUPTED"
     t = (await h2.api.threads(doc["document_id"]))["threads"][0]
     assert t["messages"][0]["content"].endswith("long") and t["messages"][1]["status"] == "interrupted"
+
+
+async def test_stale_offsets_are_relocated_by_context_even_for_repeated_quotes(api: Api, workspace: Path):
+    """The browser's offsets can be stale (document re-rendered under an open popover). If the quote occurs several
+    times, the stored prefix/suffix must still pin the right occurrence instead of failing with INVALID_ANCHOR."""
+    p = workspace / "docs" / "guide.md"
+    p.write_text("# T\n\nAlpha BUSY one.\n\nBeta BUSY two.\n\nGamma BUSY three.\n")
+    doc = await api.open_doc()
+    a = anchor_for(doc["text"], "BUSY", occurrence=1)  # the one after "Beta "
+    stale = {**a, "start": a["start"] + 7, "end": a["end"] + 7}  # wrong offsets, right context
+    r = await api.post(f"/api/v1/documents/{doc['document_id']}/threads", json={**stale, "version_sha256": doc["sha256"], "question": "what is BUSY?"})
+    assert r.status_code == 201, r.text
+    await api.wait_job(r.json()["job_id"])
+    t = (await api.threads(doc["document_id"]))["threads"][0]
+    assert t["anchor"]["start"] == a["start"] and t["anchor_state"] == "attached"
+    # without disambiguating context the request is still rejected (never attach to an arbitrary match)
+    bad = {**a, "start": 0, "end": 4, "prefix": "", "suffix": ""}
+    r = await api.post(f"/api/v1/documents/{doc['document_id']}/threads", json={**bad, "version_sha256": doc["sha256"], "question": "q"})
+    assert r.status_code == 400 and r.json()["error"]["details"]["state"] == "ambiguous"

@@ -64,7 +64,7 @@ export default function DiffReview({
 }) {
   const [base, setBase] = useState("HEAD");
   const [target, setTarget] = useState<string>("worktree");
-  const [markdownOnly, setMarkdownOnly] = useState(true);
+  const [markdownOnly, setMarkdownOnly] = useState(false);
   const [result, setResult] = useState<DiffResult | null>(null);
   const [refs, setRefs] = useState<GitRefs | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -167,7 +167,7 @@ export default function DiffReview({
               ))}
             </select>
           </label>
-          <label className="small"><input type="checkbox" checked={markdownOnly} onChange={(e) => setMarkdownOnly(e.target.checked)} /> Markdown only</label>
+          <label className="small" title="Hide changes in non-Markdown files"><input type="checkbox" checked={markdownOnly} onChange={(e) => setMarkdownOnly(e.target.checked)} /> Markdown only</label>
           <button className="btn small" onClick={() => void load()} title="Reload">↻</button>
           <button className="icon-btn" onClick={onClose} title="Close diff review">×</button>
         </div>
@@ -225,7 +225,7 @@ export default function DiffReview({
                         <button className="btn primary small" disabled={busy || !question.trim()} onClick={() => void send()} data-testid="diff-comment-send">Send</button>
                         <button className="btn small" onClick={() => setComposer(null)}>Cancel</button>
                       </div>
-                      {!f.is_markdown && <div className="warn small">Comments can only be attached to Markdown files.</div>}
+                      {!f.commentable && <div className="warn small">Comments can only be attached to files the reader can open (Markdown, text/source, .docx).</div>}
                     </div>
                   </td>
                 </tr>
@@ -265,13 +265,14 @@ function FileDiff({ file, lines, hunks, comments, collapsed, onToggle, onOpen, o
     <section className={`diff-file ${collapsed ? "collapsed" : ""}`} data-testid="diff-file" data-path={file.path}>
       <header className="diff-file-head" onClick={onToggle}>
         <span className="chev">{collapsed ? "›" : "⌄"}</span>
-        <FileIcon item={{ type: "file", kind: file.is_markdown ? "markdown" : "file" }} />
+        <FileIcon item={{ type: "file", kind: file.is_markdown ? "markdown" : file.commentable ? "code" : "file" }} />
         <span className="diff-path" title={file.path}>{file.path}</span>
         <span className={`chip git ${file.status}`}>{file.status}</span>
+        {file.lock && <span className="chip locked" title={`Locked${file.lock.reason ? ` — ${file.lock.reason}` : ""}`}>🔒</span>}
         <span className="muted small"><span className="add">+{file.additions}</span> <span className="del">−{file.deletions}</span></span>
         {comments.length > 0 && <span className="chip" title="Comments on this file's diff">{comments.length} comment{comments.length > 1 ? "s" : ""}</span>}
         <span className="spacer" />
-        {file.is_markdown && file.status !== "deleted" && (
+        {file.commentable && file.status !== "deleted" && (
           <button className="btn small" onClick={(e) => { e.stopPropagation(); onOpen(); }} title="Open in the reader">Open</button>
         )}
         <span className="muted small">{kind}</span>
@@ -294,7 +295,7 @@ function FileDiff({ file, lines, hunks, comments, collapsed, onToggle, onOpen, o
               const isComposer = composerIndex === i;
               return (
                 <Fragment key={i}>
-                  <tr className={`diff-line ${ln.kind} ${isComposer ? "composing" : ""} ${cs.length ? "has-comments" : ""}`} onClick={() => file.is_markdown && onComment(i, ln, hunks[ln.hunkIndex] ?? "")} title={file.is_markdown ? "Click to comment on this line" : undefined} data-testid="diff-row">
+                  <tr className={`diff-line ${ln.kind} ${isComposer ? "composing" : ""} ${cs.length ? "has-comments" : ""}`} onClick={() => file.commentable && onComment(i, ln, hunks[ln.hunkIndex] ?? "")} title={file.commentable ? "Click to comment on this line" : undefined} data-testid="diff-row">
                     <td className="no">{ln.oldNo ?? ""}</td>
                     <td className="no">{ln.newNo ?? ""}</td>
                     <td className="code">

@@ -49,11 +49,27 @@ async def test_path_traversal_and_symlink_escape_rejected(api: Api, workspace: P
     outside = tmp_path / "secret.md"
     outside.write_text("# secret\n")
     os.symlink(outside, workspace / "docs" / "link.md")
+    # reading through a symlink that leaves the workspace is allowed (wikis link to source corpora) and flagged
     r = await api.get("/api/v1/documents/open", params={"path": "docs/link.md"})
-    assert r.status_code == 403 and r.json()["error"]["code"] == "PATH_ESCAPES_WORKSPACE"
+    assert r.status_code == 200 and r.json()["text"] == "# secret\n"
+    items = {i["name"]: i for i in (await api.get("/api/v1/files", params={"path": "docs"})).json()["items"]}
+    assert items["link.md"]["symlink"] is True and items["link.md"]["escapes"] is True and items["link.md"]["openable"] is True
     os.symlink(tmp_path, workspace / "escape")
     r = await api.get("/api/v1/files", params={"path": "escape"})
-    assert r.status_code == 403
+    assert r.status_code == 200 and any(i["name"] == "secret.md" for i in r.json()["items"])
+    # but writing through it is refused
+    doc = (await api.get("/api/v1/documents/open", params={"path": "docs/link.md"})).json()
+    pv = await api.post(f"/api/v1/documents/{doc['document_id']}/previews", json={"instruction": "[[edit:docs/link.md:::secret:::leak]]", "base_sha256": doc["sha256"]})
+    await api.wait_job(pv.json()["job_id"])
+    for _ in range(50):
+        p = (await api.get(f"/api/v1/previews/{pv.json()['preview_id']}")).json()
+        if p["status"] != "pending":
+            break
+        await asyncio.sleep(0.1)
+    if p["status"] == "ready":
+        r = await api.post(f"/api/v1/previews/{pv.json()['preview_id']}/apply", json={"base_sha256": doc["sha256"]})
+        assert r.status_code == 403 and r.json()["error"]["code"] == "PATH_ESCAPES_WORKSPACE"
+    assert outside.read_text() == "# secret\n"
     r = await api.get("/api/v1/documents/open", params={"path": "docs/guide.md\0x"})
     assert r.status_code in (400, 404)
 
@@ -188,10 +204,10 @@ async def test_file_tree_lists_all_kinds_with_icons_metadata(api: Api, workspace
     assert items["data.json"]["kind"] == "data" and items["notes.txt"]["kind"] == "text" and items["paper.pdf"]["kind"] == "pdf" and items["paper.pdf"]["format"] == "pdf"
     assert items["alias.md"]["symlink"] is True and items["alias.md"]["link_target"] == "guide.md" and items["alias.md"]["openable"] is True
     assert items["dangling.md"]["kind"] == "broken_link" and items["dangling.md"]["openable"] is False
-    assert items["escape.md"]["escapes"] is True and items["escape.md"]["openable"] is False
+    assert items["escape.md"]["escapes"] is True and items["escape.md"]["openable"] is True
     # unsupported or escaping entries are refused by the API; text/source files open as code
     assert (await api.get("/api/v1/documents/open", params={"path": "docs/pic.png"})).json()["error"]["code"] == "UNSUPPORTED_FORMAT"
-    assert (await api.get("/api/v1/documents/open", params={"path": "docs/escape.md"})).status_code == 403
+    assert (await api.get("/api/v1/documents/open", params={"path": "docs/escape.md"})).status_code == 200
     py = (await api.get("/api/v1/documents/open", params={"path": "docs/script.py"})).json()
     assert py["format"] == "text" and py["text"] == "print(1)\n" and 'class="language-python"' in py["html"]
 

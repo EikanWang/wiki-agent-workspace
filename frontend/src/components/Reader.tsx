@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AgentSession, ApiError, OpenDocument, ReviewMark, Thread, put } from "../api";
 import { renderMarkdown, sanitizeHtml, slugify } from "../markdown";
-import { SelectionAnchor, TextModel, anchorFromSelection, buildTextModel, rangeFromOffsets, resolveAnchor } from "../textmodel";
+import { SelectionAnchor, TextModel, anchorFromSelection, buildTextModel, makeAnchor, rangeFromOffsets, resolveAnchor } from "../textmodel";
 
 export interface ReaderProps {
   doc: OpenDocument;
@@ -178,6 +178,18 @@ export default function Reader(props: ReaderProps) {
     modelRef.current = buildTextModel(el);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [popover?.anchor.start, popover?.anchor.end, sheet?.start, sheet?.end, html]);
+
+  // Before sending, re-locate the quoted passage in the *current* model: highlights may have re-wrapped the DOM
+  // and the document may have been refreshed while the question box was open. Keeps the offsets the server sees in
+  // sync with the quote; the server additionally relocates by context as a last resort.
+  const freshAnchor = useCallback((a: SelectionAnchor): SelectionAnchor => {
+    const model = modelRef.current;
+    if (!model || a.end <= a.start) return a;
+    if (model.text.slice(a.start, a.end) === a.quote) return a;
+    const res = resolveAnchor(model, { quote: a.quote, prefix: a.prefix, suffix: a.suffix, start: a.start, end: a.end, version_sha256: "" }, "x");
+    if (res.start !== null && res.end !== null) return makeAnchor(model, res.start, res.end);
+    return a;
+  }, []);
 
   // In-document fragment navigation: exact id, then case-insensitive id, then heading-text slug.
   const [fragmentMissing, setFragmentMissing] = useState<string | null>(null);
@@ -424,13 +436,18 @@ export default function Reader(props: ReaderProps) {
             className="btn small"
             data-testid="ask-current-selection"
             onClick={() => {
+              if (doc.format === "pdf") {
+                // no text anchors for PDFs: start a discussion about the document as a whole
+                setSheet({ quote: doc.path, prefix: "", suffix: "", start: 0, end: 0, heading: null });
+                return;
+              }
               const a = computeSelection() ?? props.pendingSelectionRef.current;
               if (a) setSheet(a);
               else alert("Select some text in the document first.");
             }}
-            title="On touch devices: select text first, then tap here to ask"
+            title={doc.format === "pdf" ? "Ask the agent about this PDF" : "On touch devices: select text first, then tap here to ask"}
           >
-            Ask about selection
+            {doc.format === "pdf" ? "Ask about this PDF" : "Ask about selection"}
           </button>
         </div>
       </div>
@@ -484,7 +501,7 @@ export default function Reader(props: ReaderProps) {
             defaultSessionId={defaultSessionId}
             defaultProvider={defaultProvider}
             onSend={async (q, sid) => {
-              await onSend(popover.anchor, q, sid);
+              await onSend(freshAnchor(popover.anchor), q, sid);
               setPopover(null);
             }}
             onMark={() => {
@@ -514,7 +531,7 @@ export default function Reader(props: ReaderProps) {
               defaultProvider={defaultProvider}
               className="sheet"
               onSend={async (q, sid) => {
-                await onSend(sheet, q, sid);
+                await onSend(freshAnchor(sheet), q, sid);
                 setSheet(null);
               }}
               onMark={() => {

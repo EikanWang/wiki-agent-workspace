@@ -113,5 +113,7 @@ dismissed.
 | Jobs show `interrupted` after a restart | Expected: the server stopped while they were running. They are never re-run automatically; click **Retry**. |
 | `423 PATH_LOCKED` | The file or a parent folder is locked (🔒). Unlock it in the tree or header, or use your terminal (locks never restrict the shell). |
 | `lock_violation` event in a discussion | An app-driven agent turn modified a locked file anyway (OpenCode CLI mode cannot be sandboxed by the app). Review the diff; revert with Git if unwanted. Codex turns on locked files run read-only. |
+| "The selected text could not be located…" (`INVALID_ANCHOR`) | The offsets sent by the browser did not match the current file and the quote plus its surrounding context could not be located uniquely (e.g. the passage is repeated verbatim and the file changed while the question box was open). Refresh the document and reselect. |
+| `PATH_ESCAPES_WORKSPACE` | Only raised for *writes* through a symlink that points outside the workspace (reads through such links are allowed and flagged in the tree). Edit the real target in your terminal. |
 | `UNSUPPORTED_FORMAT` when opening | Only Markdown, text/source, `.docx` and `.pdf` open in the reader. Other files are listed with their icon for orientation. |
 | Lost the access token | `scripts/setup.sh --show-token`. To rotate: edit `auth.access_token` (any random string), restart, log in again. |

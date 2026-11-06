@@ -97,24 +97,21 @@ class DocumentService:
             raise bad_request("invalid path", "INVALID_PATH")
         return "/".join(parts)
 
-    def resolve(self, rel: str, *, must_exist: bool = True) -> tuple[str, Path]:
-        """Resolve a relative path under the root, rejecting traversal and symlink escapes."""
+    def resolve(self, rel: str, *, must_exist: bool = True, for_write: bool = False) -> tuple[str, Path]:
+        """Resolve a relative path under the root.
+
+        Reads may follow symlinks that point outside the workspace (wikis commonly link to source corpora);
+        the tree marks such entries as `escapes` so the user knows. Writes never go through a symlink that leaves
+        the root, and `..` traversal is always rejected."""
         norm = self.normalize_rel(rel)
         candidate = self.root / norm if norm else self.root
-        # Reject any symlink component escaping the root (also when the final target is inside).
-        cur = self.root
-        for part in norm.split("/") if norm else []:
-            cur = cur / part
-            if cur.is_symlink():
-                target = cur.resolve()
-                if target != self.root and self.root not in target.parents:
-                    raise ApiError(403, "PATH_ESCAPES_WORKSPACE", "symlink escapes the workspace")
         try:
             real = candidate.resolve(strict=must_exist)
         except FileNotFoundError:
             raise not_found(f"{norm} not found", "FILE_NOT_FOUND")
-        if real != self.root and self.root not in real.parents:
-            raise ApiError(403, "PATH_ESCAPES_WORKSPACE", "path escapes the workspace")
+        inside = real == self.root or self.root in real.parents
+        if not inside and for_write:
+            raise ApiError(403, "PATH_ESCAPES_WORKSPACE", "refusing to write through a symlink that leaves the workspace")
         return norm, candidate
 
     # ------------------------------------------------------------------ tree
@@ -156,7 +153,7 @@ class DocumentService:
                         size = None
                 items.append({
                     "path": rel_item, "name": e.name, "type": "file", "kind": kind, "size": size,
-                    "openable": document_format(e.name) != "unsupported" and not broken and not escapes,
+                    "openable": document_format(e.name) != "unsupported" and not broken,
                     "format": document_format(e.name),
                     "git_status": self._file_status(info, rel_item),
                     "symlink": is_link, "link_target": link_target, "escapes": escapes,
@@ -679,7 +676,7 @@ class DocumentService:
     def write_atomic(self, rel: str, data: bytes) -> str:
         if self.locks is not None:
             self.locks.assert_writable(self.normalize_rel(rel), "writing")
-        _, path = self.resolve(rel)
+        _, path = self.resolve(rel, for_write=True)
         if path.is_symlink():
             raise ApiError(403, "PATH_ESCAPES_WORKSPACE", "refusing to write through a symlink")
         mode = path.stat().st_mode & 0o777 if path.exists() else 0o644
