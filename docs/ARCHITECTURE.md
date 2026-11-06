@@ -88,6 +88,13 @@ The window can hold several root folders. `WorkspaceRegistry` keeps one `Workspa
 (`DocumentService`, `LockService`, `WorkspaceWatcher`) and the `workspaces` table records every folder ever opened.
 Every per-wiki row (documents, sessions, locks, reviews, file_reviews) carries `workspace_id`.
 
+Each `WorkspaceWatcher` runs `watchfiles` in a spawned child process and streams batches over a pipe. The server reads
+the raw descriptor itself (`_FrameReader` decodes the `multiprocessing` wire format), because uvloop (uvicorn's
+default loop) makes the descriptor non-blocking and `Connection.recv()` would fail on a partly arrived batch. If the
+child dies or the pipe breaks, the watcher restarts it with backoff (2, 4, 8… s, at most 5 times in a row) and, once
+it is ready, publishes `tree_changed` so clients pick up what changed in the gap. A child that reports its own error
+(e.g. inotify watch limit) is not restarted; its message is shown instead.
+
 `require_auth` / `require_auth_mutating` return a *scoped copy* of `AppContext` (`deps.scoped`) whose `documents`,
 `locks`, `watcher`, `workspace_id` and `workspace_root` belong to one root. The root is chosen as:
 

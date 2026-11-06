@@ -159,7 +159,7 @@ separately (`~/.config/wiki-agent-workspace/config.toml`). Backup, restore and m
 ## Running the tests
 
 ```bash
-scripts/test.sh            # backend: pytest (83 tests; real git + tmux + fake agents), ~25 s
+scripts/test.sh            # backend: pytest (88 tests; real git + tmux + fake agents), ~25 s
 scripts/test.sh --e2e      # + Playwright browser suite (27 scenarios) against the production build
 # or individually
 .venv/bin/python -m pytest tests/backend -q
@@ -192,6 +192,7 @@ Codex CLI 0.155.1, tmux 3.5a, Python 3.13, Node 20.18):
   `/etc/sysctl.d/`) and restart. Manual refresh keeps working meanwhile.
 - The filesystem watcher runs in a child process; on large trees (e.g. a `raw/` corpus with many thousands of files)
   registering can take a minute. The UI shows a banner until it is ready and the `↻` button always works meanwhile.
+  If the watcher process dies it is restarted automatically (up to 5 times in a row) and the file tree is refreshed.
 
 - Browser xterm scrollback does not survive a page reload; use **tmux history** (snapshot) or scroll inside tmux. A
   restored screen is the current tmux screen, not a guaranteed lossless replay.
