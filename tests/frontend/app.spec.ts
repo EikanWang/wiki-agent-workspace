@@ -560,10 +560,26 @@ test("selection popover offers Copy; the model of a session can be switched from
   await login(page);
   await openGuide(page);
   await selectText(page, "AOTAutograd");
-  await page.getByTestId("selection-copy").click();
-  await expect(page.getByTestId("selection-copy")).toHaveText(/Copied/);
+  await expect(page.getByTestId("selection-popover")).toBeVisible();
+  await page.getByTestId("selection-copy").click(); // icon button in the quote header, GitHub style
+  await expect(page.getByTestId("selection-copy")).toHaveAttribute("title", "Copied");
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("AOTAutograd");
   await page.keyboard.press("Escape");
+  // Read mode: selecting text shows only a small copy chip, never the question box
+  await page.getByTestId("reader-mode-read").click();
+  await selectText(page, "TorchInductor");
+  await expect(page.getByTestId("copy-chip")).toBeVisible();
+  await expect(page.getByTestId("selection-popover")).toHaveCount(0);
+  await page.getByTestId("copy-chip").click();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("TorchInductor");
+  // the header button still lets you discuss the current selection explicitly in Read mode
+  await selectText(page, "TorchInductor");
+  await page.getByTestId("ask-current-selection").click();
+  await expect(page.getByTestId("selection-popover")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await page.reload(); // mode persists
+  await expect(page.getByTestId("reader-mode-read")).toHaveAttribute("aria-selected", "true");
+  await page.getByTestId("reader-mode-discuss").click();
   // model switch in individual mode
   if ((await page.getByTestId("panel-expand").count()) > 0) await page.getByTestId("panel-expand").click();
   await page.getByTestId("mode-individual").click();

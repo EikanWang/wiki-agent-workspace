@@ -98,7 +98,9 @@ Alternative token source: `WAW_ACCESS_TOKEN=... scripts/start.sh`. Other env ove
 - The discussion panel has two modes: **Individual** (one discussion at a time, with its diff and anchor tools) and
   **Flat** (all discussions of the document as one chronological stream, grouped by quoted passage; the composer
   continues the chosen discussion — default the newest — so related questions flow without switching).
-- The selection box has a **Copy** button (Ctrl/⌘+C works too — opening the box never clears the selection).
+- Reader modes: **Read** (a plain viewer — selecting text shows only a small copy icon; use *Ask about selection*
+  to discuss explicitly) and **Discuss** (selecting text opens the question box, which has a GitHub-style copy icon
+  on the quote). Ctrl/⌘+C works in both — the box never clears the selection.
 - **Model switching**: each agent session has a model (and reasoning effort) used for its future turns — pick it in
   the session dialog or next to the session in the discussion panel (`opencode models` list / Codex config +
   common ids, or type any id). Past answers keep the model they were produced with.

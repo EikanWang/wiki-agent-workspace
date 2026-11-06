@@ -355,3 +355,13 @@ mark.waw-hl.review.needs_review { border-bottom: 2px dashed var(--warn); }
 .model-picker select, .model-picker input { max-width: 260px; font-size: 12px; }
 .model-picker input { border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; background: var(--bg); width: 180px; }
 .model-tag { opacity: 0.85; }
+
+/* copy affordances */
+.sel-quote-wrap { position: relative; }
+.sel-quote-wrap .sel-quote { padding-right: 34px; }
+.icon-copy { position: absolute; top: 6px; right: 6px; width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--muted); cursor: pointer; padding: 0; }
+.icon-copy:hover { color: var(--fg); border-color: var(--primary); }
+.icon-copy.done { color: var(--green); border-color: var(--green); }
+.copy-chip { position: absolute; z-index: 20; width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--muted); cursor: pointer; padding: 0; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2); }
+.copy-chip:hover { color: var(--fg); border-color: var(--primary); }
+.copy-chip.done { color: var(--green); border-color: var(--green); }

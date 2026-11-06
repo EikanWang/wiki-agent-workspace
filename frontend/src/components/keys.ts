@@ -25,10 +25,11 @@ export function composerKeyDown(
     const ta = e.currentTarget;
     const { selectionStart: s, selectionEnd: en, value } = ta;
     const next = value.slice(0, s) + "\n" + value.slice(en);
+    // Update the DOM value and caret synchronously so keystrokes that follow immediately land after the
+    // newline; then inform React (controlled input) of the same value.
+    ta.value = next;
+    ta.selectionStart = ta.selectionEnd = s + 1;
     setValue(next);
-    requestAnimationFrame(() => {
-      ta.selectionStart = ta.selectionEnd = s + 1;
-    });
     return;
   }
   e.preventDefault();

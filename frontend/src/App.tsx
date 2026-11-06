@@ -478,6 +478,8 @@ export default function App() {
               pendingSelectionRef={pendingSelection}
               tocOpen={prefs.tocOpen}
               onToggleToc={() => updatePrefs({ tocOpen: !prefs.tocOpen })}
+              readerMode={prefs.readerMode}
+              onReaderModeChange={(m) => updatePrefs({ readerMode: m })}
               sessions={sessions}
               defaultSessionId={doc.default_session_id}
               defaultProvider={boot.default_provider}

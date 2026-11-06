@@ -26,14 +26,17 @@ export interface ReaderProps {
   onFragmentConsumed?: () => void;
   tocOpen?: boolean;
   onToggleToc?: () => void;
+  readerMode?: "read" | "discuss";
+  onReaderModeChange?: (m: "read" | "discuss") => void;
   pendingSelectionRef: React.MutableRefObject<SelectionAnchor | null>;
 }
 
 const SELECTION_DELAY_MS = 350;
 
 export default function Reader(props: ReaderProps) {
-  const { doc, threads, marks, activeThreadId, changedNotice, onRefresh, onRelink, onOpenThread, initialFragment, onFragmentConsumed, tocOpen = true, onToggleToc, onSend, onMarkReviewed, onReanchor, onOpenInternalLink, sessions, defaultSessionId, defaultProvider } = props;
+  const { doc, threads, marks, activeThreadId, changedNotice, onRefresh, onRelink, onOpenThread, initialFragment, onFragmentConsumed, tocOpen = true, onToggleToc, readerMode = "discuss", onReaderModeChange, onSend, onMarkReviewed, onReanchor, onOpenInternalLink, sessions, defaultSessionId, defaultProvider } = props;
   const [sheet, setSheet] = useState<SelectionAnchor | null>(null); // mobile / header-button composer
+  const [copyChip, setCopyChip] = useState<{ text: string; x: number; y: number; done: boolean } | null>(null); // read mode
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const modelRef = useRef<TextModel | null>(null);
@@ -275,9 +278,18 @@ export default function Reader(props: ReaderProps) {
     if (!anchor || !sel || sel.rangeCount === 0) {
       setPopover(null);
       setMobileSel(null);
+      setCopyChip(null);
       return;
     }
     props.pendingSelectionRef.current = anchor;
+    if (readerMode === "read") {
+      // plain viewer: offer only a small copy chip at the end of the selection
+      const rect = sel.getRangeAt(0).getBoundingClientRect();
+      const scroller = scrollRef.current!;
+      const sRect = scroller.getBoundingClientRect();
+      setCopyChip({ text: anchor.quote, x: Math.min(rect.right - sRect.left + scroller.scrollLeft + 6, sRect.width - 40), y: rect.top - sRect.top + scroller.scrollTop - 30, done: false });
+      return;
+    }
     if (isTouch) {
       setMobileSel(anchor);
       return;
@@ -291,7 +303,7 @@ export default function Reader(props: ReaderProps) {
     const x = Math.min(Math.max(rect.left - sRect.left + scroller.scrollLeft, 8), Math.max(8, sRect.width - 360));
     const y = above ? rect.top - sRect.top + scroller.scrollTop - 8 : rect.bottom - sRect.top + scroller.scrollTop + 8;
     setPopover({ anchor, x, y, above });
-  }, [computeSelection, isTouch, props.pendingSelectionRef]);
+  }, [computeSelection, isTouch, props.pendingSelectionRef, readerMode]);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -310,6 +322,8 @@ export default function Reader(props: ReaderProps) {
     const change = () => {
       // The DOM selection collapses when focus moves into the question input; the popover keeps
       // its own copy of the anchor, so a collapsed selection never closes it here.
+      const s0 = window.getSelection();
+      if (s0 && s0.isCollapsed) setCopyChip((c) => (c && !c.done ? null : c));
       if (!isTouch) return;
       const sel = window.getSelection();
       if (!sel || sel.isCollapsed) {
@@ -433,6 +447,12 @@ export default function Reader(props: ReaderProps) {
           {doc.git.remote_state && <span className="chip" title="Relation to the remote">{doc.git.remote_state}</span>}
           <span className="chip mono" title={doc.sha256}>{doc.sha256.slice(0, 8)}</span>
           <span className="chip">{threads.length} discussions</span>
+          {onReaderModeChange && (
+            <span className="mode-switch" role="tablist" aria-label="Reader mode" title="Read: selecting text only copies. Discuss: selecting text opens the question box.">
+              <button role="tab" aria-selected={readerMode === "read"} className={readerMode === "read" ? "active" : ""} onClick={() => onReaderModeChange("read")} data-testid="reader-mode-read">Read</button>
+              <button role="tab" aria-selected={readerMode === "discuss"} className={readerMode === "discuss" ? "active" : ""} onClick={() => onReaderModeChange("discuss")} data-testid="reader-mode-discuss">Discuss</button>
+            </span>
+          )}
           <button
             className="btn small"
             data-testid="ask-current-selection"
@@ -494,6 +514,23 @@ export default function Reader(props: ReaderProps) {
         ) : (
           <article className="markdown-body" ref={containerRef} data-testid="markdown-body" />
         )}
+        {copyChip && (
+          <button
+            className={`copy-chip ${copyChip.done ? "done" : ""}`}
+            style={{ left: copyChip.x, top: copyChip.y }}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={async () => {
+              await copyText(copyChip.text);
+              setCopyChip({ ...copyChip, done: true });
+              window.setTimeout(() => setCopyChip(null), 1200);
+            }}
+            title="Copy selection"
+            aria-label="Copy selection"
+            data-testid="copy-chip"
+          >
+            {copyChip.done ? <CheckIcon /> : <CopyIcon />}
+          </button>
+        )}
         {popover && !isTouch && (
           <SelectionPopover
             anchor={popover.anchor}
@@ -518,7 +555,7 @@ export default function Reader(props: ReaderProps) {
         <div className="mobile-ask-bar" data-testid="mobile-ask-bar">
           <span className="quote">"{mobileSel.quote.slice(0, 60)}{mobileSel.quote.length > 60 ? "…" : ""}"</span>
           <button className="btn primary small" onClick={() => { setSheet(mobileSel); setMobileSel(null); }}>Ask</button>
-          <button className="btn small" onClick={() => { void navigator.clipboard?.writeText(mobileSel.quote); setMobileSel(null); }}>Copy</button>
+          <button className="btn small" onClick={() => { void copyText(mobileSel.quote); setMobileSel(null); }} aria-label="Copy selection"><CopyIcon /></button>
           <button className="btn small" onClick={() => { onMarkReviewed(mobileSel); setMobileSel(null); }}>Mark reviewed</button>
         </div>
       )}
@@ -604,7 +641,22 @@ function SelectionPopover({ anchor, style, sessions, defaultSessionId, defaultPr
         <span>Ask about the selected text</span>
         <button className="icon-btn" onClick={onClose} aria-label="Close">×</button>
       </div>
-      <blockquote className="sel-quote" data-testid="selection-quote">{anchor.quote}</blockquote>
+      <div className="sel-quote-wrap">
+        <blockquote className="sel-quote" data-testid="selection-quote">{anchor.quote}</blockquote>
+        <button
+          className={`icon-copy ${copied ? "done" : ""}`}
+          onClick={async () => {
+            await copyText(anchor.quote);
+            setCopied(true);
+            window.setTimeout(() => setCopied(false), 1500);
+          }}
+          title={copied ? "Copied" : "Copy selection"}
+          aria-label="Copy selection"
+          data-testid="selection-copy"
+        >
+          {copied ? <CheckIcon /> : <CopyIcon />}
+        </button>
+      </div>
       {anchor.heading && <div className="sel-heading">Section: {anchor.heading}</div>}
       <textarea
         ref={taRef}
@@ -632,28 +684,49 @@ function SelectionPopover({ anchor, style, sessions, defaultSessionId, defaultPr
       {error && <div className="error-text" role="alert" data-testid="selection-error">{error}</div>}
       <div className="sel-actions">
         <button className="btn primary" onClick={() => void send()} disabled={busy || !question.trim()} data-testid="selection-send">{busy ? "Sending…" : "Send"}</button>
-        <button
-          className="btn"
-          onClick={async () => {
-            try {
-              await navigator.clipboard.writeText(anchor.quote);
-              setCopied(true);
-              window.setTimeout(() => setCopied(false), 1500);
-            } catch {
-              // clipboard API unavailable (insecure context): fall back to the document selection + execCommand
-              const ok = document.execCommand && document.execCommand("copy");
-              setCopied(!!ok);
-              window.setTimeout(() => setCopied(false), 1500);
-            }
-          }}
-          title="Copy the selected text to the clipboard (Ctrl/⌘+C also works while this box is open)"
-          data-testid="selection-copy"
-        >
-          {copied ? "Copied ✓" : "Copy"}
-        </button>
         <button className="btn" onClick={onMark} title="Explicitly mark as reviewed; scrolling never marks automatically">Mark reviewed</button>
         {onReanchor && <button className="btn" onClick={onReanchor}>Reanchor current discussion here</button>}
       </div>
     </div>
+  );
+}
+
+
+async function copyText(text: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    // clipboard API unavailable (insecure context): copy the live selection via execCommand
+    const sel = window.getSelection();
+    const had = sel && !sel.isCollapsed;
+    if (!had) {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      ta.remove();
+    } else {
+      document.execCommand("copy");
+    }
+  }
+}
+
+/** GitHub-style copy / check icons. */
+function CopyIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+      <path fill="currentColor" d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25Z" />
+      <path fill="currentColor" d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z" />
+    </svg>
+  );
+}
+function CheckIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+      <path fill="currentColor" d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z" />
+    </svg>
   );
 }

@@ -56,6 +56,8 @@ export interface Prefs {
   tocOpen: boolean;
   /** Discussion panel: one discussion at a time, or all discussions of the document as one stream. */
   panelMode: "individual" | "flat";
+  /** Reader interaction: "read" = plain viewer (selection only copies), "discuss" = selection opens the question box. */
+  readerMode: "read" | "discuss";
 }
 
 export const DEFAULT_PREFS: Prefs = {
@@ -69,6 +71,7 @@ export const DEFAULT_PREFS: Prefs = {
   panelOpen: true,
   tocOpen: true,
   panelMode: "individual",
+  readerMode: "discuss",
 };
 
 const KEY = "waw.prefs";
