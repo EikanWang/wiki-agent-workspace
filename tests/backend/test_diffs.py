@@ -47,7 +47,7 @@ async def test_folder_diff_vs_head_includes_modified_and_untracked_markdown(api:
     assert (await api.get("/api/v1/diff", params={"path": "docs", "base": "nope"})).json()["error"]["code"] == "REF_NOT_FOUND"
     assert (await api.get("/api/v1/diff", params={"path": "../etc"})).status_code == 400
     refs = (await api.get("/api/v1/refs")).json()
-    assert [c["sha"] for c in refs["commits"]][:2] == [second, first] and "master" in refs["branches"] or "main" in refs["branches"]
+    assert ([c["sha"] for c in refs["commits"]][:2] == [second, first] and "master" in refs["branches"]) or "main" in refs["branches"]
 
 
 async def test_diff_comment_becomes_anchored_discussion(api: Api, workspace: Path):
@@ -82,10 +82,10 @@ async def test_diff_comment_becomes_anchored_discussion(api: Api, workspace: Pat
     r2 = await api.post("/api/v1/diff/comments", json={"path": "docs/guide.md", "side": "deleted", "line_text": removed, "question": "why removed?"})
     assert r2.status_code == 201 and r2.json()["anchored"] is False
     await api.wait_job(r2.json()["job_id"])
-    t2 = [x for x in (await api.threads(out["document_id"]))["threads"] if x["id"] == r2.json()["thread_id"]][0]
+    t2 = next(x for x in (await api.threads(out["document_id"]))["threads"] if x["id"] == r2.json()["thread_id"])
     assert t2["diff"]["side"] == "deleted" and t2["anchor_state"] in ("orphaned", "attached")
-    # non-markdown files cannot take comments
-    assert (await api.post("/api/v1/diff/comments", json={"path": "README.txt", "line_text": "x", "question": "q"})).status_code == 400
+    # files the reader cannot open (binary) cannot take comments
+    assert (await api.post("/api/v1/diff/comments", json={"path": "logo.png", "line_text": "x", "question": "q"})).json()["error"]["code"] == "UNSUPPORTED_FORMAT"
 
 
 async def test_diff_comment_on_markdown_source_line_anchors_to_rendered_text(api: Api, workspace: Path):

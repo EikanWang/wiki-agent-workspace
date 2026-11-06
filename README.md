@@ -98,6 +98,22 @@ Alternative token source: `WAW_ACCESS_TOKEN=... scripts/start.sh`. Other env ove
 - Exited terminals (shell ended) stay visible as `(exited)` so nothing is silently replaced; dismiss them with `×`
   or **Clear exited**. Live terminals ask once before being closed.
 
+### File types, locks and diff review
+
+- The file tree lists every file with a kind-specific icon (folder, Markdown, image, PDF, notebook, code, script,
+  data, text, archive, binary, symlink badge, broken link). The reader opens Markdown, any text/source file
+  (C/C++, Python, YAML, XML, JSON, shell, …, shown as numbered code with the same select-and-ask workflow),
+  Word `.docx` (converted to HTML) and PDF (browser viewer; discussions attach to the document).
+- **Lock** a file or folder (🔒 in the tree or the header toggle): the app and app-driven agent turns treat it as
+  read-only — preview Apply, relink and history deletion are refused (`423 PATH_LOCKED`), the agent is told the
+  path is locked, Codex runs with the `read-only` sandbox, and any change that still happens during a turn is
+  reported as a `lock_violation` (never silently reverted). Your terminal is never restricted.
+- **Diff** view (± next to changed files/folders, or the Diff tab): review a file, a folder or the whole workspace
+  against HEAD or any commit/branch, including untracked Markdown drafts. Click a line to comment; the comment
+  becomes a discussion anchored to that text, with the diff context shown and the agent answering as usual.
+- **Recent** supports filtering, hiding/unhiding entries (history kept) and deleting a document's app history
+  (discussions, versions, reading state — the file itself is untouched).
+
 ### Agent sessions
 
 - Each document has one default session (header). The first question creates it with the default provider; `+ New
@@ -153,8 +169,8 @@ separately (`~/.config/wiki-agent-workspace/config.toml`). Backup, restore and m
 ## Running the tests
 
 ```bash
-scripts/test.sh            # backend: pytest (58 tests; real git + tmux + fake agents), ~25 s
-scripts/test.sh --e2e      # + Playwright browser suite (13 scenarios) against the production build
+scripts/test.sh            # backend: pytest (66 tests; real git + tmux + fake agents), ~25 s
+scripts/test.sh --e2e      # + Playwright browser suite (17 scenarios) against the production build
 # or individually
 .venv/bin/python -m pytest tests/backend -q
 cd frontend && npx playwright install chromium && npm run test:e2e

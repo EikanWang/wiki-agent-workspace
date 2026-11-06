@@ -13,6 +13,7 @@ export default function FileTree({
   selectedPath,
   onOpen,
   onOpenDiff,
+  onToggleLock,
   refreshKey,
   onGit,
 }: {
@@ -21,6 +22,8 @@ export default function FileTree({
   onOpen: (path: string) => void;
   /** Open the diff review for a file or folder (undefined disables the action). */
   onOpenDiff?: (path: string, isDir: boolean) => void;
+  /** Toggle a read-only lock on a file or folder. */
+  onToggleLock?: (path: string, locked: boolean) => void;
   refreshKey: number;
   onGit?: (g: GitSummary) => void;
 }) {
@@ -88,13 +91,17 @@ export default function FileTree({
               {onOpenDiff && it.git_status && it.git_status !== "clean" && (
                 <button className="tree-action" onClick={() => onOpenDiff(it.path, true)} title="Review all changes in this folder" data-testid={`tree-diff-${it.path}`}>±</button>
               )}
+              {onToggleLock && !it.lock_inherited && (
+                <button className="tree-action" onClick={() => onToggleLock(it.path, !it.locked)} title={it.locked ? "Unlock this folder" : "Lock this folder (read-only for the app and app-driven agents)"} data-testid={`tree-lock-${it.path}`}>{it.locked ? "🔓" : "🔒"}</button>
+              )}
+              {it.locked && <span className={`lock-badge ${it.lock_inherited ? "inherited" : ""}`} title={it.lock_inherited ? "Locked by a parent folder" : "Locked"}>🔒</span>}
               {it.git_status && it.git_status !== "clean" && <span className={`git-badge ${it.git_status}`}>{gitLabel(it.git_status)}</span>}
             </div>
             {isOpen && renderDir(it.path, depth + 1)}
           </div>
         );
       }
-      const openable = it.openable !== false && it.kind === "markdown";
+      const openable = it.openable === true;
       return (
         <div key={it.path} className={`tree-row file ${selectedPath === it.path ? "selected" : ""} ${openable ? "" : "inert"} ${it.kind}`} style={{ paddingLeft: depth * 14 + 22 }} title={tip} data-testid={`tree-file-${it.path}`} data-kind={it.kind}>
           <button className="tree-main" onClick={() => (openable ? onOpen(it.path) : undefined)} disabled={!openable} aria-disabled={!openable}>
@@ -104,6 +111,10 @@ export default function FileTree({
           {onOpenDiff && it.git_status && it.git_status !== "clean" && it.git_status !== "untracked" && (
             <button className="tree-action" onClick={() => onOpenDiff(it.path, false)} title="Review changes in this file" data-testid={`tree-diff-${it.path}`}>±</button>
           )}
+          {onToggleLock && !it.lock_inherited && (
+            <button className="tree-action" onClick={() => onToggleLock(it.path, !it.locked)} title={it.locked ? "Unlock this file" : "Lock this file (read-only for the app and app-driven agents)"} data-testid={`tree-lock-${it.path}`}>{it.locked ? "🔓" : "🔒"}</button>
+          )}
+          {it.locked && <span className={`lock-badge ${it.lock_inherited ? "inherited" : ""}`} title={it.lock_inherited ? "Locked by a parent folder" : "Locked"}>🔒</span>}
           {it.git_status && <span className={`git-badge ${it.git_status}`}>{gitLabel(it.git_status)}</span>}
         </div>
       );

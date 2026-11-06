@@ -36,6 +36,8 @@ class JobManager:
         self._pending_permissions: dict[str, dict[str, Any]] = {}
         self._on_complete: dict[str, Any] = {}
         self._shutting_down = False
+        self.locks = None       # LockService, set by main
+        self.documents = None   # DocumentService, set by main
 
     # ------------------------------------------------------------------ startup
     def mark_interrupted(self) -> int:
@@ -234,9 +236,27 @@ class JobManager:
             if not caps.available:
                 raise ProviderError("PROVIDER_UNAVAILABLE", caps.error or f"{provider} is not available")
             cwd = Path(context["_cwd"]) if context.get("_cwd") else None
+            lock = None
+            doc_path = context.get("document_path")
+            if self.locks is not None and doc_path and kind == "turn":
+                lock = self.locks.covering(doc_path)
+            sandbox = self.codex_sandbox if provider == "codex" else None
+            if lock:
+                prompt = (prompt + "\n\nIMPORTANT: The user has LOCKED this document" + (f" (reason: {lock['reason']})" if lock.get("reason") else "")
+                          + ". It is read-only for you: answer the question, but do NOT modify this file or anything under "
+                          + (lock["path"] or "the workspace") + ". If asked to edit, explain that the path is locked instead.")
+                if provider == "codex":
+                    sandbox = "read-only"
+                self._emit(job_id, "notice", {"message": f"{doc_path} is locked; the agent runs read-only for this turn" + (" (Codex sandbox read-only)" if provider == "codex" else "")})
+            pre_sha = None
+            if lock and self.documents is not None:
+                try:
+                    pre_sha = self._sha_of(doc_path)
+                except Exception:
+                    pre_sha = None
             turn = TurnContext(prompt=prompt, workspace=self.workspace, native_session_id=native_id,
-                               title=display_name or (context.get("document_path") and f"Wiki: {context['document_path']}"),
-                               cwd=cwd, sandbox=self.codex_sandbox if provider == "codex" else None)
+                               title=display_name or (doc_path and f"Wiki: {doc_path}"),
+                               cwd=cwd, sandbox=sandbox)
             handle = await adapter.resume_turn(turn)
         except ProviderError as exc:
             self._finish(job_id, "failed", exc.code, exc.message, "")
@@ -302,6 +322,16 @@ class JobManager:
             text = "".join(texts[p] for p in order)
         if final is None:
             final = AgentEvent("failed", {"code": "PROVIDER_FAILED", "message": "the provider ended without a result"})
+        if lock and pre_sha is not None and self.documents is not None:
+            try:
+                post_sha = self._sha_of(doc_path)
+            except Exception:
+                post_sha = pre_sha
+            if post_sha != pre_sha:
+                # Never revert silently (DESIGN §14); make the violation loud and traceable.
+                self._emit(job_id, "lock_violation", {"path": doc_path, "before_sha256": pre_sha, "after_sha256": post_sha,
+                                                      "message": f"{doc_path} is locked but was modified during this agent turn. Review the diff and revert with Git if unwanted."})
+                self.bus.publish("global", {"type": "lock_violation", "path": doc_path, "job_id": job_id})
         if final.type == "completed":
             self._finish(job_id, "completed", None, None, text)
             self._emit(job_id, "completed", {"status": "completed", "text": text, "thread_id": thread_id, "kind": kind})
@@ -315,6 +345,14 @@ class JobManager:
             self._emit(job_id, "failed", {"status": "failed", "code": code, "message": msg, "text": text, "thread_id": thread_id,
                                          "hint": self._hint_for(code, provider)})
             self._mark_session_from_failure(job_id, code)
+
+    def _sha_of(self, rel: str) -> str | None:
+        import hashlib
+
+        p = self.workspace / rel
+        if not p.is_file():
+            return None
+        return hashlib.sha256(p.read_bytes()).hexdigest()
 
     @staticmethod
     def _hint_for(code: str, provider: str) -> str:

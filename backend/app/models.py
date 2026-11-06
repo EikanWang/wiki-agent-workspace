@@ -230,6 +230,20 @@ class IdempotencyKey(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
+class Lock(Base):
+    """A user-declared read-only path. A folder lock covers everything below it. Enforced for every write the
+    app performs or drives (agent edits, preview apply, relink); the user's own terminal is never restricted."""
+
+    __tablename__ = "locks"
+    __table_args__ = (UniqueConstraint("workspace_id", "path", name="uq_locks_workspace_path"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), nullable=False)
+    path: Mapped[str] = mapped_column(Text, nullable=False)  # "" = whole workspace
+    is_dir: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
 class Preview(Base):
     __tablename__ = "previews"
     id: Mapped[str] = mapped_column(String(36), primary_key=True)

@@ -15,7 +15,7 @@ from .deps import AppContext, require_auth, require_auth_mutating
 from .errors import ApiError, bad_request, conflict, not_found, DOCUMENT_VERSION_CONFLICT, INVALID_ANCHOR
 from .models import AgentSession, AnchorHistory, Document, Job, Message, Thread
 from .sessions import SessionService
-from .textmodel import build_text_model
+from .textmodel import TextModel, build_text_model_from_html
 
 router = APIRouter()
 
@@ -84,16 +84,23 @@ class ThreadService:
         self.jobs = ctx.jobs
         self.sessions = SessionService(ctx)
 
+    def _model(self, doc: Document) -> tuple[TextModel, str]:
+        """Full text model (with headings) of the current content, any supported format."""
+        _, data, sha = self.docs.current_content(doc)
+        fmt, html = self.docs.render(doc.path, data)
+        if fmt == "pdf":
+            return TextModel(text="", headings=[]), sha
+        return build_text_model_from_html(html), sha
+
     # ------------------------------------------------------------------ listing
     def list_threads(self, doc_id: str) -> dict[str, Any]:
         doc = self.docs.get_document(doc_id)
         try:
-            text, _, sha = self.docs.current_content(doc)
+            model, sha = self.docs.model_for_doc(doc)
         except ApiError as exc:
             if exc.code != "DOCUMENT_MISSING":
                 raise
-            text, sha = None, None
-        model = build_text_model(text).text if text is not None else None
+            model, sha = None, None
         with self.ctx.db.read() as s:
             threads = s.query(Thread).filter_by(document_id=doc_id).order_by(Thread.created_at).all()
             out = []
@@ -150,11 +157,10 @@ class ThreadService:
     # ------------------------------------------------------------------ create
     async def create_thread(self, doc_id: str, body: "ThreadCreateIn") -> dict[str, Any]:
         doc = self.docs.get_document(doc_id)
-        text, _, sha = self.docs.current_content(doc)
+        model, sha = self._model(doc)
         if sha != body.version_sha256:
             raise conflict(DOCUMENT_VERSION_CONFLICT, "the document changed since you selected the passage; reload and reselect",
                            current_sha256=sha, submitted_sha256=body.version_sha256)
-        model = build_text_model(text)
         err = anchoring.validate_offsets(model.text, body.start, body.end, body.quote)
         if err:
             # Offsets did not match the server model; accept if the quote occurs exactly once (client-side
@@ -267,10 +273,9 @@ class ThreadService:
                 raise not_found("thread not found", "THREAD_NOT_FOUND")
             doc = s.get(Document, t.document_id)
         assert doc is not None
-        text, _, sha = self.docs.current_content(doc)
+        model, sha = self._model(doc)
         if sha != body.version_sha256:
             raise conflict(DOCUMENT_VERSION_CONFLICT, "document changed; reload before reanchoring", current_sha256=sha)
-        model = build_text_model(text)
         err = anchoring.validate_offsets(model.text, body.start, body.end, body.quote)
         if err and model.text.count(body.quote) != 1:
             raise bad_request(f"invalid anchor: {err}", INVALID_ANCHOR)

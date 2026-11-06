@@ -28,6 +28,7 @@ workspaces 1─┬─* documents 1─┬─* document_versions
              │               ├─1 reading_state
              │               ├─* review_marks
              │               ├─* previews ──1 jobs
+             ├─* locks
              │               └─* threads 1─┬─* messages ──(soft) jobs
              │                             ├─* anchor_history
              │                             └─* jobs 1─* job_events
@@ -62,6 +63,7 @@ record (it becomes `missing` until explicitly relinked), so discussions never si
 | `default_session_id` | FK `agent_sessions.id`, nullable | Session new discussions on this document use by default (header "Document session"). |
 | `last_sha256` | nullable | Hash of the file content most recently observed (open or watcher). |
 | `missing` | BOOLEAN | File no longer exists at `path` (renamed/deleted outside the app). |
+| `hidden` | BOOLEAN | Hidden from the *Recent* list (history kept). Toggled with `PUT /documents/{id}/hidden`. |
 | `created_at`, `updated_at` | DATETIME | Record lifecycle. |
 
 ## `document_versions` — every content version seen
@@ -114,6 +116,7 @@ is computed at read time and does not overwrite `cur_*`.
 | `orig_heading` | nullable | Nearest preceding heading text. |
 | `cur_version_sha256`, `cur_quote`, `cur_prefix`, `cur_suffix`, `cur_start`, `cur_end`, `cur_heading` | as above | Current anchor (equal to `orig_*` until manually reanchored). |
 | `anchor_state` | `attached` \| `moved` \| `ambiguous` \| `orphaned` | Last stored resolution state (the API recomputes it against the current file on every read). |
+| `diff_json` | JSON, nullable | Set when the discussion was started as a comment in the diff review: `{base, target, side, line_no, line_text, hunk, anchored}`. |
 | `last_session_id` | FK `agent_sessions.id`, nullable | Session the most recent turn used; replies default to it. |
 | `created_at`, `updated_at` | DATETIME | Lifecycle (`updated_at` moves on reply/reanchor). |
 
@@ -209,6 +212,22 @@ Everything streamed to the browser is persisted first, so a reconnecting client 
 | `proposed_sha256` | nullable | Hash of the proposed content. |
 | `status` | `pending` \| `ready` \| `applied` \| `failed` \| `stale` | `stale` = file changed before Apply. |
 | `created_at`, `applied_at` | DATETIME | Lifecycle. |
+
+## `locks` — user-declared read-only paths
+
+A lock makes a file, a folder (recursively) or the whole workspace (`path = ""`) read-only **for the app**: preview
+Apply, relink and history deletion return 423 `PATH_LOCKED`; app-driven agent turns are told the path is locked
+and Codex runs with the `read-only` sandbox; a change that still happens is reported as a `lock_violation` job
+event. The user's terminal is never restricted.
+
+| Column | Type | Meaning |
+| --- | --- | --- |
+| `id` | UUID, PK | Lock id. |
+| `workspace_id` | FK `workspaces.id` | Workspace. |
+| `path` | TEXT | Normalized relative path; `""` = whole workspace. Unique per workspace. |
+| `is_dir` | BOOLEAN | Folder lock (covers everything below) vs single file. |
+| `reason` | TEXT, nullable | Optional note shown in tooltips and in the agent prompt. |
+| `created_at` | DATETIME | When locked. |
 
 ## `terminals` — terminal tabs
 

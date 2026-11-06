@@ -180,6 +180,8 @@ class PreviewService:
         assert doc is not None
         if p.status != "ready" or not p.proposed_snapshot_ref:
             raise conflict("PREVIEW_NOT_READY", f"preview status is {p.status}")
+        if self.ctx.locks is not None:
+            self.ctx.locks.assert_writable(doc.path, "applying a preview")
         if base_sha256 != p.base_sha256:
             raise conflict(DOCUMENT_VERSION_CONFLICT, "base_sha256 does not match the preview base", preview_base=p.base_sha256)
         _, _, current = self.docs.current_content(doc)

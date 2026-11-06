@@ -22,6 +22,7 @@ from .documents import MARKDOWN_SUFFIXES, DocumentService, sha256_bytes
 from .errors import ApiError, bad_request
 from .gitinfo import git_info, git_run, valid_ref
 from .models import Document, Message, Thread
+from .textmodel import document_format
 
 router = APIRouter()
 
@@ -137,6 +138,8 @@ class DiffService:
                 "identical": a == b, "document_id": doc_ids.get(frel),
                 "target_sha256": sha256_bytes(b.encode("utf-8")) if b is not None and target is None else None,
                 "is_markdown": Path(frel).suffix.lower() in MARKDOWN_SUFFIXES,
+                "commentable": document_format(Path(frel).name) in ("markdown", "text", "docx"),
+                "lock": self.ctx.locks.covering(frel) if self.ctx.locks is not None else None,
             })
         return {
             "path": rel, "is_dir": is_dir, "base": base, "target": target or "worktree",
@@ -150,21 +153,18 @@ class DiffService:
         with the same workflow (session, streaming, retry). The anchor is the commented line's text when it exists
         in the current file; otherwise the thread records the diff context only."""
         rel = self._rel(body.path)
-        if Path(rel).suffix.lower() not in MARKDOWN_SUFFIXES:
-            raise bad_request("comments can only be attached to Markdown files", "NOT_MARKDOWN")
+        if document_format(Path(rel).name) not in ("markdown", "text", "docx"):
+            raise bad_request("comments can only be attached to files the reader can open (Markdown, text/source, .docx)", "UNSUPPORTED_FORMAT")
         doc = self.docs.get_or_create_document(rel)
         try:
-            text, data, sha = self.docs.current_content(doc)
+            _, data, sha = self.docs.current_content(doc)
         except ApiError as exc:
             if exc.code != "DOCUMENT_MISSING":
                 raise
             raise ApiError(409, "DOCUMENT_MISSING", "the file no longer exists in the worktree; comments need a current file")
         self.docs.record_version(doc.id, data, sha)
         svc = ThreadService(self.ctx)
-        from .textmodel import build_text_model
-
-
-        model = build_text_model(text)
+        model, _ = svc._model(doc)
         line_text = body.line_text.strip()
         start = end = 0
         quote = line_text

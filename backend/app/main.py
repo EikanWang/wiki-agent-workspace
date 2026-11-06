@@ -13,7 +13,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
-from . import annotations, diffs, documents, previews, sessions
+from . import annotations, diffs, documents, locks, previews, sessions
 from .agents.jobs import JobManager
 from .agents.registry import ProviderRegistry
 from .auth import AuthManager
@@ -179,8 +179,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ctx.events = bus
     ctx.documents = documents.DocumentService(db, settings.workspace_root, settings.snapshots_dir, settings.max_document_bytes)
     ctx.workspace_id = ctx.documents.workspace_id
+    ctx.locks = locks.LockService(db, ctx.workspace_id)
+    ctx.documents.locks = ctx.locks
     ctx.providers = ProviderRegistry(settings)
     ctx.jobs = JobManager(db, ctx.providers, bus, settings.workspace_root, settings.provider("codex").sandbox)
+    ctx.jobs.locks = ctx.locks
+    ctx.jobs.documents = ctx.documents
     tmux = Tmux(settings)
     ctx.terminals = terminal.TerminalManager(db, tmux, bus, settings.workspace_root)
     ctx.watcher = WorkspaceWatcher(settings.workspace_root, ctx.documents, bus)
@@ -226,6 +230,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     api.include_router(sessions.router)
     api.include_router(previews.router)
     api.include_router(diffs.router)
+    api.include_router(locks.router)
     api.include_router(terminal.router)
     app.include_router(api)
 
@@ -234,11 +239,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         resp = await call_next(request)
         resp.headers.setdefault("X-Content-Type-Options", "nosniff")
         resp.headers.setdefault("Referrer-Policy", "no-referrer")
-        resp.headers.setdefault("X-Frame-Options", "DENY")
+        # /raw may be embedded by the app's own PDF viewer; everything else refuses framing
+        resp.headers.setdefault("X-Frame-Options", "SAMEORIGIN" if request.url.path == "/api/v1/raw" else "DENY")
         if not request.url.path.startswith("/api/"):
             resp.headers.setdefault("Content-Security-Policy",
                                     "default-src 'self'; img-src 'self' data: blob: https: http:; style-src 'self' 'unsafe-inline'; "
-                                    "script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'")
+                                    "script-src 'self'; connect-src 'self'; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'")
         return resp
 
     app.add_middleware(IdempotencyMiddleware, db=db)

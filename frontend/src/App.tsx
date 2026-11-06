@@ -3,6 +3,7 @@ import {
   AgentSession,
   ApiError,
   Bootstrap,
+  del,
   OpenDocument,
   RecentItem,
   ReviewMark,
@@ -313,6 +314,27 @@ export default function App() {
     if (doc) void openDocument(doc.path, true);
   }, [doc, openDocument]);
 
+  const toggleLock = useCallback(
+    async (path: string, locked: boolean) => {
+      try {
+        if (locked) {
+          const reason = window.prompt(`Lock ${path || "the whole workspace"}? The app and app-driven agent turns will not modify it (your terminal is unrestricted). Optional reason:`, "");
+          if (reason === null) return;
+          await post("/locks", { path, reason: reason || null });
+          notify(`Locked ${path || "workspace"}.`);
+        } else {
+          await del(`/locks?path=${encodeURIComponent(path)}`);
+          notify(`Unlocked ${path || "workspace"}.`);
+        }
+        setTreeKey((k) => k + 1);
+        if (doc && (doc.path === path || (path === "" || doc.path.startsWith(path + "/")))) void openDocument(doc.path, true);
+      } catch (e) {
+        notify((e as ApiError).message);
+      }
+    },
+    [doc, notify, openDocument],
+  );
+
   const logout = async () => {
     try {
       await post("/auth/logout");
@@ -367,7 +389,16 @@ export default function App() {
       }}
     >
       <header className="topbar">
-        <button className="icon-btn" onClick={() => setSidebarOpen((s) => !s)} title={sidebarOpen ? "Hide file tree" : "Show file tree"} data-testid="toggle-sidebar">☰</button>
+        <button
+          className={`btn small toggle ${sidebarOpen ? "on" : ""}`}
+          onClick={() => setSidebarOpen((s) => !s)}
+          title={sidebarOpen ? "Hide the file tree" : "Show the file tree"}
+          aria-pressed={sidebarOpen}
+          data-testid="toggle-sidebar"
+          data-state={sidebarOpen ? "open" : "closed"}
+        >
+          <span className="toggle-glyph" aria-hidden="true">{sidebarOpen ? "◧" : "◨"}</span> Files
+        </button>
         <span className="brand-mark">W</span>
         <span className="brand-title">Wiki Reader</span>
         <span className="muted small hide-mobile" title={boot.workspace.root}>{boot.workspace.name}{boot.workspace.git.branch ? ` · ${boot.workspace.git.branch}` : ""}</span>
@@ -375,11 +406,14 @@ export default function App() {
         {doc && (
           <div className="session-area" data-testid="session-area">
             <span className="muted small hide-mobile">Document session</span>
-            <button className="chip-btn" onClick={() => setShowSessions(true)} data-testid="session-button">
-              <SessionChip session={defaultSession} />
+            <button className="btn small session-btn" onClick={() => setShowSessions(true)} data-testid="session-button" title="Choose or link the session new discussions use">
+              {defaultSession ? <SessionChip session={defaultSession} /> : <>No session bound · choose…</>}
             </button>
             <button className="btn small" onClick={() => setShowSessions(true)} data-testid="new-session-button">+ New session</button>
-            <button className="btn small" onClick={() => setShowPreview(true)} title="Ask the agent for a change in an isolated copy and review the diff before applying">Preview change</button>
+            <button className="btn small" onClick={() => setShowPreview(true)} title="Ask the agent for a change in an isolated copy and review the diff before applying" disabled={!!doc.lock}>Preview change</button>
+            <button className={`btn small toggle ${doc.lock ? "on" : ""}`} onClick={() => void toggleLock(doc.lock && doc.lock.path !== doc.path ? doc.lock.path : doc.path, !doc.lock)} title={doc.lock ? `Locked${doc.lock.path !== doc.path ? ` by folder ${doc.lock.path || "(workspace)"}` : ""} — click to unlock` : "Lock this document (read-only for the app and app-driven agents)"} data-testid="doc-lock-toggle" aria-pressed={!!doc.lock}>
+              {doc.lock ? "🔒 Locked" : "🔓 Lock"}
+            </button>
           </div>
         )}
         <nav className="view-tabs">
@@ -402,7 +436,7 @@ export default function App() {
 
       <main className={`layout view-${view === "diff" ? "terminal" : view} ${view === "diff" ? "view-diff" : ""}`}>
         <aside className="sidebar">
-          <FileTree workspaceName={boot.workspace.name} selectedPath={doc?.path ?? null} onOpen={(p) => void openDocument(p)} onOpenDiff={openDiff} refreshKey={treeKey} />
+          <FileTree workspaceName={boot.workspace.name} selectedPath={doc?.path ?? null} onOpen={(p) => void openDocument(p)} onOpenDiff={openDiff} onToggleLock={(p, l) => void toggleLock(p, l)} refreshKey={treeKey} />
           {sidebarOpen && <Resizer side="right" onResize={resizeSidebar} onEnd={persistPrefs} />}
         </aside>
 

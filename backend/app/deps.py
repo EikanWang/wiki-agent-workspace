@@ -16,6 +16,7 @@ if TYPE_CHECKING:  # pragma: no cover
     from .agents.registry import ProviderRegistry
     from .documents import DocumentService
     from .events import EventBus
+    from .locks import LockService
     from .terminal.manager import TerminalManager
     from .watcher import WorkspaceWatcher
 
@@ -32,6 +33,7 @@ class AppContext:
     terminals: "TerminalManager | None" = None
     events: "EventBus | None" = None
     watcher: "WorkspaceWatcher | None" = None
+    locks: "LockService | None" = None
     extra: dict[str, Any] = field(default_factory=dict)
 
 

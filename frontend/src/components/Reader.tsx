@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AgentSession, ApiError, OpenDocument, ReviewMark, Thread, put } from "../api";
-import { renderMarkdown, slugify } from "../markdown";
+import { renderMarkdown, sanitizeHtml, slugify } from "../markdown";
 import { SelectionAnchor, TextModel, anchorFromSelection, buildTextModel, rangeFromOffsets, resolveAnchor } from "../textmodel";
 
 export interface ReaderProps {
@@ -43,17 +43,39 @@ export default function Reader(props: ReaderProps) {
   const restoredFor = useRef<string | null>(null);
   const isTouch = useMemo(() => typeof window !== "undefined" && window.matchMedia("(pointer: coarse)").matches, []);
 
-  const html = useMemo(() => renderMarkdown(doc.text, doc.path), [doc.text, doc.path]);
+  const html = useMemo(() => {
+    if (doc.format === "markdown") return renderMarkdown(doc.text, doc.path);
+    if (doc.format === "pdf") return "";
+    return sanitizeHtml(doc.html ?? "", doc.path);
+  }, [doc.text, doc.html, doc.format, doc.path]);
 
   // Render + build model + apply highlights synchronously after DOM update.
   useLayoutEffect(() => {
     const el = containerRef.current;
     if (!el) return;
     el.innerHTML = html;
+    if (doc.format === "text") {
+      // line numbers as CSS counters: wrap each source line so numbers never enter the text model/selection
+      const code = el.querySelector("pre > code");
+      if (code && !code.querySelector(".ln")) {
+        const raw = code.textContent ?? "";
+        const lines = raw.endsWith("\n") ? raw.slice(0, -1).split("\n") : raw.split("\n");
+        code.textContent = "";
+        lines.forEach((line, i) => {
+          const span = document.createElement("span");
+          span.className = "ln";
+          span.textContent = line + (i < lines.length - 1 ? "\n" : "");
+          code.appendChild(span);
+        });
+        el.classList.add("source-view");
+      }
+    } else {
+      el.classList.remove("source-view");
+    }
     modelRef.current = buildTextModel(el);
     applyHighlights();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [html]);
+  }, [html, doc.format]);
 
   useLayoutEffect(() => {
     applyHighlights();
@@ -387,7 +409,12 @@ export default function Reader(props: ReaderProps) {
           ))}
         </div>
         <div className="doc-meta">
-          <span className="chip">MARKDOWN</span>
+          <span className="chip">{doc.format.toUpperCase()}</span>
+          {doc.lock && (
+            <span className="chip locked" title={`Locked${doc.lock.is_dir && doc.lock.path !== doc.path ? ` by folder ${doc.lock.path || "(workspace)"}` : ""}${doc.lock.reason ? ` — ${doc.lock.reason}` : ""}. The app and app-driven agents will not modify this file; your terminal is unrestricted.`} data-testid="doc-lock-badge">
+              🔒 locked{doc.lock.is_dir && doc.lock.path !== doc.path ? " (folder)" : ""}
+            </span>
+          )}
           {doc.git.branch && <span className="chip" title={doc.git.commit ?? ""}>{doc.git.branch}</span>}
           {doc.git.file_status && <span className={`chip git ${doc.git.file_status}`}>{doc.git.file_status}</span>}
           {doc.git.remote_state && <span className="chip" title="Relation to the remote">{doc.git.remote_state}</span>}
@@ -441,7 +468,14 @@ export default function Reader(props: ReaderProps) {
               ))}
           </nav>
         )}
-        <article className="markdown-body" ref={containerRef} data-testid="markdown-body" />
+        {doc.format === "pdf" ? (
+          <div className="pdf-view" data-testid="pdf-view">
+            <div className="muted small">PDF shown with the browser's viewer. Discussions on PDFs attach to the document (no text anchors); use the discussion panel to ask about it.</div>
+            <iframe title={doc.path} src={`/api/v1/raw?path=${encodeURIComponent(doc.path)}`} />
+          </div>
+        ) : (
+          <article className="markdown-body" ref={containerRef} data-testid="markdown-body" />
+        )}
         {popover && !isTouch && (
           <SelectionPopover
             anchor={popover.anchor}

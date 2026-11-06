@@ -124,6 +124,9 @@ export interface FileItem {
   symlink?: boolean;
   link_target?: string | null;
   escapes?: boolean;
+  format?: string;
+  locked?: boolean;
+  lock_inherited?: boolean;
 }
 
 export interface ReadingState {
@@ -150,9 +153,22 @@ export interface RecentItem {
   session: { provider: string; short_id: string | null; display_name: string | null; status: string } | null;
 }
 
+export interface LockInfo {
+  id: string;
+  path: string;
+  is_dir: boolean;
+  reason: string | null;
+  created_at: string;
+}
+
 export interface OpenDocument {
   document_id: string;
   path: string;
+  /** markdown | text | docx | pdf */
+  format: "markdown" | "text" | "docx" | "pdf";
+  /** server-rendered HTML for text/docx (markdown renders client-side; pdf has none) */
+  html: string | null;
+  lock: LockInfo | null;
   text: string;
   sha256: string;
   git: GitSummary;
@@ -322,6 +338,8 @@ export interface DiffFile {
   document_id: string | null;
   target_sha256: string | null;
   is_markdown: boolean;
+  commentable?: boolean;
+  lock?: LockInfo | null;
 }
 
 export interface DiffComment {

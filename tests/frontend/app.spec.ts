@@ -402,7 +402,7 @@ test("Recent work lists documents newest first and restores document, position a
   await expect(page.getByTestId("thread-quote")).toHaveText(quote!);
 });
 
-test("file tree shows distinct icons per kind; non-markdown entries are not openable", async ({ page }) => {
+test("file tree shows distinct icons per kind; binary entries are not openable, source files open as code", async ({ page }) => {
   await login(page);
   const ws = workspaceDir();
   fs.writeFileSync(path.join(ws, "docs", "diagram.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
@@ -421,7 +421,40 @@ test("file tree shows distinct icons per kind; non-markdown entries are not open
   const svg = async (id: string) => page.getByTestId(id).locator("svg.fi").innerHTML();
   expect(await svg("tree-file-docs/diagram.png")).not.toBe(await svg("tree-file-docs/tool.py"));
   expect(await svg("tree-file-docs/tool.py")).not.toBe(await svg("tree-file-docs/guide.md"));
-  await expect(page.getByTestId("tree-file-docs/tool.py").locator("button.tree-main")).toBeDisabled();
+  await expect(page.getByTestId("tree-file-docs/diagram.png").locator("button.tree-main")).toBeDisabled();
+  await page.getByTestId("tree-file-docs/tool.py").locator("button.tree-main").click();
+  await expect(page.locator(".source-view .ln").first()).toHaveText(/print\(1\)/);
+  await expect(page.locator(".doc-meta .chip").first()).toHaveText("TEXT");
+});
+
+test("lock a folder: badge shown, preview disabled, agent told the file is read-only; unlock restores", async ({ page }) => {
+  await login(page);
+  await openGuide(page);
+  // header toggle shows the state clearly and is a real button
+  const toggle = page.getByTestId("doc-lock-toggle");
+  await expect(toggle).toHaveText(/Lock$/);
+  page.once("dialog", (d) => d.accept("frozen"));
+  await toggle.click();
+  await expect(page.getByTestId("doc-lock-badge")).toBeVisible();
+  await expect(toggle).toHaveText(/Locked/);
+  await expect(page.getByRole("button", { name: "Preview change" })).toBeDisabled();
+  // the tree reflects it
+  await expect(page.getByTestId("tree-file-docs/guide.md").locator(".lock-badge")).toBeVisible();
+  // ask the agent: the discussion still works and reports the read-only notice
+  await selectText(page, "TorchDynamo");
+  await page.getByTestId("selection-question").fill("explain");
+  await page.getByTestId("selection-send").click();
+  await expect(page.locator('[data-testid="message-agent"][data-status="completed"]').last()).toBeVisible({ timeout: 20000 });
+  await toggle.click();
+  await expect(page.getByTestId("doc-lock-badge")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Preview change" })).toBeEnabled();
+  // the sidebar toggle is a stateful button
+  const side = page.getByTestId("toggle-sidebar");
+  await expect(side).toHaveAttribute("aria-pressed", "true");
+  await side.click();
+  await expect(side).toHaveAttribute("aria-pressed", "false");
+  await expect(side).toHaveAttribute("data-state", "closed");
+  await side.click();
 });
 
 test("Recent: hide, show hidden, unhide, delete history", async ({ page }) => {

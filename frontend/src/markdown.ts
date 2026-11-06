@@ -79,6 +79,32 @@ function safeDecode(s: string): string {
   }
 }
 
+/** Sanitize server-rendered HTML (text/source as code block, .docx converted by mammoth) with the same rules. */
+export function sanitizeHtml(html: string, docPath: string): string {
+  const clean = DOMPurify.sanitize(html, {
+    USE_PROFILES: { html: true },
+    FORBID_TAGS: ["style", "script", "iframe", "object", "embed", "form", "input", "button", "svg", "math"],
+    FORBID_ATTR: ["style", "onerror", "onload"],
+    ALLOW_DATA_ATTR: false,
+  });
+  const tpl = document.createElement("template");
+  tpl.innerHTML = clean;
+  tpl.content.querySelectorAll("a[href]").forEach((a) => {
+    const href = a.getAttribute("href") || "";
+    if (!SAFE_PROTOCOLS.test(href)) a.removeAttribute("href");
+    else if (/^https?:/i.test(href) || /^mailto:/i.test(href)) {
+      a.setAttribute("target", "_blank");
+      a.setAttribute("rel", "noopener noreferrer");
+    }
+  });
+  tpl.content.querySelectorAll("img[src]").forEach((img) => {
+    const src = img.getAttribute("src") || "";
+    if (!(src.startsWith("data:image/") || /^https?:/i.test(src))) img.removeAttribute("src"); // docx images arrive as data URIs
+  });
+  void docPath;
+  return tpl.innerHTML;
+}
+
 export function resolveRelative(dir: string, href: string): string {
   const [pathPart] = href.split("#");
   const parts = (dir + safeDecode(pathPart)).split("/");

@@ -11,6 +11,8 @@ import re
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
 
+from pathlib import Path
+
 from markdown_it import MarkdownIt
 
 BLOCK_TAGS = {
@@ -63,6 +65,72 @@ def markdown_renderer() -> MarkdownIt:
 
 def render_markdown(text: str) -> str:
     return markdown_renderer().render(text, {})
+
+
+# ---------------------------------------------------------------------- other formats
+
+TEXT_SUFFIXES = {
+    ".txt", ".rst", ".adoc", ".org", ".log", ".tex", ".bib", ".csv", ".tsv",
+    ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf", ".xml", ".html", ".htm", ".css", ".svg",
+    ".py", ".pyi", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".cu", ".cuh",
+    ".rs", ".go", ".java", ".kt", ".kts", ".swift", ".rb", ".php", ".cs", ".scala", ".lua", ".pl", ".pm", ".r", ".m", ".mm", ".cl",
+    ".glsl", ".hlsl", ".asm", ".s", ".sh", ".bash", ".zsh", ".fish", ".ps1", ".bat", ".cmd", ".sql", ".proto", ".cmake", ".mk",
+    ".gradle", ".groovy", ".dart", ".zig", ".nim", ".ex", ".exs", ".erl", ".hs", ".ml", ".mli", ".clj", ".lisp", ".el", ".vim",
+    ".dockerfile", ".env", ".gitignore", ".gitattributes", ".editorconfig", ".ipynb", ".diff", ".patch",
+}
+TEXT_NAMES = {"makefile", "dockerfile", "cmakelists.txt", "license", "readme", "changelog", "authors", "copying", "notice"}
+LANG_BY_SUFFIX = {
+    ".py": "python", ".pyi": "python", ".js": "javascript", ".mjs": "javascript", ".cjs": "javascript", ".ts": "typescript", ".tsx": "tsx",
+    ".jsx": "jsx", ".c": "c", ".h": "c", ".cc": "cpp", ".cpp": "cpp", ".cxx": "cpp", ".hh": "cpp", ".hpp": "cpp", ".hxx": "cpp", ".cu": "cuda",
+    ".cuh": "cuda", ".rs": "rust", ".go": "go", ".java": "java", ".kt": "kotlin", ".swift": "swift", ".rb": "ruby", ".php": "php", ".cs": "csharp",
+    ".scala": "scala", ".lua": "lua", ".pl": "perl", ".r": "r", ".sh": "bash", ".bash": "bash", ".zsh": "bash", ".ps1": "powershell",
+    ".sql": "sql", ".json": "json", ".yaml": "yaml", ".yml": "yaml", ".toml": "toml", ".xml": "xml", ".html": "html", ".css": "css",
+    ".ini": "ini", ".cfg": "ini", ".conf": "ini", ".cmake": "cmake", ".proto": "protobuf", ".diff": "diff", ".patch": "diff", ".tex": "latex",
+}
+
+
+def document_format(name: str) -> str:
+    """markdown | text | docx | pdf | unsupported"""
+    lower = name.lower()
+    suffix = Path(lower).suffix
+    if suffix in (".md", ".markdown"):
+        return "markdown"
+    if suffix == ".docx":
+        return "docx"
+    if suffix == ".pdf":
+        return "pdf"
+    if suffix in TEXT_SUFFIXES or lower in TEXT_SUFFIXES or lower in TEXT_NAMES or (not suffix and lower.split(".")[0] in TEXT_NAMES):
+        return "text"
+    return "unsupported"
+
+
+def render_text_as_code(text: str, name: str) -> str:
+    """Plain/source text is shown as one fenced code block (line numbers are added by the browser)."""
+    lang = LANG_BY_SUFFIX.get(Path(name.lower()).suffix, "")
+    fence = "`" * 3
+    while fence in text:
+        fence += "`"
+    return markdown_renderer().render(f"{fence}{lang}\n{text}\n{fence}\n", {})
+
+
+def render_docx(data: bytes) -> str:
+    import io
+
+    import mammoth
+
+    result = mammoth.convert_to_html(io.BytesIO(data))
+    return result.value  # sanitized by DOMPurify in the browser; server model is built from the same HTML
+
+
+def render_document(fmt: str, data: bytes, name: str) -> str:
+    """HTML for any supported document format; raises UnicodeDecodeError for non-UTF-8 text."""
+    if fmt == "markdown":
+        return render_markdown(data.decode("utf-8"))
+    if fmt == "text":
+        return render_text_as_code(data.decode("utf-8"), name)
+    if fmt == "docx":
+        return render_docx(data)
+    raise ValueError(f"unsupported document format: {fmt}")
 
 
 @dataclass

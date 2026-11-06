@@ -52,6 +52,11 @@ a { color: var(--primary); }
 .chip.anchor.orphaned, .chip.anchor.ambiguous { background: var(--warn-bg); color: var(--warn); }
 .chip.status.failed, .chip.status.interrupted, .chip.status.cancelled { background: var(--warn-bg); color: var(--warn); }
 .chip-btn { border: none; background: transparent; cursor: pointer; padding: 0; }
+.btn.toggle { display: inline-flex; align-items: center; gap: 5px; }
+.btn.toggle.on { background: var(--accent); border-color: var(--primary); color: var(--primary); }
+.toggle-glyph { font-size: 14px; line-height: 1; }
+.btn.session-btn { display: inline-flex; align-items: center; gap: 6px; }
+.btn.session-btn .chip { background: transparent; padding: 0; font-size: 13px; }
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
 .label { font-size: 12px; color: var(--muted); margin-bottom: 4px; display: flex; gap: 8px; align-items: center; }
 .error-text { color: var(--red); font-size: 13px; margin-top: 6px; white-space: pre-wrap; word-break: break-word; }
@@ -317,3 +322,14 @@ mark.waw-hl.review.needs_review { border-bottom: 2px dashed var(--warn); }
 .diff-origin-line { display: block; font-family: var(--mono); padding: 2px 6px; border-radius: 4px; white-space: pre-wrap; }
 .diff-origin-line.added { background: rgba(0, 162, 64, 0.12); }
 .diff-origin-line.deleted { background: rgba(224, 46, 42, 0.10); }
+
+/* other formats */
+.source-view pre { counter-reset: line; padding-left: 0; }
+.source-view pre code { display: block; }
+.source-view .ln { display: block; counter-increment: line; padding-left: 4.2em; position: relative; }
+.source-view .ln::before { content: counter(line); position: absolute; left: 0; width: 3.2em; text-align: right; color: var(--muted); user-select: none; font-size: 0.85em; padding-right: 0.6em; border-right: 1px solid var(--border); }
+.pdf-view { flex: 1; display: flex; flex-direction: column; gap: 6px; min-height: 0; }
+.pdf-view iframe { flex: 1; min-height: 70vh; border: 1px solid var(--border); border-radius: 8px; background: #fff; }
+.chip.locked { background: var(--warn-bg); color: var(--warn); }
+.tree-row .lock-badge { font-size: 11px; color: var(--warn); flex: none; }
+.tree-row .lock-badge.inherited { opacity: 0.55; }

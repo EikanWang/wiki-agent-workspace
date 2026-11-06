@@ -32,9 +32,16 @@ from .models import (
     Thread,
     Workspace,
 )
-from .textmodel import build_text_model
+from .textmodel import build_text_model, build_text_model_from_html, document_format, render_document
 
 MARKDOWN_SUFFIXES = {".md", ".markdown"}
+
+
+class _Model:
+    """Minimal stand-in for textmodel.TextModel when only the text is needed."""
+
+    def __init__(self, text: str):
+        self.text = text
 EXCLUDED_DIRS = {".git", "node_modules", ".codex", ".opencode", "__pycache__"}
 
 
@@ -49,6 +56,7 @@ class DocumentService:
         self.snapshots_dir = snapshots_dir
         self.max_bytes = max_bytes
         self.workspace_id = self._ensure_workspace()
+        self.locks = None  # set by main: LockService
 
     # ------------------------------------------------------------------ workspace
     def _ensure_workspace(self) -> str:
@@ -148,14 +156,21 @@ class DocumentService:
                         size = None
                 items.append({
                     "path": rel_item, "name": e.name, "type": "file", "kind": kind, "size": size,
-                    "openable": kind == "markdown" and not broken and not escapes,
+                    "openable": document_format(e.name) != "unsupported" and not broken and not escapes,
+                    "format": document_format(e.name),
                     "git_status": self._file_status(info, rel_item),
                     "symlink": is_link, "link_target": link_target, "escapes": escapes,
                 })
+        if self.locks is not None:
+            for it in items:
+                lock = self.locks.covering(it["path"])
+                it["locked"] = bool(lock)
+                it["lock_inherited"] = bool(lock) and lock["path"] != it["path"]
         return {
             "path": norm,
             "items": items,
             "git": self.git_summary(info),
+            "lock": self.locks.covering(norm) if self.locks is not None else None,
         }
 
     KINDS: dict[str, set[str]] = {
@@ -218,8 +233,8 @@ class DocumentService:
         norm, path = self.resolve(rel)
         if not path.is_file():
             raise not_found(f"{norm} is not a file", "FILE_NOT_FOUND")
-        if Path(norm).suffix.lower() not in MARKDOWN_SUFFIXES:
-            raise bad_request("only .md/.markdown files can be opened", "NOT_MARKDOWN")
+        if document_format(Path(norm).name) == "unsupported":
+            raise bad_request("this file type cannot be opened in the reader (Markdown, text/source, .docx and .pdf are supported)", "UNSUPPORTED_FORMAT")
         size = path.stat().st_size
         if size > self.max_bytes:
             raise ApiError(413, "DOCUMENT_TOO_LARGE", f"document is {size} bytes; limit is {self.max_bytes}")
@@ -231,6 +246,26 @@ class DocumentService:
             return data.decode("utf-8")
         except UnicodeDecodeError as exc:
             raise bad_request(f"file is not valid UTF-8 (byte {exc.start})", "INVALID_UTF8")
+
+    @staticmethod
+    def render(norm: str, data: bytes) -> tuple[str, str]:
+        """(format, html) for a document; pdf renders no HTML (shown natively by the browser)."""
+        fmt = document_format(Path(norm).name)
+        if fmt == "pdf":
+            return fmt, ""
+        try:
+            return fmt, render_document(fmt, data, Path(norm).name)
+        except UnicodeDecodeError as exc:
+            raise bad_request(f"file is not valid UTF-8 (byte {exc.start})", "INVALID_UTF8")
+        except Exception as exc:  # corrupt docx etc.
+            raise bad_request(f"could not render {fmt} file: {exc.__class__.__name__}", "RENDER_FAILED")
+
+    def model_text(self, norm: str, data: bytes) -> str:
+        """Rendered-text model for anchors, for any supported format."""
+        fmt, html = self.render(norm, data)
+        if fmt == "pdf":
+            return ""
+        return build_text_model_from_html(html).text
 
     # ------------------------------------------------------------------ documents
     def get_or_create_document(self, norm: str) -> Document:
@@ -261,7 +296,8 @@ class DocumentService:
                         d.missing = True
                 raise not_found("document file is missing; relink it to another file", "DOCUMENT_MISSING", path=doc.path)
             raise
-        text = self.decode(data)
+        fmt = document_format(Path(doc.path).name)
+        text = self.decode(data) if fmt in ("markdown", "text") else ""
         sha = sha256_bytes(data)
         return text, data, sha
 
@@ -309,7 +345,8 @@ class DocumentService:
 
     def open_document(self, rel: str) -> dict[str, Any]:
         norm, data = self.read_bytes(rel)
-        text = self.decode(data)
+        fmt, html = self.render(norm, data)
+        text = self.decode(data) if fmt in ("markdown", "text") else ""
         sha = sha256_bytes(data)
         doc = self.get_or_create_document(norm)
         self.record_version(doc.id, data, sha)
@@ -320,12 +357,15 @@ class DocumentService:
         return {
             "document_id": doc.id,
             "path": norm,
+            "format": fmt,
             "text": text,
+            "html": html if fmt in ("docx", "text") else None,  # markdown is rendered client-side; others server-side
             "sha256": sha,
             "git": {**self.git_summary(info), "file_status": self._file_status(info, norm)},
             "reading_state": self._reading_state_dict(rs),
             "default_session_id": doc.default_session_id,
             "missing": False,
+            "lock": self.locks.covering(norm) if self.locks is not None else None,
         }
 
     def observe_file_change(self, norm: str) -> dict[str, Any] | None:
@@ -349,11 +389,11 @@ class DocumentService:
         if sha == doc.last_sha256:
             return None
         try:
-            data.decode("utf-8")
-        except UnicodeDecodeError:
+            model_text = self.model_text(norm, data)
+        except ApiError:
             return None
         self.record_version(doc.id, data, sha)
-        self.flag_review_marks(doc.id, data.decode("utf-8"), sha)
+        self.flag_review_marks(doc.id, model_text, sha, is_model=True)
         return {"document_id": doc.id, "path": norm, "sha256": sha, "missing": False}
 
     # ------------------------------------------------------------------ reading state
@@ -456,6 +496,10 @@ class DocumentService:
     def delete_history(self, doc_id: str) -> dict[str, Any]:
         """Permanently delete a document's app history: discussions, messages, jobs, versions, reading state,
         review marks, previews and snapshot files. The file in the wiki is never touched."""
+        with self.db.read() as s:
+            d0 = s.get(Document, doc_id)
+        if d0 is not None and self.locks is not None:
+            self.locks.assert_writable(d0.path, "deleting its history")
         with self.db.write() as s:
             d = s.get(Document, doc_id)
             if d is None:
@@ -504,10 +548,10 @@ class DocumentService:
     # ------------------------------------------------------------------ review marks
     def add_review_mark(self, doc_id: str, version_sha256: str, anchor: dict[str, Any]) -> dict[str, Any]:
         doc = self.get_document(doc_id)
-        text, _, sha = self.current_content(doc)
+        model_text, sha = self.model_for_doc(doc)
         if sha != version_sha256:
             raise conflict(DOCUMENT_VERSION_CONFLICT, "document changed; reload before marking reviewed", current_sha256=sha)
-        model = build_text_model(text)
+        model = _Model(model_text)
         err = anchoring.validate_offsets(model.text, anchor["start"], anchor["end"], anchor["quote"])
         if err:
             raise bad_request(err, INVALID_ANCHOR)
@@ -529,12 +573,12 @@ class DocumentService:
             "updated_at": iso(m.updated_at),
         }
 
-    def list_review_marks(self, doc_id: str, text: str, sha: str) -> list[dict[str, Any]]:
-        self.flag_review_marks(doc_id, text, sha)
+    def list_review_marks(self, doc_id: str, text: str, sha: str, *, is_model: bool = False) -> list[dict[str, Any]]:
+        self.flag_review_marks(doc_id, text, sha, is_model=is_model)
         with self.db.read() as s:
             rows = s.query(ReviewMark).filter_by(document_id=doc_id).order_by(ReviewMark.start).all()
         out = []
-        model = build_text_model(text)
+        model = _Model(text) if is_model else build_text_model(text)
         for m in rows:
             d = self._mark_dict(m)
             res = anchoring.resolve(
@@ -547,13 +591,18 @@ class DocumentService:
             out.append(d)
         return out
 
-    def flag_review_marks(self, doc_id: str, text: str, sha: str) -> None:
+    def model_for_doc(self, doc: Document) -> tuple[str, str]:
+        """(model_text, sha) of the current file content for any supported format."""
+        _, data, sha = self.current_content(doc)
+        return self.model_text(doc.path, data), sha
+
+    def flag_review_marks(self, doc_id: str, text: str, sha: str, *, is_model: bool = False) -> None:
         """A reviewed passage whose text no longer matches exactly becomes `needs_review`."""
         with self.db.read() as s:
             rows = s.query(ReviewMark).filter_by(document_id=doc_id, state="reviewed").all()
         if not rows:
             return
-        model = build_text_model(text)
+        model = _Model(text) if is_model else build_text_model(text)
         changed: list[str] = []
         for m in rows:
             if m.reviewed_version_sha256 == sha:
@@ -608,6 +657,11 @@ class DocumentService:
     # ------------------------------------------------------------------ relink
     def relink(self, doc_id: str, new_rel: str) -> dict[str, Any]:
         norm, data = self.read_bytes(new_rel)
+        if self.locks is not None:
+            with self.db.read() as s:
+                cur = s.get(Document, doc_id)
+            if cur is not None:
+                self.locks.assert_writable(cur.path, "relinking")
         with self.db.write() as s:
             doc = s.get(Document, doc_id)
             if doc is None:
@@ -623,6 +677,8 @@ class DocumentService:
 
     # ------------------------------------------------------------------ writes (preview apply)
     def write_atomic(self, rel: str, data: bytes) -> str:
+        if self.locks is not None:
+            self.locks.assert_writable(self.normalize_rel(rel), "writing")
         _, path = self.resolve(rel)
         if path.is_symlink():
             raise ApiError(403, "PATH_ESCAPES_WORKSPACE", "refusing to write through a symlink")
@@ -701,6 +757,9 @@ def raw_file(path: str = Query(...), ctx: AppContext = Depends(require_auth)):
     ctype = mimetypes.guess_type(norm)[0] or "application/octet-stream"
     if ctype in ("text/html", "application/xhtml+xml", "image/svg+xml", "application/javascript", "text/javascript"):
         ctype = "text/plain"
+    if ctype == "application/pdf":
+        # the browser's PDF viewer runs in a sandboxed frame; scripts inside PDFs are never executed by it
+        pass
     return RawResponse(content=p.read_bytes(), media_type=ctype,
                        headers={"Content-Disposition": "inline", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-cache"})
 
@@ -741,8 +800,8 @@ def post_review_mark(doc_id: str, body: ReviewMarkIn, ctx: AppContext = Depends(
 def get_review_marks(doc_id: str, ctx: AppContext = Depends(require_auth)):
     svc = _svc(ctx)
     doc = svc.get_document(doc_id)
-    text, _, sha = svc.current_content(doc)
-    return {"marks": svc.list_review_marks(doc_id, text, sha), "sha256": sha}
+    model_text, sha = svc.model_for_doc(doc)
+    return {"marks": svc.list_review_marks(doc_id, model_text, sha, is_model=True), "sha256": sha}
 
 
 @router.get("/documents/{doc_id}/diff")
