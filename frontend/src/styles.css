@@ -382,3 +382,18 @@ mark.waw-hl.review.needs_review { border-bottom: 2px dashed var(--warn); }
 .viewed-box.on { border-color: var(--green); color: var(--green); background: rgba(0, 162, 64, 0.08); }
 .diff-file.viewed .diff-file-head { opacity: 0.8; }
 .diff-file.viewed-stale .viewed-box { border-color: var(--warn); color: var(--warn); }
+
+/* commit panel */
+.commit-panel { border-bottom: 1px solid var(--border); padding: 10px 16px; display: flex; flex-direction: column; gap: 12px; background: var(--card); }
+.commit-head { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.commit-files { display: flex; flex-direction: column; gap: 2px; max-height: 220px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; padding: 4px; background: var(--bg); }
+.commit-file { display: flex; align-items: center; gap: 8px; padding: 3px 6px; border-radius: 6px; font-size: 13px; cursor: pointer; }
+.commit-file:hover { background: var(--accent); }
+.commit-file.locked { opacity: 0.6; cursor: not-allowed; }
+.commit-file .path { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 12.5px; }
+.commit-panel textarea { width: 100%; border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; background: var(--bg); font-family: var(--mono); font-size: 13px; }
+.commit-panel .label { justify-content: flex-start; }
+.pr-box { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+.pr-box input { border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; background: var(--bg); flex: 1; min-width: 160px; }
+.pr-box input.short { flex: 0 0 180px; }
+.recent-commits { margin: 0; padding-left: 18px; font-size: 13px; }

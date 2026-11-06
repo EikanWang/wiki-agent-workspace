@@ -72,15 +72,18 @@ async function selectText(page: Page, needle: string, endNeedle?: string) {
 /** Commit the e2e workspace; the server's own `git status` can briefly hold index.lock, so retry. */
 function gitCommitAll(ws: string, msg: string) {
   const cp = require("child_process") as typeof import("child_process");
-  for (let i = 0; i < 20; i++) {
+  const run = (cmd: string) => cp.execSync(cmd, { cwd: ws, stdio: ["ignore", "pipe", "pipe"] }).toString();
+  for (let i = 0; i < 30; i++) {
     try {
-      cp.execSync(`git add -A && git commit -q -m "${msg}" || true`, { cwd: ws, stdio: "ignore" });
-      return;
+      run("git add -A");
+      if (run("git status --porcelain").trim() !== "") run(`git commit -q -m "${msg}"`);
+      if (run("git status --porcelain").trim() === "") return;
     } catch {
       try { fs.unlinkSync(path.join(ws, ".git", "index.lock")); } catch { /* not ours or gone */ }
-      cp.execSync("sleep 0.2");
     }
+    cp.execSync("sleep 0.2");
   }
+  throw new Error("gitCommitAll: working tree still dirty after retries");
 }
 
 async function ensureThreadList(page: Page) {
@@ -162,11 +165,14 @@ test("B6: provider failure keeps the question and offers explicit retry; cancel 
   await page.getByTestId("retry-job").click();
   await expect(page.locator('[data-testid="message-agent"]')).toHaveCount(2, { timeout: 20000 });
   // cancel a slow job
+  // wait for the retry to finish so exactly one job is active, then cancel the slow one via *its* message
+  await expect(page.locator('[data-testid="message-agent"]').nth(1)).toHaveAttribute("data-status", /failed|completed/, { timeout: 20000 });
   await page.getByTestId("reply-input").fill("[[sleep:30]] slow");
   await page.getByTestId("reply-send").click();
-  await expect(page.getByTestId("cancel-job")).toBeVisible({ timeout: 15000 });
-  await page.getByTestId("cancel-job").click();
-  await expect(page.locator('[data-testid="message-agent"][data-status="cancelled"]')).toBeVisible({ timeout: 20000 });
+  const slow = page.locator('[data-testid="message-agent"]').last();
+  await expect(slow).toHaveAttribute("data-status", /running|queued/, { timeout: 15000 });
+  await slow.getByTestId("cancel-job").click();
+  await expect(slow).toHaveAttribute("data-status", "cancelled", { timeout: 20000 });
 });
 
 test("B8/D12: document change banner, user-authorized edit shows the diff and reanchors", async ({ page }) => {
@@ -670,4 +676,36 @@ test("diff: multi-line range comments, side-by-side layout, Diff tab follows the
   await expect(page.getByTestId("diff-review")).toContainText("README.md");
   await expect(page.locator('[data-testid="diff-file"][data-path="README.md"]')).toContainText("readme changed");
   await page.getByTestId("diff-layout-unified").click();
+});
+
+test("commit workflow: pick files, draft the message with the agent, commit only those files", async ({ page }) => {
+  await login(page);
+  const ws = workspaceDir();
+  gitCommitAll(ws, "before-commit-test");
+  fs.writeFileSync(path.join(ws, "docs", "commit-a.md"), "# A\n\nfirst\n");
+  fs.writeFileSync(path.join(ws, "docs", "commit-b.md"), "# B\n\nsecond\n");
+  await page.getByTestId("tree-refresh").click();
+  await page.getByTestId("tree-diff-root").click();
+  await page.getByTestId("commit-toggle").click();
+  const panel = page.getByTestId("commit-panel");
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText("changed files selected");
+  // select only commit-a.md
+  await page.getByTestId("commit-select-all").uncheck();
+  await page.getByTestId("commit-file-docs/commit-a.md").check();
+  await expect(panel).toContainText("1 of");
+  await page.getByTestId("commit-draft").click();
+  await expect(page.getByTestId("commit-message")).toHaveValue(/Update docs\/commit-a\.md/, { timeout: 20000 });
+  const msg = await page.getByTestId("commit-message").inputValue();
+  expect(msg).toContain("summarise the diff");
+  await page.getByTestId("commit-button").click();
+  await expect(page.getByTestId("toast")).toContainText("Committed", { timeout: 10000 });
+  const cp = require("child_process") as typeof import("child_process");
+  expect(cp.execSync("git log -1 --format=%s", { cwd: ws }).toString().trim()).toBe("Update docs/commit-a.md");
+  expect(cp.execSync("git show --name-only --format= HEAD", { cwd: ws }).toString().trim()).toBe("docs/commit-a.md");
+  expect(cp.execSync("git status --porcelain", { cwd: ws }).toString()).toContain("docs/commit-b.md"); // untouched
+  await expect(panel).toContainText("Update docs/commit-a.md"); // listed under recent commits
+  // no remote in the e2e workspace -> Push is offered but disabled, and no PR controls
+  await expect(page.getByTestId("push-button")).toBeDisabled();
+  await expect(page.getByTestId("pr-button")).toHaveCount(0);
 });

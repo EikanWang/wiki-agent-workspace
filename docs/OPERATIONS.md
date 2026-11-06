@@ -111,6 +111,10 @@ dismissed.
 | Startup fails with `FOREIGN KEY constraint failed` / `_alembic_tmp_*` table present | An older build ran a SQLite table-rebuild migration with foreign keys on and was interrupted. Current builds run migrations with the pragma off and drop the leftover temp table automatically; just restart. Data is intact (the failed step was rolled back). |
 | `Address already in use` at start | Another instance (or something else) uses the port: `ss -ltnp \| grep 8765`; change `server.port`. |
 | Jobs show `interrupted` after a restart | Expected: the server stopped while they were running. They are never re-run automatically; click **Retry**. |
+| `PUSH_REJECTED` | The remote branch has commits you don't have. The app never force-pushes: `git pull --rebase` (or merge) in the terminal, then push again. |
+| `PUSH_AUTH` | `git push` was refused by the remote's authentication. Fix credentials/SSH keys in the terminal (`gh auth login`, `ssh -T git@github.com`, credential helper). |
+| `GH_UNAVAILABLE` / `NOT_GITHUB` | Pull requests need the GitHub CLI logged in (`gh auth login`) and an `origin` on github.com. |
+| `GIT_IDENTITY_MISSING` | Set `git config --global user.name` / `user.email` for the server user; commits are made with that identity. |
 | `423 PATH_LOCKED` | The file or a parent folder is locked (🔒). Unlock it in the tree or header, or use your terminal (locks never restrict the shell). |
 | `lock_violation` event in a discussion | An app-driven agent turn modified a locked file anyway (OpenCode CLI mode cannot be sandboxed by the app). Review the diff; revert with Git if unwanted. Codex turns on locked files run read-only. |
 | "The selected text could not be located…" (`INVALID_ANCHOR`) | The offsets sent by the browser did not match the current file and the quote plus its surrounding context could not be located uniquely (e.g. the passage is repeated verbatim and the file changed while the question box was open). Refresh the document and reselect. |

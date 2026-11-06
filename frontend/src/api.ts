@@ -378,3 +378,19 @@ export interface GitRefs {
   commits: { sha: string; short: string; subject: string; date: string }[];
   branches: string[];
 }
+
+// ---------------------------------------------------------------- commit workflow
+
+export interface GitStatus {
+  branch: string | null;
+  head: string | null;
+  upstream: string | null;
+  ahead: number | null;
+  behind: number | null;
+  origin: string | null;
+  origin_is_github: boolean;
+  gh_available: boolean;
+  identity: { name: string; email: string; configured: boolean };
+  files: { path: string; status: string; staged: boolean; unstaged: boolean; is_markdown: boolean; lock: LockInfo | null }[];
+  recent_commits: { short: string; subject: string; when: string; author: string }[];
+}

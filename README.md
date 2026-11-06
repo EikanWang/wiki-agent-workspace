@@ -126,6 +126,11 @@ Alternative token source: `WAW_ACCESS_TOKEN=... scripts/start.sh`. Other env ove
   The Diff tab follows the document you are reading; use ± in the tree to review a folder. Each file has a
   GitHub-style **Viewed** checkbox (collapses the file, counted in the header); it is bound to the reviewed content,
   so a later change to the file clears it and shows "changed since".
+- **Commit…** (in the Diff view): tick the changed files you want, let the agent **draft a commit message from the
+  actual diff** (editable), and commit only those files with your Git identity. Then **Push** (sets upstream on the
+  first push; never force-pushes — a diverged remote is reported for you to pull/rebase in the terminal) and, for
+  GitHub remotes with `gh` logged in, **Create pull request** from the current branch. Locked files cannot be
+  committed through the app.
 - **Recent** supports filtering, hiding/unhiding entries (history kept) and deleting a document's app history
   (discussions, versions, reading state — the file itself is untouched).
 
@@ -186,8 +191,8 @@ separately (`~/.config/wiki-agent-workspace/config.toml`). Backup, restore and m
 ## Running the tests
 
 ```bash
-scripts/test.sh            # backend: pytest (71 tests; real git + tmux + fake agents), ~25 s
-scripts/test.sh --e2e      # + Playwright browser suite (20 scenarios) against the production build
+scripts/test.sh            # backend: pytest (73 tests; real git + tmux + fake agents), ~25 s
+scripts/test.sh --e2e      # + Playwright browser suite (21 scenarios) against the production build
 # or individually
 .venv/bin/python -m pytest tests/backend -q
 cd frontend && npx playwright install chromium && npm run test:e2e

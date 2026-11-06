@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { COMPOSER_HINT, composerKeyDown } from "./keys";
 import { AgentSession, ApiError, DiffComment, DiffFile, DiffResult, GitRefs, get, post, put } from "../api";
 import { FileIcon } from "./FileIcon";
+import CommitPanel from "./CommitPanel";
 
 interface Line {
   kind: "add" | "del" | "ctx" | "hunk" | "file";
@@ -93,6 +94,7 @@ export default function DiffReview({
   onOpenThread,
   onClose,
   refreshKey,
+  onNotify,
 }: {
   path: string;
   isDir: boolean;
@@ -102,6 +104,7 @@ export default function DiffReview({
   onOpenThread: (docPath: string, threadId: string) => void;
   onClose: () => void;
   refreshKey: number;
+  onNotify?: (msg: string) => void;
 }) {
   const [base, setBase] = useState("HEAD");
   const [target, setTarget] = useState<string>("worktree");
@@ -118,6 +121,7 @@ export default function DiffReview({
   const [sessionChoice, setSessionChoice] = useState<string>("__default__");
   const [busy, setBusy] = useState(false);
   const [posted, setPosted] = useState<string | null>(null);
+  const [showCommit, setShowCommit] = useState(false);
   const dragging = useRef(false);
 
   useEffect(() => {
@@ -327,11 +331,20 @@ export default function DiffReview({
             <button role="tab" aria-selected={layout === "split"} className={layout === "split" ? "active" : ""} onClick={() => setLayout("split")} data-testid="diff-layout-split" title="Side-by-side view">Side by side</button>
           </span>
           <label className="small" title="Hide changes in non-Markdown files"><input type="checkbox" checked={markdownOnly} onChange={(e) => setMarkdownOnly(e.target.checked)} /> Markdown only</label>
+          <button className={`btn small toggle ${showCommit ? "on" : ""}`} onClick={() => setShowCommit((v) => !v)} title="Select changed files, draft a commit message with the agent, commit, push, open a pull request" data-testid="commit-toggle" aria-pressed={showCommit}>Commit…</button>
           <button className="btn small" onClick={() => void load()} title="Reload">↻</button>
           <button className="icon-btn" onClick={onClose} title="Close diff review">×</button>
         </div>
       </div>
       {error && <div className="banner warn">{error}</div>}
+      {showCommit && (
+        <CommitPanel
+          refreshKey={refreshKey + (result?.files.length ?? 0)}
+          preselect={result ? result.files.map((f) => f.path) : []}
+          onDone={() => void load()}
+          onNotify={(m) => onNotify?.(m)}
+        />
+      )}
       {result && (
         <div className="diff-summary muted small">
           {result.summary.files} file{result.summary.files === 1 ? "" : "s"} · <span className="add">+{result.summary.additions}</span> <span className="del">−{result.summary.deletions}</span>

@@ -519,7 +519,8 @@ export default function App() {
                 restoreThreadRef.current = tid;
                 void openDocument(p);
               }}
-              onClose={() => setView(doc ? "document" : "document")}
+              onClose={() => setView("document")}
+              onNotify={notify}
             />
           )}
         </section>
