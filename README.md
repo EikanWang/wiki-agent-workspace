@@ -98,7 +98,7 @@ Everything below is explained step by step in **[docs/USER_GUIDE.md](docs/USER_G
 | Reviews | Stash comments, **Submit review** once; the agent addresses / replies / skips each comment |
 | Git | **Commit…** selected files with an agent-drafted message, push, create a GitHub pull request |
 | Recent | All folders, newest first; filter, hide, delete history |
-| Terminal | tmux-backed tabs that survive disconnects and server restarts; history snapshot; exited tabs dismissable |
+| Terminal | tmux-backed tabs that survive disconnects and server restarts; history snapshot; exited tabs dismissable; full-screen keyboard capture and a Keys menu / sticky Ctrl for browser-reserved shortcuts (Ctrl+T, Ctrl+W…) |
 | Layout | Foldable/resizable file tree and panel, foldable outline, fonts and sizes (`Aa`) |
 
 ### Agent sessions
@@ -160,7 +160,7 @@ separately (`~/.config/wiki-agent-workspace/config.toml`). Backup, restore and m
 
 ```bash
 scripts/test.sh            # backend: pytest (81 tests; real git + tmux + fake agents), ~25 s
-scripts/test.sh --e2e      # + Playwright browser suite (24 scenarios) against the production build
+scripts/test.sh --e2e      # + Playwright browser suite (25 scenarios) against the production build
 # or individually
 .venv/bin/python -m pytest tests/backend -q
 cd frontend && npx playwright install chromium && npm run test:e2e

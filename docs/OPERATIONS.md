@@ -102,6 +102,7 @@ dismissed.
 | Login works, then immediately logged out behind HTTPS | `cookie_secure` mismatch or proxy not forwarding cookies. Set `cookie_secure = true` for HTTPS, `false` for plain HTTP. |
 | "tmux is not installed" banner; no terminals | Install tmux 3.2+ and restart. Reader and discussions work regardless. |
 | Terminal tab shows `(exited)` | The shell ended (`exit`, crash, host reboot). Dismiss it with `×` / **Clear exited** and create a new one. Never auto-replaced, by design. |
+| Ctrl+T / Ctrl+W / Ctrl+N open or close browser tabs instead of reaching the terminal | Browsers reserve these in normal tabs; pages cannot override them. Use **⛶ Full screen** (keyboard capture in Chrome/Edge; hold Esc to leave), **Keys ▾**, or sticky **Ctrl** then the key. |
 | Terminal shows garbled non-ASCII | Server locale is not UTF-8 and no UTF-8 locale exists on the host (`locale -a`). Install one (e.g. `C.UTF-8`); the UI banner reports which locale is used. |
 | "inotify watch limit … exhausted" banner (more likely with several folders: each folder has its own watcher) | Raise `fs.inotify.max_user_watches` (see DEPLOYMENT.md §1). Manual refresh (`↻`) keeps working meanwhile. |
 | "The file watcher is still indexing" banner for a long time | Very large trees (tens of thousands of directories, e.g. `node_modules`, corpora) take a while to register; use `↻` meanwhile. Excluded automatically: `.git`, `node_modules`, `.codex`, `.opencode`, `__pycache__`. |

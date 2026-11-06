@@ -5,6 +5,42 @@ import { ApiError, Bootstrap, TerminalInfo, del, get, getCsrf, patch, post } fro
 
 type ConnState = "connecting" | "connected" | "detached" | "exited" | "error" | "closed";
 
+/** Live terminal views, so the toolbar can send keys the browser would otherwise swallow (Ctrl+T, Ctrl+W, …). */
+interface TermHandle {
+  send: (bytes: Uint8Array) => void;
+  focus: () => void;
+  appCursor: () => boolean;
+}
+const handles = new Map<string, TermHandle>();
+
+/** One-shot modifiers armed from the toolbar (for keys/combos you cannot type, and for touch keyboards). */
+export interface StickyMods {
+  ctrl: boolean;
+  alt: boolean;
+}
+
+/** Bytes a terminal expects for Ctrl+<key> (Ctrl+letter = 0x01…0x1a, Ctrl+@/[/\\/]/^/_ and Ctrl+Space too). */
+export function ctrlByte(ch: string): number | null {
+  if (ch === " " || ch === "@" || ch === "2") return 0x00;
+  if (ch === "?") return 0x7f;
+  const c = ch.toUpperCase().charCodeAt(0);
+  if (c >= 0x40 && c <= 0x5f) return c - 0x40; // @A-Z[\]^_
+  return null;
+}
+
+function applyMods(data: string, mods: StickyMods): string | null {
+  // only a single typed character is combined with the armed modifier(s)
+  if ([...data].length !== 1) return null;
+  let out = data;
+  if (mods.ctrl) {
+    const b = ctrlByte(data);
+    if (b === null) return null;
+    out = String.fromCharCode(b);
+  }
+  if (mods.alt) out = "\x1b" + out;
+  return out;
+}
+
 export default function TerminalPanel({
   terminals,
   info,
@@ -27,6 +63,60 @@ export default function TerminalPanel({
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<{ id: string; text: string; note: string } | null>(null);
   const [states, setStates] = useState<Record<string, ConnState>>({});
+  const [mods, setMods] = useState<StickyMods>({ ctrl: false, alt: false });
+  const modsRef = useRef<StickyMods>(mods);
+  modsRef.current = mods;
+  const [showKeys, setShowKeys] = useState(false);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const [fullscreen, setFullscreen] = useState(false);
+  const [kbLocked, setKbLocked] = useState(false);
+  const kbLockSupported = typeof navigator !== "undefined" && !!(navigator as any).keyboard?.lock;
+
+  useEffect(() => {
+    const onChange = () => {
+      const fs = document.fullscreenElement === panelRef.current && !!panelRef.current;
+      setFullscreen(fs);
+      if (!fs) {
+        (navigator as any).keyboard?.unlock?.();
+        setKbLocked(false);
+      }
+      // re-fit after the size change
+      if (activeId) window.setTimeout(() => handles.get(activeId)?.focus(), 50);
+    };
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, [activeId]);
+
+  const toggleFullscreen = async () => {
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+        return;
+      }
+      await panelRef.current?.requestFullscreen();
+      // In full screen, Chromium lets a page capture reserved shortcuts (Ctrl+T, Ctrl+W, Ctrl+N, …).
+      if (kbLockSupported) {
+        await (navigator as any).keyboard.lock();
+        setKbLocked(true);
+      }
+    } catch (e) {
+      setError(`Full screen / keyboard capture not available: ${(e as Error).message}`);
+    }
+  };
+
+  const sendKey = (bytes: string) => {
+    if (!activeId) return;
+    const h = handles.get(activeId);
+    if (!h) return;
+    h.send(new TextEncoder().encode(bytes));
+    h.focus();
+  };
+  const sendArrow = (dir: "A" | "B" | "C" | "D") => {
+    if (!activeId) return;
+    const h = handles.get(activeId);
+    if (!h) return;
+    sendKey((h.appCursor() ? "\x1bO" : "\x1b[") + dir);
+  };
 
   const create = async () => {
     setError(null);
@@ -88,7 +178,7 @@ export default function TerminalPanel({
   const active = terminals.find((t) => t.id === activeId) ?? null;
 
   return (
-    <div className="terminal-panel" data-testid="terminal-panel">
+    <div className={`terminal-panel ${fullscreen ? "fullscreen" : ""}`} data-testid="terminal-panel" ref={panelRef}>
       <div className="term-tabs">
         {terminals.map((t) => (
           <span key={t.id} className={`term-tab ${t.id === activeId ? "active" : ""} ${t.state}`} onClick={() => onActive(t.id)} onDoubleClick={() => void rename(t)} title={`${t.cwd} · tmux ${t.tmux_session}`} data-testid="terminal-tab" role="tab">
@@ -111,6 +201,46 @@ export default function TerminalPanel({
           <>
             <button className="btn small" onClick={() => void move(active, -1)} title="Move tab left">◂</button>
             <button className="btn small" onClick={() => void move(active, 1)} title="Move tab right">▸</button>
+            <button className={`btn small toggle ${mods.ctrl ? "on" : ""}`} onClick={() => { setMods((m) => ({ ...m, ctrl: !m.ctrl })); handles.get(active.id)?.focus(); }} aria-pressed={mods.ctrl} title="Sticky Ctrl: the next key you type is sent with Ctrl (e.g. Ctrl, then T = Ctrl+T)" data-testid="term-sticky-ctrl">Ctrl</button>
+            <button className={`btn small toggle ${mods.alt ? "on" : ""}`} onClick={() => { setMods((m) => ({ ...m, alt: !m.alt })); handles.get(active.id)?.focus(); }} aria-pressed={mods.alt} title="Sticky Alt/Meta: the next key you type is sent with Alt" data-testid="term-sticky-alt">Alt</button>
+            <span className="keys-anchor">
+              <button className={`btn small toggle ${showKeys ? "on" : ""}`} onClick={() => setShowKeys((v) => !v)} title="Send keys the browser reserves (Ctrl+T, Ctrl+W, …) and special keys" data-testid="term-keys">Keys ▾</button>
+              {showKeys && (
+                <div className="keys-menu" data-testid="term-keys-menu" onMouseDown={(e) => e.preventDefault()}>
+                  <div className="muted small">Reserved by the browser in a normal tab:</div>
+                  <div className="keys-row">
+                    {["T", "W", "N", "Q", "R", "L", "J", "K"].map((k) => (
+                      <button key={k} className="btn small" onClick={() => sendKey(String.fromCharCode(ctrlByte(k)!))} data-testid={`term-key-ctrl-${k.toLowerCase()}`}>Ctrl+{k}</button>
+                    ))}
+                  </div>
+                  <div className="muted small">Common:</div>
+                  <div className="keys-row">
+                    <button className="btn small" onClick={() => sendKey("\x03")}>Ctrl+C</button>
+                    <button className="btn small" onClick={() => sendKey("\x04")}>Ctrl+D</button>
+                    <button className="btn small" onClick={() => sendKey("\x1a")}>Ctrl+Z</button>
+                    <button className="btn small" onClick={() => sendKey("\x02")} title="tmux prefix of the app's tmux server">Ctrl+B</button>
+                    <button className="btn small" onClick={() => sendKey("\x1b")} data-testid="term-key-esc">Esc</button>
+                    <button className="btn small" onClick={() => sendKey("\t")}>Tab</button>
+                    <button className="btn small" onClick={() => sendKey("\x1b[Z")}>Shift+Tab</button>
+                  </div>
+                  <div className="keys-row">
+                    <button className="btn small" onClick={() => sendArrow("A")} aria-label="Up">↑</button>
+                    <button className="btn small" onClick={() => sendArrow("B")} aria-label="Down">↓</button>
+                    <button className="btn small" onClick={() => sendArrow("D")} aria-label="Left">←</button>
+                    <button className="btn small" onClick={() => sendArrow("C")} aria-label="Right">→</button>
+                    <button className="btn small" onClick={() => sendKey("\x1b[5~")}>PgUp</button>
+                    <button className="btn small" onClick={() => sendKey("\x1b[6~")}>PgDn</button>
+                    <button className="btn small" onClick={() => sendKey("\x1b[H")}>Home</button>
+                    <button className="btn small" onClick={() => sendKey("\x1b[F")}>End</button>
+                  </div>
+                  <div className="muted small">
+                    Any other combo: click <b>Ctrl</b> (or <b>Alt</b>) above, then type the key. Or use <b>Full screen</b>
+                    {kbLockSupported ? ", which captures every shortcut (hold Esc to leave)." : " (this browser cannot capture reserved shortcuts; use these buttons)."}
+                  </div>
+                </div>
+              )}
+            </span>
+            <button className={`btn small toggle ${fullscreen ? "on" : ""}`} onClick={() => void toggleFullscreen()} title={kbLockSupported ? "Full screen with keyboard capture: Ctrl+T, Ctrl+W, Ctrl+N… go to the terminal. Hold Esc to leave." : "Full screen (this browser cannot capture Ctrl+T/W/N; use Keys ▾)"} data-testid="term-fullscreen">⛶ {fullscreen ? "Exit" : "Full screen"}</button>
             <button className="btn small" onClick={() => void showHistory(active)} title="Snapshot of the tmux pane history (server-side), distinct from the browser scrollback">tmux history</button>
             <button className="btn small danger" onClick={() => void close(active)} data-testid="terminal-close">{active.state === "live" ? "Close terminal" : "Dismiss"}</button>
           </>
@@ -120,6 +250,14 @@ export default function TerminalPanel({
         <div className="banner warn">tmux is not installed on the server; terminals are disabled. {info.install_hint}</div>
       )}
       {info?.locale_warning && <div className="banner">{info.locale_warning}</div>}
+      {fullscreen && (
+        <div className="banner small" data-testid="term-kb-banner">
+          {kbLocked ? "Keyboard captured: Ctrl+T, Ctrl+W, Ctrl+N and other shortcuts go to the terminal. Press and hold Esc to leave full screen." : "Full screen. This browser does not allow capturing Ctrl+T/W/N; use Keys ▾ or sticky Ctrl."}
+        </div>
+      )}
+      {(mods.ctrl || mods.alt) && (
+        <div className="banner small" data-testid="term-mods-banner">Next key is sent with {[mods.ctrl && "Ctrl", mods.alt && "Alt"].filter(Boolean).join("+")} — type it in the terminal.</div>
+      )}
       {error && <div className="error-text pad">{error}</div>}
       <div className="term-views">
         {terminals.length === 0 && (
@@ -136,6 +274,8 @@ export default function TerminalPanel({
             onExited={() => void onChanged()}
             onDismiss={() => void close(t)}
             fontSize={fontSize}
+            modsRef={modsRef}
+            onModsUsed={() => setMods({ ctrl: false, alt: false })}
           />
         ))}
       </div>
@@ -173,7 +313,7 @@ function b64decode(s: string): Uint8Array {
   return out;
 }
 
-function TerminalView({ terminal, active, onState, onExited, onDismiss, fontSize }: { terminal: TerminalInfo; active: boolean; onState: (s: ConnState) => void; onExited: () => void; onDismiss: () => void; fontSize: number }) {
+function TerminalView({ terminal, active, onState, onExited, onDismiss, fontSize, modsRef, onModsUsed }: { terminal: TerminalInfo; active: boolean; onState: (s: ConnState) => void; onExited: () => void; onDismiss: () => void; fontSize: number; modsRef: React.MutableRefObject<StickyMods>; onModsUsed: () => void }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -251,10 +391,27 @@ function TerminalView({ terminal, active, onState, onExited, onDismiss, fontSize
     term.open(host);
     termRef.current = term;
     fitRef.current = fit;
-    term.onData((data) => {
+    const sendBytes = (bytes: Uint8Array) => {
       const ws = wsRef.current;
       if (!ws || ws.readyState !== WebSocket.OPEN) return;
-      ws.send(JSON.stringify({ type: "input", data: b64encode(encoder.current.encode(data)) }));
+      ws.send(JSON.stringify({ type: "input", data: b64encode(bytes) }));
+    };
+    handles.set(terminal.id, {
+      send: sendBytes,
+      focus: () => term.focus(),
+      appCursor: () => !!(term as any).modes?.applicationCursorKeysMode,
+    });
+    term.onData((data) => {
+      const m = modsRef.current;
+      if (m.ctrl || m.alt) {
+        const combined = applyMods(data, m);
+        onModsUsed();
+        if (combined !== null) {
+          sendBytes(encoder.current.encode(combined));
+          return;
+        }
+      }
+      sendBytes(encoder.current.encode(data));
     });
     term.onBinary((data) => {
       // binary strings: copy each char's low 8 bits (e.g. mouse reports are not UTF-8 text)
@@ -276,6 +433,7 @@ function TerminalView({ terminal, active, onState, onExited, onDismiss, fontSize
     }, 25000);
     return () => {
       window.clearInterval(ping);
+      handles.delete(terminal.id);
       wsRef.current?.close();
       term.dispose();
     };

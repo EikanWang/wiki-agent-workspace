@@ -169,6 +169,17 @@ browser only detaches; reattach later and everything is still running, even acro
 history** shows the server-side scrollback. Tabs whose shell exited show *(exited)*: dismiss them with `×` or
 **Clear exited**; closing a live terminal asks first.
 
+**Keys the browser keeps for itself.** In a normal browser tab, Chrome/Edge/Firefox never pass a few shortcuts to the
+page — Ctrl+T, Ctrl+W, Ctrl+N, Ctrl+Tab and similar open/close tabs and windows instead. Three ways to send them:
+
+- **⛶ Full screen** (terminal toolbar): in Chromium-based browsers (Chrome, Edge) full screen also *captures the
+  keyboard*, so Ctrl+T, Ctrl+W, Ctrl+N… go straight to the terminal. Press and **hold** Esc to leave full screen.
+  Firefox and Safari don't support keyboard capture.
+- **Keys ▾**: one-click Ctrl+T/W/N/Q/R/L/J/K, Ctrl+C/D/Z, Ctrl+B (tmux prefix), Esc, Tab, Shift+Tab, arrows,
+  PgUp/PgDn, Home/End — also handy on touch keyboards.
+- **Ctrl** / **Alt** (sticky): click, then type any key — it is sent with that modifier once (Ctrl, T = Ctrl+T;
+  Alt, x = Alt+x).
+
 ## Keyboard
 
 | Where | Key | Action |
@@ -178,6 +189,7 @@ history** shows the server-side scrollback. Tabs whose shell exited show *(exite
 | | Esc | Close the box (keeps nothing sent) |
 | Selection box | Ctrl/⌘+C | Copy the selection |
 | Editor | Ctrl/⌘+S · Esc · Tab / Shift+Tab | Save · back to reading · indent / outdent |
+| Terminal | Ctrl+T, Ctrl+W, Ctrl+N… | Reserved by the browser: use ⛶ Full screen (Chrome/Edge), **Keys ▾** or sticky **Ctrl** |
 | Diff | click / shift-click / drag | Select one line / a range |
 
 IME composition (e.g. Chinese input) never sends on Enter.

@@ -453,3 +453,11 @@ mark.waw-hl.review.needs_review { border-bottom: 2px dashed var(--warn); }
 .editor-text { flex: 1; border: none; outline: none; resize: none; padding: 8px 10px; font-family: var(--mono); font-size: 13px; line-height: 1.5; background: transparent; tab-size: 4; }
 .editor-pane.nowrap .editor-text { white-space: pre; overflow: auto; }
 .editor-preview { overflow: auto; border: 1px solid var(--border); border-radius: 8px; padding: 8px 14px; max-width: none; font-size: calc(var(--reader-size, 15px) - 1px); }
+
+/* terminal keys / full screen */
+.keys-anchor { position: relative; }
+.keys-menu { position: absolute; right: 0; top: 32px; z-index: 40; width: 380px; background: #1b1e24; border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 10px; padding: 10px; display: flex; flex-direction: column; gap: 6px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4); color: #ddd; }
+.keys-row { display: flex; flex-wrap: wrap; gap: 4px; }
+.keys-menu .btn { background: #22252c; border-color: rgba(255, 255, 255, 0.12); color: #ddd; }
+.term-tabs .btn.toggle.on { background: #2f6fb3; border-color: #5aa0ea; color: #fff; }
+.terminal-panel.fullscreen { background: #0f1115; }

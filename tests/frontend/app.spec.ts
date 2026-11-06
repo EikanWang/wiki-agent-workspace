@@ -872,3 +872,34 @@ test("edit a file directly: save with Ctrl+S, preview, conflict handling, lock, 
   await page.getByTestId("doc-lock-toggle").click();
   await expect(page.getByTestId("doc-edit")).toBeEnabled();
 });
+
+test("terminal: send browser-reserved keys (Ctrl+T, Ctrl+W) via the Keys menu and sticky Ctrl/Alt", async ({ page }) => {
+  await login(page);
+  await page.getByTestId("view-terminal").click();
+  await page.getByTestId("terminal-new").click();
+  const view = page.locator(".term-view.active");
+  await expect(view).toHaveAttribute("data-state", "connected", { timeout: 15000 });
+  await page.locator(".term-view.active .xterm-helper-textarea").focus();
+  // werase undef: otherwise the tty line discipline treats Ctrl+W as "erase word" inside cat's input line
+  await page.keyboard.type("export PS1='$ '; stty werase undef; echo RE\"\"ADY; cat -v\n");
+  await expect(view.locator(".xterm-rows")).toContainText("READY", { timeout: 15000 }); // cat -v is now reading the tty
+  // Keys menu: Ctrl+T and Ctrl+W, which a normal browser tab never delivers to the page
+  await page.getByTestId("term-keys").click();
+  await page.getByTestId("term-key-ctrl-t").click();
+  await page.getByTestId("term-key-ctrl-w").click();
+  await page.getByTestId("term-key-esc").click();
+  await page.getByTestId("term-keys").click(); // close menu
+  // sticky Ctrl: arm it, then type a letter
+  await page.getByTestId("term-sticky-ctrl").click();
+  await expect(page.getByTestId("term-mods-banner")).toContainText("Ctrl");
+  await page.keyboard.type("n");
+  await expect(page.getByTestId("term-mods-banner")).toHaveCount(0); // one-shot
+  // sticky Alt: ESC prefix
+  await page.getByTestId("term-sticky-alt").click();
+  await page.keyboard.type("x");
+  await page.keyboard.press("Enter");
+  // cat -v echoes control characters visibly: ^T ^W ^[ ^N ^[x
+  await expect(view.locator(".xterm-rows")).toContainText("^T^W^[^N^[x", { timeout: 10000 });
+  await page.keyboard.press("Control+c");
+  await expect(page.getByTestId("term-fullscreen")).toBeVisible();
+});
