@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { COMPOSER_HINT, composerKeyDown } from "./keys";
 import { AgentSession, ApiError, OpenDocument, ReviewMark, Thread, put } from "../api";
 import { renderMarkdown, sanitizeHtml, slugify } from "../markdown";
 import { SelectionAnchor, TextModel, anchorFromSelection, buildTextModel, makeAnchor, rangeFromOffsets, resolveAnchor } from "../textmodel";
@@ -606,12 +607,10 @@ function SelectionPopover({ anchor, style, sessions, defaultSessionId, defaultPr
       <textarea
         ref={taRef}
         className="sel-input"
-        placeholder="Your question about the selected text (Ctrl/⌘+Enter to send)"
+        placeholder={`Your question about the selected text (${COMPOSER_HINT})`}
         value={question}
         onChange={(e) => setQuestion(e.target.value)}
-        onKeyDown={(e) => {
-          if ((e.ctrlKey || e.metaKey) && e.key === "Enter") void send();
-        }}
+        onKeyDown={(e) => composerKeyDown(e, () => void send(), setQuestion, onClose)}
         data-testid="selection-question"
         rows={3}
       />

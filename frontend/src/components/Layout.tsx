@@ -54,6 +54,8 @@ export interface Prefs {
   sidebarOpen: boolean;
   panelOpen: boolean;
   tocOpen: boolean;
+  /** Discussion panel: one discussion at a time, or all discussions of the document as one stream. */
+  panelMode: "individual" | "flat";
 }
 
 export const DEFAULT_PREFS: Prefs = {
@@ -66,6 +68,7 @@ export const DEFAULT_PREFS: Prefs = {
   sidebarOpen: true,
   panelOpen: true,
   tocOpen: true,
+  panelMode: "individual",
 };
 
 const KEY = "waw.prefs";

@@ -95,6 +95,11 @@ Alternative token source: `WAW_ACCESS_TOKEN=... scripts/start.sh`. Other env ove
   folds with `▾ Outline`. The document area always expands into the freed space. Settings persist per browser.
 - Links to sections (`#heading`, `page.md#heading`) scroll inside the reader; heading ids use GitHub's slug rules.
 - Agent replies are rendered as sanitized Markdown; your own messages stay verbatim.
+- The discussion panel has two modes: **Individual** (one discussion at a time, with its diff and anchor tools) and
+  **Flat** (all discussions of the document as one chronological stream, grouped by quoted passage; the composer
+  continues the chosen discussion — default the newest — so related questions flow without switching).
+- In every question/reply box **Enter sends** and **Ctrl/⌘+Enter** (or Shift+Enter) inserts a new paragraph; Enter
+  during IME composition never sends.
 - Exited terminals (shell ended) stay visible as `(exited)` so nothing is silently replaced; dismiss them with `×`
   or **Clear exited**. Live terminals ask once before being closed.
 
@@ -172,7 +177,7 @@ separately (`~/.config/wiki-agent-workspace/config.toml`). Backup, restore and m
 
 ```bash
 scripts/test.sh            # backend: pytest (68 tests; real git + tmux + fake agents), ~25 s
-scripts/test.sh --e2e      # + Playwright browser suite (17 scenarios) against the production build
+scripts/test.sh --e2e      # + Playwright browser suite (18 scenarios) against the production build
 # or individually
 .venv/bin/python -m pytest tests/backend -q
 cd frontend && npx playwright install chromium && npm run test:e2e

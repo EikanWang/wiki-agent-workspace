@@ -525,6 +525,8 @@ export default function App() {
           <DiscussionPanel
             onCollapse={() => updatePrefs({ panelOpen: false })}
             resizer={<Resizer side="left" onResize={resizePanel} onEnd={persistPrefs} />}
+            mode={prefs.panelMode}
+            onModeChange={(m) => updatePrefs({ panelMode: m })}
             thread={activeThreadObj}
             threads={threads}
             sessions={sessions}

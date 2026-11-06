@@ -516,3 +516,41 @@ test("Diff review of a folder with line comments that become discussions", async
   await page.getByTestId("diff-comment-marker").first().click();
   await expect(page.getByTestId("thread-quote")).toContainText("item ONE (reviewed)");
 });
+
+test("flat discussion mode shows all threads as one stream; Enter sends, Ctrl+Enter inserts a paragraph", async ({ page }) => {
+  await login(page);
+  await openGuide(page);
+  if ((await page.getByTestId("panel-expand").count()) > 0) await page.getByTestId("panel-expand").click();
+  const before = (await page.getByTestId("thread-item").count()) || 0;
+  // start a second discussion so the stream has several groups
+  await selectText(page, "compiler pipeline");
+  const q = page.getByTestId("selection-question");
+  await q.fill("");
+  await q.type("First line");
+  await q.press("Control+Enter");
+  await q.type("second paragraph");
+  await expect(q).toHaveValue("First line\nsecond paragraph");
+  await q.press("Enter"); // Enter sends
+  await expect(page.getByTestId("thread-quote")).toHaveText("compiler pipeline", { timeout: 10000 });
+  await expect(page.locator('[data-testid="message-user"]').last()).toContainText("second paragraph");
+  // switch to flat mode: every thread is listed as a group, in creation order, persisted in prefs
+  await page.getByTestId("mode-flat").click();
+  const panel = page.getByTestId("discussion-panel");
+  await expect(panel).toHaveAttribute("data-mode", "flat");
+  await expect(page.getByTestId("flat-group").count()).resolves.toBeGreaterThanOrEqual(Math.max(before, 1) + 1);
+  await expect(page.getByTestId("flat-target")).toContainText("compiler pipeline"); // newest / active thread is the reply target
+  // reply from the flat composer with Enter; the answer lands in the same group
+  const groups = await page.getByTestId("flat-group").count();
+  await page.getByTestId("flat-reply-input").type("follow up in flat mode");
+  await page.getByTestId("flat-reply-input").press("Enter");
+  await expect(page.getByTestId("flat-group").last().locator('[data-testid="message-agent"][data-status="completed"]').last()).toContainText("follow up in flat mode", { timeout: 20000 });
+  expect(await page.getByTestId("flat-group").count()).toBe(groups);
+  // choose another discussion as the reply target via the selector
+  await page.getByTestId("flat-target-select").selectOption({ index: 0 });
+  await expect(page.getByTestId("flat-target")).toContainText("#1");
+  // mode persists across reload
+  await page.reload();
+  await expect(page.getByTestId("discussion-panel")).toHaveAttribute("data-mode", "flat");
+  await page.getByTestId("mode-individual").click();
+  await expect(page.getByTestId("discussion-panel")).not.toHaveAttribute("data-mode", "flat");
+});

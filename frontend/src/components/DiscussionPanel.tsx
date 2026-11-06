@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { COMPOSER_HINT, composerKeyDown } from "./keys";
 import { AgentSession, ApiError, JobEvent, Message, Thread, get, subscribeJob } from "../api";
 import DiffView from "./DiffView";
 import MarkdownView from "./MarkdownView";
@@ -109,6 +110,8 @@ export default function DiscussionPanel({
   reanchorArmed,
   onCollapse,
   resizer,
+  mode = "individual",
+  onModeChange,
 }: {
   thread: Thread | null;
   threads: Thread[];
@@ -125,6 +128,8 @@ export default function DiscussionPanel({
   reanchorArmed: boolean;
   onCollapse?: () => void;
   resizer?: React.ReactNode;
+  mode?: "individual" | "flat";
+  onModeChange?: (mode: "individual" | "flat") => void;
 }) {
   const [text, setText] = useState("");
   const [sessionChoice, setSessionChoice] = useState<string>("__last__");
@@ -144,6 +149,34 @@ export default function DiscussionPanel({
     bottomRef.current?.scrollIntoView({ block: "end" });
   }, [thread?.messages.length, liveJob?.text, liveJob?.status]);
 
+  const modeSwitch = onModeChange ? (
+    <span className="mode-switch" role="tablist" aria-label="Discussion panel mode">
+      <button role="tab" aria-selected={mode === "individual"} className={mode === "individual" ? "active" : ""} onClick={() => onModeChange("individual")} title="One discussion at a time" data-testid="mode-individual">Individual</button>
+      <button role="tab" aria-selected={mode === "flat"} className={mode === "flat" ? "active" : ""} onClick={() => onModeChange("flat")} title="All discussions of this document as one stream" data-testid="mode-flat">Flat</button>
+    </span>
+  ) : null;
+
+  if (mode === "flat") {
+    return (
+      <FlatPanel
+        threads={threads}
+        sessions={sessions}
+        sessionsById={sessionsById}
+        defaultSessionId={defaultSessionId}
+        liveJob={liveJob}
+        activeThreadId={thread?.id ?? null}
+        onReply={onReply}
+        onRetry={onRetry}
+        onCancel={onCancel}
+        onPermission={onPermission}
+        onSelectThread={onSelectThread}
+        onCollapse={onCollapse}
+        resizer={resizer}
+        modeSwitch={modeSwitch}
+      />
+    );
+  }
+
   if (!thread) {
     return (
       <aside className="discussion" data-testid="discussion-panel">
@@ -152,6 +185,7 @@ export default function DiscussionPanel({
           <span>Discussions</span>
           <span className="muted">{threads.length} total</span>
           <span className="spacer" />
+          {modeSwitch}
           {onCollapse && <button className="icon-btn" onClick={onCollapse} title="Hide discussions panel" data-testid="panel-collapse">›</button>}
         </div>
         <div className="thread-list">
@@ -209,6 +243,7 @@ export default function DiscussionPanel({
         <button className="icon-btn" onClick={() => onSelectThread(null)} title="Back to the discussion list">‹</button>
         <span>Discussion {idx + 1} / {threads.length}</span>
         <span className="spacer" />
+        {modeSwitch}
         <button className="btn small" onClick={showDiff} title="Show the diff between the version this discussion was created on and the current file">View diff</button>
         {onCollapse && <button className="icon-btn" onClick={onCollapse} title="Hide discussions panel" data-testid="panel-collapse">›</button>}
       </div>
@@ -259,10 +294,8 @@ export default function DiscussionPanel({
         <textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder={running ? "The agent is answering… you can keep typing" : "Type your message (Ctrl/⌘+Enter to send)"}
-          onKeyDown={(e) => {
-            if ((e.ctrlKey || e.metaKey) && e.key === "Enter") void send();
-          }}
+          placeholder={running ? "The agent is answering… you can keep typing" : `Type your message (${COMPOSER_HINT})`}
+          onKeyDown={(e) => composerKeyDown(e, () => void send(), setText)}
           rows={3}
           data-testid="reply-input"
         />
@@ -311,7 +344,7 @@ export function statusLabel(s: string): string {
 }
 
 function AnchorBadge({ state }: { state: string }) {
-  const label = { attached: "attached", moved: "moved", ambiguous: "ambiguous", orphaned: "orphaned" }[state] ?? state;
+  const label = { attached: "attached", moved: "moved", ambiguous: "ambiguous", orphaned: "orphaned", document: "whole document" }[state] ?? state;
   return <span className={`chip anchor ${state}`} data-testid="anchor-state">{label}</span>;
 }
 
@@ -399,4 +432,127 @@ export function jobStatusLabel(s: string): string {
     default:
       return s;
   }
+}
+
+
+/** Flat mode: every discussion of the document in one chronological stream. Each thread is a group headed by its
+ *  quoted passage; messages keep their thread/session. The composer continues the selected thread (default: the
+ *  most recent one) so related questions can be asked without switching threads. */
+function FlatPanel({ threads, sessions, sessionsById, defaultSessionId, liveJob, activeThreadId, onReply, onRetry, onCancel, onPermission, onSelectThread, onCollapse, resizer, modeSwitch }: {
+  threads: Thread[];
+  sessions: AgentSession[];
+  sessionsById: Record<string, AgentSession>;
+  defaultSessionId: string | null;
+  liveJob: LiveJob | null;
+  activeThreadId: string | null;
+  onReply: (threadId: string, text: string, sessionChoice: string | null) => Promise<void>;
+  onRetry: (threadId: string, messageId: string, sessionChoice: string | null) => Promise<void>;
+  onCancel: (jobId: string) => Promise<void>;
+  onPermission: (jobId: string, requestId: string, decision: string) => Promise<void>;
+  onSelectThread: (id: string | null) => void;
+  onCollapse?: () => void;
+  resizer?: React.ReactNode;
+  modeSwitch: React.ReactNode;
+}) {
+  const ordered = useMemo(() => [...threads].sort((a, b) => a.created_at.localeCompare(b.created_at)), [threads]);
+  const newest = ordered.length ? ordered[ordered.length - 1] : null;
+  const [targetId, setTargetId] = useState<string | null>(activeThreadId ?? newest?.id ?? null);
+  useEffect(() => {
+    // follow the thread the user opened from the document; otherwise stick to the newest
+    if (activeThreadId && threads.some((t) => t.id === activeThreadId)) setTargetId(activeThreadId);
+    else if (!threads.some((t) => t.id === targetId)) setTargetId(newest?.id ?? null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeThreadId, threads.length]);
+  const [text, setText] = useState("");
+  const [sessionChoice, setSessionChoice] = useState<string>("__last__");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const totalMessages = threads.reduce((n, t) => n + t.messages.length, 0);
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ block: "end" });
+  }, [totalMessages, liveJob?.text, liveJob?.status]);
+
+  const target = threads.find((t) => t.id === targetId) ?? null;
+  const targetSess = target?.last_session_id ? sessionsById[target.last_session_id] : undefined;
+
+  const send = async () => {
+    if (!text.trim() || !target) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await onReply(target.id, text.trim(), sessionChoice === "__last__" ? null : sessionChoice);
+      setText("");
+    } catch (e) {
+      setError((e as ApiError).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <aside className="discussion flat" data-testid="discussion-panel" data-mode="flat">
+      {resizer}
+      <div className="panel-head">
+        <span>Discussions</span>
+        <span className="muted">{threads.length} · {totalMessages} messages</span>
+        <span className="spacer" />
+        {modeSwitch}
+        {onCollapse && <button className="icon-btn" onClick={onCollapse} title="Hide discussions panel" data-testid="panel-collapse">›</button>}
+      </div>
+      <div className="thread-body flat-stream" data-testid="flat-stream">
+        {ordered.length === 0 && <div className="muted pad">Select text in the document to start a discussion. In flat mode all discussions of this document appear here as one stream.</div>}
+        {ordered.map((t, i) => {
+          const live = liveJob && liveJob.threadId === t.id ? liveJob : null;
+          const liveMessageId = t.messages.find((m) => m.job_id === live?.jobId)?.id;
+          const differs = t.last_session_id && defaultSessionId && t.last_session_id !== defaultSessionId;
+          return (
+            <section key={t.id} className={`flat-group ${t.id === targetId ? "target" : ""}`} data-testid="flat-group">
+              <header className="flat-group-head">
+                <button className="flat-quote" onClick={() => { setTargetId(t.id); onSelectThread(t.id); }} title="Reply to this discussion and scroll the document to its passage">
+                  <span className="flat-index">#{i + 1}</span>
+                  <AnchorBadge state={t.anchor_state} />
+                  <span className="quote-text">"{t.anchor.quote.slice(0, 140)}{t.anchor.quote.length > 140 ? "…" : ""}"</span>
+                </button>
+                <span className="muted small">{new Date(t.created_at).toLocaleString()}{differs ? " · other session" : ""}</span>
+              </header>
+              {t.messages.map((m) => (
+                <MessageView key={m.id} m={m} session={m.session_id ? sessionsById[m.session_id] : undefined} live={m.id === liveMessageId ? live : null} onRetry={(sid) => onRetry(t.id, m.id, sid)} onCancel={onCancel} onPermission={onPermission} sessions={sessions} />
+              ))}
+            </section>
+          );
+        })}
+        <div ref={bottomRef} />
+      </div>
+      <div className="composer">
+        {target ? (
+          <div className="muted small flat-target" data-testid="flat-target">
+            Replying to <b>#{ordered.findIndex((t) => t.id === target.id) + 1}</b> "{target.anchor.quote.slice(0, 50)}{target.anchor.quote.length > 50 ? "…" : ""}"
+            {ordered.length > 1 && (
+              <select className="flat-target-select" value={target.id} onChange={(e) => setTargetId(e.target.value)} data-testid="flat-target-select" title="Choose which discussion to continue">
+                {ordered.map((t, i) => (
+                  <option key={t.id} value={t.id}>#{i + 1} {t.anchor.quote.slice(0, 40)}</option>
+                ))}
+              </select>
+            )}
+            <span> · select text in the document to start a new one</span>
+          </div>
+        ) : (
+          <div className="muted small">Select text in the document to start the first discussion.</div>
+        )}
+        <textarea value={text} onChange={(e) => setText(e.target.value)} disabled={!target} placeholder={target ? `Continue the discussion (${COMPOSER_HINT})` : "No discussion yet"} onKeyDown={(e) => composerKeyDown(e, () => void send(), setText)} rows={3} data-testid="flat-reply-input" />
+        <div className="composer-row">
+          <select value={sessionChoice} onChange={(e) => setSessionChoice(e.target.value)} data-testid="flat-reply-session">
+            <option value="__last__">This discussion's last session{targetSess ? ` · ${targetSess.provider} ${targetSess.short_id ?? targetSess.status}` : ""}</option>
+            <option value="new">New session</option>
+            {sessions.filter((s) => s.id !== target?.last_session_id && s.origin !== "preview").map((s) => (
+              <option key={s.id} value={s.id}>{s.provider} · {s.display_name ?? s.short_id ?? s.id.slice(0, 8)} {s.status !== "ready" ? `(${s.status})` : ""}</option>
+            ))}
+          </select>
+          <button className="btn primary" onClick={() => void send()} disabled={busy || !text.trim() || !target} data-testid="flat-reply-send">Send</button>
+        </div>
+        {error && <div className="error-text" role="alert">{error}</div>}
+      </div>
+    </aside>
+  );
 }

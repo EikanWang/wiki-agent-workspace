@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
+import { COMPOSER_HINT, composerKeyDown } from "./keys";
 import { AgentSession, ApiError, DiffComment, DiffFile, DiffResult, GitRefs, get, post } from "../api";
 import { FileIcon } from "./FileIcon";
 
@@ -212,8 +213,8 @@ export default function DiffReview({
                   <td colSpan={3}>
                     <div className="diff-composer" data-testid="diff-composer">
                       <div className="label">Comment on {composer.line.kind === "del" ? "removed" : composer.line.kind === "add" ? "added" : "unchanged"} line {composer.line.newNo ?? composer.line.oldNo}: <code>{composer.line.text.slice(0, 80)}</code></div>
-                      <textarea autoFocus rows={3} value={question} onChange={(e) => setQuestion(e.target.value)} placeholder="Your comment or question about this change (Ctrl/⌘+Enter to send)" data-testid="diff-comment-input"
-                        onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") void send(); if (e.key === "Escape") setComposer(null); }} />
+                      <textarea autoFocus rows={3} value={question} onChange={(e) => setQuestion(e.target.value)} placeholder={`Your comment or question about this change (${COMPOSER_HINT})`} data-testid="diff-comment-input"
+                        onKeyDown={(e) => composerKeyDown(e, () => void send(), setQuestion, () => setComposer(null))} />
                       <div className="row">
                         <select value={sessionChoice} onChange={(e) => setSessionChoice(e.target.value)}>
                           <option value="__default__">{defaultProvider ? `Document session (${defaultProvider})` : "No agent provider configured"}</option>

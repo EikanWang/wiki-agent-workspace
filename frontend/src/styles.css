@@ -333,3 +333,18 @@ mark.waw-hl.review.needs_review { border-bottom: 2px dashed var(--warn); }
 .chip.locked { background: var(--warn-bg); color: var(--warn); }
 .tree-row .lock-badge { font-size: 11px; color: var(--warn); flex: none; }
 .tree-row .lock-badge.inherited { opacity: 0.55; }
+
+/* discussion panel modes */
+.mode-switch { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; font-size: 12px; }
+.mode-switch button { border: none; background: transparent; padding: 2px 8px; cursor: pointer; color: var(--muted); }
+.mode-switch button.active { background: var(--primary); color: var(--primary-fg); }
+.flat-stream { gap: 14px; }
+.flat-group { border-left: 3px solid var(--border); padding-left: 10px; display: flex; flex-direction: column; gap: 8px; }
+.flat-group.target { border-left-color: var(--primary); }
+.flat-group-head { display: flex; flex-direction: column; gap: 2px; }
+.flat-quote { display: flex; align-items: baseline; gap: 6px; border: none; background: transparent; text-align: left; cursor: pointer; padding: 0; color: inherit; font-size: 13px; }
+.flat-quote:hover .quote-text { color: var(--primary); }
+.flat-index { font-weight: 700; color: var(--muted); }
+.flat-quote .quote-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.flat-target { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-bottom: 6px; }
+.flat-target-select { font-size: 12px; max-width: 220px; }
