@@ -174,6 +174,8 @@ class DocumentService:
         "markdown": {".md", ".markdown"},
         "image": {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp", ".ico", ".avif"},
         "pdf": {".pdf"},
+        "slides": {".pptx", ".ppt", ".odp", ".key"},
+        "word": {".docx", ".doc", ".odt", ".rtf"},
         "notebook": {".ipynb"},
         "code": {".py", ".js", ".ts", ".tsx", ".jsx", ".c", ".cc", ".cpp", ".h", ".hpp", ".cu", ".rs", ".go", ".java", ".kt", ".swift",
                  ".rb", ".php", ".cs", ".scala", ".lua", ".pl", ".r", ".m", ".mm", ".cl", ".glsl", ".asm", ".s"},
@@ -231,7 +233,7 @@ class DocumentService:
         if not path.is_file():
             raise not_found(f"{norm} is not a file", "FILE_NOT_FOUND")
         if document_format(Path(norm).name) == "unsupported":
-            raise bad_request("this file type cannot be opened in the reader (Markdown, text/source, .docx and .pdf are supported)", "UNSUPPORTED_FORMAT")
+            raise bad_request("this file type cannot be opened in the reader (Markdown, text/source, .docx, .pptx and .pdf are supported)", "UNSUPPORTED_FORMAT")
         size = path.stat().st_size
         if size > self.max_bytes:
             raise ApiError(413, "DOCUMENT_TOO_LARGE", f"document is {size} bytes; limit is {self.max_bytes}")
@@ -360,7 +362,7 @@ class DocumentService:
             "format": fmt,
             "editable": fmt in ("markdown", "text"),
             "text": text,
-            "html": html if fmt in ("docx", "text") else None,  # markdown is rendered client-side; others server-side
+            "html": html if fmt in ("docx", "pptx", "text") else None,  # markdown is rendered client-side; others server-side
             "sha256": sha,
             "git": {**self.git_summary(info), "file_status": self._file_status(info, norm)},
             "reading_state": self._reading_state_dict(rs),

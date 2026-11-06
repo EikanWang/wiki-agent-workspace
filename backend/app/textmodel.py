@@ -90,13 +90,15 @@ LANG_BY_SUFFIX = {
 
 
 def document_format(name: str) -> str:
-    """markdown | text | docx | pdf | unsupported"""
+    """markdown | text | docx | pptx | pdf | unsupported"""
     lower = name.lower()
     suffix = Path(lower).suffix
     if suffix in (".md", ".markdown"):
         return "markdown"
     if suffix == ".docx":
         return "docx"
+    if suffix == ".pptx":
+        return "pptx"
     if suffix == ".pdf":
         return "pdf"
     if suffix in TEXT_SUFFIXES or lower in TEXT_SUFFIXES or lower in TEXT_NAMES or (not suffix and lower.split(".")[0] in TEXT_NAMES):
@@ -122,6 +124,118 @@ def render_docx(data: bytes) -> str:
     return result.value  # sanitized by DOMPurify in the browser; server model is built from the same HTML
 
 
+MAX_INLINE_IMAGE = 4 * 1024 * 1024  # larger slide images are replaced by a placeholder
+
+
+def render_pptx(data: bytes) -> str:
+    """PowerPoint (.pptx) → HTML: one <section> per slide with its title as a heading, text frames (paragraphs and
+    bullet levels), tables, pictures (inline data URIs) and speaker notes. Shapes are read top-to-bottom,
+    left-to-right, which is the usual reading order. Sanitized by DOMPurify in the browser."""
+    import base64
+    import html
+    import io
+
+    from pptx import Presentation
+    from pptx.enum.shapes import MSO_SHAPE_TYPE
+    from pptx.util import Emu
+
+    prs = Presentation(io.BytesIO(data))
+    esc = html.escape
+
+    def para_html(paragraphs) -> str:
+        out: list[str] = []
+        items: list[tuple[int, str]] = []
+
+        def flush() -> None:
+            """Emit collected (level, html) items as properly nested lists (sub-lists live inside their <li>)."""
+            if not items:
+                return
+
+            def build(start: int, level: int) -> tuple[str, int]:
+                buf = ["<ul>"]
+                i = start
+                while i < len(items):
+                    lv, txt = items[i]
+                    if lv < level:
+                        break
+                    if lv > level:  # deeper item without a parent at this level: nest under an empty item
+                        sub, i = build(i, level + 1)
+                        buf.append(f"<li>{sub}</li>")
+                        continue
+                    i += 1
+                    sub = ""
+                    if i < len(items) and items[i][0] > level:
+                        sub, i = build(i, level + 1)
+                    buf.append(f"<li>{txt}{sub}</li>")
+                buf.append("</ul>")
+                return "".join(buf), i
+
+            base = min(lv for lv, _ in items)
+            html_list, _ = build(0, base)
+            out.append(html_list)
+            items.clear()
+
+        for p in paragraphs:
+            txt = "".join(
+                (f"<strong>{esc(r.text)}</strong>" if r.font.bold else f"<em>{esc(r.text)}</em>" if r.font.italic else esc(r.text))
+                for r in p.runs
+            ) or esc(p.text)
+            if not txt.strip():
+                flush()
+                continue
+            if p.level > 0 or len(paragraphs) > 1:
+                items.append((min(p.level, 8), txt))
+            else:
+                flush()
+                out.append(f"<p>{txt}</p>")
+        flush()
+        return "".join(out)
+
+    def shape_html(shape, title_shape) -> str:
+        if shape == title_shape:
+            return ""
+        if shape.shape_type == MSO_SHAPE_TYPE.GROUP:
+            return "".join(shape_html(s, title_shape) for s in sorted(shape.shapes, key=_pos))
+        if getattr(shape, "has_table", False) and shape.has_table:
+            rows = []
+            for r_i, row in enumerate(shape.table.rows):
+                tag = "th" if r_i == 0 else "td"
+                rows.append("<tr>" + "".join(f"<{tag}>{esc(c.text)}</{tag}>" for c in row.cells) + "</tr>")
+            return "<table>" + "".join(rows) + "</table>"
+        if shape.shape_type == MSO_SHAPE_TYPE.PICTURE:
+            try:
+                blob = shape.image.blob
+                ctype = shape.image.content_type or "image/png"
+            except Exception:
+                return ""
+            alt = esc(getattr(shape, "name", "") or "picture")
+            if len(blob) > MAX_INLINE_IMAGE or not ctype.startswith("image/"):
+                return f"<p><em>[image: {alt}]</em></p>"
+            return f'<p><img alt="{alt}" src="data:{ctype};base64,{base64.b64encode(blob).decode()}"></p>'
+        if getattr(shape, "has_text_frame", False) and shape.has_text_frame and shape.text_frame.text.strip():
+            return para_html(shape.text_frame.paragraphs)
+        return ""
+
+    def _pos(sh) -> tuple[int, int]:
+        return (int(sh.top or Emu(0)), int(sh.left or Emu(0)))
+
+    parts: list[str] = []
+    for i, slide in enumerate(prs.slides, 1):
+        title_shape = slide.shapes.title if slide.shapes.title is not None and slide.shapes.title.has_text_frame else None
+        title = title_shape.text_frame.text.strip() if title_shape is not None else ""
+        heading = f"Slide {i}" + (f": {title}" if title else "")
+        body = "".join(shape_html(sh, title_shape) for sh in sorted(slide.shapes, key=_pos))
+        notes = ""
+        if slide.has_notes_slide:
+            nt = slide.notes_slide.notes_text_frame.text.strip() if slide.notes_slide.notes_text_frame is not None else ""
+            if nt:
+                notes = '<div class="slide-notes"><p><strong>Notes</strong></p>' + "".join(f"<p>{esc(ln)}</p>" for ln in nt.splitlines() if ln.strip()) + "</div>"
+        parts.append(f'<section class="slide" data-slide="{i}"><h2>{esc(heading)}</h2>{body or "<p><em>(no text)</em></p>"}{notes}</section>')
+    if not parts:
+        return "<p><em>(empty presentation)</em></p>"
+    return "".join(parts)
+
+
 def render_document(fmt: str, data: bytes, name: str) -> str:
     """HTML for any supported document format; raises UnicodeDecodeError for non-UTF-8 text."""
     if fmt == "markdown":
@@ -130,6 +244,8 @@ def render_document(fmt: str, data: bytes, name: str) -> str:
         return render_text_as_code(data.decode("utf-8"), name)
     if fmt == "docx":
         return render_docx(data)
+    if fmt == "pptx":
+        return render_pptx(data)
     raise ValueError(f"unsupported document format: {fmt}")
 
 

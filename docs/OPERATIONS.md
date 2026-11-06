@@ -117,8 +117,9 @@ dismissed.
 | Startup fails with `FOREIGN KEY constraint failed` / `_alembic_tmp_*` table present | An older build ran a SQLite table-rebuild migration with foreign keys on and was interrupted. Current builds run migrations with the pragma off and drop the leftover temp table automatically; just restart. Data is intact (the failed step was rolled back). |
 | `Address already in use` at start | Another instance (or something else) uses the port: `ss -ltnp \| grep 8765`; change `server.port`. |
 | Jobs show `interrupted` after a restart | Expected: the server stopped while they were running. They are never re-run automatically; click **Retry**. |
+| Terminal copy shows "The browser blocked the clipboard" | On plain `http://` (not localhost) a clipboard write needs a recent click/key press. Click **Copy now** in the note or the toolbar **Copy** button; serve over HTTPS (or an SSH tunnel to localhost) to avoid it. |
 | Editor: "The file was changed on disk after you started editing" | Someone (agent, terminal, Git) changed the file since you opened the editor. Choose *Overwrite with mine* or *Discard mine, reload*; *Copy my text* keeps your version on the clipboard. |
-| `NOT_EDITABLE` | Only Markdown and text/source files can be edited in the browser; Word and PDF are read-only. |
+| `NOT_EDITABLE` | Only Markdown and text/source files can be edited in the browser; Word, PowerPoint and PDF are read-only. |
 | `PUSH_REJECTED` | The remote branch has commits you don't have. The app never force-pushes: `git pull --rebase` (or merge) in the terminal, then push again. |
 | `PUSH_AUTH` | `git push` was refused by the remote's authentication. Fix credentials/SSH keys in the terminal (`gh auth login`, `ssh -T git@github.com`, credential helper). |
 | `GH_UNAVAILABLE` / `NOT_GITHUB` | Pull requests need the GitHub CLI logged in (`gh auth login`) and an `origin` on github.com. |
@@ -127,7 +128,8 @@ dismissed.
 | `lock_violation` event in a discussion | An app-driven agent turn modified a locked file anyway (OpenCode CLI mode cannot be sandboxed by the app). Review the diff; revert with Git if unwanted. Codex turns on locked files run read-only. |
 | "The selected text could not be located…" (`INVALID_ANCHOR`) | The offsets sent by the browser did not match the current file and the quote plus its surrounding context could not be located uniquely (e.g. the passage is repeated verbatim and the file changed while the question box was open). Refresh the document and reselect. |
 | `PATH_ESCAPES_WORKSPACE` | Only raised for *writes* through a symlink that points outside the workspace (reads through such links are allowed and flagged in the tree). Edit the real target in your terminal. |
-| `UNSUPPORTED_FORMAT` when opening | Only Markdown, text/source, `.docx` and `.pdf` open in the reader. Other files are listed with their icon for orientation. |
+| `UNSUPPORTED_FORMAT` when opening | Only Markdown, text/source, `.docx`, `.pptx` and `.pdf` open in the reader. Legacy `.doc` / `.ppt`: save them as `.docx` / `.pptx`. Other files are listed with their icon for orientation. |
+| `RENDER_FAILED` | The Word/PowerPoint file could not be parsed (corrupt, password-protected or not really Office Open XML). |
 | `WORKSPACE_NOT_OPEN` / folder shown as *missing* | The folder was removed from the window or no longer exists on disk. Add it again with **＋** in the file tree (data comes back), or remove the stale entry. |
 | `ALREADY_OPEN` when adding a folder | That folder (or the same resolved path) is already one of the window's folders. |
 | `WRONG_WORKSPACE` | A request tried to read a document through another folder; reload the page (the browser had a stale folder selection). |

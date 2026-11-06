@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ApiError, WorkspaceInfo, get, post } from "../api";
 import { FileIcon } from "./FileIcon";
 
@@ -20,6 +20,11 @@ export default function AddFolderDialog({ start, onAdded, onClose }: { start: st
   const [busy, setBusy] = useState(false);
   const [showHidden, setShowHidden] = useState(false);
   const [loading, setLoading] = useState(false);
+  const edited = useRef(false); // the user typed in the path box since the last navigation
+  const go = (p: string) => {
+    edited.current = false;
+    setPath(p);
+  };
 
   useEffect(() => {
     let alive = true;
@@ -28,7 +33,7 @@ export default function AddFolderDialog({ start, onAdded, onClose }: { start: st
       .then((l) => {
         if (!alive) return;
         setListing(l);
-        setTyped(l.path);
+        if (!edited.current) setTyped(l.path); // never overwrite what the user is typing
         setError(null);
       })
       .catch((e) => alive && setError((e as ApiError).message))
@@ -67,16 +72,16 @@ export default function AddFolderDialog({ start, onAdded, onClose }: { start: st
           browsing the server's file system (where your wikis and agents live).
         </div>
         <div className="row">
-          <input className="path-input" value={typed} onChange={(e) => setTyped(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") setPath(typed); }} data-testid="add-folder-path" />
-          <button className="btn small" onClick={() => setPath(typed)}>Go</button>
+          <input className="path-input" value={typed} onChange={(e) => { edited.current = true; setTyped(e.target.value); }} onKeyDown={(e) => { if (e.key === "Enter") go(typed); }} data-testid="add-folder-path" />
+          <button className="btn small" onClick={() => go(typed)}>Go</button>
           <label className="small"><input type="checkbox" checked={showHidden} onChange={(e) => setShowHidden(e.target.checked)} /> hidden</label>
         </div>
         <div className="dir-list" data-testid="add-folder-list">
           {listing?.parent && (
-            <button className="list-item" onClick={() => setPath(listing.parent!)}><span>‹ ..</span></button>
+            <button className="list-item" onClick={() => go(listing.parent!)}><span>‹ ..</span></button>
           )}
           {listing?.entries.map((e) => (
-            <button key={e.path} className="list-item" onClick={() => setPath(e.path)} onDoubleClick={() => setPath(e.path)} data-testid="add-folder-entry">
+            <button key={e.path} className="list-item" onClick={() => go(e.path)} onDoubleClick={() => go(e.path)} data-testid="add-folder-entry">
               <span className="dir-entry"><FileIcon item={{ type: "dir", kind: "dir" }} /> {e.name}</span>
               {e.is_git && <span className="git-badge clean">git</span>}
             </button>

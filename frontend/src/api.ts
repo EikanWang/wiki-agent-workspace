@@ -140,7 +140,7 @@ export interface FileItem {
   path: string;
   name: string;
   type: "dir" | "file";
-  /** dir | markdown | image | pdf | notebook | code | shell | data | text | archive | binary | file | broken_link */
+  /** dir | markdown | image | pdf | slides | word | notebook | code | shell | data | text | archive | binary | file | broken_link */
   kind: string;
   size?: number | null;
   openable?: boolean;
@@ -191,7 +191,7 @@ export interface OpenDocument {
   document_id: string;
   path: string;
   /** markdown | text | docx | pdf */
-  format: "markdown" | "text" | "docx" | "pdf";
+  format: "markdown" | "text" | "docx" | "pptx" | "pdf";
   /** text formats (Markdown, text/source) can be edited in the browser */
   editable?: boolean;
   /** server-rendered HTML for text/docx (markdown renders client-side; pdf has none) */

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { ApiError, Bootstrap, TerminalInfo, del, get, getCsrf, patch, post } from "../api";
+import { decodeBase64Utf8, writeClipboard } from "../clipboard";
 
 type ConnState = "connecting" | "connected" | "detached" | "exited" | "error" | "closed";
 
@@ -10,7 +11,13 @@ interface TermHandle {
   send: (bytes: Uint8Array) => void;
   focus: () => void;
   appCursor: () => boolean;
+  selection: () => string;
 }
+
+/** Where copied terminal text came from: the browser-side xterm selection, or tmux / a program via OSC 52. */
+type CopySource = "selection" | "tmux";
+
+const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 const handles = new Map<string, TermHandle>();
 
 /** One-shot modifiers armed from the toolbar (for keys/combos you cannot type, and for touch keyboards). */
@@ -71,6 +78,31 @@ export default function TerminalPanel({
   const [fullscreen, setFullscreen] = useState(false);
   const [kbLocked, setKbLocked] = useState(false);
   const kbLockSupported = typeof navigator !== "undefined" && !!(navigator as any).keyboard?.lock;
+  // copy feedback: a short "Copied" toast, or (when the browser refused the clipboard write) a one-click retry
+  const [copyNote, setCopyNote] = useState<{ text: string; ok: boolean; hint?: string } | null>(null);
+  const copyTimer = useRef<number | undefined>(undefined);
+  const showCopyNote = (n: { text: string; ok: boolean; hint?: string }) => {
+    window.clearTimeout(copyTimer.current);
+    setCopyNote(n);
+    if (n.ok || n.hint) copyTimer.current = window.setTimeout(() => setCopyNote(null), n.hint ? 4000 : 1800);
+  };
+  const lastCopied = useRef("");
+  const copy = useCallback(async (text: string, _source: CopySource) => {
+    if (!text) return;
+    lastCopied.current = text;
+    // OSC 52 from tmux arrives over the WebSocket, usually still within the mouse gesture's activation window;
+    // when the browser refuses anyway, the toast offers a one-click "Copy now" (a fresh user gesture).
+    const ok = await writeClipboard(text);
+    showCopyNote({ text, ok });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const copyActiveSelection = () => {
+    const sel = activeId ? handles.get(activeId)?.selection() ?? "" : "";
+    if (sel) void copy(sel, "selection");
+    else if (lastCopied.current) void copy(lastCopied.current, "selection"); // re-copy the last terminal copy
+    else showCopyNote({ text: "", ok: false, hint: `Select text first: drag in the terminal (tmux selection, copied on release) or ${isMac ? "Option" : "Shift"}+drag (browser selection).` });
+    if (activeId) handles.get(activeId)?.focus();
+  };
 
   useEffect(() => {
     const onChange = () => {
@@ -241,6 +273,7 @@ export default function TerminalPanel({
               )}
             </span>
             <button className={`btn small toggle ${fullscreen ? "on" : ""}`} onClick={() => void toggleFullscreen()} title={kbLockSupported ? "Full screen with keyboard capture: Ctrl+T, Ctrl+W, Ctrl+N… go to the terminal. Hold Esc to leave." : "Full screen (this browser cannot capture Ctrl+T/W/N; use Keys ▾)"} data-testid="term-fullscreen">⛶ {fullscreen ? "Exit" : "Full screen"}</button>
+            <button className="btn small" onMouseDown={(e) => e.preventDefault()} onClick={copyActiveSelection} title={`Copy the terminal selection (${isMac ? "⌘C" : "Ctrl+Shift+C"}); with nothing selected, copy the last terminal copy again. Dragging in the terminal copies automatically.`} data-testid="term-copy">Copy</button>
             <button className="btn small" onClick={() => void showHistory(active)} title="Snapshot of the tmux pane history (server-side), distinct from the browser scrollback">tmux history</button>
             <button className="btn small danger" onClick={() => void close(active)} data-testid="terminal-close">{active.state === "live" ? "Close terminal" : "Dismiss"}</button>
           </>
@@ -276,18 +309,36 @@ export default function TerminalPanel({
             fontSize={fontSize}
             modsRef={modsRef}
             onModsUsed={() => setMods({ ctrl: false, alt: false })}
+            onCopy={copy}
           />
         ))}
       </div>
+      {copyNote && (
+        <div className="toast term-copy-toast" data-testid="term-copy-toast" data-ok={copyNote.ok ? "true" : "false"}>
+          {copyNote.hint ? (
+            copyNote.hint
+          ) : copyNote.ok ? (
+            `Copied ${[...copyNote.text].length} character${[...copyNote.text].length === 1 ? "" : "s"} to the clipboard`
+          ) : (
+            <>
+              The browser blocked the clipboard.{" "}
+              <button className="link-btn toast-link" onClick={() => void copy(copyNote.text, "selection")} data-testid="term-copy-retry">Copy now</button>{" "}
+              <button className="link-btn toast-link" onClick={() => setCopyNote(null)}>Dismiss</button>
+            </>
+          )}
+        </div>
+      )}
       {history && (
         <div className="modal-backdrop" onClick={() => setHistory(null)}>
           <div className="modal wide" onClick={(e) => e.stopPropagation()}>
             <div className="modal-head">
               <span>tmux pane history snapshot</span>
+              <span className="spacer" />
+              <button className="btn small" onClick={() => void copy(history.text, "selection")} data-testid="term-history-copy">Copy all</button>
               <button className="icon-btn" onClick={() => setHistory(null)}>×</button>
             </div>
             <div className="muted small">{history.note} This is the server-side tmux buffer, not the browser's xterm scrollback. Inside the terminal you can also scroll (tmux copy mode) to view history.</div>
-            <pre className="history-pre">{history.text}</pre>
+            <pre className="history-pre" data-testid="term-history-text">{history.text}</pre>
           </div>
         </div>
       )}
@@ -313,7 +364,7 @@ function b64decode(s: string): Uint8Array {
   return out;
 }
 
-function TerminalView({ terminal, active, onState, onExited, onDismiss, fontSize, modsRef, onModsUsed }: { terminal: TerminalInfo; active: boolean; onState: (s: ConnState) => void; onExited: () => void; onDismiss: () => void; fontSize: number; modsRef: React.MutableRefObject<StickyMods>; onModsUsed: () => void }) {
+function TerminalView({ terminal, active, onState, onExited, onDismiss, fontSize, modsRef, onModsUsed, onCopy }: { terminal: TerminalInfo; active: boolean; onState: (s: ConnState) => void; onExited: () => void; onDismiss: () => void; fontSize: number; modsRef: React.MutableRefObject<StickyMods>; onModsUsed: () => void; onCopy: (text: string, source: CopySource) => void }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -321,6 +372,8 @@ function TerminalView({ terminal, active, onState, onExited, onDismiss, fontSize
   const [state, setState] = useState<ConnState>("connecting");
   const [message, setMessage] = useState<string>("");
   const encoder = useRef(new TextEncoder());
+  const onCopyRef = useRef(onCopy);
+  onCopyRef.current = onCopy;
 
   const setConn = useCallback(
     (s: ConnState, msg = "") => {
@@ -384,7 +437,9 @@ function TerminalView({ terminal, active, onState, onExited, onDismiss, fontSize
       fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace",
       fontSize,
       scrollback: 5000,
-      theme: { background: "#0f1115", foreground: "#e6e6e6", cursor: "#9cdcfe" },
+      theme: { background: "#0f1115", foreground: "#e6e6e6", cursor: "#9cdcfe", selectionBackground: "#3a5a85" },
+      // tmux has the mouse: Shift+drag (Option+drag on macOS) makes a browser-side selection instead
+      macOptionClickForcesSelection: true,
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
@@ -400,7 +455,46 @@ function TerminalView({ terminal, active, onState, onExited, onDismiss, fontSize
       send: sendBytes,
       focus: () => term.focus(),
       appCursor: () => !!(term as any).modes?.applicationCursorKeysMode,
+      selection: () => term.getSelection(),
     });
+    // OSC 52 "set clipboard": tmux sends it when you finish a mouse/copy-mode selection (set-clipboard on);
+    // programs such as vim or OpenCode may send it too. Payload: "<targets>;<base64>" ("?" = query, ignored).
+    const osc52 = term.parser.registerOscHandler(52, (data) => {
+      const semi = data.indexOf(";");
+      const payload = semi >= 0 ? data.slice(semi + 1) : data;
+      if (!payload || payload === "?") return true;
+      const text = decodeBase64Utf8(payload);
+      if (text) onCopyRef.current(text, "tmux");
+      return true;
+    });
+    // Copy shortcuts: Ctrl+Shift+C (⌘C on macOS) copies the browser-side selection; plain Ctrl+C copies too while
+    // text is selected (like Windows Terminal) and is otherwise sent to the shell as an interrupt.
+    term.attachCustomKeyEventHandler((ev) => {
+      if (ev.type !== "keydown") return true;
+      const k = ev.key.toLowerCase();
+      const copyCombo = (ev.ctrlKey && ev.shiftKey && !ev.altKey && k === "c") || (isMac && ev.metaKey && !ev.ctrlKey && k === "c");
+      const plainCtrlC = ev.ctrlKey && !ev.shiftKey && !ev.altKey && !ev.metaKey && k === "c";
+      if (copyCombo || (plainCtrlC && term.hasSelection())) {
+        if (term.hasSelection()) onCopyRef.current(term.getSelection(), "selection");
+        term.clearSelection();
+        ev.preventDefault(); // Ctrl+Shift+C would otherwise open the browser's inspector
+        return false;
+      }
+      // Ctrl+Shift+V / ⌘V: let the browser paste (xterm.js receives the paste event) instead of sending ^V
+      if ((ev.ctrlKey && ev.shiftKey && k === "v") || (isMac && ev.metaKey && k === "v")) return false;
+      return true;
+    });
+    // Like a desktop terminal: releasing a Shift+drag browser selection copies it.
+    let lastAutoCopied = "";
+    const onMouseUp = (ev: MouseEvent) => {
+      if (ev.button !== 0) return;
+      window.setTimeout(() => {
+        const sel = term.hasSelection() ? term.getSelection() : "";
+        if (sel && sel !== lastAutoCopied) onCopyRef.current(sel, "selection");
+        lastAutoCopied = sel;
+      }, 0);
+    };
+    host.addEventListener("mouseup", onMouseUp);
     term.onData((data) => {
       const m = modsRef.current;
       if (m.ctrl || m.alt) {
@@ -433,6 +527,8 @@ function TerminalView({ terminal, active, onState, onExited, onDismiss, fontSize
     }, 25000);
     return () => {
       window.clearInterval(ping);
+      osc52.dispose();
+      host.removeEventListener("mouseup", onMouseUp);
       handles.delete(terminal.id);
       wsRef.current?.close();
       term.dispose();

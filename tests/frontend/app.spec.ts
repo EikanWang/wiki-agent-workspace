@@ -903,3 +903,94 @@ test("terminal: send browser-reserved keys (Ctrl+T, Ctrl+W) via the Keys menu an
   await page.keyboard.press("Control+c");
   await expect(page.getByTestId("term-fullscreen")).toBeVisible();
 });
+
+test("PowerPoint: a .pptx opens as slides with notes; select text on a slide and ask", async ({ page }) => {
+  await login(page);
+  const ws = workspaceDir();
+  const cp = require("child_process") as typeof import("child_process");
+  const py = path.resolve(__dirname, "../../.venv/bin/python");
+  cp.execFileSync(py, ["-c", `
+from pptx import Presentation
+prs = Presentation()
+s = prs.slides.add_slide(prs.slide_layouts[1])
+s.shapes.title.text = "Roadmap"
+tf = s.placeholders[1].text_frame
+tf.text = "Ship the reader"
+p = tf.add_paragraph(); p.text = "Pptx support lands this week"; p.level = 1
+s.notes_slide.notes_text_frame.text = "Say thanks to the team."
+s2 = prs.slides.add_slide(prs.slide_layouts[5]); s2.shapes.title.text = "Questions"
+prs.save(${JSON.stringify(path.join(ws, "docs", "roadmap.pptx"))})
+`]);
+  await page.getByTestId("tree-refresh").click();
+  const dir = page.getByTestId("tree-root").first().locator(".tree-row.dir", { hasText: "docs" }).first();
+  if ((await page.getByTestId("tree-file-docs/roadmap.pptx").count()) === 0) await dir.click();
+  await expect(page.getByTestId("tree-file-docs/roadmap.pptx")).toHaveAttribute("data-kind", "slides");
+  await page.getByTestId("tree-file-docs/roadmap.pptx").locator("button.tree-main").click();
+  const body = page.getByTestId("markdown-body");
+  await expect(body.locator("section.slide")).toHaveCount(2);
+  await expect(body.locator("section.slide").first().locator("h2")).toHaveText("Slide 1: Roadmap");
+  await expect(body.locator(".slide-notes")).toContainText("Say thanks to the team.");
+  await expect(page.locator(".doc-meta .chip").first()).toHaveText("PPTX");
+  await expect(page.getByTestId("doc-edit")).toHaveCount(0); // read-only
+  if ((await page.getByTestId("reader-mode-discuss").getAttribute("aria-selected")) !== "true") await page.getByTestId("reader-mode-discuss").click();
+  await selectText(page, "Pptx support lands this week");
+  await expect(page.getByTestId("selection-quote")).toHaveText("Pptx support lands this week");
+  await page.getByTestId("selection-question").fill("When exactly?");
+  await page.getByTestId("selection-send").click();
+  if ((await page.getByTestId("mode-individual").count()) > 0) await page.getByTestId("mode-individual").click();
+  await expect(page.locator('[data-testid="message-agent"][data-status="completed"]').last()).toContainText("When exactly?", { timeout: 20000 });
+  await expect(page.locator("mark.waw-hl.thread")).toHaveCount(1);
+});
+
+test("terminal copy: tmux mouse selection, program OSC 52, Shift+drag + Ctrl+Shift+C, Copy button", async ({ page, context }) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await login(page);
+  await page.getByTestId("view-terminal").click();
+  const before = await page.getByTestId("terminal-tab").count();
+  await page.getByTestId("terminal-new").click();
+  await expect(page.getByTestId("terminal-tab")).toHaveCount(before + 1);
+  await expect(page.getByTestId("terminal-tab").last()).toHaveClass(/active/); // type into the new tab, not an older one
+  const view = page.locator(".term-view.active");
+  await expect(view).toHaveAttribute("data-state", "connected", { timeout: 15000 });
+  await page.locator(".term-view.active .xterm-helper-textarea").focus();
+  const clip = () => page.evaluate(() => navigator.clipboard.readText());
+  await expect(view.locator(".xterm-rows")).toContainText("$", { timeout: 15000 }); // shell prompt is up
+  // 1) a program sends OSC 52 (as vim/OpenCode do); tmux forwards it to the browser clipboard
+  await page.keyboard.type("export PS1='$ '; printf '\\033]52;c;%s\\a' \"$(printf 'h\\303\\251llo osc52' | base64)\"; echo OS\"\"CDONE\n");
+  await expect(view.locator(".xterm-rows")).toContainText("OSCDONE", { timeout: 15000 });
+  await expect.poll(clip, { timeout: 10000 }).toBe("héllo osc52");
+  await expect(page.getByTestId("term-copy-toast")).toContainText("Copied");
+  // 2) put a word at the top-left of the screen
+  await page.keyboard.type("clear; echo COPYMEWORD; echo; echo\n");
+  const firstRow = view.locator(".xterm-rows > div").first();
+  await expect(firstRow).toContainText("COPYMEWORD", { timeout: 15000 });
+  const box = (await firstRow.boundingBox())!;
+  // tmux has the mouse: a double-click selects the word in tmux copy mode, which copies it via OSC 52
+  await page.evaluate(() => navigator.clipboard.writeText("-"));
+  await page.mouse.dblclick(box.x + 12, box.y + box.height / 2);
+  await expect.poll(clip, { timeout: 10000 }).toBe("COPYMEWORD");
+  // 3) Shift+drag = browser-side selection; Ctrl+Shift+C copies it (Ctrl+C alone would be SIGINT)
+  await page.evaluate(() => navigator.clipboard.writeText("-"));
+  await page.keyboard.down("Shift");
+  await page.mouse.move(box.x + 1, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + 60, box.y + box.height / 2, { steps: 5 });
+  await page.mouse.move(box.x + box.width / 3, box.y + box.height / 2, { steps: 5 });
+  await page.mouse.up();
+  await page.keyboard.up("Shift");
+  await expect.poll(clip, { timeout: 10000 }).toContain("COPYMEWORD"); // copied on release
+  await page.evaluate(() => navigator.clipboard.writeText("-"));
+  await page.locator(".term-view.active .xterm-helper-textarea").focus();
+  await page.keyboard.press("Control+Shift+C");
+  await expect.poll(clip, { timeout: 10000 }).toContain("COPYMEWORD");
+  // 4) the toolbar Copy button with nothing selected re-copies the last terminal copy
+  await page.evaluate(() => navigator.clipboard.writeText("-"));
+  await page.getByTestId("term-copy").click();
+  await expect.poll(clip, { timeout: 10000 }).toContain("COPYMEWORD");
+  // 5) tmux history: Copy all
+  await page.getByRole("button", { name: "tmux history" }).click();
+  await expect(page.getByTestId("term-history-text")).toContainText("COPYMEWORD");
+  await page.evaluate(() => navigator.clipboard.writeText("-"));
+  await page.getByTestId("term-history-copy").click();
+  await expect.poll(clip, { timeout: 10000 }).toMatch(/^COPYMEWORD\n/); // trailing blanks trimmed
+});

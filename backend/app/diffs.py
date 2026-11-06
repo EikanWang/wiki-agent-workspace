@@ -41,18 +41,32 @@ class DiffService:
     def _rel(self, path: str) -> str:
         return self.docs.normalize_rel(path) if path else ""
 
+    @staticmethod
+    def _as_text(rel: str, data: bytes) -> str:
+        """Text to diff: Office documents are compared by their rendered text (one line per block: slide titles,
+        bullets, table rows, notes), everything else by its UTF-8 content."""
+        fmt = document_format(Path(rel).name)
+        if fmt in ("docx", "pptx"):
+            try:
+                from .textmodel import build_text_model_from_html, render_document
+
+                return build_text_model_from_html(render_document(fmt, data, Path(rel).name)).text
+            except Exception:
+                return "<could not read this file>\n"
+        return data.decode("utf-8", "replace")
+
     def _text_at_ref(self, ref: str, rel: str) -> str | None:
         code, out, _ = git_run(self.root, ["show", f"{ref}:{rel}"])
         if code != 0:
             return None
-        return out.decode("utf-8", "replace")
+        return self._as_text(rel, out)
 
     def _text_in_worktree(self, rel: str) -> str | None:
         p = self.root / rel
         if not p.is_file():
             return None
         try:
-            return p.read_bytes().decode("utf-8", "replace")
+            return self._as_text(rel, p.read_bytes())
         except OSError:
             return None
 
@@ -138,7 +152,7 @@ class DiffService:
                 "identical": a == b, "document_id": doc_ids.get(frel),
                 "target_sha256": sha256_bytes(b.encode("utf-8")) if b is not None else None,
                 "is_markdown": Path(frel).suffix.lower() in MARKDOWN_SUFFIXES,
-                "commentable": document_format(Path(frel).name) in ("markdown", "text", "docx"),
+                "commentable": document_format(Path(frel).name) in ("markdown", "text", "docx", "pptx"),
                 "lock": self.ctx.locks.covering(frel) if self.ctx.locks is not None else None,
             })
         reviews = self.reviews_for(base, [f["path"] for f in out_files])
@@ -191,7 +205,7 @@ class DiffService:
         with the same workflow (session, streaming, retry). The anchor is the commented line's text when it exists
         in the current file; otherwise the thread records the diff context only."""
         rel = self._rel(body.path)
-        if document_format(Path(rel).name) not in ("markdown", "text", "docx"):
+        if document_format(Path(rel).name) not in ("markdown", "text", "docx", "pptx"):
             raise bad_request("comments can only be attached to files the reader can open (Markdown, text/source, .docx)", "UNSUPPORTED_FORMAT")
         doc = self.docs.get_or_create_document(rel)
         try:

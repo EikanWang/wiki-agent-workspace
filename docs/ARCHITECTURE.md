@@ -23,7 +23,8 @@ backend/app/
                    version snapshots, direct editing (conditional save), reading state, review marks, diff,
                    relink, recent, hide/delete history;
                    routes under /files, /documents, /recent, /raw
-  textmodel.py     markdown-it-py rendering, text/source → code block, .docx → HTML (mammoth), the deterministic
+  textmodel.py     markdown-it-py rendering, text/source → code block, .docx → HTML (mammoth), .pptx → HTML
+                   (python-pptx: slide sections, nested bullets, tables, inline images, notes), the deterministic
                    text model (mirrors frontend/src/textmodel.ts)
   anchors.py       anchor resolution algorithm (attached/moved/ambiguous/orphaned) + offset validation
   annotations.py   ThreadService: threads, messages, retry, reanchor, context relocation; prompt building;
@@ -131,6 +132,11 @@ One tmux session per tab on the app's own socket. Each browser connection spawns
 is base64 raw bytes (`onData` UTF-8, `onBinary` low-8-bit), output is raw bytes written to xterm.js. Closing the
 socket terminates only the attach client. `TerminalManager.reconcile()` re-matches DB tabs with live tmux
 sessions at startup. `window-size latest` makes the most recently active client control the size.
+
+Copy: tmux owns the mouse, so a drag selects in tmux copy mode; on release tmux emits OSC 52 (`set-clipboard on`),
+which TerminalPanel's `registerOscHandler(52)` decodes and writes to the clipboard (`frontend/src/clipboard.ts`:
+Clipboard API in secure contexts, `execCommand("copy")` otherwise). Shift+drag forces an xterm.js selection,
+copied on release or with Ctrl+Shift+C. OSC 52 queries are ignored, so programs can never read the clipboard.
 
 ### Security boundaries
 

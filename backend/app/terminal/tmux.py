@@ -31,6 +31,7 @@ class Tmux:
         self.env = self._build_env()
         if self.exe:
             self._write_conf()
+            self._reload_conf()
 
     # ------------------------------------------------------------------ setup
     @property
@@ -104,6 +105,10 @@ class Tmux:
             "set -g escape-time 10",
             "set -g focus-events on",
             "set -g mouse on",
+            # Copy: text selected in tmux (mouse drag / copy mode) and OSC 52 from programs reach the browser
+            # clipboard through xterm.js (the frontend handles OSC 52).
+            "set -g set-clipboard on",
+            'set -as terminal-features ",xterm-256color:clipboard"',
             "set -g window-size latest",
             "setw -g aggressive-resize on",
             "set -g status off",
@@ -114,6 +119,14 @@ class Tmux:
         ]
         self.conf.parent.mkdir(parents=True, exist_ok=True)
         self.conf.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def _reload_conf(self) -> None:
+        """Apply the config to an already running app tmux server (it outlives app restarts)."""
+        try:
+            subprocess.run([self.exe, "-L", self.socket, "source-file", str(self.conf)],
+                           capture_output=True, timeout=5, env=self.env)
+        except (OSError, subprocess.SubprocessError):
+            pass  # no server yet: it reads the file when it starts
 
     # ------------------------------------------------------------------ commands
     def base_args(self) -> list[str]:
@@ -157,7 +170,8 @@ class Tmux:
         p = self._run(["capture-pane", "-p", "-J", "-S", f"-{lines}", "-t", f"{name}:"], timeout=20)
         if p.returncode != 0:
             raise TmuxError(p.stderr.strip() or "tmux capture-pane failed")
-        return p.stdout
+        # -J keeps trailing spaces of unwrapped lines; drop them (and the empty screen rows) so copies are clean
+        return "\n".join(ln.rstrip() for ln in p.stdout.splitlines()).rstrip("\n") + "\n"
 
     def attach_args(self, name: str) -> list[str]:
         return self.base_args() + ["attach-session", "-t", f"={name}"]

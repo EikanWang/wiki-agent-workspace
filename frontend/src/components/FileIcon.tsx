@@ -8,6 +8,8 @@ const COLORS: Record<string, string> = {
   markdown: "#339cff",
   image: "#9b59b6",
   pdf: "#e02e2a",
+  slides: "#d24726",
+  word: "#2b579a",
   notebook: "#f37626",
   code: "#00a240",
   shell: "#2f8f6f",
@@ -25,6 +27,8 @@ export const KIND_LABEL: Record<string, string> = {
   markdown: "Markdown document",
   image: "Image",
   pdf: "PDF",
+  slides: "Presentation (PowerPoint)",
+  word: "Word document",
   notebook: "Jupyter notebook",
   code: "Source code",
   shell: "Script",
@@ -79,6 +83,23 @@ export function FileIcon({ item, open = false }: { item: Pick<FileItem, "type" |
         <>
           <path d="M3.5 1.5h6l3 3v10h-9z" fill="none" stroke={c} strokeWidth="1.3" strokeLinejoin="round" />
           <text x="4.2" y="12" fontSize="5.5" fontWeight="700" fill={c} fontFamily="sans-serif">PDF</text>
+        </>
+      );
+      break;
+    case "slides":
+      body = (
+        <>
+          <rect x="1.5" y="2.5" width="13" height="9" rx="1" fill="none" stroke={c} strokeWidth="1.3" />
+          <path d="M8 11.5v2.5M5.5 14h5" stroke={c} strokeWidth="1.3" strokeLinecap="round" />
+          <path d="M4 9l2.5-3 2 2 3.5-4" fill="none" stroke={c} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+        </>
+      );
+      break;
+    case "word":
+      body = (
+        <>
+          <path d="M3.5 1.5h6l3 3v10h-9z" fill="none" stroke={c} strokeWidth="1.3" strokeLinejoin="round" />
+          <text x="4.4" y="12" fontSize="6" fontWeight="700" fill={c} fontFamily="sans-serif">W</text>
         </>
       );
       break;

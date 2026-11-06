@@ -50,8 +50,10 @@ state. Nothing is shared between folders except your login, terminals and prefer
   archive, binary; a small arrow marks symlinks, a broken-link icon marks dangling ones). Git status badges show
   `untracked` / `modified` / `clean`.
 - The reader opens **Markdown**, **any text or source file** (C/C++, Python, YAML, XML, JSON, shell…, shown as
-  numbered code), **Word .docx** (converted to HTML) and **PDF** (browser viewer). Other files are listed for
-  orientation only.
+  numbered code), **Word .docx** (converted to HTML), **PowerPoint .pptx** (one card per slide: title, text with
+  bullet levels, tables, pictures and speaker notes; the outline lists the slides) and **PDF** (browser viewer).
+  Selecting text, discussions, review marks and diff comments work on Word and PowerPoint text like on Markdown.
+  Older binary formats (`.doc`, `.ppt`) and other files are listed for orientation only.
 - Links to sections (`#heading`, `other.md#heading`) scroll inside the reader; heading ids follow GitHub's rules.
 - Your reading position is saved when you stop scrolling for a second and restored next time; nothing is marked
   reviewed by scrolling.
@@ -91,7 +93,7 @@ to the new text. **Mark reviewed** marks a passage reviewed; it turns *needs rev
 
 ## Editing a file yourself
 
-**✎ Edit** in the document header (Markdown and any text/source file; Word and PDF are read-only) opens an editor
+**✎ Edit** in the document header (Markdown and any text/source file; Word, PowerPoint and PDF are read-only) opens an editor
 in place of the rendered view.
 
 - **Ctrl/⌘+S** or **Save** writes the file; **Done** (or Esc) goes back to reading. *wrap* toggles soft wrapping
@@ -125,7 +127,8 @@ Open with **Diff** in the top bar (the current document), `±` on a changed file
 uncommitted changes of that folder).
 
 - Choose **base** (HEAD, a branch, a recent commit) and **target** (working tree or a commit); **Unified** or
-  **Side by side** layout; optionally *Markdown only*. Untracked drafts appear as additions.
+  **Side by side** layout; optionally *Markdown only*. Untracked drafts appear as additions. Word and PowerPoint
+  files are compared by their text (slide titles, bullets, table cells, notes), never as raw bytes.
 - **Viewed** checkbox per file (collapses it, counted in the header); it clears itself when the file changes again.
 - Select lines to comment: click a line, shift-click or drag for a range. Then either
   - **Add to review** (Enter) — stash for the review (next section), or
@@ -180,6 +183,19 @@ page — Ctrl+T, Ctrl+W, Ctrl+N, Ctrl+Tab and similar open/close tabs and window
 - **Ctrl** / **Alt** (sticky): click, then type any key — it is sent with that modifier once (Ctrl, T = Ctrl+T;
   Alt, x = Alt+x).
 
+**Copying text out of the terminal.** A short *Copied N characters* note confirms every copy.
+
+- **Drag** with the mouse (or double-click a word, triple-click a line): tmux selects the text and copies it to
+  your clipboard when you release the button. Drag past the top/bottom edge to scroll while selecting.
+- **Shift+drag** (Option+drag on macOS): a plain browser selection, independent of tmux — useful inside full-screen
+  programs. It is copied on release, and **Ctrl+Shift+C** (⌘C), **Ctrl+C while text is selected**, or the **Copy**
+  button copy it again. Without a selection Ctrl+C is the usual interrupt.
+- Programs that set the clipboard themselves (vim/neovim with OSC 52, OpenCode, `printf '\e]52;c;…'`) also reach
+  your clipboard. They can write it, never read it.
+- **tmux history** → **Copy all** copies the whole server-side scrollback; you can also select part of it there.
+- On plain `http://` (not localhost) browsers only allow clipboard writes right after a click or key press. If a
+  copy is refused, the note offers **Copy now**; the toolbar **Copy** button also re-copies the last terminal copy.
+
 ## Keyboard
 
 | Where | Key | Action |
@@ -190,6 +206,9 @@ page — Ctrl+T, Ctrl+W, Ctrl+N, Ctrl+Tab and similar open/close tabs and window
 | Selection box | Ctrl/⌘+C | Copy the selection |
 | Editor | Ctrl/⌘+S · Esc · Tab / Shift+Tab | Save · back to reading · indent / outdent |
 | Terminal | Ctrl+T, Ctrl+W, Ctrl+N… | Reserved by the browser: use ⛶ Full screen (Chrome/Edge), **Keys ▾** or sticky **Ctrl** |
+| | drag · Shift+drag | Copy via tmux (on release) · browser selection (copied on release) |
+| | Ctrl+Shift+C (⌘C) · Ctrl+C with a selection | Copy the selection (Ctrl+C without one interrupts) |
+| | Ctrl+V / Ctrl+Shift+V | Paste |
 | Diff | click / shift-click / drag | Select one line / a range |
 
 IME composition (e.g. Chinese input) never sends on Enter.

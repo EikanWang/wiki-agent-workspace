@@ -68,7 +68,9 @@ PDFs). Requests that address an object (document, discussion, review, session…
 The app-owned tmux server uses its own socket (`<state_dir>/tmux-socket`) and config (`<state_dir>/tmux.conf`,
 regenerated at startup); your personal `~/.tmux.conf` is never touched. Generated settings: 256-colour inner
 `$TERM` (`tmux-256color` if installed, else `screen-256color`), RGB for the outer `xterm-256color`, mouse on
-(wheel scrolls history), `window-size latest`, status bar off, UTF-8 locale when the server's isn't.
+(wheel scrolls history, drag selects), `set-clipboard on` plus the `clipboard` terminal feature (copies reach
+the browser via OSC 52), `window-size latest`, status bar off, UTF-8 locale when the server's isn't. The config is re-applied
+(`source-file`) to a tmux server that is already running at startup.
 
 ## `[auth]`
 
