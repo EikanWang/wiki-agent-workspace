@@ -268,8 +268,9 @@ export default function DiscussionPanel({
           {thread.original_anchor.quote !== thread.anchor.quote && <div className="muted small">Original quote: "{thread.original_anchor.quote.slice(0, 80)}"</div>}
           {thread.diff && (
             <div className="diff-origin small" data-testid="thread-diff-origin">
-              <span className="chip">diff comment</span> on {thread.diff.side === "deleted" ? "removed" : thread.diff.side === "added" ? "added" : "unchanged"} line {thread.diff.line_no ?? "?"} ({thread.diff.base} → {thread.diff.target}):
-              <code className={`diff-origin-line ${thread.diff.side}`}>{thread.diff.side === "deleted" ? "−" : thread.diff.side === "added" ? "+" : " "}{thread.diff.line_text}</code>
+              <span className="chip">diff comment</span> on {{ deleted: "removed", added: "added", context: "unchanged", mixed: "changed" }[thread.diff.side] ?? thread.diff.side}{" "}
+              {thread.diff.line_end && thread.diff.line_end !== thread.diff.line_no ? `lines ${thread.diff.line_no}–${thread.diff.line_end}` : `line ${thread.diff.line_no ?? "?"}`} ({thread.diff.base} → {thread.diff.target}):
+              <code className={`diff-origin-line ${thread.diff.side}`}>{thread.diff.line_text.split("\n").map((l, i) => <span key={i} className="diff-origin-ln">{thread.diff!.side === "deleted" ? "−" : thread.diff!.side === "added" ? "+" : " "}{l}{"\n"}</span>)}</code>
               {!thread.diff.anchored && <span className="muted"> · this line is not in the current file; the discussion is attached to the document, not to a passage</span>}
             </div>
           )}
@@ -393,9 +394,10 @@ function MessageView({ m, session, live, onRetry, onCancel, onPermission, sessio
           )}
         </div>
       )}
-      {isAgent && (status === "running" || status === "queued" || status === "waiting_for_session" || status === "waiting_provider_permission") && live && (
+      {isAgent && (status === "running" || status === "queued" || status === "waiting_for_session" || status === "waiting_provider_permission") && (m.job_id || live) && (
         <div className="row">
-          <button className="btn small" onClick={() => void onCancel(live.jobId)} data-testid="cancel-job">Cancel</button>
+          {/* always cancel *this* message's job: the streamed job may lag behind when several turns are queued */}
+          <button className="btn small" onClick={() => void onCancel(m.job_id ?? live!.jobId)} data-testid="cancel-job">Cancel</button>
         </div>
       )}
       {isAgent && failed && (

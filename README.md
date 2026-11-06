@@ -120,8 +120,12 @@ Alternative token source: `WAW_ACCESS_TOKEN=... scripts/start.sh`. Other env ove
   path is locked, Codex runs with the `read-only` sandbox, and any change that still happens during a turn is
   reported as a `lock_violation` (never silently reverted). Your terminal is never restricted.
 - **Diff** view (± next to changed files/folders, or the Diff tab): review a file, a folder or the whole workspace
-  against HEAD or any commit/branch, including untracked Markdown drafts. Click a line to comment; the comment
-  becomes a discussion anchored to that text, with the diff context shown and the agent answering as usual.
+  against HEAD or any commit/branch, including untracked Markdown drafts, in unified or **side-by-side** layout.
+  Click a line — or drag / shift-click to select several — to comment; the comment becomes a discussion anchored
+  to that text (ranges span first to last line), with the diff context shown and the agent answering as usual.
+  The Diff tab follows the document you are reading; use ± in the tree to review a folder. Each file has a
+  GitHub-style **Viewed** checkbox (collapses the file, counted in the header); it is bound to the reviewed content,
+  so a later change to the file clears it and shows "changed since".
 - **Recent** supports filtering, hiding/unhiding entries (history kept) and deleting a document's app history
   (discussions, versions, reading state — the file itself is untouched).
 
@@ -182,8 +186,8 @@ separately (`~/.config/wiki-agent-workspace/config.toml`). Backup, restore and m
 ## Running the tests
 
 ```bash
-scripts/test.sh            # backend: pytest (69 tests; real git + tmux + fake agents), ~25 s
-scripts/test.sh --e2e      # + Playwright browser suite (19 scenarios) against the production build
+scripts/test.sh            # backend: pytest (71 tests; real git + tmux + fake agents), ~25 s
+scripts/test.sh --e2e      # + Playwright browser suite (20 scenarios) against the production build
 # or individually
 .venv/bin/python -m pytest tests/backend -q
 cd frontend && npx playwright install chromium && npm run test:e2e

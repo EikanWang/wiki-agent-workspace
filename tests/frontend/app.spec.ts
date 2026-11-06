@@ -69,6 +69,20 @@ async function selectText(page: Page, needle: string, endNeedle?: string) {
   );
 }
 
+/** Commit the e2e workspace; the server's own `git status` can briefly hold index.lock, so retry. */
+function gitCommitAll(ws: string, msg: string) {
+  const cp = require("child_process") as typeof import("child_process");
+  for (let i = 0; i < 20; i++) {
+    try {
+      cp.execSync(`git add -A && git commit -q -m "${msg}" || true`, { cwd: ws, stdio: "ignore" });
+      return;
+    } catch {
+      try { fs.unlinkSync(path.join(ws, ".git", "index.lock")); } catch { /* not ours or gone */ }
+      cp.execSync("sleep 0.2");
+    }
+  }
+}
+
 async function ensureThreadList(page: Page) {
   // the panel restores the last open discussion; go back to the list when needed
   const back = page.locator('.panel-head .icon-btn[title="Back to the discussion list"]');
@@ -488,8 +502,7 @@ test("Recent: hide, show hidden, unhide, delete history", async ({ page }) => {
 test("Diff review of a folder with line comments that become discussions", async ({ page }) => {
   await login(page);
   const ws = workspaceDir();
-  const cp = (await import("child_process")).execSync;
-  cp("git add -A && git commit -q -m snapshot", { cwd: ws });
+  gitCommitAll(ws, "snapshot");
   const guide = path.join(ws, "docs", "guide.md");
   fs.writeFileSync(guide, fs.readFileSync(guide, "utf-8").replace(/- item (one|ONE)\n/, "- item ONE (reviewed)\n"));
   fs.writeFileSync(path.join(ws, "docs", "draft.md"), "# Draft\n\nbrand new\n");
@@ -511,8 +524,19 @@ test("Diff review of a folder with line comments that become discussions", async
   await expect(page.getByTestId("thread-diff-origin")).toContainText("added line");
   await expect(page.locator('[data-testid="message-agent"][data-status="completed"]')).toContainText("reviewing a diff", { timeout: 20000 });
   // back in the diff view the comment marker is listed on that file
-  await page.getByTestId("view-diff").click();
+  await page.getByTestId("tree-diff-root").click();
   await expect(page.getByTestId("diff-comment-marker").first()).toContainText("really needed", { timeout: 10000 });
+  // GitHub-style Viewed checkbox: ticking collapses the file and counts it; it unticks itself when the file changes
+  const draft = page.locator('[data-testid="diff-file"][data-path="docs/draft.md"]');
+  await draft.getByTestId("diff-viewed").click();
+  await expect(draft).toHaveAttribute("data-viewed", "1", { timeout: 10000 });
+  await expect(draft).toHaveClass(/collapsed/);
+  await expect(page.getByTestId("diff-viewed-count")).toContainText("1 /");
+  fs.appendFileSync(path.join(ws, "docs", "draft.md"), "\nmore text\n");
+  await page.getByTestId("tree-diff-root").click();
+  await page.getByRole("button", { name: "↻" }).last().click();
+  await expect(page.locator('[data-testid="diff-file"][data-path="docs/draft.md"]')).toHaveAttribute("data-viewed", "0", { timeout: 10000 });
+  await expect(page.locator('[data-testid="diff-file"][data-path="docs/draft.md"] .viewed-box')).toContainText("changed since");
   await page.getByTestId("diff-comment-marker").first().click();
   await expect(page.getByTestId("thread-quote")).toContainText("item ONE (reviewed)");
 });
@@ -595,4 +619,55 @@ test("selection popover offers Copy; the model of a session can be switched from
   await expect(page.getByTestId("session-area")).toContainText("beta");
   await page.getByTestId("model-select").selectOption("");
   await expect(page.getByTestId("session-model-tag")).toHaveCount(0, { timeout: 10000 });
+});
+
+test("diff: multi-line range comments, side-by-side layout, Diff tab follows the open document", async ({ page }) => {
+  await login(page);
+  const ws = workspaceDir();
+  gitCommitAll(ws, "snapshot2");
+  const guide = path.join(ws, "docs", "guide.md");
+  fs.writeFileSync(guide, fs.readFileSync(guide, "utf-8").replace(/- item (ONE|one)[^\n]*\n- item (TWO|two)[^\n]*\n/, "- alpha line\n- beta line\n- gamma line\n"));
+  fs.writeFileSync(path.join(ws, "README.md"), "# Repo\n\ncommitted file\nreadme changed\n");
+  // open the guide, then press Diff: it shows the guide's diff (not a previous target)
+  await openGuide(page);
+  await page.getByTestId("view-diff").click();
+  await expect(page.getByTestId("diff-review")).toContainText("docs/guide.md");
+  await expect(page.getByTestId("diff-file")).toHaveCount(1);
+  // range selection: click the first added line, shift-click the third
+  const rows = page.locator('[data-testid="diff-table-unified"] tr.diff-line.add');
+  await expect(rows).toHaveCount(3, { timeout: 10000 });
+  await rows.nth(0).dispatchEvent("pointerdown", { button: 0 });
+  await page.mouse.up();
+  await rows.nth(2).dispatchEvent("pointerdown", { button: 0, shiftKey: true });
+  await expect(page.locator('[data-testid="diff-row"][data-selected="1"]')).toHaveCount(3);
+  await expect(page.getByTestId("diff-composer")).toContainText("3 lines");
+  await page.getByTestId("diff-comment-input").fill("Why these three together?");
+  await page.getByTestId("diff-comment-input").press("Enter");
+  await expect(page.getByTestId("thread-diff-origin")).toContainText("lines", { timeout: 15000 });
+  await expect(page.getByTestId("thread-quote")).toContainText("alpha line");
+  await expect(page.getByTestId("thread-quote")).toContainText("gamma line");
+  // side-by-side layout: deletions on the left, additions on the right, persisted
+  await page.getByTestId("view-diff").click();
+  await page.getByTestId("diff-layout-split").click();
+  const split = page.getByTestId("diff-table-split");
+  await expect(split).toBeVisible();
+  await expect(split.locator("td.code.left.del").first()).toContainText("item");
+  await expect(split.locator("td.code.right.add").first()).toContainText("alpha line");
+  await expect(split.locator("td.code.right.empty")).toHaveCount(0); // 2 dels paired with 3 adds -> one empty left cell
+  await expect(split.locator("td.code.left.empty")).toHaveCount(1);
+  await expect(page.getByTestId("diff-comment-marker").first()).toContainText("three together");
+  await page.reload();
+  await expect(page.getByTestId("markdown-body").locator("h1")).toContainText("Guide"); // last document restored first
+  await page.getByTestId("view-diff").click();
+  const fileSec = page.locator('[data-testid="diff-file"][data-path="docs/guide.md"]');
+  await expect(fileSec).toBeVisible({ timeout: 10000 });
+  if ((await fileSec.getAttribute("class"))?.includes("collapsed")) await fileSec.locator(".diff-file-head").click();
+  await expect(page.getByTestId("diff-table-split")).toBeVisible();
+  // opening another modified document switches the diff target when pressing Diff again
+  await page.getByTestId("tree-file-README.md").locator("button.tree-main").click();
+  await expect(page.getByTestId("markdown-body").locator("h1")).toHaveText("Repo");
+  await page.getByTestId("view-diff").click();
+  await expect(page.getByTestId("diff-review")).toContainText("README.md");
+  await expect(page.locator('[data-testid="diff-file"][data-path="README.md"]')).toContainText("readme changed");
+  await page.getByTestId("diff-layout-unified").click();
 });

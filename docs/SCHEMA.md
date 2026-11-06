@@ -29,6 +29,7 @@ workspaces 1─┬─* documents 1─┬─* document_versions
              │               ├─* review_marks
              │               ├─* previews ──1 jobs
              ├─* locks
+             ├─* file_reviews
              │               └─* threads 1─┬─* messages ──(soft) jobs
              │                             ├─* anchor_history
              │                             └─* jobs 1─* job_events
@@ -230,6 +231,17 @@ event. The user's terminal is never restricted.
 | `is_dir` | BOOLEAN | Folder lock (covers everything below) vs single file. |
 | `reason` | TEXT, nullable | Optional note shown in tooltips and in the agent prompt. |
 | `created_at` | DATETIME | When locked. |
+
+## `file_reviews` — "Viewed" checkboxes in the diff review
+
+| Column | Type | Meaning |
+| --- | --- | --- |
+| `id` | UUID, PK | Row id. |
+| `workspace_id` | FK `workspaces.id` | Workspace. |
+| `path` | TEXT | File path; unique per `(workspace, path, base)`. |
+| `base` | TEXT | Base ref the diff was reviewed against (`HEAD`, a commit, a branch). |
+| `reviewed_sha256` | 64 hex | Content hash of the file when it was marked viewed; the checkbox shows ticked only while the current content still has this hash. |
+| `created_at` | DATETIME | When marked. |
 
 ## `terminals` — terminal tabs
 

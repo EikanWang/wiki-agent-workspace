@@ -248,6 +248,21 @@ class Lock(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
+class FileReview(Base):
+    """GitHub-style 'Viewed' checkbox in the diff review: the user marked a file's diff (against `base`) as
+    reviewed when its content hash was `reviewed_sha256`. If the file changes afterwards the mark no longer
+    matches and the checkbox clears itself."""
+
+    __tablename__ = "file_reviews"
+    __table_args__ = (UniqueConstraint("workspace_id", "path", "base", name="uq_file_reviews_ws_path_base"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), nullable=False)
+    path: Mapped[str] = mapped_column(Text, nullable=False)
+    base: Mapped[str] = mapped_column(Text, nullable=False)  # the base ref the diff was reviewed against
+    reviewed_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
 class Preview(Base):
     __tablename__ = "previews"
     id: Mapped[str] = mapped_column(String(36), primary_key=True)

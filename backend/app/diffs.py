@@ -19,9 +19,9 @@ from .annotations import ThreadService, build_prompt
 from .db import new_id
 from .deps import AppContext, require_auth, require_auth_mutating
 from .documents import MARKDOWN_SUFFIXES, DocumentService, sha256_bytes
-from .errors import ApiError, bad_request
+from .errors import ApiError, bad_request, not_found
 from .gitinfo import git_info, git_run, valid_ref
-from .models import Document, Message, Thread
+from .models import Document, FileReview, Message, Thread
 from .textmodel import document_format
 
 router = APIRouter()
@@ -136,16 +136,54 @@ class DiffService:
             out_files.append({
                 "path": frel, "status": f["status"], "unified": unified, "additions": adds, "deletions": dels,
                 "identical": a == b, "document_id": doc_ids.get(frel),
-                "target_sha256": sha256_bytes(b.encode("utf-8")) if b is not None and target is None else None,
+                "target_sha256": sha256_bytes(b.encode("utf-8")) if b is not None else None,
                 "is_markdown": Path(frel).suffix.lower() in MARKDOWN_SUFFIXES,
                 "commentable": document_format(Path(frel).name) in ("markdown", "text", "docx"),
                 "lock": self.ctx.locks.covering(frel) if self.ctx.locks is not None else None,
             })
+        reviews = self.reviews_for(base, [f["path"] for f in out_files])
+        for f in out_files:
+            rv = reviews.get(f["path"])
+            f["viewed"] = bool(rv) and rv["reviewed_sha256"] == f["target_sha256"]
+            f["viewed_stale"] = bool(rv) and not f["viewed"]  # was viewed, but the file changed since
+        viewed_count = sum(1 for f in out_files if f["viewed"])
         return {
             "path": rel, "is_dir": is_dir, "base": base, "target": target or "worktree",
-            "git": self.docs.git_summary(info), "files": out_files,
+            "git": self.docs.git_summary(info), "files": out_files, "viewed_count": viewed_count,
             "summary": {"files": len(out_files), "additions": sum(f["additions"] for f in out_files), "deletions": sum(f["deletions"] for f in out_files)},
         }
+
+    # ------------------------------------------------------------------ viewed marks
+    def reviews_for(self, base: str, paths: list[str]) -> dict[str, dict[str, Any]]:
+        if not paths:
+            return {}
+        with self.ctx.db.read() as s:
+            rows = s.query(FileReview).filter(FileReview.workspace_id == self.docs.workspace_id, FileReview.base == base,
+                                              FileReview.path.in_(paths)).all()
+            return {r.path: {"reviewed_sha256": r.reviewed_sha256, "created_at": r.created_at.isoformat()} for r in rows}
+
+    def set_viewed(self, path: str, base: str, viewed: bool, target_sha256: str | None) -> dict[str, Any]:
+        rel = self._rel(path)
+        if not valid_ref(self.root, base):
+            raise bad_request(f"unknown base ref: {base}", "REF_NOT_FOUND")
+        with self.ctx.db.write() as s:
+            row = s.query(FileReview).filter_by(workspace_id=self.docs.workspace_id, path=rel, base=base).one_or_none()
+            if not viewed:
+                if row is not None:
+                    s.delete(row)
+                return {"path": rel, "base": base, "viewed": False}
+            if not target_sha256:
+                # compute from the worktree when the client did not send the hash it reviewed
+                text = self._text_in_worktree(rel)
+                if text is None:
+                    raise not_found("file not found in the working tree", "FILE_NOT_FOUND")
+                target_sha256 = sha256_bytes(text.encode("utf-8"))
+            if row is None:
+                row = FileReview(id=new_id(), workspace_id=self.docs.workspace_id, path=rel, base=base, reviewed_sha256=target_sha256)
+                s.add(row)
+            else:
+                row.reviewed_sha256 = target_sha256
+            return {"path": rel, "base": base, "viewed": True, "reviewed_sha256": target_sha256}
 
     # ------------------------------------------------------------------ comments
     async def comment(self, body: "DiffCommentIn") -> dict[str, Any]:
@@ -170,15 +208,41 @@ class DiffService:
         quote = line_text
         anchored = False
         if line_text and body.side != "deleted":
-            # Diff lines are Markdown *source*; the anchor model is *rendered* text. Try the raw line first,
-            # then the line without block markers (bullets, numbering, heading #, quote >, emphasis).
-            for cand in _rendered_candidates(line_text):
+            # Diff lines are Markdown *source*; the anchor model is *rendered* text. For a multi-line range the
+            # rendered lines are usually contiguous in the model (one block per source line); try the joined
+            # range first, then the range with markers stripped, then its first non-empty line.
+            src_lines = [ln for ln in line_text.split("\n")]
+            candidates: list[str] = []
+            if len(src_lines) > 1:
+                stripped = [_rendered_candidates(ln)[-1] for ln in src_lines if ln.strip()]
+                candidates.append("\n".join(stripped))
+                # Markdown joins consecutive paragraph lines with a space (soft break) in rendered text
+                candidates.append(" ".join(stripped))
+                first = next((ln for ln in src_lines if ln.strip()), "")
+                last = next((ln for ln in reversed(src_lines) if ln.strip()), "")
+                candidates.extend(_rendered_candidates(first))
+                candidates.extend(_rendered_candidates(last))
+            else:
+                candidates.extend(_rendered_candidates(line_text))
+            for cand in candidates:
+                if not cand:
+                    continue
                 idx = model.text.find(cand)
                 if idx >= 0 and model.text.find(cand, idx + 1) < 0:
                     start, end = idx, idx + len(cand)
                     quote = cand
                     anchored = True
                     break
+            # Range anchors: if only the first and last lines were found individually, span them.
+            if not anchored and len(src_lines) > 1:
+                f = _rendered_candidates(next((ln for ln in src_lines if ln.strip()), ""))[-1]
+                l = _rendered_candidates(next((ln for ln in reversed(src_lines) if ln.strip()), ""))[-1]
+                fi = model.text.find(f) if f else -1
+                li = model.text.find(l, fi + 1) if l and fi >= 0 else -1
+                if fi >= 0 and li >= 0 and model.text.find(f, fi + 1) < 0 and model.text.find(l, li + 1) < 0:
+                    start, end = fi, li + len(l)
+                    quote = model.text[start:end]
+                    anchored = True
         if not anchored:
             # Fall back to the first non-empty rendered line so the thread still has a valid anchor.
             first = next((ln for ln in model.text.split("\n") if ln.strip()), None)
@@ -191,13 +255,14 @@ class DiffService:
         suffix = model.text[end:end + 40]
         heading = model.heading_for(start)
         sess = await svc._session_for_new_thread(doc, body.session_id)
-        diff_ctx = {"base": body.base, "target": body.target, "side": body.side, "line_no": body.line_no, "line_text": body.line_text,
-                    "hunk": body.hunk[:4000] if body.hunk else None, "anchored": anchored}
+        diff_ctx = {"base": body.base, "target": body.target, "side": body.side, "line_no": body.line_no, "line_end": body.line_end,
+                    "line_text": body.line_text, "hunk": body.hunk[:4000] if body.hunk else None, "anchored": anchored}
         question = body.question
+        where = f"lines {body.line_no}-{body.line_end}" if body.line_end and body.line_no and body.line_end != body.line_no else f"line {body.line_no or '?'}"
+        kind = {"deleted": "removed", "added": "added", "context": "unchanged", "mixed": "changed"}.get(body.side, body.side)
         prompt_question = (
-            f"[Comment made while reviewing a diff of {rel} ({body.base} → {body.target}); "
-            f"commented {'removed' if body.side == 'deleted' else 'added' if body.side == 'added' else 'context'} line "
-            f"{body.line_no or '?'}: {body.line_text.strip()!r}]\n\n" + question
+            f"[Comment made while reviewing a diff of {rel} ({body.base} → {body.target}); commented {kind} {where}:\n"
+            + "\n".join("    " + ln for ln in body.line_text.strip().splitlines()[:40]) + "]\n\n" + question
         )
         if body.hunk:
             prompt_question += "\n\nDiff hunk for reference:\n```diff\n" + body.hunk[:4000] + "\n```"
@@ -263,9 +328,10 @@ class DiffCommentIn(BaseModel):
     path: str
     base: str = "HEAD"
     target: str = "worktree"
-    side: str = Field("added", pattern="^(added|deleted|context)$")
-    line_no: int | None = None
-    line_text: str = Field("", max_length=4000)
+    side: str = Field("added", pattern="^(added|deleted|context|mixed)$")
+    line_no: int | None = None          # first line of the range (new-side number when it exists, else old-side)
+    line_end: int | None = None         # last line of the range (inclusive); None = single line
+    line_text: str = Field("", max_length=20000)   # the selected lines joined with "\n" (without +/- markers)
     hunk: str | None = Field(None, max_length=20000)
     question: str = Field(min_length=1, max_length=100000)
     session_id: str | None = None
@@ -283,6 +349,18 @@ def get_diff(path: str = Query(""), base: str = Query("HEAD"), target: str | Non
 @router.post("/diff/comments", status_code=201)
 async def post_diff_comment(body: DiffCommentIn, ctx: AppContext = Depends(require_auth_mutating)):
     return await DiffService(ctx).comment(body)
+
+
+class ViewedIn(BaseModel):
+    path: str
+    base: str = "HEAD"
+    viewed: bool
+    target_sha256: str | None = None  # hash of the content that was reviewed (from GET /diff); protects against races
+
+
+@router.put("/diff/viewed")
+def put_viewed(body: ViewedIn, ctx: AppContext = Depends(require_auth_mutating)):
+    return DiffService(ctx).set_viewed(body.path, body.base, body.viewed, body.target_sha256)
 
 
 @router.get("/refs")

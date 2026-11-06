@@ -77,6 +77,11 @@ export default function App() {
     setDiffTarget({ path, isDir });
     setView("diff");
   }, []);
+  useEffect(() => {
+    // the Diff tab follows the document being read; an explicitly chosen folder is kept
+    if (doc && diffTarget && !diffTarget.isDir && diffTarget.path !== doc.path) setDiffTarget({ path: doc.path, isDir: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doc?.path]);
   const pendingSelection = useRef<SelectionAnchor | null>(null);
 
   const notify = useCallback((m: string) => {
@@ -419,7 +424,14 @@ export default function App() {
         <nav className="view-tabs">
           <button className={view === "document" ? "active" : ""} onClick={() => setView("document")} data-testid="view-document">Document</button>
           <button className={view === "terminal" ? "active" : ""} onClick={() => setView("terminal")} data-testid="view-terminal">Terminal</button>
-          <button className={view === "diff" ? "active" : ""} onClick={() => openDiff(diffTarget?.path ?? (doc?.path ?? ""), diffTarget?.isDir ?? !doc)} data-testid="view-diff" title="Review uncommitted changes and comment on them">Diff</button>
+          <button
+            className={view === "diff" ? "active" : ""}
+            onClick={() => (doc ? openDiff(doc.path, false) : openDiff("", true))}
+            data-testid="view-diff"
+            title={doc ? `Review uncommitted changes of ${doc.path} (use ± in the file tree for a folder)` : "Review uncommitted changes of the workspace"}
+          >
+            Diff
+          </button>
         </nav>
         <button className="btn small" onClick={() => { setRecentKey((k) => k + 1); setShowRecent(true); }} title="Documents and discussions you worked on, newest first" data-testid="recent-button">Recent</button>
         <span className="font-settings-anchor">

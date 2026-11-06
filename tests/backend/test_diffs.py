@@ -101,3 +101,65 @@ async def test_diff_comment_on_markdown_source_line_anchors_to_rendered_text(api
     assert threads["heading?"]["anchor"]["quote"] == "Lowering stage" and threads["heading?"]["anchor"]["heading"] == "Lowering stage"
     for t in threads.values():
         await api.wait_job(t["messages"][1]["job_id"])
+
+
+async def test_diff_comment_on_a_multi_line_range(api: Api, workspace: Path):
+    _commit_all(workspace, "base")
+    guide = workspace / "docs" / "guide.md"
+    guide.write_text(guide.read_text().replace("- item one\n- item two\n", "- item one (edited)\n- item two (edited)\n- item three\n"))
+    d = (await api.get("/api/v1/diff", params={"path": "docs/guide.md"})).json()
+    unified = d["files"][0]["unified"]
+    added = [ln[1:] for ln in unified.splitlines() if ln.startswith("+") and not ln.startswith("+++")]
+    assert added == ["- item one (edited)", "- item two (edited)", "- item three"]
+    r = await api.post("/api/v1/diff/comments", json={
+        "path": "docs/guide.md", "side": "added", "line_no": 14, "line_end": 16, "line_text": "\n".join(added),
+        "hunk": unified, "question": "Why were all three items changed together?"})
+    assert r.status_code == 201, r.text
+    out = r.json()
+    assert out["anchored"] is True
+    ev = await api.wait_job(out["job_id"])
+    assert ev[-1]["type"] == "completed"
+    t = (await api.threads(out["document_id"]))["threads"][0]
+    # the anchor spans the rendered list items (one per source line) and the diff context records the range
+    assert t["anchor"]["quote"] == "item one (edited)\nitem two (edited)\nitem three"
+    assert t["anchor_state"] == "attached"
+    assert t["diff"]["line_no"] == 14 and t["diff"]["line_end"] == 16 and t["diff"]["line_text"].count("\n") == 2
+    assert "lines 14-16" in t["messages"][1]["content"]  # the fake echoes the prompt's context
+    # a range whose rendered lines are not contiguous still anchors from first to last line when both are unique
+    (workspace / "docs" / "guide.md").write_text(guide.read_text().replace("## Lowering", "## Lowering\n\nIntro sentence.\n"))
+    d = (await api.get("/api/v1/diff", params={"path": "docs/guide.md"})).json()
+    r2 = await api.post("/api/v1/diff/comments", json={"path": "docs/guide.md", "side": "mixed", "line_no": 9, "line_end": 12,
+                                                        "line_text": "## Lowering\n\nIntro sentence.\n\nTorchInductor converts the graph into device code.", "question": "range?"})
+    assert r2.status_code == 201 and r2.json()["anchored"] is True
+    await api.wait_job(r2.json()["job_id"])
+    t2 = next(x for x in (await api.threads(out["document_id"]))["threads"] if x["id"] == r2.json()["thread_id"])
+    assert t2["anchor"]["quote"].startswith("Lowering") and t2["anchor"]["quote"].endswith("device code.")
+
+
+async def test_viewed_checkbox_is_bound_to_the_reviewed_content(api: Api, workspace: Path):
+    _commit_all(workspace, "base")
+    guide = workspace / "docs" / "guide.md"
+    guide.write_text(guide.read_text().replace("device code.", "device code (v1)."))
+    (workspace / "docs" / "other.md").write_text("# Other\n")
+    d = (await api.get("/api/v1/diff", params={"path": "docs"})).json()
+    by = {f["path"]: f for f in d["files"]}
+    assert by["docs/guide.md"]["viewed"] is False and d["viewed_count"] == 0
+    r = await api.put("/api/v1/diff/viewed", json={"path": "docs/guide.md", "base": "HEAD", "viewed": True, "target_sha256": by["docs/guide.md"]["target_sha256"]})
+    assert r.status_code == 200 and r.json()["viewed"] is True
+    d = (await api.get("/api/v1/diff", params={"path": "docs"})).json()
+    by = {f["path"]: f for f in d["files"]}
+    assert by["docs/guide.md"]["viewed"] is True and by["docs/other.md"]["viewed"] is False and d["viewed_count"] == 1
+    # the file changes again -> the mark no longer applies (stale), like GitHub un-ticking "Viewed"
+    guide.write_text(guide.read_text().replace("(v1)", "(v2)"))
+    by = {f["path"]: f for f in (await api.get("/api/v1/diff", params={"path": "docs"})).json()["files"]}
+    assert by["docs/guide.md"]["viewed"] is False and by["docs/guide.md"]["viewed_stale"] is True
+    # marks are per base: reviewing against another ref is independent
+    first = subprocess.run(["git", "rev-parse", "HEAD"], cwd=workspace, capture_output=True, text=True).stdout.strip()
+    r = await api.put("/api/v1/diff/viewed", json={"path": "docs/guide.md", "base": first, "viewed": True})
+    assert r.json()["viewed"] is True and r.json()["reviewed_sha256"]
+    # untick
+    r = await api.put("/api/v1/diff/viewed", json={"path": "docs/guide.md", "base": "HEAD", "viewed": False})
+    assert r.json()["viewed"] is False
+    by = {f["path"]: f for f in (await api.get("/api/v1/diff", params={"path": "docs"})).json()["files"]}
+    assert by["docs/guide.md"]["viewed"] is False and by["docs/guide.md"]["viewed_stale"] is False
+    assert (await api.put("/api/v1/diff/viewed", json={"path": "docs/guide.md", "base": "--bad", "viewed": True})).status_code == 400

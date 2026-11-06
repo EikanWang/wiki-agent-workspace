@@ -205,7 +205,7 @@ export interface Thread {
   original_anchor: Anchor;
   anchor: Anchor;
   anchor_state: "attached" | "moved" | "ambiguous" | "orphaned";
-  diff?: { base: string; target: string; side: string; line_no: number | null; line_text: string; anchored: boolean } | null;
+  diff?: { base: string; target: string; side: string; line_no: number | null; line_end?: number | null; line_text: string; anchored: boolean } | null;
   current_start: number | null;
   current_end: number | null;
   candidates?: number;
@@ -350,11 +350,13 @@ export interface DiffFile {
   is_markdown: boolean;
   commentable?: boolean;
   lock?: LockInfo | null;
+  viewed?: boolean;
+  viewed_stale?: boolean;
 }
 
 export interface DiffComment {
   thread_id: string;
-  diff: { base: string; target: string; side: string; line_no: number | null; line_text: string; anchored: boolean };
+  diff: { base: string; target: string; side: string; line_no: number | null; line_end?: number | null; line_text: string; anchored: boolean };
   question: string;
   last_status: string | null;
   message_count: number;
@@ -369,6 +371,7 @@ export interface DiffResult {
   files: DiffFile[];
   summary: { files: number; additions: number; deletions: number };
   comments: Record<string, DiffComment[]>;
+  viewed_count?: number;
 }
 
 export interface GitRefs {
