@@ -92,6 +92,7 @@ Everything below is explained step by step in **[docs/USER_GUIDE.md](docs/USER_G
 | Asking | Select words or lines → question box (copy icon, Enter to send); anchors survive edits; orphaned/ambiguous detection and manual reanchor; review marks |
 | Discussions | Individual or Flat (all discussions as one stream) panel; streaming answers rendered as Markdown; retry / cancel |
 | Agents | OpenCode and Codex with your existing login; per-session **model and effort**; link provider sessions; per-session job queueing |
+| Editing | Edit Markdown and any text/source file in the browser: Ctrl/⌘+S, live Markdown preview, conflict-safe saves, versions + diff |
 | Safety | **Locks** on files/folders (read-only for the app and app-driven agents); preview-before-apply; no auto-commit, no force-push |
 | Diff | File / folder / whole-folder diffs vs any ref; unified or side-by-side; multi-line comments; inline answers; **Viewed** checkbox |
 | Reviews | Stash comments, **Submit review** once; the agent addresses / replies / skips each comment |
@@ -158,8 +159,8 @@ separately (`~/.config/wiki-agent-workspace/config.toml`). Backup, restore and m
 ## Running the tests
 
 ```bash
-scripts/test.sh            # backend: pytest (78 tests; real git + tmux + fake agents), ~25 s
-scripts/test.sh --e2e      # + Playwright browser suite (23 scenarios) against the production build
+scripts/test.sh            # backend: pytest (81 tests; real git + tmux + fake agents), ~25 s
+scripts/test.sh --e2e      # + Playwright browser suite (24 scenarios) against the production build
 # or individually
 .venv/bin/python -m pytest tests/backend -q
 cd frontend && npx playwright install chromium && npm run test:e2e

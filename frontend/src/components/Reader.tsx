@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { COMPOSER_HINT, composerKeyDown } from "./keys";
+import Editor from "./Editor";
 import { AgentSession, ApiError, OpenDocument, ReviewMark, Thread, getWorkspace, put } from "../api";
 import { renderMarkdown, sanitizeHtml, slugify } from "../markdown";
 import { SelectionAnchor, TextModel, anchorFromSelection, buildTextModel, makeAnchor, rangeFromOffsets, resolveAnchor } from "../textmodel";
@@ -28,15 +29,20 @@ export interface ReaderProps {
   onToggleToc?: () => void;
   readerMode?: "read" | "discuss";
   onReaderModeChange?: (m: "read" | "discuss") => void;
+  /** after a save in the editor: reload the document (keeps the open discussion) */
+  onEdited?: (sha256: string) => void;
+  onDirtyChange?: (dirty: boolean) => void;
   pendingSelectionRef: React.MutableRefObject<SelectionAnchor | null>;
 }
 
 const SELECTION_DELAY_MS = 350;
 
 export default function Reader(props: ReaderProps) {
-  const { doc, threads, marks, activeThreadId, changedNotice, onRefresh, onRelink, onOpenThread, initialFragment, onFragmentConsumed, tocOpen = true, onToggleToc, readerMode = "discuss", onReaderModeChange, onSend, onMarkReviewed, onReanchor, onOpenInternalLink, sessions, defaultSessionId, defaultProvider } = props;
+  const { doc, threads, marks, activeThreadId, changedNotice, onRefresh, onRelink, onOpenThread, initialFragment, onFragmentConsumed, tocOpen = true, onToggleToc, readerMode = "discuss", onReaderModeChange, onEdited, onDirtyChange, onSend, onMarkReviewed, onReanchor, onOpenInternalLink, sessions, defaultSessionId, defaultProvider } = props;
   const [sheet, setSheet] = useState<SelectionAnchor | null>(null); // mobile / header-button composer
   const [copyChip, setCopyChip] = useState<{ text: string; x: number; y: number; done: boolean } | null>(null); // read mode
+  const [editing, setEditing] = useState(false);
+  useEffect(() => setEditing(false), [doc.document_id]);
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const modelRef = useRef<TextModel | null>(null);
@@ -447,6 +453,17 @@ export default function Reader(props: ReaderProps) {
           {doc.git.remote_state && <span className="chip" title="Relation to the remote">{doc.git.remote_state}</span>}
           <span className="chip mono" title={doc.sha256}>{doc.sha256.slice(0, 8)}</span>
           <span className="chip">{threads.length} discussions</span>
+          {doc.editable && !editing && (
+            <button
+              className="btn small"
+              disabled={!!doc.lock}
+              onClick={() => setEditing(true)}
+              title={doc.lock ? "Locked — unlock to edit" : "Edit this file directly (Ctrl/⌘+S saves)"}
+              data-testid="doc-edit"
+            >
+              ✎ Edit
+            </button>
+          )}
           {onReaderModeChange && (
             <span className="mode-switch" role="tablist" aria-label="Reader mode" title="Read: selecting text only copies. Discuss: selecting text opens the question box.">
               <button role="tab" aria-selected={readerMode === "read"} className={readerMode === "read" ? "active" : ""} onClick={() => onReaderModeChange("read")} data-testid="reader-mode-read">Read</button>
@@ -493,7 +510,7 @@ export default function Reader(props: ReaderProps) {
         </div>
       )}
       <div className="reader-body" ref={scrollRef}>
-        {headings.length > 1 && (
+        {headings.length > 1 && !editing && (
           <nav className={`toc ${tocOpen ? "" : "collapsed"}`} data-testid="toc">
             <button className="toc-toggle" onClick={onToggleToc} title={tocOpen ? "Fold outline" : "Unfold outline"} data-testid="toc-toggle">
               {tocOpen ? "▾ Outline" : "▸"}
@@ -506,13 +523,26 @@ export default function Reader(props: ReaderProps) {
               ))}
           </nav>
         )}
+        {editing && (
+          <Editor
+            key={doc.document_id}
+            doc={doc}
+            externalChange={!!changedNotice}
+            onSaved={(sha) => onEdited?.(sha)}
+            onClose={() => {
+              setEditing(false);
+              if (changedNotice) onRefresh();
+            }}
+            onDirtyChange={(d) => onDirtyChange?.(d)}
+          />
+        )}
         {doc.format === "pdf" ? (
           <div className="pdf-view" data-testid="pdf-view">
             <div className="muted small">PDF shown with the browser's viewer. Discussions on PDFs attach to the document (no text anchors); use the discussion panel to ask about it.</div>
             <iframe title={doc.path} src={`/api/v1/raw?path=${encodeURIComponent(doc.path)}${getWorkspace() ? `&workspace=${encodeURIComponent(getWorkspace()!)}` : ""}`} />
           </div>
         ) : (
-          <article className="markdown-body" ref={containerRef} data-testid="markdown-body" />
+          <article className="markdown-body" ref={containerRef} data-testid="markdown-body" style={editing ? { display: "none" } : undefined} />
         )}
         {copyChip && (
           <button

@@ -116,6 +116,8 @@ dismissed.
 | Startup fails with `FOREIGN KEY constraint failed` / `_alembic_tmp_*` table present | An older build ran a SQLite table-rebuild migration with foreign keys on and was interrupted. Current builds run migrations with the pragma off and drop the leftover temp table automatically; just restart. Data is intact (the failed step was rolled back). |
 | `Address already in use` at start | Another instance (or something else) uses the port: `ss -ltnp \| grep 8765`; change `server.port`. |
 | Jobs show `interrupted` after a restart | Expected: the server stopped while they were running. They are never re-run automatically; click **Retry**. |
+| Editor: "The file was changed on disk after you started editing" | Someone (agent, terminal, Git) changed the file since you opened the editor. Choose *Overwrite with mine* or *Discard mine, reload*; *Copy my text* keeps your version on the clipboard. |
+| `NOT_EDITABLE` | Only Markdown and text/source files can be edited in the browser; Word and PDF are read-only. |
 | `PUSH_REJECTED` | The remote branch has commits you don't have. The app never force-pushes: `git pull --rebase` (or merge) in the terminal, then push again. |
 | `PUSH_AUTH` | `git push` was refused by the remote's authentication. Fix credentials/SSH keys in the terminal (`gh auth login`, `ssh -T git@github.com`, credential helper). |
 | `GH_UNAVAILABLE` / `NOT_GITHUB` | Pull requests need the GitHub CLI logged in (`gh auth login`) and an `origin` on github.com. |

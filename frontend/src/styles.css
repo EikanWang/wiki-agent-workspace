@@ -441,3 +441,15 @@ mark.waw-hl.review.needs_review { border-bottom: 2px dashed var(--warn); }
 .path-input { flex: 1; font-family: var(--mono); font-size: 13px; }
 .dir-list { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 8px; max-height: 320px; overflow: auto; }
 .dir-entry { display: inline-flex; align-items: center; gap: 6px; }
+
+/* editor */
+.editor { display: flex; flex-direction: column; flex: 1; min-height: 70vh; min-width: 0; gap: 6px; }
+.editor-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.editor-body { display: flex; gap: 12px; flex: 1; min-height: 0; }
+.editor-body.split > * { flex: 1 1 50%; min-width: 0; }
+.editor-pane { display: flex; flex: 1; min-height: 60vh; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--bg); }
+.editor-pane:focus-within { border-color: var(--primary); }
+.editor-gutter { flex: none; padding: 8px 6px; text-align: right; color: var(--muted); font-family: var(--mono); font-size: 13px; line-height: 1.5; overflow: hidden; user-select: none; background: var(--card); border-right: 1px solid var(--border); min-width: 3em; }
+.editor-text { flex: 1; border: none; outline: none; resize: none; padding: 8px 10px; font-family: var(--mono); font-size: 13px; line-height: 1.5; background: transparent; tab-size: 4; }
+.editor-pane.nowrap .editor-text { white-space: pre; overflow: auto; }
+.editor-preview { overflow: auto; border: 1px solid var(--border); border-radius: 8px; padding: 8px 14px; max-width: none; font-size: calc(var(--reader-size, 15px) - 1px); }

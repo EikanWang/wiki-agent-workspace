@@ -19,9 +19,11 @@ export default function AddFolderDialog({ start, onAdded, onClose }: { start: st
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [showHidden, setShowHidden] = useState(false);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     let alive = true;
+    setLoading(true);
     get<DirListing>(`/fs/dirs?path=${encodeURIComponent(path)}&hidden=${showHidden}`)
       .then((l) => {
         if (!alive) return;
@@ -29,11 +31,14 @@ export default function AddFolderDialog({ start, onAdded, onClose }: { start: st
         setTyped(l.path);
         setError(null);
       })
-      .catch((e) => alive && setError((e as ApiError).message));
+      .catch((e) => alive && setError((e as ApiError).message))
+      .finally(() => alive && setLoading(false));
     return () => {
       alive = false;
     };
   }, [path, showHidden]);
+  // never add a folder other than the one shown: the path box must match the listed folder, and nothing may be loading
+  const stale = loading || !listing || typed.replace(/\/+$/, "") !== listing.path.replace(/\/+$/, "");
 
   const add = async () => {
     if (!listing) return;
@@ -80,13 +85,13 @@ export default function AddFolderDialog({ start, onAdded, onClose }: { start: st
         </div>
         {listing && (
           <div className="row">
-            <span className="small">Selected: <code>{listing.path}</code>{listing.is_git ? " · Git repository" : " · not a Git repository (diff/commit unavailable)"}</span>
+            <span className="small" data-testid="add-folder-selected">Selected: <code>{listing.path}</code>{listing.is_git ? " · Git repository" : " · not a Git repository (diff/commit unavailable)"}</span>
           </div>
         )}
         <div className="row">
           <input value={name} onChange={(e) => setName(e.target.value)} placeholder={`Display name (default: ${folderName})`} data-testid="add-folder-name" />
-          <button className="btn primary" disabled={busy || !listing || !!listing.open_as} onClick={() => void add()} data-testid="add-folder-submit">
-            {listing?.open_as ? "Already open" : busy ? "Adding…" : "Add folder"}
+          <button className="btn primary" disabled={busy || stale || !!listing?.open_as} onClick={() => void add()} data-testid="add-folder-submit" title={stale ? "Press Enter / Go to open the typed path first" : undefined}>
+            {listing?.open_as ? "Already open" : busy ? "Adding…" : loading ? "Loading…" : "Add folder"}
           </button>
         </div>
         {error && <div className="error-text" role="alert">{error}</div>}

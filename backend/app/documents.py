@@ -358,6 +358,7 @@ class DocumentService:
             "document_id": doc.id,
             "path": norm,
             "format": fmt,
+            "editable": fmt in ("markdown", "text"),
             "text": text,
             "html": html if fmt in ("docx", "text") else None,  # markdown is rendered client-side; others server-side
             "sha256": sha,
@@ -679,9 +680,13 @@ class DocumentService:
     def write_atomic(self, rel: str, data: bytes) -> str:
         if self.locks is not None:
             self.locks.assert_writable(self.normalize_rel(rel), "writing")
-        _, path = self.resolve(rel, for_write=True)
+        _, path = self.resolve(rel, for_write=True)  # refuses symlinks that leave the folder
         if path.is_symlink():
-            raise ApiError(403, "PATH_ESCAPES_WORKSPACE", "refusing to write through a symlink")
+            # a link to another file *inside* the folder: write the real target, which must not be locked either
+            target = path.resolve()
+            if self.locks is not None:
+                self.locks.assert_writable(target.relative_to(self.root).as_posix(), "writing (symlink target)")
+            path = target
         mode = path.stat().st_mode & 0o777 if path.exists() else 0o644
         tmp = path.with_name(f".waw-tmp-{os.getpid()}-{path.name}")
         with open(tmp, "wb") as fh:
@@ -691,6 +696,31 @@ class DocumentService:
         os.chmod(tmp, mode)
         os.replace(tmp, path)
         return sha256_bytes(data)
+
+    # ------------------------------------------------------------------ direct editing
+    def save_content(self, doc_id: str, text: str, base_sha256: str) -> dict[str, Any]:
+        """Write user-edited text. Refuses when the file changed since the editor loaded it (409 with the current
+        hash, so the browser can offer reload / overwrite), for non-text formats, oversize content and locks."""
+        doc = self.get_document(doc_id)
+        fmt = document_format(Path(doc.path).name)
+        if fmt not in ("markdown", "text"):
+            raise bad_request(f"{fmt} files cannot be edited as text", "NOT_EDITABLE")
+        _, data, current = self.current_content(doc)
+        if current != base_sha256:
+            raise conflict(DOCUMENT_VERSION_CONFLICT, "the file changed on disk after you started editing", current_sha256=current)
+        old_text = data.decode("utf-8")
+        # keep the file's line-ending convention (browsers normalise textarea content to \n)
+        if "\r\n" in old_text and "\r" not in text:
+            text = text.replace("\n", "\r\n")
+        new = text.encode("utf-8")
+        if len(new) > self.max_bytes:
+            raise ApiError(413, "DOCUMENT_TOO_LARGE", f"content is {len(new)} bytes; limit is {self.max_bytes}")
+        if new == data:
+            return {"document_id": doc_id, "sha256": current, "changed": False}
+        sha = self.write_atomic(doc.path, new)
+        self.record_version(doc_id, new, sha, source="user_edit")
+        self.flag_review_marks(doc_id, self.model_text(doc.path, new), sha, is_model=True)
+        return {"document_id": doc_id, "sha256": sha, "previous_sha256": current, "changed": True, "bytes": len(new)}
 
 
 # ---------------------------------------------------------------------- schemas
@@ -807,6 +837,21 @@ def get_review_marks(doc_id: str, ctx: AppContext = Depends(require_auth)):
 @router.get("/documents/{doc_id}/diff")
 def get_diff(doc_id: str, from_: str = Query(alias="from"), to: str = Query("current"), ctx: AppContext = Depends(require_auth)):
     return _svc(ctx).diff(doc_id, from_, to)
+
+
+class ContentIn(BaseModel):
+    text: str = Field(max_length=50 * 1024 * 1024)
+    base_sha256: str = Field(min_length=64, max_length=64)
+
+
+@router.put("/documents/{doc_id}/content")
+def put_content(doc_id: str, body: ContentIn, ctx: AppContext = Depends(require_auth_mutating)):
+    out = _svc(ctx).save_content(doc_id, body.text, body.base_sha256)
+    if out.get("changed") and ctx.events:
+        doc = _svc(ctx).get_document(doc_id)
+        ctx.events.publish("global", {"type": "file_changed", "path": doc.path, "document_id": doc_id, "sha256": out["sha256"],
+                                      "change": "modified", "source": "user_edit", "workspace_id": ctx.workspace_id})
+    return out
 
 
 @router.post("/documents/{doc_id}/relink")

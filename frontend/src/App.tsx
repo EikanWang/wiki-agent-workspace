@@ -85,6 +85,10 @@ export default function App() {
     return id;
   });
   const [showAddFolder, setShowAddFolder] = useState(false);
+  // unsaved edits guard + suppress the "changed on disk" banner for our own saves
+  const editorDirty = useRef(false);
+  const ownSaves = useRef<Set<string>>(new Set());
+  const confirmLeaveEditor = () => !editorDirty.current || window.confirm("You have unsaved changes in the editor. Discard them?");
   const openDiff = useCallback((path: string, isDir: boolean) => {
     setDiffTarget({ path, isDir });
     setView("diff");
@@ -186,6 +190,8 @@ export default function App() {
 
   const openDocument = useCallback(
     async (path: string, keepThread = false) => {
+      if (!keepThread && !confirmLeaveEditor()) return;
+      if (!keepThread) editorDirty.current = false;
       setDocError(null);
       try {
         const d = await get<OpenDocument>(`/documents/open?path=${encodeURIComponent(path)}`);
@@ -221,6 +227,8 @@ export default function App() {
   const switchWorkspace = useCallback(
     (id: string, openLast = true) => {
       if (id === getWorkspace()) return;
+      if (!confirmLeaveEditor()) return;
+      editorDirty.current = false;
       setWorkspace(id);
       setActiveWs(id);
       localStorage.setItem("waw.activeWorkspace", id);
@@ -252,7 +260,9 @@ export default function App() {
       const sameRoot = !ev.workspace_id || ev.workspace_id === getWorkspace();
       if (ev.type === "file_changed" && sameRoot && doc && (ev.document_id === doc.document_id || ev.path === doc.path)) {
         if (ev.missing) setChanged({ missing: true });
-        else if (ev.sha256 && ev.sha256 !== doc.sha256) setChanged({ sha256: ev.sha256 });
+        else if (ev.sha256 && ownSaves.current.has(ev.sha256)) {
+          /* our own save from the editor: not an external change */
+        } else if (ev.sha256 && ev.sha256 !== doc.sha256) setChanged({ sha256: ev.sha256 });
         else if (!ev.sha256) setChanged({});
         void refreshThreads(doc.document_id);
       }
@@ -596,6 +606,14 @@ export default function App() {
               onToggleToc={() => updatePrefs({ tocOpen: !prefs.tocOpen })}
               readerMode={prefs.readerMode}
               onReaderModeChange={(m) => updatePrefs({ readerMode: m })}
+              onEdited={(sha) => {
+                ownSaves.current.add(sha);
+                notify("Saved.");
+                void openDocument(doc.path, true);
+              }}
+              onDirtyChange={(d) => {
+                editorDirty.current = d;
+              }}
               sessions={sessions}
               defaultSessionId={doc.default_session_id}
               defaultProvider={boot.default_provider}

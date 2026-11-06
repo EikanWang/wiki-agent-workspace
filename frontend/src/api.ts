@@ -192,6 +192,8 @@ export interface OpenDocument {
   path: string;
   /** markdown | text | docx | pdf */
   format: "markdown" | "text" | "docx" | "pdf";
+  /** text formats (Markdown, text/source) can be edited in the browser */
+  editable?: boolean;
   /** server-rendered HTML for text/docx (markdown renders client-side; pdf has none) */
   html: string | null;
   lock: LockInfo | null;

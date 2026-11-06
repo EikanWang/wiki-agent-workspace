@@ -86,7 +86,7 @@ an agent edit, or on preview apply. Needed to display the exact text a discussio
 | `snapshot_ref` | TEXT | Path **relative to `<state_dir>/snapshots/`** of the exact bytes (`<document_id>/<sha256>.md`). |
 | `git_branch` | nullable | Branch checked out when the version was seen (metadata only). |
 | `git_commit` | nullable | HEAD commit when seen (metadata only; the file may have been uncommitted). |
-| `source` | `observed` \| `preview_apply` \| `agent_edit` | How the version came to exist. |
+| `source` | `observed` \| `preview_apply` \| `user_edit` \| `agent_edit` | How the version came to exist (`user_edit` = saved from the in-browser editor). |
 | `created_at` | DATETIME | When first seen. |
 
 ## `agent_sessions` — provider conversations

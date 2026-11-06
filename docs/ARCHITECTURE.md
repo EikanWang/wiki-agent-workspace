@@ -20,7 +20,8 @@ backend/app/
                    folder; add/remove/rename folders; /workspaces, /fs/dirs (folder picker)
   errors.py        ApiError and the stable error codes; JSON error shape
   documents.py     DocumentService (one per root): safe paths, file tree + kinds + Git status, open (all formats),
-                   version snapshots, reading state, review marks, diff, relink, recent, hide/delete history;
+                   version snapshots, direct editing (conditional save), reading state, review marks, diff,
+                   relink, recent, hide/delete history;
                    routes under /files, /documents, /recent, /raw
   textmodel.py     markdown-it-py rendering, text/source → code block, .docx → HTML (mammoth), the deterministic
                    text model (mirrors frontend/src/textmodel.ts)
@@ -59,7 +60,7 @@ frontend/src/
   components/      Login, FileTree (multi-root), AddFolderDialog, Reader (render/highlights/selection popover/
                    reading position/fragments/Read-Discuss), DiscussionPanel (Individual/Flat + useJobStream),
                    SessionPicker, ModelPicker, PreviewDialog, DiffReview (unified/split, ranges, inline threads,
-                   review tray), CommitPanel, TerminalPanel (xterm.js), RecentList, Layout (prefs, resizer,
+                   review tray), Editor (in-browser editing), CommitPanel, TerminalPanel (xterm.js), RecentList, Layout (prefs, resizer,
                    appearance), FileIcon, DiffView, MarkdownView, keys.ts (composer keys)
 tests/backend/     pytest: real Git + tmux, fake providers (tests/fakes/fake-opencode, fake-codex)
 tests/frontend/    Playwright specs + start_server.py (spawns a backend with a temp workspace and fake agents)

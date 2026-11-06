@@ -6,7 +6,7 @@ in [CONFIGURATION.md](CONFIGURATION.md), troubleshooting in [OPERATIONS.md](OPER
 Contents: [Window layout](#window-layout) · [Folders (multi-root)](#folders-multi-root) ·
 [Reading](#reading-documents) · [Asking about a passage](#asking-about-a-passage) ·
 [Discussions panel](#discussions-panel) · [Agent sessions and models](#agent-sessions-and-models) ·
-[Editing through the agent](#editing-through-the-agent) · [Locks](#locks) · [Diff review](#diff-review) ·
+[Editing a file yourself](#editing-a-file-yourself) · [Editing through the agent](#editing-through-the-agent) · [Locks](#locks) · [Diff review](#diff-review) ·
 [Reviews](#reviews-stash-then-submit) · [Committing, pushing, pull requests](#committing-pushing-pull-requests) ·
 [Recent work](#recent-work) · [Terminal](#terminal) · [Keyboard](#keyboard) · [Mobile](#mobile)
 
@@ -89,6 +89,22 @@ to the new text. **Mark reviewed** marks a passage reviewed; it turns *needs rev
   configured default, profiles and common ids are offered, or type any id. Past answers keep their model.
 - Jobs on the same session run one after another ("waiting for session"); different sessions run in parallel.
 
+## Editing a file yourself
+
+**✎ Edit** in the document header (Markdown and any text/source file; Word and PDF are read-only) opens an editor
+in place of the rendered view.
+
+- **Ctrl/⌘+S** or **Save** writes the file; **Done** (or Esc) goes back to reading. *wrap* toggles soft wrapping
+  (off shows line numbers); for Markdown, *preview* shows the rendered result side by side. Tab / Shift+Tab indent and
+  outdent (the file's own indentation style is kept), and the file's line endings (LF/CRLF) are preserved.
+- Saving is safe against concurrent changes: if the agent, your terminal or Git changed the file after you started,
+  the save is refused and you choose **Overwrite with mine**, **Discard mine, reload**, or **Copy my text**. A banner
+  warns as soon as such a change happens while you edit.
+- Every save is recorded as a version, so **View diff** and the Diff view show it, discussions re-anchor to the new
+  text and reviewed passages flag *needs review* if their text changed. Nothing is committed.
+- Locked files cannot be edited. Leaving with unsaved changes (another document, another folder, closing the tab)
+  asks first.
+
 ## Editing through the agent
 
 - Ask explicitly ("please change …") in a discussion; the agent edits with its own configured permissions. The
@@ -161,6 +177,7 @@ history** shows the server-side scrollback. Tabs whose shell exited show *(exite
 | | Ctrl/⌘+Enter, Shift+Enter | New line / paragraph |
 | | Esc | Close the box (keeps nothing sent) |
 | Selection box | Ctrl/⌘+C | Copy the selection |
+| Editor | Ctrl/⌘+S · Esc · Tab / Shift+Tab | Save · back to reading · indent / outdent |
 | Diff | click / shift-click / drag | Select one line / a range |
 
 IME composition (e.g. Chinese input) never sends on Enter.

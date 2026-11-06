@@ -782,7 +782,8 @@ test("multi-root window: add a folder, work in both wikis, Recent across folders
   const dlg = page.getByTestId("add-folder-dialog");
   await page.getByTestId("add-folder-path").fill(second);
   await page.getByTestId("add-folder-path").press("Enter");
-  await expect(dlg).toContainText("Git repository");
+  await expect(page.getByTestId("add-folder-selected")).toContainText(second);
+  await expect(page.getByTestId("add-folder-selected")).toContainText("· Git repository");
   await page.getByTestId("add-folder-name").fill("Second");
   await page.getByTestId("add-folder-submit").click();
   await expect(dlg).toHaveCount(0);
@@ -817,4 +818,57 @@ test("multi-root window: add a folder, work in both wikis, Recent across folders
   await page.getByTestId("tree-remove-Second").click();
   await expect(page.getByTestId("tree-root")).toHaveCount(1);
   await expect(page.getByTestId("markdown-body").locator("h1")).toContainText("Guide", { timeout: 10000 });
+});
+
+test("edit a file directly: save with Ctrl+S, preview, conflict handling, lock, unsaved-changes guard", async ({ page }) => {
+  await login(page);
+  const ws = workspaceDir();
+  const file = path.join(ws, "docs", "editme.md");
+  fs.writeFileSync(file, "# Edit me\n\nfirst paragraph\n");
+  await page.getByTestId("tree-refresh").click();
+  const dir = page.getByTestId("tree-root").first().locator(".tree-row.dir", { hasText: "docs" }).first();
+  if ((await page.getByTestId("tree-file-docs/editme.md").count()) === 0) await dir.click();
+  await page.getByTestId("tree-file-docs/editme.md").locator("button.tree-main").click();
+  await expect(page.getByTestId("markdown-body").locator("h1")).toHaveText("Edit me");
+  // edit + Ctrl+S
+  await page.getByTestId("doc-edit").click();
+  const ta = page.getByTestId("editor-text");
+  await expect(ta).toHaveValue("# Edit me\n\nfirst paragraph\n");
+  await ta.fill("# Edit me\n\nfirst paragraph\n\nsecond **paragraph**\n");
+  await expect(page.getByTestId("editor-state")).toHaveText("Unsaved changes");
+  await page.getByTestId("editor-preview-toggle").check();
+  await expect(page.getByTestId("editor-preview").locator("strong")).toHaveText("paragraph");
+  await ta.press("Control+s");
+  await expect(page.getByTestId("editor-state")).toHaveText("Saved ✓", { timeout: 10000 });
+  expect(fs.readFileSync(file, "utf-8")).toBe("# Edit me\n\nfirst paragraph\n\nsecond **paragraph**\n");
+  await expect(page.getByTestId("doc-changed-banner")).toHaveCount(0); // our own save is not an external change
+  // conflict: the file changes on disk while editing -> refused, then overwrite
+  await ta.fill("# Edit me\n\nmine\n");
+  fs.writeFileSync(file, "# Edit me\n\ntheirs\n");
+  await expect(page.getByTestId("editor-external-change")).toBeVisible({ timeout: 10000 });
+  await page.getByTestId("editor-save").click();
+  await expect(page.getByTestId("editor-conflict")).toBeVisible({ timeout: 10000 });
+  expect(fs.readFileSync(file, "utf-8")).toBe("# Edit me\n\ntheirs\n");
+  page.once("dialog", (d) => d.accept());
+  await page.getByTestId("editor-overwrite").click();
+  await expect(page.getByTestId("editor-state")).toHaveText("Saved ✓", { timeout: 10000 });
+  expect(fs.readFileSync(file, "utf-8")).toBe("# Edit me\n\nmine\n");
+  // Done -> reader shows the saved content
+  await page.getByTestId("editor-close").click();
+  await expect(page.getByTestId("editor")).toHaveCount(0);
+  await expect(page.getByTestId("markdown-body")).toContainText("mine");
+  // unsaved-changes guard when opening another document
+  await page.getByTestId("doc-edit").click();
+  await page.getByTestId("editor-text").fill("# Edit me\n\nunsaved\n");
+  page.once("dialog", (d) => d.dismiss());
+  await page.getByTestId("tree-file-docs/guide.md").locator("button.tree-main").click();
+  await expect(page.getByTestId("editor-text")).toHaveValue("# Edit me\n\nunsaved\n"); // stayed
+  page.once("dialog", (d) => d.accept());
+  await page.getByTestId("editor-close").click();
+  // locked files cannot be edited
+  page.once("dialog", (d) => d.accept(""));
+  await page.getByTestId("doc-lock-toggle").click();
+  await expect(page.getByTestId("doc-edit")).toBeDisabled();
+  await page.getByTestId("doc-lock-toggle").click();
+  await expect(page.getByTestId("doc-edit")).toBeEnabled();
 });
