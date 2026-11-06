@@ -98,7 +98,7 @@ Everything below is explained step by step in **[docs/USER_GUIDE.md](docs/USER_G
 | Reviews | Stash comments, **Submit review** once; the agent addresses / replies / skips each comment |
 | Git | **Commit…** selected files with an agent-drafted message, push, create a GitHub pull request |
 | Recent | All folders, newest first; filter, hide, delete history |
-| Terminal | tmux-backed tabs that survive disconnects and server restarts; history snapshot; exited tabs dismissable; full-screen keyboard capture and a Keys menu / sticky Ctrl for browser-reserved shortcuts (Ctrl+T, Ctrl+W…) |
+| Terminal | tmux-backed tabs that survive disconnects and server restarts; history snapshot; exited tabs dismissable; full-screen keyboard capture and a Keys menu / sticky Ctrl for browser-reserved shortcuts (Ctrl+T, Ctrl+W…); copy to the browser clipboard (drag via tmux, Shift+drag, Ctrl+Shift+C, Copy button, programs via OSC 52, history Copy all) |
 | Layout | Foldable/resizable file tree and panel, foldable outline, fonts and sizes (`Aa`) |
 
 ### Agent sessions
