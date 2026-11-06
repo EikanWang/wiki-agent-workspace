@@ -21,5 +21,7 @@ export default defineConfig({
     timeout: 60_000,
     stdout: "pipe",
     stderr: "pipe",
+    // SIGTERM (not the default SIGKILL) so start_server.py can stop its tmux server and delete its temp folder
+    gracefulShutdown: { signal: "SIGTERM", timeout: 10_000 },
   },
 });

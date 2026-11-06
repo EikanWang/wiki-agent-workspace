@@ -165,6 +165,16 @@ class Tmux:
         if p.returncode != 0 and "can't find session" not in p.stderr and "no server running" not in p.stderr:
             raise TmuxError(p.stderr.strip() or "tmux kill-session failed")
 
+    def kill_server(self) -> None:
+        """Stop the whole app-owned tmux server (all its sessions). Used by tests and throwaway servers only;
+        the app itself never does this: terminals must survive app restarts."""
+        if not self.exe:
+            return
+        try:
+            self._run(["kill-server"], timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+
     def capture_history(self, name: str, lines: int = 2000) -> str:
         lines = max(1, min(int(lines), self.settings.tmux_history_limit))
         p = self._run(["capture-pane", "-p", "-J", "-S", f"-{lines}", "-t", f"{name}:"], timeout=20)

@@ -169,6 +169,7 @@ class AppHandle:
 async def running_app(settings):
     """Factory: start the ASGI app (with lifespan) and return a logged-in Api."""
     stack: list = []
+    tmuxes: list = []  # each test has its own state dir, hence its own tmux server: stop it afterwards
 
     async def start(s: Settings | None = None, login: bool = True) -> AppHandle:
         s = s or settings
@@ -182,6 +183,7 @@ async def running_app(settings):
             r = await api.login()
             assert r.status_code == 200, r.text
         handle = AppHandle(app, api)
+        tmuxes.append(handle.ctx.terminals.tmux)
         entry = (lifespan, client)
         stack.append(entry)
 
@@ -204,6 +206,8 @@ async def running_app(settings):
             await lifespan.__aexit__(None, None, None)
         except Exception:
             pass
+    for tmux in tmuxes:
+        tmux.kill_server()
 
 
 @pytest.fixture
