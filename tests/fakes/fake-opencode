@@ -96,6 +96,27 @@ def main(argv):
         session = f"ses_fake{len(sessions) + 1:04d}"
         sessions.append({"id": session, "title": title or prompt[:40], "updated": int(time.time() * 1000), "directory": directory})
         save(sessions)
+    if prompt.startswith("You are receiving a REVIEW"):
+        # Triage: comments containing "please change X to Y" are addressed by editing; questions get a reply; "[[skip]]" is skipped.
+        import re as _re
+        items = []
+        for m in _re.finditer(r"--- Comment \d+ \(id ([0-9a-f-]+)\) on (\S+), .*?\nReviewer says: (.*?)(?=\n(?:Hunk:|--- Comment |After making)|\Z)", prompt, _re.S):
+            cid, path, says = m.group(1), m.group(2), m.group(3).strip()
+            locked = f"LOCKED by the user and must NOT be modified" in prompt and path in prompt.split("must NOT be modified (use `reply` instead of `address`): ", 1)[-1].split("\n", 1)[0]
+            ch = _re.search(r"please change (.+?) to (.+?)[.]?$", says, _re.S)
+            if ch and not locked:
+                p_ = Path(directory) / path
+                p_.write_text(p_.read_text().replace(ch.group(1).strip(), ch.group(2).strip()))
+                items.append({"id": cid, "decision": "address", "response": f"Changed '{ch.group(1).strip()}' to '{ch.group(2).strip()}'."})
+            elif "[[skip]]" in says:
+                items.append({"id": cid, "decision": "skip", "response": "Already covered."})
+            else:
+                items.append({"id": cid, "decision": "reply", "response": ("Cannot edit: the file is locked. " if locked else "") + f"Answer to: {says[:60]}"})
+        text = "Reviewed all comments.\n\n```json\n" + json.dumps({"comments": items, "summary": f"Handled {len(items)} comments."}) + "\n```"
+        emit({"type": "step_start", "sessionID": session, "part": {"type": "step-start"}})
+        emit({"type": "text", "sessionID": session, "part": {"id": "prt_1", "type": "text", "text": text}})
+        emit({"type": "step_finish", "sessionID": session, "part": {"type": "step-finish", "reason": "stop"}})
+        return 0
     emit({"type": "step_start", "sessionID": session, "part": {"type": "step-start"}})
     if "[[permission]]" in user_msg:
         emit({"type": "permission", "sessionID": session, "id": "per_fake1", "title": "fake wants to run `rm`"})

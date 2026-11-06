@@ -408,3 +408,19 @@ mark.waw-hl.review.needs_review { border-bottom: 2px dashed var(--warn); }
 .diff-reply { display: flex; gap: 6px; }
 .diff-reply input { flex: 1; border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; background: var(--bg); font-family: inherit; }
 .toast-link { color: var(--bg); text-decoration: underline; margin-left: 6px; }
+
+/* reviews */
+.review-tray { border-bottom: 1px solid var(--border); padding: 10px 16px; display: flex; flex-direction: column; gap: 10px; background: var(--card); }
+.review-item { border: 1px solid var(--border); border-left: 3px solid var(--warn); border-radius: 8px; padding: 6px 10px; background: var(--bg); display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.review-item-head { display: flex; align-items: center; gap: 8px; }
+.review-item-line { font-size: 12px; color: var(--muted); white-space: pre-wrap; }
+.review-item-body { white-space: pre-wrap; }
+.review-submit textarea, .review-item textarea { width: 100%; border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; background: var(--bg); }
+.review-last { border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; background: var(--bg); }
+.review-decisions { margin: 4px 0 0; padding-left: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+.review-response { margin-left: 4px; }
+.chip.pending { background: var(--warn-bg); color: var(--warn); }
+.chip.decision.address { background: rgba(0, 162, 64, 0.15); color: var(--green); }
+.chip.decision.reply { background: var(--accent); color: var(--primary); }
+.chip.decision.skip { background: var(--card); color: var(--muted); }
+.diff-pending { border: 1px dashed var(--warn); border-radius: 8px; padding: 4px 10px; font-family: inherit; font-size: 13px; background: var(--warn-bg); }

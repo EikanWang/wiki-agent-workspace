@@ -267,6 +267,19 @@ class DiffService:
         if body.hunk:
             prompt_question += "\n\nDiff hunk for reference:\n```diff\n" + body.hunk[:4000] + "\n```"
         thread_id, user_msg_id, agent_msg_id = new_id(), new_id(), new_id()
+        if body.defer_agent:
+            with self.ctx.db.write() as s:
+                t = Thread(
+                    id=thread_id, document_id=doc.id,
+                    orig_version_sha256=sha, orig_quote=quote, orig_prefix=prefix, orig_suffix=suffix, orig_start=start, orig_end=end, orig_heading=heading,
+                    cur_version_sha256=sha, cur_quote=quote, cur_prefix=prefix, cur_suffix=suffix, cur_start=start, cur_end=end, cur_heading=heading,
+                    anchor_state="attached" if anchored else "orphaned", diff_json=json.dumps(diff_ctx, ensure_ascii=False), last_session_id=sess.id,
+                )
+                s.add(t)
+                s.flush()
+                s.add(Message(id=user_msg_id, thread_id=thread_id, session_id=sess.id, role="user", content=question, status="completed"))
+                s.add(Message(id=agent_msg_id, thread_id=thread_id, session_id=sess.id, role="agent", content="", status="queued"))
+            return {"thread_id": thread_id, "job_id": None, "session_id": sess.id, "document_id": doc.id, "anchored": anchored, "agent_message_id": agent_msg_id}
         with self.ctx.db.write() as s:
             t = Thread(
                 id=thread_id, document_id=doc.id,
@@ -340,6 +353,8 @@ class DiffCommentIn(BaseModel):
     hunk: str | None = Field(None, max_length=20000)
     question: str = Field(min_length=1, max_length=100000)
     session_id: str | None = None
+    # Reviews: create the thread and the user's comment but do not start an agent turn (one review job answers all).
+    defer_agent: bool = False
 
 
 @router.get("/diff")

@@ -30,6 +30,7 @@ workspaces 1─┬─* documents 1─┬─* document_versions
              │               ├─* previews ──1 jobs
              ├─* locks
              ├─* file_reviews
+             ├─* reviews 1─* review_comments ──(FK) threads
              │               └─* threads 1─┬─* messages ──(soft) jobs
              │                             ├─* anchor_history
              │                             └─* jobs 1─* job_events
@@ -231,6 +232,33 @@ event. The user's terminal is never restricted.
 | `is_dir` | BOOLEAN | Folder lock (covers everything below) vs single file. |
 | `reason` | TEXT, nullable | Optional note shown in tooltips and in the agent prompt. |
 | `created_at` | DATETIME | When locked. |
+
+## `reviews` — a GitHub-style review (stash, then submit once)
+
+| Column | Type | Meaning |
+| --- | --- | --- |
+| `id` | UUID, PK | Review id. |
+| `workspace_id` | FK `workspaces.id` | Workspace. |
+| `base`, `target` | TEXT | The diff the review is about (`HEAD`/ref and `worktree`/ref). One `pending` review per pair. |
+| `status` | `pending` \| `submitted` \| `completed` \| `failed` \| `cancelled` | Lifecycle. |
+| `summary` | TEXT, nullable | Reviewer's overall note. |
+| `session_id` | FK `agent_sessions.id`, nullable | Session the review job ran in. |
+| `job_id` | FK `jobs.id`, nullable | The single agent job that triaged all comments. |
+| `result_json` | JSON, nullable | Parsed triage `{comments:[{id, decision, response}], summary}` or `{raw, parsed:false}`. |
+| `created_at`, `submitted_at`, `finished_at` | DATETIME | Lifecycle. |
+
+## `review_comments` — stashed comments of a review
+
+| Column | Type | Meaning |
+| --- | --- | --- |
+| `id` | UUID, PK | Comment id (referenced by the agent's triage). |
+| `review_id` | FK `reviews.id` | Review. |
+| `path`, `side`, `line_no`, `line_end`, `line_text`, `hunk` | diff context | Same meaning as in `threads.diff_json`. |
+| `body` | TEXT | The reviewer's comment. |
+| `thread_id` | FK `threads.id`, nullable | Discussion created at submission (carries the verdict as the agent's message). |
+| `decision` | `address` \| `reply` \| `skip`, nullable | The agent's decision. |
+| `response` | TEXT, nullable | The agent's per-comment response. |
+| `created_at` | DATETIME | When stashed. |
 
 ## `file_reviews` — "Viewed" checkboxes in the diff review
 

@@ -396,3 +396,34 @@ export interface GitStatus {
   files: { path: string; status: string; staged: boolean; unstaged: boolean; is_markdown: boolean; lock: LockInfo | null }[];
   recent_commits: { short: string; subject: string; when: string; author: string }[];
 }
+
+// ---------------------------------------------------------------- reviews (stash comments, submit once)
+
+export interface ReviewComment {
+  id: string;
+  path: string;
+  side: string;
+  line_no: number | null;
+  line_end: number | null;
+  line_text: string;
+  body: string;
+  thread_id: string | null;
+  decision: "address" | "reply" | "skip" | null;
+  response: string | null;
+  created_at: string;
+}
+
+export interface Review {
+  id: string | null;
+  base: string;
+  target: string;
+  status: "pending" | "submitted" | "completed" | "failed" | "cancelled";
+  summary?: string | null;
+  job_id?: string | null;
+  job_status?: string | null;
+  job_error?: string | null;
+  result?: { summary?: string; comments?: unknown[]; parsed?: boolean; raw?: string } | null;
+  comments: ReviewComment[];
+  submitted_at?: string | null;
+  finished_at?: string | null;
+}

@@ -661,7 +661,7 @@ test("diff: multi-line range comments, side-by-side layout, Diff tab follows the
   await expect(page.locator('[data-testid="diff-row"][data-selected="1"]')).toHaveCount(3);
   await expect(page.getByTestId("diff-composer")).toContainText("3 lines");
   await page.getByTestId("diff-comment-input").fill("Why these three together?");
-  await page.getByTestId("diff-comment-input").press("Enter");
+  await page.getByTestId("diff-comment-send").click(); // "Ask now": immediate discussion
   const rangeThread = page.getByTestId("diff-comment-marker").first();
   await expect(rangeThread).toContainText("lines", { timeout: 15000 });
   await rangeThread.getByTestId("diff-open-thread").click();
@@ -726,4 +726,44 @@ test("commit workflow: pick files, draft the message with the agent, commit only
   // no remote in the e2e workspace -> Push is offered but disabled, and no PR controls
   await expect(page.getByTestId("push-button")).toBeDisabled();
   await expect(page.getByTestId("pr-button")).toHaveCount(0);
+});
+
+
+test("review: stash comments in the diff, submit once, the agent triages (address / reply / skip)", async ({ page }) => {
+  await login(page);
+  const ws = workspaceDir();
+  gitCommitAll(ws, "before-review");
+  const guide = path.join(ws, "docs", "guide.md");
+  fs.writeFileSync(guide, fs.readFileSync(guide, "utf-8").replace(/- gamma line\n/, "- gamma lnie\n- delta line\n"));
+  await openGuide(page);
+  await page.getByTestId("view-diff").click();
+  const added = page.locator('[data-testid="diff-table-unified"] tr.diff-line.add');
+  await expect(added).toHaveCount(2, { timeout: 10000 });
+  // stash two comments (Enter = Add to review); nothing is asked yet
+  await added.nth(0).dispatchEvent("pointerdown", { button: 0 });
+  await page.mouse.up();
+  await page.getByTestId("diff-comment-input").fill("Typo: please change lnie to line.");
+  await page.getByTestId("diff-comment-input").press("Enter");
+  await expect(page.getByTestId("review-toggle")).toContainText("(1)");
+  await expect(page.getByTestId("diff-pending-comment")).toHaveCount(1);
+  await added.nth(1).dispatchEvent("pointerdown", { button: 0 });
+  await page.mouse.up();
+  await page.getByTestId("diff-comment-input").fill("Is delta really needed here?");
+  await page.getByTestId("diff-comment-stash").click();
+  await expect(page.getByTestId("review-toggle")).toContainText("(2)");
+  await expect(page.getByTestId("review-item")).toHaveCount(2);
+  expect(fs.readFileSync(guide, "utf-8")).toContain("gamma lnie"); // untouched so far
+  // submit the review once; the agent addresses the typo and replies to the question
+  await page.getByTestId("review-summary").fill("Small cleanup pass.");
+  await page.getByTestId("review-submit").click();
+  await expect(page.getByTestId("review-last")).toContainText("completed", { timeout: 30000 });
+  const items = page.getByTestId("review-decision-item");
+  await expect(items).toHaveCount(2);
+  await expect(items.filter({ hasText: "lnie" })).toContainText("addressed");
+  await expect(items.filter({ hasText: "delta really" })).toContainText("replied");
+  expect(fs.readFileSync(guide, "utf-8")).toContain("- gamma line\n");
+  expect(fs.readFileSync(guide, "utf-8")).not.toContain("lnie");
+  await expect(page.getByTestId("review-toggle")).not.toContainText("("); // pending review is empty again
+  // the comments are now ordinary discussions, shown inline with their decision badges
+  await expect(page.getByTestId("review-decision").first()).toBeVisible({ timeout: 10000 });
 });

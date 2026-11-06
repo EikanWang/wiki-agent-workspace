@@ -126,6 +126,11 @@ Alternative token source: `WAW_ACCESS_TOKEN=... scripts/start.sh`. Other env ove
   The Diff tab follows the document you are reading; use ± in the tree to review a folder. Each file has a
   GitHub-style **Viewed** checkbox (collapses the file, counted in the header); it is bound to the reviewed content,
   so a later change to the file clears it and shows "changed since".
+- **Reviews**: like a GitHub PR review, **Add to review** (Enter in the comment box) stashes a comment without
+  asking the agent; the **Review (n)** tray lists, edits and deletes pending comments. **Submit review** runs *one*
+  agent turn over all comments: for each it decides *address* (edits the file, respecting locks), *reply*
+  (answers, no edit) or *skip*, and every comment becomes a discussion carrying that verdict. **Ask now** still
+  starts an immediate discussion for a single comment.
 - **Commit…** (in the Diff view): tick the changed files you want, let the agent **draft a commit message from the
   actual diff** (editable), and commit only those files with your Git identity. Then **Push** (sets upstream on the
   first push; never force-pushes — a diverged remote is reported for you to pull/rebase in the terminal) and, for
@@ -191,8 +196,8 @@ separately (`~/.config/wiki-agent-workspace/config.toml`). Backup, restore and m
 ## Running the tests
 
 ```bash
-scripts/test.sh            # backend: pytest (73 tests; real git + tmux + fake agents), ~25 s
-scripts/test.sh --e2e      # + Playwright browser suite (21 scenarios) against the production build
+scripts/test.sh            # backend: pytest (75 tests; real git + tmux + fake agents), ~25 s
+scripts/test.sh --e2e      # + Playwright browser suite (22 scenarios) against the production build
 # or individually
 .venv/bin/python -m pytest tests/backend -q
 cd frontend && npx playwright install chromium && npm run test:e2e

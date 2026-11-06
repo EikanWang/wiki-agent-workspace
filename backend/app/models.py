@@ -263,6 +263,43 @@ class FileReview(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
+class Review(Base):
+    """A GitHub-style review: comments are stashed (`pending`) and submitted together. One agent job then
+    triages every comment (address / reply / skip), edits files for the ones to address, and the comments become
+    normal discussion threads carrying the agent's verdict."""
+
+    __tablename__ = "reviews"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), nullable=False)
+    base: Mapped[str] = mapped_column(Text, nullable=False)
+    target: Mapped[str] = mapped_column(Text, nullable=False)  # "worktree" or a ref
+    status: Mapped[str] = mapped_column(String(16), default="pending")  # pending | submitted | completed | failed | cancelled
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)  # overall review note from the user
+    session_id: Mapped[str | None] = mapped_column(ForeignKey("agent_sessions.id"), nullable=True)
+    job_id: Mapped[str | None] = mapped_column(ForeignKey("jobs.id"), nullable=True)
+    result_json: Mapped[str | None] = mapped_column(Text, nullable=True)  # parsed triage from the agent
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ReviewComment(Base):
+    __tablename__ = "review_comments"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    review_id: Mapped[str] = mapped_column(ForeignKey("reviews.id"), nullable=False, index=True)
+    path: Mapped[str] = mapped_column(Text, nullable=False)
+    side: Mapped[str] = mapped_column(String(16), nullable=False)  # added | deleted | context | mixed
+    line_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    line_end: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    line_text: Mapped[str] = mapped_column(Text, nullable=False)
+    hunk: Mapped[str | None] = mapped_column(Text, nullable=True)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    thread_id: Mapped[str | None] = mapped_column(ForeignKey("threads.id"), nullable=True)  # created at submission
+    decision: Mapped[str | None] = mapped_column(String(16), nullable=True)  # address | reply | skip (from the agent)
+    response: Mapped[str | None] = mapped_column(Text, nullable=True)  # the agent's per-comment response
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
 class Preview(Base):
     __tablename__ = "previews"
     id: Mapped[str] = mapped_column(String(36), primary_key=True)

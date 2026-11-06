@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { COMPOSER_HINT, composerKeyDown } from "./keys";
-import { AgentSession, ApiError, DiffComment, DiffFile, DiffResult, GitRefs, get, post, put } from "../api";
+import { AgentSession, ApiError, DiffComment, DiffFile, DiffResult, GitRefs, Review, ReviewComment, del, get, post, put } from "../api";
 import { FileIcon } from "./FileIcon";
 import CommitPanel from "./CommitPanel";
 import MarkdownView from "./MarkdownView";
@@ -124,7 +124,27 @@ export default function DiffReview({
   const [busy, setBusy] = useState(false);
   const [posted, setPosted] = useState<{ thread_id: string; file: string } | null>(null);
   const [showCommit, setShowCommit] = useState(false);
+  const [review, setReview] = useState<{ pending: Review; last: Review | null } | null>(null);
+  const [reviewSummary, setReviewSummary] = useState("");
+  const [showReviewTray, setShowReviewTray] = useState(false);
   const dragging = useRef(false);
+
+  const loadReview = async () => {
+    try {
+      const params = new URLSearchParams({ base, target });
+      setReview(await get<{ pending: Review; last: Review | null }>(`/reviews/current?${params}`));
+    } catch {
+      setReview(null);
+    }
+  };
+  useEffect(() => {
+    void loadReview();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [base, target, refreshKey]);
+  const lastReviewJob = useJobStream(review?.last?.status === "submitted" ? review.last.job_id ?? null : null, () => {
+    void loadReview();
+    void load();
+  });
 
   useEffect(() => {
     localStorage.setItem("waw.diffLayout", layout);
@@ -193,7 +213,7 @@ export default function DiffReview({
     return ls.slice(r.from, r.to + 1).filter((l) => l.kind === "add" || l.kind === "del" || l.kind === "ctx");
   };
 
-  const send = async () => {
+  const send = async (mode: "now" | "review" = "now") => {
     if (!composer || !question.trim()) return;
     const sel = selectedLines(composer);
     if (!sel.length) return;
@@ -204,6 +224,23 @@ export default function DiffReview({
     setBusy(true);
     setError(null);
     try {
+      if (mode === "review") {
+        // GitHub-style: stash the comment in the pending review; nothing runs until "Submit review"
+        await post("/reviews/comments", {
+          path: composer.file, base, target, side,
+          line_no: first.newNo ?? first.oldNo,
+          line_end: sel.length > 1 ? last.newNo ?? last.oldNo : null,
+          line_text: sel.map((l) => l.text).join("\n"),
+          hunk: parsed[composer.file]?.hunks[first.hunkIndex] ?? "",
+          body: question.trim(),
+        });
+        setQuestion("");
+        setComposer(null);
+        setRange(null);
+        await loadReview();
+        setShowReviewTray(true);
+        return;
+      }
       const r = await post<{ thread_id: string; document_id: string }>("/diff/comments", {
         path: composer.file,
         base,
@@ -284,7 +321,7 @@ export default function DiffReview({
           <code className="diff-sel-preview">{sel.map((l) => l.text).join("\n").slice(0, 160)}{sel.map((l) => l.text).join("\n").length > 160 ? "…" : ""}</code>
         </div>
         <textarea autoFocus rows={3} value={question} onChange={(e) => setQuestion(e.target.value)} placeholder={`Your comment or question about this change (${COMPOSER_HINT})`} data-testid="diff-comment-input"
-          onKeyDown={(e) => composerKeyDown(e, () => void send(), setQuestion, () => { setComposer(null); setRange(null); })} />
+          onKeyDown={(e) => composerKeyDown(e, () => void send("review"), setQuestion, () => { setComposer(null); setRange(null); })} />
         <div className="row">
           <select value={sessionChoice} onChange={(e) => setSessionChoice(e.target.value)}>
             <option value="__default__">{defaultProvider ? `Document session (${defaultProvider})` : "No agent provider configured"}</option>
@@ -293,7 +330,8 @@ export default function DiffReview({
               <option key={s.id} value={s.id}>{s.provider} · {s.display_name ?? s.short_id ?? s.id.slice(0, 8)}</option>
             ))}
           </select>
-          <button className="btn primary small" disabled={busy || !question.trim()} onClick={() => void send()} data-testid="diff-comment-send">Send</button>
+          <button className="btn primary small" disabled={busy || !question.trim()} onClick={() => void send("review")} data-testid="diff-comment-stash" title="Stash this comment in the pending review; submit all comments at once later">Add to review</button>
+          <button className="btn small" disabled={busy || !question.trim()} onClick={() => void send("now")} data-testid="diff-comment-send" title="Start a discussion for this comment right away">Ask now</button>
           <button className="btn small" onClick={() => { setComposer(null); setRange(null); }}>Cancel</button>
         </div>
         {!file.commentable && <div className="warn small">Comments can only be attached to files the reader can open (Markdown, text/source, .docx).</div>}
@@ -335,12 +373,28 @@ export default function DiffReview({
             <button role="tab" aria-selected={layout === "split"} className={layout === "split" ? "active" : ""} onClick={() => setLayout("split")} data-testid="diff-layout-split" title="Side-by-side view">Side by side</button>
           </span>
           <label className="small" title="Hide changes in non-Markdown files"><input type="checkbox" checked={markdownOnly} onChange={(e) => setMarkdownOnly(e.target.checked)} /> Markdown only</label>
+          <button className={`btn small toggle ${showReviewTray ? "on" : ""}`} onClick={() => setShowReviewTray((v) => !v)} data-testid="review-toggle" aria-pressed={showReviewTray} title="Pending review comments; submit them together">
+            Review{review?.pending.comments.length ? ` (${review.pending.comments.length})` : ""}
+          </button>
           <button className={`btn small toggle ${showCommit ? "on" : ""}`} onClick={() => setShowCommit((v) => !v)} title="Select changed files, draft a commit message with the agent, commit, push, open a pull request" data-testid="commit-toggle" aria-pressed={showCommit}>Commit…</button>
           <button className="btn small" onClick={() => void load()} title="Reload">↻</button>
           <button className="icon-btn" onClick={onClose} title="Close diff review">×</button>
         </div>
       </div>
       {error && <div className="banner warn">{error}</div>}
+      {showReviewTray && review && (
+        <ReviewTray
+          review={review.pending}
+          last={review.last}
+          lastJob={lastReviewJob}
+          summary={reviewSummary}
+          onSummary={setReviewSummary}
+          sessions={sessions}
+          onChanged={async () => { await loadReview(); await load(); }}
+          onOpenThread={(p, tid) => onOpenThread(p, tid)}
+          onError={setError}
+        />
+      )}
       {showCommit && (
         <CommitPanel
           refreshKey={refreshKey + (result?.files.length ?? 0)}
@@ -373,6 +427,8 @@ export default function DiffReview({
             file={f}
             lines={parsed[f.path].lines}
             comments={result.comments[f.path] ?? []}
+            pending={(review?.pending.comments ?? []).filter((c) => c.path === f.path)}
+            lastReview={(review?.last?.comments ?? []).filter((c) => c.path === f.path)}
             collapsed={collapsed.has(f.path)}
             layout={layout}
             range={range?.file === f.path ? range : null}
@@ -402,10 +458,12 @@ function commentKey(side: string, text: string) {
   return `${side}:${text.trim()}`;
 }
 
-function FileDiff({ file, lines, comments, collapsed, layout, range, composerAfter, composerNode, onToggle, onOpen, onOpenThread, onStart, onExtend, onViewed, onReload }: {
+function FileDiff({ file, lines, comments, pending, lastReview, collapsed, layout, range, composerAfter, composerNode, onToggle, onOpen, onOpenThread, onStart, onExtend, onViewed, onReload }: {
   file: DiffFile;
   lines: Line[];
   comments: DiffComment[];
+  pending: ReviewComment[];
+  lastReview: ReviewComment[];
   collapsed: boolean;
   layout: "unified" | "split";
   range: Range | null;
@@ -433,18 +491,33 @@ function FileDiff({ file, lines, comments, collapsed, layout, range, composerAft
     const side = ln.kind === "add" ? "added" : ln.kind === "del" ? "deleted" : "context";
     return [...(byLine.get(commentKey(side, ln.text)) ?? []), ...(byLine.get(commentKey("mixed", ln.text)) ?? [])];
   };
+  const pendingFor = (ln: Line): ReviewComment[] => {
+    const side = ln.kind === "add" ? "added" : ln.kind === "del" ? "deleted" : "context";
+    return pending.filter((c) => (c.side === side || c.side === "mixed") && (c.line_text.split("\n")[0] ?? "").trim() === ln.text.trim());
+  };
+  const decisionFor = (threadId: string): ReviewComment | undefined => lastReview.find((c) => c.thread_id === threadId);
   const inRange = (i: number) => !!range && i >= range.from && i <= range.to;
   const rangeLen = range ? range.to - range.from + 1 : 0;
   const splitRows = useMemo(() => (layout === "split" ? buildSplitRows(lines) : []), [layout, lines]);
 
-  const commentRows = (cs: DiffComment[], colSpan: number) =>
-    cs.map((c) => (
-      <tr key={c.thread_id} className="diff-comment-row">
+  const commentRows = (cs: DiffComment[], ps: ReviewComment[], colSpan: number) => [
+    ...ps.map((c) => (
+      <tr key={"p" + c.id} className="diff-comment-row">
         <td colSpan={colSpan}>
-          <InlineThread comment={c} onOpen={() => onOpenThread(c.thread_id)} onChanged={onReload} />
+          <div className="diff-pending" data-testid="diff-pending-comment">
+            <span className="chip pending">pending review</span> {c.body}
+          </div>
         </td>
       </tr>
-    ));
+    )),
+    ...cs.map((c) => (
+      <tr key={c.thread_id} className="diff-comment-row">
+        <td colSpan={colSpan}>
+          <InlineThread comment={c} decision={decisionFor(c.thread_id)} onOpen={() => onOpenThread(c.thread_id)} onChanged={onReload} />
+        </td>
+      </tr>
+    )),
+  ];
 
   const cellProps = (i: number) => ({
     onPointerDown: (e: React.PointerEvent) => {
@@ -488,9 +561,10 @@ function FileDiff({ file, lines, comments, collapsed, layout, range, composerAft
                 );
               }
               const cs = commentsFor(ln);
+              const ps = pendingFor(ln);
               return (
                 <Fragment key={i}>
-                  <tr className={`diff-line ${ln.kind} ${inRange(i) ? "selected" : ""} ${cs.length ? "has-comments" : ""}`} {...cellProps(i)} title={file.commentable ? "Click to comment; drag or shift-click to select several lines" : undefined} data-testid="diff-row" data-selected={inRange(i) ? "1" : "0"}>
+                  <tr className={`diff-line ${ln.kind} ${inRange(i) ? "selected" : ""} ${cs.length || ps.length ? "has-comments" : ""}`} {...cellProps(i)} title={file.commentable ? "Click to comment; drag or shift-click to select several lines" : undefined} data-testid="diff-row" data-selected={inRange(i) ? "1" : "0"}>
                     <td className="no">{ln.oldNo ?? ""}</td>
                     <td className="no">{ln.newNo ?? ""}</td>
                     <td className="code">
@@ -498,7 +572,7 @@ function FileDiff({ file, lines, comments, collapsed, layout, range, composerAft
                       {ln.text || " "}
                     </td>
                   </tr>
-                  {commentRows(cs, 3)}
+                  {commentRows(cs, ps, 3)}
                   {composerAfter === i ? (
                     <tr className="diff-composer-row">
                       <td colSpan={3}>{composerNode}</td>
@@ -525,6 +599,7 @@ function FileDiff({ file, lines, comments, collapsed, layout, range, composerAft
               const R = row.right !== null ? lines[row.right] : null;
               const lastIdx = Math.max(row.left ?? -1, row.right ?? -1);
               const cs = [...(L ? commentsFor(L) : []), ...(R && R !== L ? commentsFor(R) : [])];
+              const ps = [...(L ? pendingFor(L) : []), ...(R && R !== L ? pendingFor(R) : [])];
               return (
                 <Fragment key={ri}>
                   <tr className="diff-line split-row" data-testid="diff-row">
@@ -537,7 +612,7 @@ function FileDiff({ file, lines, comments, collapsed, layout, range, composerAft
                       {R ? <><span className="marker">{R.kind === "add" ? "+" : " "}</span>{R.text || " "}</> : ""}
                     </td>
                   </tr>
-                  {cs.length > 0 && commentRows(cs, 4)}
+                  {(cs.length > 0 || ps.length > 0) && commentRows(cs, ps, 4)}
                   {composerAfter !== null && composerAfter === lastIdx ? (
                     <tr className="diff-composer-row">
                       <td colSpan={4}>{composerNode}</td>
@@ -557,7 +632,7 @@ function FileDiff({ file, lines, comments, collapsed, layout, range, composerAft
 
 /** A diff comment shown in place: the question, the agent's answer (streamed while running) and a reply box, so a
  *  review never has to leave the diff. "Open discussion" jumps to the full thread in the document. */
-function InlineThread({ comment, onOpen, onChanged }: { comment: DiffComment; onOpen: () => void; onChanged: () => void }) {
+function InlineThread({ comment, decision, onOpen, onChanged }: { comment: DiffComment; decision?: ReviewComment; onOpen: () => void; onChanged: () => void }) {
   const msgs = comment.messages ?? [];
   const running = msgs.find((m) => m.role === "agent" && ["queued", "running", "waiting_provider_permission"].includes(m.status) && m.job_id);
   // reload the diff once per finished job (the stream re-subscribes when `comment` is replaced; guard against loops)
@@ -591,6 +666,7 @@ function InlineThread({ comment, onOpen, onChanged }: { comment: DiffComment; on
       <div className="diff-thread-head">
         <button className="link-btn" onClick={() => setOpen((o) => !o)} title={open ? "Collapse" : "Expand"}>{open ? "▾" : "▸"}</button>
         <span className="muted small">{msgs.length} message{msgs.length === 1 ? "" : "s"}{range}</span>
+        {decision?.decision && <span className={`chip decision ${decision.decision}`} data-testid="review-decision" title={decision.response ?? ""}>{{ address: "addressed", reply: "replied", skip: "skipped" }[decision.decision]}</span>}
         <span className="spacer" />
         <button className="link-btn small" onClick={onOpen} data-testid="diff-open-thread">Open discussion ›</button>
       </div>
@@ -618,6 +694,114 @@ function InlineThread({ comment, onOpen, onChanged }: { comment: DiffComment; on
           </div>
           {err && <div className="error-text small">{err}</div>}
         </>
+      )}
+    </div>
+  );
+}
+
+/** The pending review: stashed comments (editable/deletable), an overall note, and Submit. Shows the last submitted
+ *  review's progress and the agent's per-comment decisions. */
+function ReviewTray({ review, last, lastJob, summary, onSummary, sessions, onChanged, onOpenThread, onError }: {
+  review: Review;
+  last: Review | null;
+  lastJob: ReturnType<typeof useJobStream>;
+  summary: string;
+  onSummary: (s: string) => void;
+  sessions: AgentSession[];
+  onChanged: () => Promise<void>;
+  onOpenThread: (path: string, threadId: string) => void;
+  onError: (e: string | null) => void;
+}) {
+  const [editing, setEditing] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [sessionChoice, setSessionChoice] = useState<string>("__default__");
+  const run = async (fn: () => Promise<void>) => {
+    setBusy(true);
+    onError(null);
+    try {
+      await fn();
+    } catch (e) {
+      onError((e as ApiError).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const submit = () =>
+    run(async () => {
+      if (!review.id) return;
+      await post(`/reviews/${review.id}/submit`, { summary: summary.trim() || null, session_id: sessionChoice === "__default__" ? null : sessionChoice });
+      onSummary("");
+      await onChanged();
+    });
+  const running = last && (last.status === "submitted" || (lastJob && !["completed", "failed", "cancelled"].includes(lastJob.status)));
+  return (
+    <div className="review-tray" data-testid="review-tray">
+      <div className="label">
+        Pending review · {review.comments.length} comment{review.comments.length === 1 ? "" : "s"}
+        {review.id && review.comments.length > 0 && (
+          <button className="link-btn small" disabled={busy} onClick={() => run(async () => { if (window.confirm("Discard all pending review comments?")) { await del(`/reviews/${review.id}`); await onChanged(); } })} data-testid="review-discard">discard</button>
+        )}
+      </div>
+      {review.comments.length === 0 && <div className="muted small">Select lines in the diff and use <b>Add to review</b> to stash comments here, then submit them together. The agent will decide per comment whether to address it, reply, or skip.</div>}
+      {review.comments.map((c) => (
+        <div key={c.id} className="review-item" data-testid="review-item">
+          <div className="review-item-head">
+            <code>{c.path}</code>
+            <span className="muted small">{c.line_end && c.line_end !== c.line_no ? `lines ${c.line_no}–${c.line_end}` : `line ${c.line_no ?? "?"}`} · {c.side}</span>
+            <span className="spacer" />
+            <button className="link-btn small" disabled={busy} onClick={() => { setEditing(c.id); setDraft(c.body); }}>edit</button>
+            <button className="link-btn small" disabled={busy} onClick={() => run(async () => { await del(`/reviews/comments/${c.id}`); await onChanged(); })} data-testid="review-item-delete">delete</button>
+          </div>
+          <code className="review-item-line">{c.line_text.split("\n")[0].slice(0, 120)}</code>
+          {editing === c.id ? (
+            <div className="row">
+              <textarea rows={2} value={draft} onChange={(e) => setDraft(e.target.value)} />
+              <button className="btn small primary" disabled={busy || !draft.trim()} onClick={() => run(async () => { await put(`/reviews/comments/${c.id}`, { body: draft.trim() }); setEditing(null); await onChanged(); })}>Save</button>
+              <button className="btn small" onClick={() => setEditing(null)}>Cancel</button>
+            </div>
+          ) : (
+            <div className="review-item-body">{c.body}</div>
+          )}
+        </div>
+      ))}
+      {review.comments.length > 0 && (
+        <div className="review-submit">
+          <textarea rows={2} value={summary} onChange={(e) => onSummary(e.target.value)} placeholder="Overall note for the agent (optional)" data-testid="review-summary" />
+          <div className="row">
+            <select value={sessionChoice} onChange={(e) => setSessionChoice(e.target.value)}>
+              <option value="__default__">Document sessions (default)</option>
+              {sessions.filter((s) => s.origin !== "preview").map((s) => (
+                <option key={s.id} value={s.id}>{s.provider} · {s.display_name ?? s.short_id ?? s.id.slice(0, 8)}</option>
+              ))}
+            </select>
+            <button className="btn primary" disabled={busy || !!running} onClick={() => void submit()} data-testid="review-submit">
+              Submit review ({review.comments.length})
+            </button>
+            <span className="muted small">One agent run handles all comments: it edits for the ones it addresses, replies to questions, skips the rest.</span>
+          </div>
+        </div>
+      )}
+      {last && (
+        <div className={`review-last ${last.status}`} data-testid="review-last">
+          <div className="label">
+            Last review · {last.status === "submitted" ? (lastJob ? `running (${lastJob.status})` : "running") : last.status}
+            {last.finished_at && <span className="muted small"> · {new Date(last.finished_at).toLocaleString()}</span>}
+          </div>
+          {last.status === "submitted" && lastJob?.activity.length ? <ul className="activity">{lastJob.activity.slice(-4).map((a, i) => <li key={i}>{a}</li>)}</ul> : null}
+          {last.result?.summary && <div className="small">{String(last.result.summary)}</div>}
+          {last.job_error && <div className="error-text small">{last.job_error}</div>}
+          <ul className="review-decisions">
+            {last.comments.map((c) => (
+              <li key={c.id} data-testid="review-decision-item">
+                <span className={`chip decision ${c.decision ?? "pending"}`}>{c.decision ? { address: "addressed", reply: "replied", skip: "skipped" }[c.decision] : "…"}</span>{" "}
+                <code>{c.path}</code> <span className="muted small">line {c.line_no ?? "?"}</span> — {c.body.slice(0, 80)}
+                {c.response && <div className="muted small review-response">{c.response}</div>}
+                {c.thread_id && <button className="link-btn small" onClick={() => onOpenThread(c.path, c.thread_id!)}>open discussion ›</button>}
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
     </div>
   );
