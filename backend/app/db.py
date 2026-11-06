@@ -63,9 +63,27 @@ class Database:
         cfg = Config()
         cfg.set_main_option("script_location", str(root / "migrations"))
         cfg.set_main_option("sqlalchemy.url", f"sqlite+pysqlite:///{self.path}")
-        with self.engine.begin() as conn:
-            cfg.attributes["connection"] = conn
-            command.upgrade(cfg, "head")
+        # SQLite cannot ALTER columns; Alembic's batch mode recreates tables (copy, drop, rename). Dropping a table
+        # that other tables reference fails while foreign_keys=ON, so migrations run with the pragma off (as the
+        # Alembic SQLite documentation requires) and the referential check is re-run afterwards.
+        with self.engine.connect() as conn:
+            conn.exec_driver_sql("PRAGMA foreign_keys=OFF")  # must be set outside a transaction
+            conn.commit()
+            # An interrupted batch migration can leave Alembic's temporary copy behind; it is always safe to drop
+            # (the rename into place is the last step of a successful batch).
+            leftovers = [r[0] for r in conn.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '\\_alembic\\_tmp\\_%' ESCAPE '\\'").fetchall()]
+            for name in leftovers:
+                conn.exec_driver_sql(f'DROP TABLE "{name}"')
+            conn.commit()  # the SELECT above autobegan a transaction; end it before alembic's own begin()
+            with conn.begin():
+                cfg.attributes["connection"] = conn
+                command.upgrade(cfg, "head")
+            problems = conn.exec_driver_sql("PRAGMA foreign_key_check").fetchall()
+            conn.commit()
+            conn.exec_driver_sql("PRAGMA foreign_keys=ON")
+            conn.commit()
+        if problems:
+            raise RuntimeError(f"database migration left {len(problems)} dangling foreign-key references: {problems[:5]}")
 
     def checkpoint(self) -> None:
         """Fold the WAL into the main database file so a plain copy of workspace.sqlite3 is complete."""

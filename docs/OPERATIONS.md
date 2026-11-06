@@ -108,6 +108,7 @@ dismissed.
 | Preview: `PREVIEW_UNAVAILABLE` | Workspace too large to copy (512 MiB cap) or provider mode without isolation. Use the direct-edit flow. |
 | Apply preview → `409 DOCUMENT_VERSION_CONFLICT` | The file changed after the preview was generated; the newer change was preserved. Refresh and generate a new preview. |
 | Selection popover doesn't appear | It appears ~350 ms after releasing the mouse on a non-empty selection inside the document; on touch devices use the native selection then **Ask** / **Ask about selection**. |
+| Startup fails with `FOREIGN KEY constraint failed` / `_alembic_tmp_*` table present | An older build ran a SQLite table-rebuild migration with foreign keys on and was interrupted. Current builds run migrations with the pragma off and drop the leftover temp table automatically; just restart. Data is intact (the failed step was rolled back). |
 | `Address already in use` at start | Another instance (or something else) uses the port: `ss -ltnp \| grep 8765`; change `server.port`. |
 | Jobs show `interrupted` after a restart | Expected: the server stopped while they were running. They are never re-run automatically; click **Retry**. |
 | `423 PATH_LOCKED` | The file or a parent folder is locked (🔒). Unlock it in the tree or header, or use your terminal (locks never restrict the shell). |
