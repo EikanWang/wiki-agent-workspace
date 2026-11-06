@@ -360,6 +360,8 @@ export interface DiffComment {
   question: string;
   last_status: string | null;
   message_count: number;
+  last_session_id?: string | null;
+  messages?: { id: string; role: string; content: string; status: string; job_id: string | null; created_at: string | null }[];
 }
 
 export interface DiffResult {

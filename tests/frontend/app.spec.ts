@@ -525,11 +525,22 @@ test("Diff review of a folder with line comments that become discussions", async
   await added.click();
   await page.getByTestId("diff-comment-input").fill("Is '(reviewed)' really needed here?");
   await page.getByTestId("diff-comment-send").click();
-  // lands in the document view with the discussion open and the diff origin shown
+  // stays in the diff: the comment and the agent's answer appear inline under the line
+  await expect(page.getByTestId("diff-review")).toBeVisible();
+  const thread = page.getByTestId("diff-comment-marker").first();
+  await expect(thread.getByTestId("diff-msg-user")).toContainText("really needed", { timeout: 10000 });
+  await expect(thread.locator('[data-testid="diff-msg-agent"][data-status="completed"]')).toContainText("reviewing a diff", { timeout: 20000 });
+  // reply inline; the answer streams into the same box
+  await thread.getByTestId("diff-reply-input").fill("thanks, one more thing");
+  await thread.getByTestId("diff-reply-input").press("Enter");
+  await expect(thread.locator('[data-testid="diff-msg-agent"]')).toHaveCount(2, { timeout: 20000 });
+  await expect(thread.locator('[data-testid="diff-msg-agent"]').last()).toContainText("one more thing", { timeout: 20000 });
+  // "Open discussion" jumps to the full thread in the document view, with the diff origin shown
+  await thread.getByTestId("diff-open-thread").click();
+  await expect(page.getByTestId("view-document")).toHaveClass(/active/, { timeout: 15000 });
+  if ((await page.getByTestId("mode-individual").count()) > 0) await page.getByTestId("mode-individual").click();
   await expect(page.getByTestId("thread-quote")).toContainText("item ONE (reviewed)", { timeout: 15000 });
   await expect(page.getByTestId("thread-diff-origin")).toContainText("added line");
-  await expect(page.locator('[data-testid="message-agent"][data-status="completed"]')).toContainText("reviewing a diff", { timeout: 20000 });
-  // back in the diff view the comment marker is listed on that file
   await page.getByTestId("tree-diff-root").click();
   await expect(page.getByTestId("diff-comment-marker").first()).toContainText("really needed", { timeout: 10000 });
   // GitHub-style Viewed checkbox: ticking collapses the file and counts it; it unticks itself when the file changes
@@ -543,7 +554,9 @@ test("Diff review of a folder with line comments that become discussions", async
   await page.getByRole("button", { name: "↻" }).last().click();
   await expect(page.locator('[data-testid="diff-file"][data-path="docs/draft.md"]')).toHaveAttribute("data-viewed", "0", { timeout: 10000 });
   await expect(page.locator('[data-testid="diff-file"][data-path="docs/draft.md"] .viewed-box')).toContainText("changed since");
-  await page.getByTestId("diff-comment-marker").first().click();
+  await page.getByTestId("diff-comment-marker").first().getByTestId("diff-open-thread").click();
+  await expect(page.getByTestId("view-document")).toHaveClass(/active/, { timeout: 15000 });
+  if ((await page.getByTestId("mode-individual").count()) > 0) await page.getByTestId("mode-individual").click();
   await expect(page.getByTestId("thread-quote")).toContainText("item ONE (reviewed)");
 });
 
@@ -649,6 +662,11 @@ test("diff: multi-line range comments, side-by-side layout, Diff tab follows the
   await expect(page.getByTestId("diff-composer")).toContainText("3 lines");
   await page.getByTestId("diff-comment-input").fill("Why these three together?");
   await page.getByTestId("diff-comment-input").press("Enter");
+  const rangeThread = page.getByTestId("diff-comment-marker").first();
+  await expect(rangeThread).toContainText("lines", { timeout: 15000 });
+  await rangeThread.getByTestId("diff-open-thread").click();
+  await expect(page.getByTestId("view-document")).toHaveClass(/active/, { timeout: 15000 });
+  if ((await page.getByTestId("mode-individual").count()) > 0) await page.getByTestId("mode-individual").click();
   await expect(page.getByTestId("thread-diff-origin")).toContainText("lines", { timeout: 15000 });
   await expect(page.getByTestId("thread-quote")).toContainText("alpha line");
   await expect(page.getByTestId("thread-quote")).toContainText("gamma line");

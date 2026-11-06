@@ -3,6 +3,8 @@ import { COMPOSER_HINT, composerKeyDown } from "./keys";
 import { AgentSession, ApiError, DiffComment, DiffFile, DiffResult, GitRefs, get, post, put } from "../api";
 import { FileIcon } from "./FileIcon";
 import CommitPanel from "./CommitPanel";
+import MarkdownView from "./MarkdownView";
+import { useJobStream } from "./DiscussionPanel";
 
 interface Line {
   kind: "add" | "del" | "ctx" | "hunk" | "file";
@@ -120,7 +122,7 @@ export default function DiffReview({
   const [question, setQuestion] = useState("");
   const [sessionChoice, setSessionChoice] = useState<string>("__default__");
   const [busy, setBusy] = useState(false);
-  const [posted, setPosted] = useState<string | null>(null);
+  const [posted, setPosted] = useState<{ thread_id: string; file: string } | null>(null);
   const [showCommit, setShowCommit] = useState(false);
   const dragging = useRef(false);
 
@@ -214,12 +216,14 @@ export default function DiffReview({
         question: question.trim(),
         session_id: sessionChoice === "__default__" ? null : sessionChoice,
       });
-      setPosted(r.thread_id);
+      // Stay in the diff: the comment appears inline under the line and the agent's answer streams there too.
+      // The user can jump to the full discussion with the marker's "Open discussion" link.
+      setPosted({ thread_id: r.thread_id, file: composer.file });
       setQuestion("");
       setComposer(null);
       setRange(null);
       await load();
-      onOpenThread(composer.file, r.thread_id);
+      window.setTimeout(() => setPosted(null), 6000);
     } catch (e) {
       setError((e as ApiError).message);
     } finally {
@@ -380,10 +384,16 @@ export default function DiffReview({
             onStart={(i, shift) => f.commentable && startSelect(f.path, i, shift)}
             onExtend={(i) => extendSelect(f.path, i)}
             onViewed={(v) => void setViewed(f, v)}
+            onReload={() => void load()}
           />
         ))}
       </div>
-      {posted && <div className="toast">Comment posted as a discussion; the agent is answering.</div>}
+      {posted && (
+        <div className="toast" data-testid="diff-posted-toast">
+          Comment posted; the agent is answering below the line.{" "}
+          <button className="link-btn toast-link" onClick={() => onOpenThread(posted.file, posted.thread_id)} data-testid="diff-open-discussion">Open discussion</button>
+        </div>
+      )}
     </div>
   );
 }
@@ -392,7 +402,7 @@ function commentKey(side: string, text: string) {
   return `${side}:${text.trim()}`;
 }
 
-function FileDiff({ file, lines, comments, collapsed, layout, range, composerAfter, composerNode, onToggle, onOpen, onOpenThread, onStart, onExtend, onViewed }: {
+function FileDiff({ file, lines, comments, collapsed, layout, range, composerAfter, composerNode, onToggle, onOpen, onOpenThread, onStart, onExtend, onViewed, onReload }: {
   file: DiffFile;
   lines: Line[];
   comments: DiffComment[];
@@ -407,6 +417,7 @@ function FileDiff({ file, lines, comments, collapsed, layout, range, composerAft
   onStart: (index: number, shift: boolean) => void;
   onExtend: (index: number) => void;
   onViewed: (viewed: boolean) => void;
+  onReload: () => void;
 }) {
   // comments are keyed by the first selected line's side+text; range comments also know their line span
   const byLine = useMemo(() => {
@@ -430,11 +441,7 @@ function FileDiff({ file, lines, comments, collapsed, layout, range, composerAft
     cs.map((c) => (
       <tr key={c.thread_id} className="diff-comment-row">
         <td colSpan={colSpan}>
-          <button className="diff-comment" onClick={() => onOpenThread(c.thread_id)} data-testid="diff-comment-marker" title="Open this discussion">
-            <span className="who">You:</span> {c.question.slice(0, 160)}
-            {c.diff.line_end && c.diff.line_no && c.diff.line_end !== c.diff.line_no && <span className="muted small"> · lines {c.diff.line_no}–{c.diff.line_end}</span>}
-            <span className="muted small"> · {c.message_count} messages{c.last_status && c.last_status !== "completed" ? ` · ${c.last_status}` : ""} ›</span>
-          </button>
+          <InlineThread comment={c} onOpen={() => onOpenThread(c.thread_id)} onChanged={onReload} />
         </td>
       </tr>
     ));
@@ -544,5 +551,74 @@ function FileDiff({ file, lines, comments, collapsed, layout, range, composerAft
       )}
       {!collapsed && rangeLen > 1 && <div className="muted small pad">{rangeLen} lines selected</div>}
     </section>
+  );
+}
+
+
+/** A diff comment shown in place: the question, the agent's answer (streamed while running) and a reply box, so a
+ *  review never has to leave the diff. "Open discussion" jumps to the full thread in the document. */
+function InlineThread({ comment, onOpen, onChanged }: { comment: DiffComment; onOpen: () => void; onChanged: () => void }) {
+  const msgs = comment.messages ?? [];
+  const running = msgs.find((m) => m.role === "agent" && ["queued", "running", "waiting_provider_permission"].includes(m.status) && m.job_id);
+  // reload the diff once per finished job (the stream re-subscribes when `comment` is replaced; guard against loops)
+  const finishedJobs = useRef<Set<string>>(new Set());
+  const live = useJobStream(running?.job_id ?? null, (job) => {
+    if (finishedJobs.current.has(job.jobId)) return;
+    finishedJobs.current.add(job.jobId);
+    onChanged();
+  });
+  const [reply, setReply] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [open, setOpen] = useState(true);
+  const send = async () => {
+    if (!reply.trim()) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      await post(`/threads/${comment.thread_id}/messages`, { text: reply.trim() });
+      setReply("");
+      onChanged();
+    } catch (e) {
+      setErr((e as ApiError).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const range = comment.diff.line_end && comment.diff.line_no && comment.diff.line_end !== comment.diff.line_no ? ` · lines ${comment.diff.line_no}–${comment.diff.line_end}` : "";
+  return (
+    <div className="diff-thread" data-testid="diff-comment-marker">
+      <div className="diff-thread-head">
+        <button className="link-btn" onClick={() => setOpen((o) => !o)} title={open ? "Collapse" : "Expand"}>{open ? "▾" : "▸"}</button>
+        <span className="muted small">{msgs.length} message{msgs.length === 1 ? "" : "s"}{range}</span>
+        <span className="spacer" />
+        <button className="link-btn small" onClick={onOpen} data-testid="diff-open-thread">Open discussion ›</button>
+      </div>
+      {open && (
+        <>
+          {msgs.map((m) => {
+            const isLive = live && m.job_id === live.jobId;
+            const status = isLive ? live.status : m.status;
+            const content = isLive && live.text ? live.text : m.content;
+            return (
+              <div key={m.id} className={`diff-msg ${m.role} ${status}`} data-testid={`diff-msg-${m.role}`} data-status={status}>
+                <span className="who">{m.role === "user" ? "You" : "Agent"}</span>
+                {m.role === "agent" ? (
+                  content ? <MarkdownView text={content} className="small" /> : <span className="muted small">{status === "failed" ? "failed" : "thinking…"}</span>
+                ) : (
+                  <span className="diff-msg-text">{content}</span>
+                )}
+                {m.role === "agent" && status !== "completed" && <span className={`chip status ${status}`}>{status}</span>}
+              </div>
+            );
+          })}
+          <div className="diff-reply">
+            <input value={reply} onChange={(e) => setReply(e.target.value)} placeholder="Reply… (Enter to send)" disabled={busy} onKeyDown={(e) => { if (e.key === "Enter" && !e.nativeEvent.isComposing) void send(); }} data-testid="diff-reply-input" />
+            <button className="btn small" disabled={busy || !reply.trim()} onClick={() => void send()}>Reply</button>
+          </div>
+          {err && <div className="error-text small">{err}</div>}
+        </>
+      )}
+    </div>
   );
 }

@@ -397,3 +397,14 @@ mark.waw-hl.review.needs_review { border-bottom: 2px dashed var(--warn); }
 .pr-box input { border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; background: var(--bg); flex: 1; min-width: 160px; }
 .pr-box input.short { flex: 0 0 180px; }
 .recent-commits { margin: 0; padding-left: 18px; font-size: 13px; }
+
+/* inline diff threads */
+.diff-thread { border: 1px solid var(--border); border-left: 3px solid var(--primary); border-radius: 8px; background: var(--card); padding: 6px 10px; font-family: inherit; font-size: 13px; display: flex; flex-direction: column; gap: 6px; }
+.diff-thread-head { display: flex; align-items: center; gap: 8px; }
+.diff-msg { display: flex; gap: 8px; align-items: flex-start; }
+.diff-msg .who { font-weight: 600; flex: none; width: 48px; color: var(--muted); }
+.diff-msg.user .diff-msg-text { white-space: pre-wrap; }
+.diff-msg .markdown-body { flex: 1; }
+.diff-reply { display: flex; gap: 6px; }
+.diff-reply input { flex: 1; border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; background: var(--bg); font-family: inherit; }
+.toast-link { color: var(--bg); text-decoration: underline; margin-left: 6px; }

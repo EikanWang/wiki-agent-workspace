@@ -299,11 +299,16 @@ class DiffService:
             threads = s.query(Thread).filter(Thread.document_id.in_(list(docs)), Thread.diff_json.isnot(None)).order_by(Thread.created_at).all()
             out: dict[str, list[dict[str, Any]]] = {}
             for t in threads:
-                first = s.query(Message).filter_by(thread_id=t.id).order_by(Message.created_at).first()
-                last = s.query(Message).filter_by(thread_id=t.id).order_by(Message.created_at.desc()).first()
+                msgs = s.query(Message).filter_by(thread_id=t.id).order_by(Message.created_at).all()
+                first = msgs[0] if msgs else None
+                last = msgs[-1] if msgs else None
                 out.setdefault(docs[t.document_id], []).append({
                     "thread_id": t.id, "diff": json.loads(t.diff_json or "{}"), "question": first.content if first else "",
-                    "last_status": last.status if last else None, "message_count": s.query(Message).filter_by(thread_id=t.id).count(),
+                    "last_status": last.status if last else None, "message_count": len(msgs),
+                    "last_session_id": t.last_session_id,
+                    # the whole mini-thread so the diff view can show answers inline without leaving the review
+                    "messages": [{"id": m.id, "role": m.role, "content": m.content, "status": m.status, "job_id": m.job_id,
+                                  "created_at": m.created_at.isoformat() if m.created_at else None} for m in msgs],
                 })
             return out
 
