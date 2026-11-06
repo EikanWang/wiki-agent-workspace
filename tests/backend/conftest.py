@@ -93,6 +93,7 @@ class Api:
     def __init__(self, client: httpx.AsyncClient):
         self.c = client
         self.csrf: str | None = None
+        self.ws: str | None = None  # X-Workspace for multi-root tests
 
     async def login(self, token: str = TOKEN):
         r = await self.c.post("/api/v1/auth/login", json={"token": token}, headers={"origin": ORIGIN})
@@ -102,9 +103,14 @@ class Api:
 
     @property
     def mut(self) -> dict[str, str]:
-        return {"origin": ORIGIN, "x-csrf-token": self.csrf or ""}
+        h = {"origin": ORIGIN, "x-csrf-token": self.csrf or ""}
+        if self.ws:
+            h["x-workspace"] = self.ws
+        return h
 
     async def get(self, url, **kw):
+        if self.ws:
+            kw["headers"] = {"x-workspace": self.ws, **(kw.get("headers") or {})}
         return await self.c.get(url, **kw)
 
     async def post(self, url, json=None, headers=None, **kw):
@@ -120,7 +126,7 @@ class Api:
         return await self.c.delete(url, headers=h, **kw)
 
     async def open_doc(self, path="docs/guide.md"):
-        r = await self.c.get("/api/v1/documents/open", params={"path": path})
+        r = await self.get("/api/v1/documents/open", params={"path": path})
         assert r.status_code == 200, r.text
         return r.json()
 
@@ -129,7 +135,7 @@ class Api:
             return [json.loads(line[5:]) async for line in resp.aiter_lines() if line.startswith("data:")]
 
     async def threads(self, doc_id: str):
-        r = await self.c.get(f"/api/v1/documents/{doc_id}/threads")
+        r = await self.get(f"/api/v1/documents/{doc_id}/threads")
         assert r.status_code == 200, r.text
         return r.json()
 

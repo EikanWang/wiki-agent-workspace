@@ -272,7 +272,7 @@ class ReviewService:
                                           status="completed" if status == "completed" else status, job_id=job_id))
             if self.ctx.events:
                 self.ctx.events.publish("global", {"type": "review_finished", "review_id": review_id, "status": status})
-                self.ctx.events.publish("global", {"type": "tree_changed"})
+                self.ctx.events.publish("global", {"type": "tree_changed", "workspace_id": self.ctx.workspace_id})
 
         return on_complete
 

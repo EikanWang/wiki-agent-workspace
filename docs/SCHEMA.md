@@ -41,15 +41,20 @@ login_sessions, idempotency_keys, terminals, alembic_version: standalone
 
 ---
 
-## `workspaces` — the configured wiki root
+## `workspaces` — root folders of the window
 
-One row per configured `workspace.root`. The app is single-workspace; if the configured root changes and the
-previous root no longer exists on disk, the existing row is relocated (see README "Where your data lives").
+One row per wiki folder ever opened: the primary root (`workspace.root`), roots listed under `[[workspaces]]` in the
+config, and folders added from the UI ("Add folder"). Every per-wiki table below is keyed by this id, which is what
+isolates wikis from each other. If the primary root changes and its previous folder no longer exists on disk, the
+existing row is relocated (see docs/OPERATIONS.md, "Moving or cloning").
 
 | Column | Type | Meaning |
 | --- | --- | --- |
-| `id` | UUID, PK | Workspace id. |
-| `root_path` | TEXT, unique | Absolute, resolved path of the wiki checkout. |
+| `id` | UUID, PK | Workspace id (sent by the browser as `X-Workspace`). |
+| `root_path` | TEXT, unique | Absolute, resolved path of the wiki folder. |
+| `name` | TEXT, nullable | Display name in the file tree / switcher (default: folder name). |
+| `position` | INTEGER | Order in the file tree. |
+| `active` | BOOLEAN | Open in the window. `false` = removed from the window; its data is kept and returns when the folder is added again. |
 | `created_at` | DATETIME | First seen. |
 
 ## `documents` — identity of a Markdown file

@@ -15,8 +15,13 @@ log_level = "INFO"
 frontend_dist = ""          # built UI directory; empty = <repo>/frontend/dist
 
 [workspace]
-root = "/home/me/my-wiki"   # existing local directory (may be a Git worktree) that contains the Markdown wiki
+root = "/home/me/my-wiki"   # primary wiki folder (may be a Git worktree); more folders: [[workspaces]] below or "＋ Add folder" in the UI
 max_document_bytes = 20971520
+
+# Additional wiki folders opened in the same window (each fully isolated). Optional; folders can also be added in the UI.
+# [[workspaces]]
+# root = "/home/me/notes-wiki"
+# name = "Notes"
 
 [terminal]
 tmux_history_limit = 10000  # lines retained per pane in the app-owned tmux server

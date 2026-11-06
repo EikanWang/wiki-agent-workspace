@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { COMPOSER_HINT, composerKeyDown } from "./keys";
-import { AgentSession, ApiError, OpenDocument, ReviewMark, Thread, put } from "../api";
+import { AgentSession, ApiError, OpenDocument, ReviewMark, Thread, getWorkspace, put } from "../api";
 import { renderMarkdown, sanitizeHtml, slugify } from "../markdown";
 import { SelectionAnchor, TextModel, anchorFromSelection, buildTextModel, makeAnchor, rangeFromOffsets, resolveAnchor } from "../textmodel";
 
@@ -509,7 +509,7 @@ export default function Reader(props: ReaderProps) {
         {doc.format === "pdf" ? (
           <div className="pdf-view" data-testid="pdf-view">
             <div className="muted small">PDF shown with the browser's viewer. Discussions on PDFs attach to the document (no text anchors); use the discussion panel to ask about it.</div>
-            <iframe title={doc.path} src={`/api/v1/raw?path=${encodeURIComponent(doc.path)}`} />
+            <iframe title={doc.path} src={`/api/v1/raw?path=${encodeURIComponent(doc.path)}${getWorkspace() ? `&workspace=${encodeURIComponent(getWorkspace()!)}` : ""}`} />
           </div>
         ) : (
           <article className="markdown-body" ref={containerRef} data-testid="markdown-body" />

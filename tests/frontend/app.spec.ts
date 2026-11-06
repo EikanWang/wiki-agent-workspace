@@ -767,3 +767,54 @@ test("review: stash comments in the diff, submit once, the agent triages (addres
   // the comments are now ordinary discussions, shown inline with their decision badges
   await expect(page.getByTestId("review-decision").first()).toBeVisible({ timeout: 10000 });
 });
+
+test("multi-root window: add a folder, work in both wikis, Recent across folders, remove the folder", async ({ page }) => {
+  await login(page);
+  const ws = workspaceDir();
+  const second = path.join(path.dirname(ws), "second-wiki");
+  const cp = require("child_process") as typeof import("child_process");
+  fs.rmSync(second, { recursive: true, force: true });
+  fs.mkdirSync(path.join(second, "docs"), { recursive: true });
+  cp.execSync("git init -q && git config user.email t@e && git config user.name T", { cwd: second });
+  fs.writeFileSync(path.join(second, "docs", "guide.md"), "# Second guide\n\nOnly in the second wiki.\n");
+  // add it through the folder picker
+  await page.getByTestId("tree-add-folder").click();
+  const dlg = page.getByTestId("add-folder-dialog");
+  await page.getByTestId("add-folder-path").fill(second);
+  await page.getByTestId("add-folder-path").press("Enter");
+  await expect(dlg).toContainText("Git repository");
+  await page.getByTestId("add-folder-name").fill("Second");
+  await page.getByTestId("add-folder-submit").click();
+  await expect(dlg).toHaveCount(0);
+  await expect(page.getByTestId("tree-root")).toHaveCount(2);
+  await expect(page.getByTestId("workspace-switch")).toHaveValue(/.+/);
+  // open the second wiki's docs/guide.md (same relative path as in the first wiki)
+  const secondRoot = page.getByTestId("tree-root").nth(1);
+  await secondRoot.locator(".tree-row.dir", { hasText: "docs" }).click();
+  await secondRoot.getByTestId("tree-file-Second:docs/guide.md").locator("button.tree-main").click();
+  await expect(page.getByTestId("markdown-body").locator("h1")).toHaveText("Second guide");
+  // a discussion here stays in this wiki
+  await selectText(page, "second wiki");
+  await page.getByTestId("selection-question").fill("only here?");
+  await page.getByTestId("selection-send").click();
+  await expect(page.locator('[data-testid="message-agent"][data-status="completed"]').last()).toBeVisible({ timeout: 20000 });
+  // switch back to the first wiki via the top bar: its guide has no such discussion
+  const firstId = await page.getByTestId("tree-root").nth(0).getAttribute("data-ws");
+  await page.getByTestId("workspace-switch").selectOption(firstId!);
+  const firstRoot = page.getByTestId("tree-root").nth(0);
+  if ((await page.getByTestId("tree-file-docs/guide.md").count()) === 0) await firstRoot.locator(".tree-row.dir", { hasText: "docs" }).first().click();
+  await page.getByTestId("tree-file-docs/guide.md").locator("button.tree-main").click();
+  await expect(page.getByTestId("markdown-body").locator("h1")).toContainText("Guide");
+  await expect(page.locator(".thread-item", { hasText: "only here?" })).toHaveCount(0);
+  // Recent lists both wikis, tagged; opening the second wiki's entry switches folders
+  await page.getByTestId("recent-button").click();
+  await expect(page.getByTestId("recent-ws").first()).toBeVisible();
+  await page.getByTestId("recent-item").filter({ has: page.getByTestId("recent-ws").filter({ hasText: "Second" }) }).first().locator(".recent-main").click();
+  await expect(page.getByTestId("markdown-body").locator("h1")).toHaveText("Second guide");
+  // remove the folder from the window (data kept)
+  page.once("dialog", (d) => d.accept());
+  await page.getByTestId("tree-root").nth(1).locator(".tree-root").hover();
+  await page.getByTestId("tree-remove-Second").click();
+  await expect(page.getByTestId("tree-root")).toHaveCount(1);
+  await expect(page.getByTestId("markdown-body").locator("h1")).toContainText("Guide", { timeout: 10000 });
+});

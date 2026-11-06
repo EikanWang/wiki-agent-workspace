@@ -102,6 +102,7 @@ and [docs/CONFIGURATION.md](CONFIGURATION.md) describes every key. Decisions to 
 | Which agent answers by default? | `agents.default_provider = "opencode"` or `"codex"` (auto-detected at setup) |
 | Codex may edit the wiki when you explicitly ask? | `agents.codex.sandbox = "workspace-write"` (default); `read-only` to forbid edits |
 | OpenCode shared with your terminal TUI? | `agents.opencode.mode = "server"`, `server_url = "http://127.0.0.1:4096"` (see §9) |
+| More than one wiki? | Nothing to do now: add folders later with **＋ Add folder** in the file tree, or list them under `[[workspaces]]` (see CONFIGURATION.md). Each folder needs its own inotify watches (§1). |
 
 Edit the file and restart the server after changes (`setup.sh` can also be re-run with flags; it preserves the
 token and secret).
@@ -125,7 +126,7 @@ curl -s http://127.0.0.1:8765/api/v1/health            # {"status":"ok"}
 .venv/bin/python -m backend.app.cli print-config        # effective config, secrets redacted
 ```
 
-In the browser: the file tree lists your `.md` files with Git badges → open one → select text → the question
+In the browser: the file tree lists your wiki folder (and any additional folders) with Git badges → open one → select text → the question
 box appears → **Terminal** tab → **+ New terminal** → run `opencode` or `codex` as usual. The startup log shows
 provider detection, e.g. `provider opencode: available=True version=1.18.31`, the terminal reconcile summary and
 `filesystem watcher ready for …`.

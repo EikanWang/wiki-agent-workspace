@@ -200,7 +200,7 @@ class CommitService:
         head = sha.strip()
         code, subj, _ = _git(self.root, ["log", "-1", "--format=%s"])
         if self.ctx.events:
-            self.ctx.events.publish("global", {"type": "tree_changed"})
+            self.ctx.events.publish("global", {"type": "tree_changed", "workspace_id": self.ctx.workspace_id})
             self.ctx.events.publish("global", {"type": "commit", "sha": head, "subject": subj.strip(), "files": rels})
         return {"sha": head, "short": head[:7], "subject": subj.strip(), "files": rels, "branch": st["branch"]}
 

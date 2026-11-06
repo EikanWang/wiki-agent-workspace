@@ -10,7 +10,10 @@ import {
   SessionList,
   TerminalInfo,
   Thread,
+  WorkspaceInfo,
   get,
+  getWorkspace,
+  setWorkspace,
   newIdempotencyKey,
   post,
   put,
@@ -26,6 +29,7 @@ import TerminalPanel from "./components/TerminalPanel";
 import PreviewDialog from "./components/PreviewDialog";
 import RecentList from "./components/RecentList";
 import DiffReview from "./components/DiffReview";
+import AddFolderDialog from "./components/AddFolderDialog";
 import { SelectionAnchor } from "./textmodel";
 import { FONT_STACKS, FontSettings, Prefs, Resizer, loadPrefs, savePrefs } from "./components/Layout";
 
@@ -73,6 +77,14 @@ export default function App() {
   const [recentKey, setRecentKey] = useState(0);
   const restoreThreadRef = useRef<string | null>(null);
   const [diffTarget, setDiffTarget] = useState<{ path: string; isDir: boolean } | null>(null);
+  // multi-root window: the folder (workspace) everything is currently scoped to
+  const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([]);
+  const [activeWs, setActiveWs] = useState<string | null>(() => {
+    const id = localStorage.getItem("waw.activeWorkspace");
+    setWorkspace(id);
+    return id;
+  });
+  const [showAddFolder, setShowAddFolder] = useState(false);
   const openDiff = useCallback((path: string, isDir: boolean) => {
     setDiffTarget({ path, isDir });
     setView("diff");
@@ -92,8 +104,21 @@ export default function App() {
   // ---------------------------------------------------------------- bootstrap
   const loadBootstrap = useCallback(async () => {
     try {
-      const b = await get<Bootstrap>("/bootstrap");
+      let b: Bootstrap;
+      try {
+        b = await get<Bootstrap>("/bootstrap");
+      } catch (e) {
+        const code = (e as ApiError).code;
+        if (code !== "WORKSPACE_NOT_FOUND" && code !== "WORKSPACE_NOT_OPEN") throw e;
+        // the remembered folder was removed from the window: fall back to the primary folder
+        localStorage.removeItem("waw.activeWorkspace");
+        setWorkspace(null);
+        b = await get<Bootstrap>("/bootstrap");
+      }
       if (b.csrf_token) setCsrf(b.csrf_token);
+      setWorkspaces(b.workspaces ?? []);
+      setWorkspace(b.workspace.id);
+      setActiveWs(b.workspace.id);
       setBoot(b);
       setTerminals(b.terminals);
       setWatcherReady(!b.watcher || b.watcher.ready || !!b.watcher.error);
@@ -112,6 +137,15 @@ export default function App() {
     try {
       const r = await get<SessionList>("/agent-sessions");
       setSessions(r.sessions);
+    } catch {
+      /* non-fatal */
+    }
+  }, []);
+
+  const refreshWorkspaces = useCallback(async () => {
+    try {
+      const r = await get<{ workspaces: WorkspaceInfo[] }>("/workspaces");
+      setWorkspaces(r.workspaces);
     } catch {
       /* non-fatal */
     }
@@ -163,7 +197,7 @@ export default function App() {
           restoreThreadRef.current = null;
           setActiveThread(wanted);
         }
-        localStorage.setItem("waw.lastPath", path);
+        localStorage.setItem(`waw.lastPath.${getWorkspace() ?? ""}`, path);
         await refreshThreads(d.document_id);
         setView("document");
         setMobilePane("doc");
@@ -176,12 +210,34 @@ export default function App() {
   );
 
   useEffect(() => {
-    if (authed && !doc) {
-      const last = localStorage.getItem("waw.lastPath");
+    if (authed && !doc && activeWs) {
+      const last = localStorage.getItem(`waw.lastPath.${activeWs}`) ?? localStorage.getItem("waw.lastPath");
       if (last) void openDocument(last);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authed]);
+  }, [authed, activeWs && boot ? "ready" : "wait"]);
+
+  /** Scope the whole window to another root folder (file tree selection, Recent, diff, locks…). */
+  const switchWorkspace = useCallback(
+    (id: string, openLast = true) => {
+      if (id === getWorkspace()) return;
+      setWorkspace(id);
+      setActiveWs(id);
+      localStorage.setItem("waw.activeWorkspace", id);
+      setDoc(null);
+      setThreads([]);
+      setMarks([]);
+      setActiveThread(null);
+      setDiffTarget(null);
+      setView((v) => (v === "terminal" ? v : "document"));
+      void refreshSessions();
+      if (openLast) {
+        const last = localStorage.getItem(`waw.lastPath.${id}`);
+        if (last) void openDocument(last);
+      }
+    },
+    [openDocument, refreshSessions],
+  );
 
   // ---------------------------------------------------------------- global events
   useEffect(() => {
@@ -189,7 +245,12 @@ export default function App() {
     return subscribeGlobal((ev) => {
       if (ev.type === "tree_changed") setTreeKey((k) => k + 1);
       if (ev.type === "watcher_ready") setWatcherReady(true);
-      if (ev.type === "file_changed" && doc && (ev.document_id === doc.document_id || ev.path === doc.path)) {
+      if (ev.type === "workspaces_changed") {
+        void refreshWorkspaces();
+        setTreeKey((k) => k + 1);
+      }
+      const sameRoot = !ev.workspace_id || ev.workspace_id === getWorkspace();
+      if (ev.type === "file_changed" && sameRoot && doc && (ev.document_id === doc.document_id || ev.path === doc.path)) {
         if (ev.missing) setChanged({ missing: true });
         else if (ev.sha256 && ev.sha256 !== doc.sha256) setChanged({ sha256: ev.sha256 });
         else if (!ev.sha256) setChanged({});
@@ -200,7 +261,7 @@ export default function App() {
         setTreeKey((k) => k + 1);
       }
     });
-  }, [authed, doc, refreshThreads, refreshTerminals]);
+  }, [authed, doc, refreshThreads, refreshTerminals, refreshWorkspaces]);
 
   // ---------------------------------------------------------------- jobs
   const onJobFinished = useCallback(
@@ -320,19 +381,19 @@ export default function App() {
   }, [doc, openDocument]);
 
   const toggleLock = useCallback(
-    async (path: string, locked: boolean) => {
+    async (path: string, locked: boolean, ws: string | null = getWorkspace()) => {
       try {
         if (locked) {
-          const reason = window.prompt(`Lock ${path || "the whole workspace"}? The app and app-driven agent turns will not modify it (your terminal is unrestricted). Optional reason:`, "");
+          const reason = window.prompt(`Lock ${path || "the whole folder"}? The app and app-driven agent turns will not modify it (your terminal is unrestricted). Optional reason:`, "");
           if (reason === null) return;
-          await post("/locks", { path, reason: reason || null });
-          notify(`Locked ${path || "workspace"}.`);
+          await post("/locks", { path, reason: reason || null }, { workspace: ws });
+          notify(`Locked ${path || "folder"}.`);
         } else {
-          await del(`/locks?path=${encodeURIComponent(path)}`);
-          notify(`Unlocked ${path || "workspace"}.`);
+          await del(`/locks?path=${encodeURIComponent(path)}`, { workspace: ws });
+          notify(`Unlocked ${path || "folder"}.`);
         }
         setTreeKey((k) => k + 1);
-        if (doc && (doc.path === path || (path === "" || doc.path.startsWith(path + "/")))) void openDocument(doc.path, true);
+        if (ws === getWorkspace() && doc && (doc.path === path || (path === "" || doc.path.startsWith(path + "/")))) void openDocument(doc.path, true);
       } catch (e) {
         notify((e as ApiError).message);
       }
@@ -368,11 +429,30 @@ export default function App() {
   const openRecent = useCallback(
     (item: RecentItem) => {
       setShowRecent(false);
+      if (item.workspace_id && item.workspace_id !== getWorkspace()) switchWorkspace(item.workspace_id, false);
       restoreThreadRef.current = item.last_thread_id;
       void openDocument(item.path);
       if (item.last_thread_id) setMobilePane("chat");
     },
-    [openDocument],
+    [openDocument, switchWorkspace],
+  );
+  const activeWsInfo = useMemo(() => workspaces.find((w) => w.id === activeWs) ?? null, [workspaces, activeWs]);
+  const removeFolder = useCallback(
+    async (w: WorkspaceInfo) => {
+      if (!window.confirm(`Remove "${w.name}" (${w.root}) from this window? Its discussions, sessions and history are kept and come back if you add the folder again.`)) return;
+      try {
+        await del(`/workspaces/${w.id}`);
+        if (w.id === getWorkspace()) {
+          const primary = workspaces.find((x) => x.primary) ?? workspaces.find((x) => x.id !== w.id);
+          if (primary) switchWorkspace(primary.id);
+        }
+        await refreshWorkspaces();
+        notify(`Removed ${w.name} from the window.`);
+      } catch (e) {
+        notify((e as ApiError).message);
+      }
+    },
+    [workspaces, switchWorkspace, refreshWorkspaces, notify],
   );
   const defaultSession = useMemo(() => sessions.find((s) => s.id === doc?.default_session_id), [sessions, doc?.default_session_id]);
 
@@ -406,7 +486,15 @@ export default function App() {
         </button>
         <span className="brand-mark">W</span>
         <span className="brand-title">Wiki Reader</span>
-        <span className="muted small hide-mobile" title={boot.workspace.root}>{boot.workspace.name}{boot.workspace.git.branch ? ` · ${boot.workspace.git.branch}` : ""}</span>
+        {workspaces.filter((w) => w.available).length > 1 ? (
+          <select className="ws-switch hide-mobile" value={activeWs ?? ""} onChange={(e) => switchWorkspace(e.target.value)} title="Folder (wiki) the window is working in" data-testid="workspace-switch">
+            {workspaces.filter((w) => w.available).map((w) => (
+              <option key={w.id} value={w.id}>{w.name}{w.git?.branch ? ` · ${w.git.branch}` : ""}</option>
+            ))}
+          </select>
+        ) : (
+          <span className="muted small hide-mobile" title={activeWsInfo?.root ?? boot.workspace.root}>{activeWsInfo?.name ?? boot.workspace.name}{(activeWsInfo?.git ?? boot.workspace.git)?.branch ? ` · ${(activeWsInfo?.git ?? boot.workspace.git)!.branch}` : ""}</span>
+        )}
         <span className="spacer" />
         {doc && (
           <div className="session-area" data-testid="session-area">
@@ -448,7 +536,23 @@ export default function App() {
 
       <main className={`layout view-${view === "diff" ? "terminal" : view} ${view === "diff" ? "view-diff" : ""}`}>
         <aside className="sidebar">
-          <FileTree workspaceName={boot.workspace.name} selectedPath={doc?.path ?? null} onOpen={(p) => void openDocument(p)} onOpenDiff={openDiff} onToggleLock={(p, l) => void toggleLock(p, l)} refreshKey={treeKey} />
+          <FileTree
+            workspaces={workspaces.length ? workspaces : [{ id: boot.workspace.id, name: boot.workspace.name, root: boot.workspace.root, primary: true, configured: true, available: true, git: boot.workspace.git, watcher: null }]}
+            activeWorkspace={activeWs}
+            selectedPath={doc?.path ?? null}
+            onOpen={(ws, p) => {
+              if (ws !== getWorkspace()) switchWorkspace(ws, false);
+              void openDocument(p);
+            }}
+            onOpenDiff={(ws, p, isDir) => {
+              if (ws !== getWorkspace()) switchWorkspace(ws, false);
+              openDiff(p, isDir);
+            }}
+            onToggleLock={(ws, p, l) => void toggleLock(p, l, ws)}
+            onAddFolder={() => setShowAddFolder(true)}
+            onRemoveFolder={(w) => void removeFolder(w)}
+            refreshKey={treeKey}
+          />
           {sidebarOpen && <Resizer side="right" onResize={resizeSidebar} onEnd={persistPrefs} />}
         </aside>
 
@@ -526,7 +630,7 @@ export default function App() {
         </section>
 
         <section className="center terminal-center" style={{ display: view === "terminal" ? undefined : "none" }}>
-          <TerminalPanel terminals={terminals} info={boot.terminal_info} activeId={activeTerminal} onActive={setActiveTerminal} onChanged={refreshTerminals} visible={view === "terminal"} workspaceRoot={boot.workspace.root} fontSize={prefs.terminalSize} />
+          <TerminalPanel terminals={terminals} info={boot.terminal_info} activeId={activeTerminal} onActive={setActiveTerminal} onChanged={refreshTerminals} visible={view === "terminal"} workspaceRoot={activeWsInfo?.root ?? boot.workspace.root} fontSize={prefs.terminalSize} />
         </section>
 
         {view === "document" && doc && !panelOpen && (
@@ -574,6 +678,18 @@ export default function App() {
         <button className={view === "terminal" ? "active" : ""} onClick={() => setView("terminal")}>Terminal</button>
       </nav>
 
+      {showAddFolder && (
+        <AddFolderDialog
+          start={(activeWsInfo?.root ?? boot.workspace.root).split("/").slice(0, -1).join("/") || "/"}
+          onClose={() => setShowAddFolder(false)}
+          onAdded={async (w) => {
+            setShowAddFolder(false);
+            await refreshWorkspaces();
+            switchWorkspace(w.id);
+            notify(`Added ${w.name} (${w.root}).`);
+          }}
+        />
+      )}
       {showRecent && (
         <div className="modal-backdrop" onClick={() => setShowRecent(false)}>
           <div className="modal" onClick={(e) => e.stopPropagation()} data-testid="recent-dialog">

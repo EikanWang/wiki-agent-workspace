@@ -159,12 +159,12 @@ class WorkspaceWatcher:
             except Exception as exc:  # a bad file must not kill the watcher
                 log.warning("observe_file_change(%s) failed: %s", rel, exc)
                 info = None
-            ev = {"type": "file_changed", "path": rel, "change": kinds.get(code, "modified")}
+            ev = {"type": "file_changed", "path": rel, "change": kinds.get(code, "modified"), "workspace_id": self.docs.workspace_id}
             if info:
                 ev.update({k: v for k, v in info.items() if k != "path"})
             self._publish(ev)
         if tree_changed:
-            self._publish({"type": "tree_changed"})
+            self._publish({"type": "tree_changed", "workspace_id": self.docs.workspace_id})
 
     def _publish(self, event: dict[str, Any]) -> None:
         if self._loop and not self._loop.is_closed():

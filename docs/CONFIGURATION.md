@@ -31,8 +31,32 @@ Show the effective configuration with secrets redacted:
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `root` | (required; set by `setup.sh --workspace`) | Existing directory containing the Markdown wiki, usually a Git checkout. The file tree is restricted to it; terminals are not. |
-| `max_document_bytes` | `20971520` (20 MiB) | Documents larger than this return HTTP 413. |
+| `root` | (required; set by `setup.sh --workspace`) | The **primary** wiki folder, usually a Git checkout. It is the first folder of the window and the default for requests without a folder. The file tree of each folder is restricted to it; terminals are not. |
+| `max_document_bytes` | `20971520` (20 MiB) | Documents larger than this return HTTP 413 (applies to every folder). |
+
+## `[[workspaces]]` — additional folders of the window
+
+More wiki folders opened next to the primary one (VS Code-style multi-root). Each is fully isolated: documents,
+discussions, agent sessions, locks, reviews and Git operations are per folder. Folders listed here are always open
+and cannot be removed from the UI; folders added from the UI (**＋ Add folder**) are stored in the database instead and
+need no config entry.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `root` | (required) | Absolute path of the folder on the server. |
+| `name` | folder name | Display name in the file tree and folder switcher. |
+
+```toml
+[[workspaces]]
+root = "/home/me/notes-wiki"
+name = "Notes"
+
+[[workspaces]]
+root = "/home/me/team-wiki"
+```
+
+The browser selects the folder per request with the `X-Workspace` header (or `?workspace=<id>`, used for images and
+PDFs). Requests that address an object (document, discussion, review, session…) always use that object's folder.
 
 ## `[terminal]`
 
@@ -103,6 +127,10 @@ log_level = "INFO"
 root = "/home/me/my-wiki"
 max_document_bytes = 20971520
 
+[[workspaces]]
+root = "/home/me/notes-wiki"
+name = "Notes"
+
 [terminal]
 tmux_history_limit = 10000
 
@@ -126,8 +154,11 @@ extra_args = []
 
 ## Running several wikis
 
-Run one instance per wiki: separate `--config`, `--port` and `--state-dir`. Each instance gets its own tmux
-socket, database and token:
+Usually: one server, several folders — add them with **＋ Add folder** or list them under `[[workspaces]]`. They share
+the login, terminals and preferences but nothing else.
+
+Alternatively run one completely separate instance per wiki (own database, token and tmux server): separate
+`--config`, `--port` and `--state-dir`:
 
 ```bash
 WAW_CONFIG=~/.config/waw-docs.toml  scripts/setup.sh --workspace ~/docs  --port 8765 --state-dir ~/.local/share/waw-docs

@@ -32,9 +32,14 @@ class Base(DeclarativeBase):
 
 
 class Workspace(Base):
+    """One root folder of the window (VS Code-style "add folder to workspace"). All per-wiki state is keyed by it."""
+
     __tablename__ = "workspaces"
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     root_path: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    name: Mapped[str | None] = mapped_column(Text, nullable=True)       # display name (default: folder name)
+    position: Mapped[int] = mapped_column(Integer, default=0, server_default="0")  # order in the file tree
+    active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")  # False = removed from the window (data kept)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 

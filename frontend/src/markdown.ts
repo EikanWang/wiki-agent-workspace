@@ -2,6 +2,7 @@
 // Keep options aligned with backend/app/textmodel.py so both text models agree.
 import MarkdownIt from "markdown-it";
 import DOMPurify from "dompurify";
+import { getWorkspace } from "./api";
 
 /** GitHub-style heading slug (github-slugger): lowercase, drop punctuation, each space -> "-". */
 export function slugify(text: string): string {
@@ -65,7 +66,8 @@ export function renderMarkdown(src: string, docPath: string): string {
       img.removeAttribute("src");
       return;
     }
-    img.setAttribute("src", `/api/v1/raw?path=${encodeURIComponent(resolveRelative(dir, src))}`);
+    const ws = getWorkspace();
+    img.setAttribute("src", `/api/v1/raw?path=${encodeURIComponent(resolveRelative(dir, src))}${ws ? `&workspace=${encodeURIComponent(ws)}` : ""}`);
     img.setAttribute("loading", "lazy");
   });
   return tpl.innerHTML;

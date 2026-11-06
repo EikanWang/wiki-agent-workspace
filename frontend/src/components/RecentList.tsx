@@ -22,7 +22,7 @@ export default function RecentList({ onOpen, compact = false, refreshKey = 0, on
 
   const load = async () => {
     try {
-      const r = await get<{ items: RecentItem[] }>(`/recent?include_hidden=${showHidden}`);
+      const r = await get<{ items: RecentItem[] }>(`/recent?include_hidden=${showHidden}&all=true`);
       setItems(r.items);
       setError(null);
     } catch (e) {
@@ -38,7 +38,7 @@ export default function RecentList({ onOpen, compact = false, refreshKey = 0, on
     if (!items) return null;
     const q = filter.trim().toLowerCase();
     if (!q) return items;
-    return items.filter((it) => it.path.toLowerCase().includes(q) || (it.last_thread_quote ?? "").toLowerCase().includes(q) || (it.last_message?.content ?? "").toLowerCase().includes(q));
+    return items.filter((it) => it.path.toLowerCase().includes(q) || (it.workspace_name ?? "").toLowerCase().includes(q) || (it.last_thread_quote ?? "").toLowerCase().includes(q) || (it.last_message?.content ?? "").toLowerCase().includes(q));
   }, [items, filter]);
 
   const setHidden = async (it: RecentItem, hidden: boolean) => {
@@ -70,6 +70,7 @@ export default function RecentList({ onOpen, compact = false, refreshKey = 0, on
   };
 
   const hiddenCount = items?.filter((i) => i.hidden).length ?? 0;
+  const multiRoot = new Set((items ?? []).map((i) => i.workspace_id)).size > 1;
 
   return (
     <div className={`recent ${compact ? "compact" : ""}`} data-testid="recent-list">
@@ -86,6 +87,7 @@ export default function RecentList({ onOpen, compact = false, refreshKey = 0, on
             <div key={it.document_id} className={`recent-item ${it.hidden ? "hidden" : ""}`} data-testid="recent-item" data-hidden={it.hidden ? "1" : "0"}>
               <button className="recent-main" onClick={() => onOpen(it)} title={it.path}>
                 <div className="recent-head">
+                  {multiRoot && it.workspace_name && <span className="chip ws-chip" data-testid="recent-ws">{it.workspace_name}</span>}
                   <span className="recent-path">{it.path}{it.missing ? " (missing)" : ""}{it.hidden ? " · hidden" : ""}</span>
                   <span className="muted small" title={new Date(it.last_activity).toLocaleString()}>{timeAgo(it.last_activity)}</span>
                 </div>

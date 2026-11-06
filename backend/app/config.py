@@ -45,6 +45,8 @@ class Settings:
     port: int = 8765
     state_dir: Path = DEFAULT_STATE_DIR
     workspace_root: Path = field(default_factory=Path.cwd)
+    # extra root folders opened in the same window: [{"root": "/path", "name": "optional"}]
+    workspaces: list[dict[str, str]] = field(default_factory=list)
     default_provider: str | None = None
     providers: dict[str, ProviderConfig] = field(default_factory=dict)
     access_token: str = ""
@@ -131,6 +133,8 @@ class Settings:
         }
         if self.shell:
             d["terminal"]["shell"] = self.shell
+        if self.workspaces:
+            d["workspaces"] = [{k: v for k, v in w.items() if v} for w in self.workspaces]
         if self.frontend_dist:
             d["server"]["frontend_dist"] = str(self.frontend_dist)
         for name, p in self.providers.items():
@@ -197,8 +201,14 @@ def load_settings(path: Path | None = None, env: dict[str, str] | None = None) -
     state_dir = Path(env.get("WAW_STATE_DIR") or server.get("state_dir") or DEFAULT_STATE_DIR).expanduser()
     frontend_dist = env.get("WAW_FRONTEND_DIST") or server.get("frontend_dist") or None
 
+    extra_roots = [
+        {"root": str(Path(str(w.get("root"))).expanduser()), "name": str(w.get("name") or "")}
+        for w in (raw.get("workspaces") or []) if isinstance(w, dict) and w.get("root")
+    ]
+
     return Settings(
         config_path=cfg_path,
+        workspaces=extra_roots,
         bind=str(env.get("WAW_BIND") or server.get("bind", "127.0.0.1")),
         port=int(env.get("WAW_PORT") or server.get("port", 8765)),
         state_dir=state_dir,

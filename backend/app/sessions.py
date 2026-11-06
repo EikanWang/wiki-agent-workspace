@@ -66,7 +66,7 @@ class SessionService:
         native_id: str | None = None
         if caps.eager_session_ids:
             try:
-                native_id = await adapter.create_session(self.ctx.settings.workspace_root, display_name)
+                native_id = await adapter.create_session((self.ctx.workspace_root or self.ctx.settings.workspace_root), display_name)
             except ProviderError as exc:
                 raise ApiError(502, exc.code, exc.message)
         return self.create_local(provider, display_name, native_id, status="ready" if native_id else "uninitialized")
@@ -78,7 +78,7 @@ class SessionService:
         caps = await self.ctx.providers.capabilities(provider)
         if not caps.available:
             raise ApiError(503, "PROVIDER_UNAVAILABLE", caps.error or f"{provider} is unavailable")
-        exists = await adapter.session_exists(self.ctx.settings.workspace_root, native_id)
+        exists = await adapter.session_exists((self.ctx.workspace_root or self.ctx.settings.workspace_root), native_id)
         if exists is False:
             raise ApiError(404, SESSION_NOT_FOUND, f"{provider} does not report a session with id {native_id}")
         status = "availability_unknown"  # externally created: readiness unknown until a turn succeeds
@@ -114,7 +114,7 @@ class SessionService:
                     errors[name] = caps.error
                 continue
             try:
-                sessions = await self.ctx.providers.get(name).list_sessions(self.ctx.settings.workspace_root)
+                sessions = await self.ctx.providers.get(name).list_sessions(self.ctx.workspace_root or self.ctx.settings.workspace_root)
             except ProviderError as exc:
                 errors[name] = exc.message
                 continue

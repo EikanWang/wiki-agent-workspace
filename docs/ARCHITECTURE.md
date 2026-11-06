@@ -8,50 +8,63 @@ page explains how the implementation is laid out and how the pieces talk to each
 ```
 backend/app/
   main.py          FastAPI app factory, lifespan (migrate DB, mark interrupted jobs, reconcile tmux, detect
-                   providers, start watcher), /auth, /bootstrap, /events (global SSE), /export, SPA serving
+                   providers, start watchers), /auth, /bootstrap, /events (global SSE), /export, SPA serving
   cli.py           `setup` / `serve` / `print-config` entry points (python -m backend.app.cli …)
-  config.py        TOML + env loading, Settings/ProviderConfig dataclasses, secret generation
-  db.py            SQLite (WAL) engine, serialized writes (RLock), Alembic runner, WAL checkpoint
+  config.py        TOML + env loading, Settings/ProviderConfig dataclasses ([[workspaces]] list), secret generation
+  db.py            SQLite (WAL) engine, serialized writes (RLock), Alembic runner (FK-safe), WAL checkpoint
   models.py        SQLAlchemy models (schema reference: docs/SCHEMA.md)
   auth.py          token login, HttpOnly cookie, HMAC CSRF token, Origin checks, WebSocket auth, gateway mode
-  deps.py          AppContext (all services) + FastAPI dependencies require_auth / require_auth_mutating
+  deps.py          AppContext + dependencies require_auth / require_auth_mutating, which also *scope* the context
+                   to one root folder (see "Multi-root scoping")
+  workspaces.py    WorkspaceRegistry: one WorkspaceRuntime (DocumentService + LockService + watcher) per root
+                   folder; add/remove/rename folders; /workspaces, /fs/dirs (folder picker)
   errors.py        ApiError and the stable error codes; JSON error shape
-  documents.py     DocumentService: safe paths, file tree + Git status, open/version snapshots, reading state,
-                   review marks, diff, relink, recent; routes under /files, /documents, /recent, /raw
-  textmodel.py     markdown-it-py rendering + the deterministic text model (mirrors frontend/src/textmodel.ts)
+  documents.py     DocumentService (one per root): safe paths, file tree + kinds + Git status, open (all formats),
+                   version snapshots, reading state, review marks, diff, relink, recent, hide/delete history;
+                   routes under /files, /documents, /recent, /raw
+  textmodel.py     markdown-it-py rendering, text/source → code block, .docx → HTML (mammoth), the deterministic
+                   text model (mirrors frontend/src/textmodel.ts)
   anchors.py       anchor resolution algorithm (attached/moved/ambiguous/orphaned) + offset validation
-  annotations.py   ThreadService: threads, messages, retry, reanchor; prompt building; /jobs routes (SSE,
-                   cancel, permission decisions)
-  sessions.py      SessionService: app sessions, create/link provider sessions; /agent-sessions routes
-  previews.py      preview-before-apply in an isolated workspace copy; SHA-checked apply
-  watcher.py       child-process filesystem watcher → global events, version recording
+  annotations.py   ThreadService: threads, messages, retry, reanchor, context relocation; prompt building;
+                   /jobs routes (SSE, cancel, permission decisions)
+  sessions.py      SessionService: app sessions, create/link provider sessions, model/variant; /agent-sessions,
+                   /providers/{p}/models
+  locks.py         LockService (one per root): read-only locks on files/folders; /locks
+  previews.py      preview-before-apply in an isolated workspace copy; SHA-checked, lock-checked apply
+  diffs.py         DiffService: file/folder diffs vs refs (untracked included), line/range comments → threads,
+                   Viewed marks (file_reviews); /diff, /diff/comments, /diff/viewed, /refs
+  reviews.py       ReviewService: stash comments, submit once, one triage job (address/reply/skip) → threads; /reviews
+  commits.py       CommitService: git status, agent-drafted message, selective commit, push, gh pull request; /git
+  watcher.py       child-process filesystem watcher (one per root) → global events, version recording
   events.py        in-process pub/sub (EventBus) feeding SSE
   idempotency.py   ASGI middleware for Idempotency-Key
-  gitinfo.py       read-only git helpers (status/branch/commit/show)
+  gitinfo.py       read-only git helpers (status/branch/commit/show, raw git runner, ref validation)
   agents/
-    base.py        adapter contract (capabilities/list/create/resume/cancel), event types, subprocess helper
-    opencode.py    OpenCode CLI adapter (JSON lines) and server adapter (HTTP + SSE)
-    codex.py       Codex `exec --json` adapter (new + resume), session listing from $CODEX_HOME
+    base.py        adapter contract (capabilities/list/create/resume/cancel/list_models), event types, subprocess helper
+    opencode.py    OpenCode CLI adapter (JSON lines) and server adapter (HTTP + SSE); --model/--variant
+    codex.py       Codex `exec --json` adapter (new + resume), session listing from $CODEX_HOME; -m / effort
     registry.py    builds adapters from config, caches capabilities
     jobs.py        JobManager: per-session serialization, event persistence (seq), SSE replay, cancel,
-                   permission relay, interrupted-on-restart
+                   permission relay, lock-aware turns (per session's root), interrupted-on-restart/shutdown
   terminal/
     tmux.py        app-owned tmux server (socket from <state_dir>/tmux-socket, generated config)
     pty.py         PTY wrapper around `tmux attach` with asyncio reader/writer, resize
     manager.py     terminal tabs CRUD, reconcile on startup, history snapshot, WebSocket relay
-backend/migrations/   Alembic env + versions (0001_initial, 0002_active_thread, …)
+backend/migrations/   Alembic env + versions 0001 … 0009 (one per schema change)
 frontend/src/
-  api.ts           fetch wrapper (CSRF header, error shape), types, SSE subscriptions
+  api.ts           fetch wrapper (CSRF + X-Workspace headers, error shape), types, SSE subscriptions
   markdown.ts      markdown-it + DOMPurify, GitHub slugs, link rewriting (#frag, page.md#frag, images → /raw)
   textmodel.ts     DOM text model, selection → anchor, offsets ↔ DOM Range, client-side resolution
-  App.tsx          state container: auth, document, threads, sessions, terminals, jobs, prefs, Recent
-  components/      Login, FileTree, Reader (render/highlights/selection popover/reading position/fragments),
-                   DiscussionPanel (+ useJobStream), SessionPicker, PreviewDialog, TerminalPanel (xterm.js),
-                   RecentList, Layout (prefs, resizer, appearance), DiffView, MarkdownView
+  App.tsx          state container: auth, active folder, document, threads, sessions, terminals, jobs, prefs, Recent
+  components/      Login, FileTree (multi-root), AddFolderDialog, Reader (render/highlights/selection popover/
+                   reading position/fragments/Read-Discuss), DiscussionPanel (Individual/Flat + useJobStream),
+                   SessionPicker, ModelPicker, PreviewDialog, DiffReview (unified/split, ranges, inline threads,
+                   review tray), CommitPanel, TerminalPanel (xterm.js), RecentList, Layout (prefs, resizer,
+                   appearance), FileIcon, DiffView, MarkdownView, keys.ts (composer keys)
 tests/backend/     pytest: real Git + tmux, fake providers (tests/fakes/fake-opencode, fake-codex)
 tests/frontend/    Playwright specs + start_server.py (spawns a backend with a temp workspace and fake agents)
 scripts/           setup.sh, start.sh, test.sh
-docs/              DEPLOYMENT, CONFIGURATION, OPERATIONS, SCHEMA, ARCHITECTURE (this file)
+docs/              USER_GUIDE, DEPLOYMENT, CONFIGURATION, OPERATIONS, SCHEMA, ARCHITECTURE (this file)
 ```
 
 ## Runtime picture
@@ -60,10 +73,30 @@ docs/              DEPLOYMENT, CONFIGURATION, OPERATIONS, SCHEMA, ARCHITECTURE (
 Browser (React, xterm.js) ──HTTP/JSON──► FastAPI (uvicorn, one process, asyncio)
    │  SSE /events, /jobs/{id}/events     │   ├─ SQLite (WAL) via SQLAlchemy, writes serialized
    │  WebSocket /terminals/{id}/ws       │   ├─ EventBus → SSE subscribers
-   └─────────────────────────────────────┘   ├─ JobManager → adapter subprocess (opencode/codex) or HTTP to opencode serve
+   │  X-Workspace: <root id>             │   ├─ WorkspaceRegistry → per root: DocumentService, LockService, watcher process
+   └─────────────────────────────────────┘   ├─ JobManager → adapter subprocess (opencode/codex) in the session's root,
+                                             │               or HTTP to opencode serve
                                              ├─ PTY → `tmux -L <socket> attach` → user's shell/agents (survive the server)
-                                             └─ watcher child process (watchfiles) → EventBus
+                                             └─ git / gh subprocesses (diff, commit, push, pull request)
 ```
+
+### Multi-root scoping
+
+The window can hold several root folders. `WorkspaceRegistry` keeps one `WorkspaceRuntime` per open folder
+(`DocumentService`, `LockService`, `WorkspaceWatcher`) and the `workspaces` table records every folder ever opened.
+Every per-wiki row (documents, sessions, locks, reviews, file_reviews) carries `workspace_id`.
+
+`require_auth` / `require_auth_mutating` return a *scoped copy* of `AppContext` (`deps.scoped`) whose `documents`,
+`locks`, `watcher`, `workspace_id` and `workspace_root` belong to one root. The root is chosen as:
+
+1. the root of the object the URL addresses (`doc_id`, `thread_id`, `preview_id`, `review_id`, `comment_id`,
+   `session_id`) — so a document can never be read through another root's path;
+2. otherwise the `X-Workspace` header (sent by `api.ts` on every call) or `?workspace=` (images, PDFs);
+3. otherwise the primary root (`[workspace] root`).
+
+`DocumentService.current_content` additionally refuses (`WRONG_WORKSPACE`) to read a document of another root, and
+`JobManager` runs each turn in the root of its session's workspace with that root's locks. Route code keeps using
+`ctx.documents` / `ctx.locks` unchanged — scoping is entirely in the dependency.
 
 ### A discussion turn, end to end
 
@@ -132,6 +165,12 @@ real tmux. `tests/frontend/start_server.py` does the same for the browser suite 
 
 Lint/type checks used in review: `.venv/bin/ruff check --select F,E9 backend tests` and
 `cd frontend && npx tsc --noEmit -p tsconfig.json --noUnusedLocals --noUnusedParameters`.
+
+### Adding a root-scoped feature
+
+Use `ctx.documents`, `ctx.locks`, `ctx.workspace_id` and `ctx.workspace_root` from the injected context (never the
+unscoped `request.app.state.ctx`), store `workspace_id` on new per-wiki rows, and if the route addresses an object
+by id add that id to `WorkspaceRegistry._workspace_of_object` so the object decides the root.
 
 ### Changing the schema
 

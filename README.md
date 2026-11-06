@@ -28,6 +28,7 @@ Design specification: [`DESIGN.md`](DESIGN.md). Visual reference (mockup only): 
 
 | Guide | Read it when… |
 | --- | --- |
+| [docs/USER_GUIDE.md](docs/USER_GUIDE.md) | you want to know how to use a feature: folders, reading, asking, discussions, models, locks, diff, reviews, commits, Recent, terminal, keyboard |
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | you are installing on a new machine: prerequisites with install commands, setup, configuration decisions, service unit, remote access (tunnel / HTTPS proxy), provider login, upgrade, uninstall |
 | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | you need the meaning and default of every `config.toml` key and environment variable, or want several wikis on one host |
 | [docs/OPERATIONS.md](docs/OPERATIONS.md) | day-to-day: logs, backup/restore, moving the state directory, maintenance, and a troubleshooting table of every error/banner the app can show |
@@ -71,73 +72,33 @@ Alternative token source: `WAW_ACCESS_TOKEN=... scripts/start.sh`. Other env ove
 ## Daily workflow
 
 1. **Terminal tab** → `+ New terminal` → run `opencode`, `codex`, `git`, editors… exactly as in SSH. Closing the
-   browser only detaches the tmux client; the shell and the running agent keep going. Reopen the tab to reattach.
-2. Ask the agent in the terminal to write a wiki page. The file tree updates (filesystem watcher, or `↻`) as soon as
-   the file exists — no commit/push needed.
-3. **Document tab** → open the page → select text → the question box appears next to the selection (desktop, ~350 ms
-   after releasing the mouse; on phones use the native selection then **Ask** / **Ask about selection**).
-   Choose the session (document default / new / any linked session) and send. The quoted passage, question, streamed
-   answer and the session used are stored on the server.
-4. Explicitly ask the agent to edit the document in a discussion → the agent edits under *its* existing permission
-   configuration → the reader shows a "document changed" banner, **View diff** shows the real change, and anchors are
-   re-resolved. No extra app approval dialog. Prefer to review first? **Preview change** runs the edit in an isolated
-   temporary copy and shows the diff; **Apply** writes it only if the file is still at the same SHA-256.
-5. Come back later: **Recent** (top bar, or the start screen) lists every document you worked on, newest activity
-   first, with where you were and the last discussion; opening an entry restores the document, your reading position
-   and the discussion you had open. Discussions whose text moved are re-anchored deterministically, and
-   changed/duplicated passages are flagged instead of being attached to the wrong place.
+   browser only detaches the tmux client; the shell and the running agent keep going.
+2. Ask the agent in the terminal to write a wiki page. It shows up in the file tree as soon as the file exists — no
+   commit/push needed.
+3. **Document** → open the page → select text → ask. The quoted passage, question, streamed answer and the session
+   used are stored on the server; discussions follow the passage across edits.
+4. Ask the agent to edit in a discussion (or **Preview change**), then review in **Diff** — comment on lines, stash
+   comments into a **review** the agent triages in one go — and **Commit…** / push / open a pull request.
+5. Come back later: **Recent** restores the document, your reading position and the discussion you had open.
 
-### Layout and appearance
+### Feature overview
 
-- `Aa` opens the Appearance popover: document font (sans/serif/mono), font size, optional content-width cap (the
-  document fills the available width by default), terminal font size.
-- The file tree (`☰`) and the discussion panel (`›`) fold; both are resizable by dragging their edge; the outline
-  folds with `▾ Outline`. The document area always expands into the freed space. Settings persist per browser.
-- Links to sections (`#heading`, `page.md#heading`) scroll inside the reader; heading ids use GitHub's slug rules.
-- Agent replies are rendered as sanitized Markdown; your own messages stay verbatim.
-- The discussion panel has two modes: **Individual** (one discussion at a time, with its diff and anchor tools) and
-  **Flat** (all discussions of the document as one chronological stream, grouped by quoted passage; the composer
-  continues the chosen discussion — default the newest — so related questions flow without switching).
-- Reader modes: **Read** (a plain viewer — selecting text shows only a small copy icon; use *Ask about selection*
-  to discuss explicitly) and **Discuss** (selecting text opens the question box, which has a GitHub-style copy icon
-  on the quote). Ctrl/⌘+C works in both — the box never clears the selection.
-- **Model switching**: each agent session has a model (and reasoning effort) used for its future turns — pick it in
-  the session dialog or next to the session in the discussion panel (`opencode models` list / Codex config +
-  common ids, or type any id). Past answers keep the model they were produced with.
-- In every question/reply box **Enter sends** and **Ctrl/⌘+Enter** (or Shift+Enter) inserts a new paragraph; Enter
-  during IME composition never sends.
-- Exited terminals (shell ended) stay visible as `(exited)` so nothing is silently replaced; dismiss them with `×`
-  or **Clear exited**. Live terminals ask once before being closed.
+Everything below is explained step by step in **[docs/USER_GUIDE.md](docs/USER_GUIDE.md)**.
 
-### File types, locks and diff review
-
-- The file tree lists every file with a kind-specific icon (folder, Markdown, image, PDF, notebook, code, script,
-  data, text, archive, binary, symlink badge, broken link). The reader opens Markdown, any text/source file
-  (C/C++, Python, YAML, XML, JSON, shell, …, shown as numbered code with the same select-and-ask workflow),
-  Word `.docx` (converted to HTML) and PDF (browser viewer; discussions attach to the document).
-- **Lock** a file or folder (🔒 in the tree or the header toggle): the app and app-driven agent turns treat it as
-  read-only — preview Apply, relink and history deletion are refused (`423 PATH_LOCKED`), the agent is told the
-  path is locked, Codex runs with the `read-only` sandbox, and any change that still happens during a turn is
-  reported as a `lock_violation` (never silently reverted). Your terminal is never restricted.
-- **Diff** view (± next to changed files/folders, or the Diff tab): review a file, a folder or the whole workspace
-  against HEAD or any commit/branch, including untracked Markdown drafts, in unified or **side-by-side** layout.
-  Click a line — or drag / shift-click to select several — to comment; the comment becomes a discussion anchored
-  to that text (ranges span first to last line), with the diff context shown and the agent answering as usual.
-  The Diff tab follows the document you are reading; use ± in the tree to review a folder. Each file has a
-  GitHub-style **Viewed** checkbox (collapses the file, counted in the header); it is bound to the reviewed content,
-  so a later change to the file clears it and shows "changed since".
-- **Reviews**: like a GitHub PR review, **Add to review** (Enter in the comment box) stashes a comment without
-  asking the agent; the **Review (n)** tray lists, edits and deletes pending comments. **Submit review** runs *one*
-  agent turn over all comments: for each it decides *address* (edits the file, respecting locks), *reply*
-  (answers, no edit) or *skip*, and every comment becomes a discussion carrying that verdict. **Ask now** still
-  starts an immediate discussion for a single comment.
-- **Commit…** (in the Diff view): tick the changed files you want, let the agent **draft a commit message from the
-  actual diff** (editable), and commit only those files with your Git identity. Then **Push** (sets upstream on the
-  first push; never force-pushes — a diverged remote is reported for you to pull/rebase in the terminal) and, for
-  GitHub remotes with `gh` logged in, **Create pull request** from the current branch. Locked files cannot be
-  committed through the app.
-- **Recent** supports filtering, hiding/unhiding entries (history kept) and deleting a document's app history
-  (discussions, versions, reading state — the file itself is untouched).
+| Area | What you get |
+| --- | --- |
+| Folders | Several wiki folders in one window ("add folder", like VS Code), each fully isolated: documents, discussions, sessions, locks, reviews, Git state |
+| Reading | Markdown, any text/source file (numbered code), Word `.docx`, PDF; kind icons; section links; Read / Discuss modes; reading position restore |
+| Asking | Select words or lines → question box (copy icon, Enter to send); anchors survive edits; orphaned/ambiguous detection and manual reanchor; review marks |
+| Discussions | Individual or Flat (all discussions as one stream) panel; streaming answers rendered as Markdown; retry / cancel |
+| Agents | OpenCode and Codex with your existing login; per-session **model and effort**; link provider sessions; per-session job queueing |
+| Safety | **Locks** on files/folders (read-only for the app and app-driven agents); preview-before-apply; no auto-commit, no force-push |
+| Diff | File / folder / whole-folder diffs vs any ref; unified or side-by-side; multi-line comments; inline answers; **Viewed** checkbox |
+| Reviews | Stash comments, **Submit review** once; the agent addresses / replies / skips each comment |
+| Git | **Commit…** selected files with an agent-drafted message, push, create a GitHub pull request |
+| Recent | All folders, newest first; filter, hide, delete history |
+| Terminal | tmux-backed tabs that survive disconnects and server restarts; history snapshot; exited tabs dismissable |
+| Layout | Foldable/resizable file tree and panel, foldable outline, fonts and sizes (`Aa`) |
 
 ### Agent sessions
 
@@ -172,7 +133,8 @@ Two supported options, neither requiring a new account — details and proxy sni
 
 ## Where your data lives
 
-Everything the app stores is in one self-contained, relocatable folder — the state directory
+Your wiki folders are only read, except for edits you ask the agent to make, previews you apply and commits you make.
+Everything the app itself stores is in one self-contained, relocatable folder — the state directory
 (`server.state_dir`, default `~/.local/share/wiki-agent-workspace`): `workspace.sqlite3` (see
 [docs/SCHEMA.md](docs/SCHEMA.md)), `snapshots/`, `tmux-socket`, `tmux.conf`. The config file with the token lives
 separately (`~/.config/wiki-agent-workspace/config.toml`). Backup, restore and moving are described in
@@ -196,8 +158,8 @@ separately (`~/.config/wiki-agent-workspace/config.toml`). Backup, restore and m
 ## Running the tests
 
 ```bash
-scripts/test.sh            # backend: pytest (75 tests; real git + tmux + fake agents), ~25 s
-scripts/test.sh --e2e      # + Playwright browser suite (22 scenarios) against the production build
+scripts/test.sh            # backend: pytest (78 tests; real git + tmux + fake agents), ~25 s
+scripts/test.sh --e2e      # + Playwright browser suite (23 scenarios) against the production build
 # or individually
 .venv/bin/python -m pytest tests/backend -q
 cd frontend && npx playwright install chromium && npm run test:e2e

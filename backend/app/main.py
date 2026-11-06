@@ -13,7 +13,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
-from . import annotations, commits, diffs, documents, locks, previews, reviews, sessions
+from . import annotations, commits, diffs, documents, locks, previews, reviews, sessions, workspaces
 from .agents.jobs import JobManager
 from .agents.registry import ProviderRegistry
 from .auth import AuthManager
@@ -26,7 +26,6 @@ from .gitinfo import git_info
 from .idempotency import IdempotencyMiddleware
 from .terminal import manager as terminal
 from .terminal.tmux import Tmux
-from .watcher import WorkspaceWatcher
 
 log = logging.getLogger("waw")
 
@@ -95,7 +94,8 @@ async def bootstrap(request: Request, ctx: AppContext = Depends(require_auth)):
     caps = await ctx.providers.summary()
     git = ctx.documents.git_summary(await asyncio.to_thread(git_info, ctx.documents.root))
     return {
-        "workspace": {"id": ctx.workspace_id, "root": str(ctx.settings.workspace_root), "name": ctx.settings.workspace_root.name, "git": git},
+        "workspace": {"id": ctx.workspace_id, "root": str(ctx.documents.root), "name": next((w["name"] for w in ctx.workspaces.list() if w["id"] == ctx.workspace_id), ctx.documents.root.name) if ctx.workspaces else ctx.documents.root.name, "git": git},
+        "workspaces": ctx.workspaces.list() if ctx.workspaces else [],
         "default_provider": ctx.providers.default_provider(),
         "providers": caps,
         "terminals": ctx.terminals.list(),
@@ -177,17 +177,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ctx = AppContext(settings=settings, db=db, auth=auth)
     bus = EventBus()
     ctx.events = bus
-    ctx.documents = documents.DocumentService(db, settings.workspace_root, settings.snapshots_dir, settings.max_document_bytes)
-    ctx.workspace_id = ctx.documents.workspace_id
-    ctx.locks = locks.LockService(db, ctx.workspace_id)
-    ctx.documents.locks = ctx.locks
+    reg = workspaces.WorkspaceRegistry(settings, db, bus)
+    reg.load()
+    ctx.workspaces = reg
+    # the unscoped context points at the primary root (routes get a per-request scoped copy, see deps.scoped)
+    primary = reg.primary
+    ctx.documents, ctx.locks, ctx.watcher = primary.docs, primary.locks, primary.watcher
+    ctx.workspace_id, ctx.workspace_root = primary.id, primary.root
     ctx.providers = ProviderRegistry(settings)
-    ctx.jobs = JobManager(db, ctx.providers, bus, settings.workspace_root, settings.provider("codex").sandbox)
-    ctx.jobs.locks = ctx.locks
-    ctx.jobs.documents = ctx.documents
+    ctx.jobs = JobManager(db, ctx.providers, bus, primary.root, settings.provider("codex").sandbox)
+    ctx.jobs.registry = reg
+    ctx.jobs.locks = primary.locks
+    ctx.jobs.documents = primary.docs
     tmux = Tmux(settings)
-    ctx.terminals = terminal.TerminalManager(db, tmux, bus, settings.workspace_root)
-    ctx.watcher = WorkspaceWatcher(settings.workspace_root, ctx.documents, bus)
+    ctx.terminals = terminal.TerminalManager(db, tmux, bus, primary.root)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -202,11 +205,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 log.info("provider %s: available=%s version=%s %s", name, c.available, c.version, c.error or "")
         except Exception as exc:  # pragma: no cover
             log.warning("provider detection failed: %s", exc)
-        ctx.watcher.start()
+        reg.start_all()
         try:
             yield
         finally:
-            await ctx.watcher.stop()
+            await reg.stop_all()
             n = await ctx.jobs.shutdown()
             if n:
                 log.info("marked %d running jobs as interrupted at shutdown", n)
@@ -233,6 +236,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     api.include_router(locks.router)
     api.include_router(commits.router)
     api.include_router(reviews.router)
+    api.include_router(workspaces.router)
     api.include_router(terminal.router)
     app.include_router(api)
 

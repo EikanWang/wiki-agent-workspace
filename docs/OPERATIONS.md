@@ -25,6 +25,7 @@ workspace root … no longer exists; relocating …     # only after you moved t
 | App-owned tmux socket name / config | `<state_dir>/tmux-socket`, `<state_dir>/tmux.conf` | socket lives in `/tmp/tmux-<uid>/<name>` |
 | Config incl. secrets | `~/.config/wiki-agent-workspace/config.toml` (or `WAW_CONFIG`) | mode 0600 |
 | Code, Python venv, built UI | the repository (`.venv/`, `frontend/dist/`) | rebuildable with `scripts/setup.sh` |
+| Folders added in the UI | `workspaces` table in the database | no config entry needed; removing a folder keeps its data |
 | Your wiki | `workspace.root` | the app only writes there when you explicitly ask an agent to edit, or apply a preview |
 | Provider transcripts | OpenCode's store / `~/.codex/sessions` | independent copies; the app keeps its own Q&A text |
 
@@ -66,12 +67,16 @@ The state directory is self-contained and all internal references are relative t
 3. In the config set `server.state_dir` (and `workspace.root` if the wiki moved).
 4. Start. Documents, discussions, reading positions, versions and *Recent* are back.
 
-Rules the app applies when `workspace.root` differs from what the database knows:
+Rules the app applies when `workspace.root` (the primary folder) differs from what the database knows:
 
-- Old root **no longer exists** → the single workspace record is relocated to the new root (logged). Document
-  identities and discussions follow the moved checkout.
-- Old root **still exists** (you pointed the same state at a *different* wiki) → a second workspace is created;
-  the old wiki's data stays untouched and reappears when its root is configured again.
+- Old root **no longer exists** and it was the only folder → its workspace record is relocated to the new root
+  (logged). Document identities and discussions follow the moved checkout.
+- Otherwise (old root still exists, or several folders are known) → a new workspace record is created; the other
+  folder's data stays untouched and reappears when that folder is configured or added again.
+
+Additional folders added from the UI are stored by absolute path. If such a folder moved, it is listed as *missing*
+in the file tree: remove it and add the new location (its old discussions stay attached to the old record), or move
+the folder back.
 
 Terminals: on the **same host**, the tmux socket name travels with the folder (`tmux-socket`), so live sessions
 reattach after the move. On another host, running processes obviously don't move; tabs show `exited` and can be
@@ -98,7 +103,7 @@ dismissed.
 | "tmux is not installed" banner; no terminals | Install tmux 3.2+ and restart. Reader and discussions work regardless. |
 | Terminal tab shows `(exited)` | The shell ended (`exit`, crash, host reboot). Dismiss it with `×` / **Clear exited** and create a new one. Never auto-replaced, by design. |
 | Terminal shows garbled non-ASCII | Server locale is not UTF-8 and no UTF-8 locale exists on the host (`locale -a`). Install one (e.g. `C.UTF-8`); the UI banner reports which locale is used. |
-| "inotify watch limit … exhausted" banner | Raise `fs.inotify.max_user_watches` (see DEPLOYMENT.md §1). Manual refresh (`↻`) keeps working meanwhile. |
+| "inotify watch limit … exhausted" banner (more likely with several folders: each folder has its own watcher) | Raise `fs.inotify.max_user_watches` (see DEPLOYMENT.md §1). Manual refresh (`↻`) keeps working meanwhile. |
 | "The file watcher is still indexing" banner for a long time | Very large trees (tens of thousands of directories, e.g. `node_modules`, corpora) take a while to register; use `↻` meanwhile. Excluded automatically: `.git`, `node_modules`, `.codex`, `.opencode`, `__pycache__`. |
 | Discussion fails with `PROVIDER_AUTH_REQUIRED` | The provider's own login expired or is missing. Log in **in the Terminal tab as the same user** (`opencode auth login` / `codex login`), then **Retry**. The exact provider message is shown. |
 | `SESSION_NOT_FOUND` | The provider no longer has that session (deleted/compacted/another machine). Link another session or start a new one from the header; the question is kept. |
@@ -120,4 +125,8 @@ dismissed.
 | "The selected text could not be located…" (`INVALID_ANCHOR`) | The offsets sent by the browser did not match the current file and the quote plus its surrounding context could not be located uniquely (e.g. the passage is repeated verbatim and the file changed while the question box was open). Refresh the document and reselect. |
 | `PATH_ESCAPES_WORKSPACE` | Only raised for *writes* through a symlink that points outside the workspace (reads through such links are allowed and flagged in the tree). Edit the real target in your terminal. |
 | `UNSUPPORTED_FORMAT` when opening | Only Markdown, text/source, `.docx` and `.pdf` open in the reader. Other files are listed with their icon for orientation. |
+| `WORKSPACE_NOT_OPEN` / folder shown as *missing* | The folder was removed from the window or no longer exists on disk. Add it again with **＋** in the file tree (data comes back), or remove the stale entry. |
+| `ALREADY_OPEN` when adding a folder | That folder (or the same resolved path) is already one of the window's folders. |
+| `WRONG_WORKSPACE` | A request tried to read a document through another folder; reload the page (the browser had a stale folder selection). |
+| `CONFIGURED_WORKSPACE` | Folders listed in `config.toml` (`[workspace]`, `[[workspaces]]`) can only be removed there. |
 | Lost the access token | `scripts/setup.sh --show-token`. To rotate: edit `auth.access_token` (any random string), restart, log in again. |

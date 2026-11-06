@@ -17,6 +17,14 @@ export class ApiError extends Error {
 }
 
 let csrfToken: string | null = null;
+// The root folder (workspace) requests are scoped to; sent as X-Workspace on every API call.
+let workspaceId: string | null = null;
+export function setWorkspace(id: string | null) {
+  workspaceId = id;
+}
+export function getWorkspace(): string | null {
+  return workspaceId;
+}
 export function setCsrf(token: string | null) {
   csrfToken = token;
 }
@@ -26,8 +34,10 @@ export function getCsrf(): string | null {
 
 const BASE = "/api/v1";
 
-export async function api<T>(method: string, path: string, body?: unknown, opts: { idempotencyKey?: string } = {}): Promise<T> {
+export async function api<T>(method: string, path: string, body?: unknown, opts: { idempotencyKey?: string; workspace?: string | null } = {}): Promise<T> {
   const headers: Record<string, string> = { Accept: "application/json" };
+  const ws = opts.workspace !== undefined ? opts.workspace : workspaceId;
+  if (ws) headers["X-Workspace"] = ws;
   if (body !== undefined) headers["Content-Type"] = "application/json";
   if (method !== "GET" && csrfToken) headers["X-CSRF-Token"] = csrfToken;
   if (opts.idempotencyKey) headers["Idempotency-Key"] = opts.idempotencyKey;
@@ -52,10 +62,12 @@ export async function api<T>(method: string, path: string, body?: unknown, opts:
 }
 
 export const get = <T,>(path: string) => api<T>("GET", path);
-export const post = <T,>(path: string, body?: unknown, opts?: { idempotencyKey?: string }) => api<T>("POST", path, body ?? {}, opts);
+/** GET scoped to a specific root folder (e.g. the multi-root file tree loading a non-active root). */
+export const getIn = <T,>(workspace: string, path: string) => api<T>("GET", path, undefined, { workspace });
+export const post = <T,>(path: string, body?: unknown, opts?: { idempotencyKey?: string; workspace?: string | null }) => api<T>("POST", path, body ?? {}, opts);
 export const put = <T,>(path: string, body?: unknown) => api<T>("PUT", path, body ?? {});
 export const patch = <T,>(path: string, body?: unknown) => api<T>("PATCH", path, body ?? {});
-export const del = <T,>(path: string) => api<T>("DELETE", path);
+export const del = <T,>(path: string, opts?: { workspace?: string | null }) => api<T>("DELETE", path, undefined, opts);
 
 export function newIdempotencyKey(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
@@ -91,8 +103,20 @@ export interface TerminalInfo {
   tmux_session: string;
 }
 
+export interface WorkspaceInfo {
+  id: string;
+  name: string;
+  root: string;
+  primary: boolean;
+  configured: boolean;
+  available: boolean;
+  git: GitSummary | null;
+  watcher: { ready: boolean; error: string | null; registering_seconds: number | null } | null;
+}
+
 export interface Bootstrap {
   workspace: { id: string; root: string; name: string; git: GitSummary };
+  workspaces: WorkspaceInfo[];
   default_provider: string | null;
   providers: Record<string, Capabilities>;
   terminals: TerminalInfo[];
@@ -139,6 +163,8 @@ export interface ReadingState {
 }
 
 export interface RecentItem {
+  workspace_id?: string;
+  workspace_name?: string | null;
   document_id: string;
   path: string;
   missing: boolean;
@@ -330,7 +356,7 @@ export function subscribeGlobal(onEvent: (ev: Record<string, any>) => void): () 
       /* ignore */
     }
   };
-  for (const t of ["file_changed", "tree_changed", "job_event", "terminal_state", "preview_update", "watcher_ready", "message"]) {
+  for (const t of ["file_changed", "tree_changed", "job_event", "terminal_state", "preview_update", "watcher_ready", "workspaces_changed", "review_finished", "commit", "message"]) {
     es.addEventListener(t, handler as EventListener);
   }
   return () => es.close();

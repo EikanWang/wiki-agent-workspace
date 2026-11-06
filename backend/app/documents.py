@@ -283,6 +283,9 @@ class DocumentService:
 
     def current_content(self, doc: Document) -> tuple[str, bytes, str]:
         """Returns (text, bytes, sha256) of the current file. Marks the doc missing if gone."""
+        if doc.workspace_id != self.workspace_id:
+            # never read a document's path relative to another root folder
+            raise ApiError(409, "WRONG_WORKSPACE", "this document belongs to another folder of the window", {"workspace_id": doc.workspace_id})
         try:
             _, data = self.read_bytes(doc.path)
         except ApiError as exc:
@@ -812,8 +815,23 @@ def relink_document(doc_id: str, body: RelinkIn, ctx: AppContext = Depends(requi
 
 
 @router.get("/recent")
-def recent_work(limit: int = Query(50, ge=1, le=500), include_hidden: bool = Query(False), ctx: AppContext = Depends(require_auth)):
-    return {"items": _svc(ctx).recent(limit, include_hidden)}
+def recent_work(limit: int = Query(50, ge=1, le=500), include_hidden: bool = Query(False), all_workspaces: bool = Query(False, alias="all"),
+                ctx: AppContext = Depends(require_auth)):
+    """Recent work of the current folder, or of every folder of the window with `all=true` (each item tagged)."""
+    if not all_workspaces or ctx.workspaces is None:
+        items = _svc(ctx).recent(limit, include_hidden)
+        for it in items:
+            it["workspace_id"] = ctx.workspace_id
+        return {"items": items}
+    names = {w["id"]: w["name"] for w in ctx.workspaces.list()}
+    items: list[dict[str, Any]] = []
+    for wid in ctx.workspaces.order:
+        for it in ctx.workspaces.runtimes[wid].docs.recent(limit, include_hidden):
+            it["workspace_id"] = wid
+            it["workspace_name"] = names.get(wid)
+            items.append(it)
+    items.sort(key=lambda e: e["last_activity"], reverse=True)
+    return {"items": items[:limit]}
 
 
 class HiddenIn(BaseModel):

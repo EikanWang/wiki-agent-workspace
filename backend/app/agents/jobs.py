@@ -36,8 +36,9 @@ class JobManager:
         self._pending_permissions: dict[str, dict[str, Any]] = {}
         self._on_complete: dict[str, Any] = {}
         self._shutting_down = False
-        self.locks = None       # LockService, set by main
-        self.documents = None   # DocumentService, set by main
+        self.locks = None       # LockService of the primary root, set by main
+        self.documents = None   # DocumentService of the primary root, set by main
+        self.registry = None    # WorkspaceRegistry: resolves each session's root folder
 
     # ------------------------------------------------------------------ startup
     def mark_interrupted(self) -> int:
@@ -225,6 +226,7 @@ class JobManager:
             native_id = session.native_id
             display_name = session.display_name
             model, variant = session.model, session.variant
+            session_ws = session.workspace_id
             prompt = job.prompt
             context = json.loads(job.context_json or "{}")
             thread_id = job.thread_id
@@ -237,10 +239,11 @@ class JobManager:
             if not caps.available:
                 raise ProviderError("PROVIDER_UNAVAILABLE", caps.error or f"{provider} is not available")
             cwd = Path(context["_cwd"]) if context.get("_cwd") else None
+            root, locks_svc = self._root_and_locks(session_ws)
             lock = None
             doc_path = context.get("document_path")
-            if self.locks is not None and doc_path and kind == "turn":
-                lock = self.locks.covering(doc_path)
+            if locks_svc is not None and doc_path and kind == "turn":
+                lock = locks_svc.covering(doc_path)
             sandbox = self.codex_sandbox if provider == "codex" else None
             if lock:
                 prompt = (prompt + "\n\nIMPORTANT: The user has LOCKED this document" + (f" (reason: {lock['reason']})" if lock.get("reason") else "")
@@ -250,12 +253,12 @@ class JobManager:
                     sandbox = "read-only"
                 self._emit(job_id, "notice", {"message": f"{doc_path} is locked; the agent runs read-only for this turn" + (" (Codex sandbox read-only)" if provider == "codex" else "")})
             pre_sha = None
-            if lock and self.documents is not None:
+            if lock:
                 try:
-                    pre_sha = self._sha_of(doc_path)
+                    pre_sha = self._sha_of(doc_path, root)
                 except Exception:
                     pre_sha = None
-            turn = TurnContext(prompt=prompt, workspace=self.workspace, native_session_id=native_id,
+            turn = TurnContext(prompt=prompt, workspace=root, native_session_id=native_id,
                                title=display_name or (doc_path and f"Wiki: {doc_path}"),
                                cwd=cwd, sandbox=sandbox, model=model, variant=variant)
             handle = await adapter.resume_turn(turn)
@@ -323,9 +326,9 @@ class JobManager:
             text = "".join(texts[p] for p in order)
         if final is None:
             final = AgentEvent("failed", {"code": "PROVIDER_FAILED", "message": "the provider ended without a result"})
-        if lock and pre_sha is not None and self.documents is not None:
+        if lock and pre_sha is not None:
             try:
-                post_sha = self._sha_of(doc_path)
+                post_sha = self._sha_of(doc_path, root)
             except Exception:
                 post_sha = pre_sha
             if post_sha != pre_sha:
@@ -347,10 +350,17 @@ class JobManager:
                                          "hint": self._hint_for(code, provider)})
             self._mark_session_from_failure(job_id, code)
 
-    def _sha_of(self, rel: str) -> str | None:
+    def _root_and_locks(self, workspace_id: str | None):
+        """Root folder and lock service of the session's workspace (multi-root windows)."""
+        if self.registry is not None and workspace_id and workspace_id in self.registry.runtimes:
+            rt = self.registry.runtimes[workspace_id]
+            return rt.root, rt.locks
+        return self.workspace, self.locks
+
+    def _sha_of(self, rel: str, root: Path | None = None) -> str | None:
         import hashlib
 
-        p = self.workspace / rel
+        p = (root or self.workspace) / rel
         if not p.is_file():
             return None
         return hashlib.sha256(p.read_bytes()).hexdigest()
