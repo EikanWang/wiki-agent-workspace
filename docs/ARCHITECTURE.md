@@ -58,7 +58,7 @@ frontend/src/
   markdown.ts      markdown-it + DOMPurify, GitHub slugs, link rewriting (#frag, page.md#frag, images → /raw)
   textmodel.ts     DOM text model, selection → anchor, offsets ↔ DOM Range, client-side resolution
   App.tsx          state container: auth, active folder, document, threads, sessions, terminals, jobs, prefs, Recent
-  components/      Login, FileTree (multi-root), AddFolderDialog, Reader (render/highlights/selection popover/
+  components/      Login, FileTree (multi-root), AddFolderDialog, DocTabs (open documents), Reader (render/highlights/selection popover/
                    reading position/fragments/Read-Discuss), DiscussionPanel (Individual/Flat + useJobStream),
                    SessionPicker, ModelPicker, PreviewDialog, DiffReview (unified/split, ranges, inline threads,
                    review tray), Editor (in-browser editing), CommitPanel, TerminalPanel (xterm.js), RecentList, Layout (prefs, resizer,

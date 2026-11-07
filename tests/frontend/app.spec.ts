@@ -807,6 +807,19 @@ test("multi-root window: add a folder, work in both wikis, Recent across folders
   await page.getByTestId("tree-file-docs/guide.md").locator("button.tree-main").click();
   await expect(page.getByTestId("markdown-body").locator("h1")).toContainText("Guide");
   await expect(page.locator(".thread-item", { hasText: "only here?" })).toHaveCount(0);
+  // tabs: the same path is open in both wikis -> two tabs, told apart by the folder name; a tab switches folders
+  const secondId = await page.getByTestId("tree-root").nth(1).getAttribute("data-ws");
+  const tabIn = (wsId: string) => page.locator(`[data-testid="doc-tab"][data-ws="${wsId}"][data-path="docs/guide.md"]`);
+  await expect(tabIn(firstId!)).toHaveCount(1);
+  await expect(tabIn(secondId!)).toHaveCount(1);
+  await expect(tabIn(secondId!).locator(".doc-tab-hint")).toHaveText("Second");
+  await expect(tabIn(firstId!)).toHaveAttribute("aria-selected", "true");
+  await tabIn(secondId!).click();
+  await expect(page.getByTestId("markdown-body").locator("h1")).toHaveText("Second guide");
+  await expect(page.getByTestId("workspace-switch")).toHaveValue(secondId!);
+  await tabIn(firstId!).click();
+  await expect(page.getByTestId("markdown-body").locator("h1")).toContainText("Guide");
+  await expect(page.getByTestId("workspace-switch")).toHaveValue(firstId!);
   // Recent lists both wikis, tagged; opening the second wiki's entry switches folders
   await page.getByTestId("recent-button").click();
   await expect(page.getByTestId("recent-ws").first()).toBeVisible();
@@ -818,6 +831,7 @@ test("multi-root window: add a folder, work in both wikis, Recent across folders
   await page.getByTestId("tree-remove-Second").click();
   await expect(page.getByTestId("tree-root")).toHaveCount(1);
   await expect(page.getByTestId("markdown-body").locator("h1")).toContainText("Guide", { timeout: 10000 });
+  await expect(page.locator(`[data-testid="doc-tab"][data-ws="${secondId}"]`)).toHaveCount(0); // its tabs went with it
 });
 
 test("edit a file directly: save with Ctrl+S, preview, conflict handling, lock, unsaved-changes guard", async ({ page }) => {
@@ -1119,4 +1133,90 @@ test("file tree ↻: the spinner stops when the server cannot be reached; the ea
   await page.unroute("**/api/v1/files**");
   await page.getByTestId("tree-retry").first().click();
   await expect(page.getByTestId("tree-error")).toHaveCount(0, { timeout: 10000 });
+});
+
+test("document tabs: open several, switch, close (× / middle-click), unsaved-edit guard, remembered across reloads", async ({ page }) => {
+  const ws = workspaceDir();
+  fs.mkdirSync(path.join(ws, "other"), { recursive: true });
+  fs.writeFileSync(path.join(ws, "other", "guide.md"), "# Other guide\n\nA second file with the same name.\n");
+  try {
+    await login(page);
+    // start clean
+    await page.evaluate(() => localStorage.removeItem("waw.docTabs"));
+    await page.reload();
+    for (const x of await page.getByTestId("doc-tab-close").all()) await x.click({ force: true }).catch(() => undefined);
+    const tabs = page.getByTestId("doc-tab");
+    const tab = (p: string) => page.locator(`[data-testid="doc-tab"][data-path="${p}"]`);
+    const h1 = page.getByTestId("markdown-body").locator("h1");
+    const open = async (p: string) => {
+      await page.getByTestId("tree-refresh").click();
+      await expect(page.getByTestId("tree-refresh")).toHaveAttribute("data-spinning", "false");
+      const dir = p.includes("/") ? p.slice(0, p.indexOf("/")) : null;
+      if (dir) {
+        const row = page.getByTestId("tree-root").first().locator(".tree-row.dir", { hasText: dir }).first();
+        if ((await row.locator(".chev").textContent()) === "›") await row.click(); // expand only if collapsed
+      }
+      await page.getByTestId(`tree-file-${p}`).locator("button.tree-main").click();
+    };
+    await open("docs/guide.md");
+    await expect(h1).toHaveText(/^Guide/);
+    await open("README.md");
+    await expect(h1).toHaveText("Repo");
+    await open("other/guide.md");
+    await expect(h1).toHaveText("Other guide");
+    await expect(tabs).toHaveCount(3);
+    await expect(tab("other/guide.md")).toHaveAttribute("aria-selected", "true");
+    // same file name twice: the parent folder tells them apart
+    await expect(tab("docs/guide.md").locator(".doc-tab-hint")).toHaveText("docs");
+    await expect(tab("other/guide.md").locator(".doc-tab-hint")).toHaveText("other");
+    // opening an already open document switches to its tab instead of adding one
+    await open("README.md");
+    await expect(tabs).toHaveCount(3);
+    // a new tab opens right after the current one
+    await tab("docs/guide.md").click();
+    await expect(h1).toHaveText(/^Guide/);
+    fs.writeFileSync(path.join(ws, "docs", "tabs-new.md"), "# New one\n");
+    await open("docs/tabs-new.md");
+    await expect(h1).toHaveText("New one");
+    await expect.poll(() => tabs.evaluateAll((els) => els.map((e) => e.getAttribute("data-path")))).toEqual(["docs/guide.md", "docs/tabs-new.md", "README.md", "other/guide.md"]);
+    // switching tabs
+    await tab("README.md").click();
+    await expect(h1).toHaveText("Repo");
+    await expect(tab("README.md")).toHaveAttribute("aria-selected", "true");
+    // middle-click closes a background tab; the active one stays
+    await tab("docs/tabs-new.md").click({ button: "middle" });
+    await expect(tab("docs/tabs-new.md")).toHaveCount(0);
+    await expect(h1).toHaveText("Repo");
+    // closing the active tab opens its neighbour (the one to the right)
+    await tab("README.md").hover();
+    await tab("README.md").getByTestId("doc-tab-close").click();
+    await expect(h1).toHaveText("Other guide");
+    await expect(tab("other/guide.md")).toHaveAttribute("aria-selected", "true");
+    // unsaved edits: switching tabs asks first; dismissing keeps you in the editor
+    await page.getByTestId("doc-edit").click();
+    await page.getByTestId("editor-text").fill("# Other guide\n\nunsaved change\n");
+    page.once("dialog", (d) => d.dismiss());
+    await tab("docs/guide.md").click();
+    await expect(page.getByTestId("editor-text")).toHaveValue(/unsaved change/);
+    page.once("dialog", (d) => d.accept());
+    await tab("docs/guide.md").click();
+    await expect(h1).toHaveText(/^Guide/);
+    expect(fs.readFileSync(path.join(ws, "other", "guide.md"), "utf-8")).not.toContain("unsaved change");
+    // remembered across reloads, with the same active document
+    await page.reload();
+    await expect(tabs).toHaveCount(2);
+    await expect(tab("docs/guide.md")).toHaveAttribute("aria-selected", "true");
+    await expect(h1).toHaveText(/^Guide/);
+    // closing the last tab shows the start page, and it stays closed after a reload
+    await tab("other/guide.md").click({ button: "middle" });
+    await tab("docs/guide.md").getByTestId("doc-tab-close").click();
+    await expect(tabs).toHaveCount(0);
+    await expect(page.getByText("Open a Markdown file")).toBeVisible();
+    await page.reload();
+    await expect(page.getByText("Open a Markdown file")).toBeVisible();
+    await expect(tabs).toHaveCount(0);
+  } finally {
+    fs.rmSync(path.join(ws, "other"), { recursive: true, force: true });
+    fs.rmSync(path.join(ws, "docs", "tabs-new.md"), { force: true });
+  }
 });

@@ -502,3 +502,15 @@ mark.waw-hl.review.needs_review { border-bottom: 2px dashed var(--warn); }
   .refresh-icon.spinning { animation: refresh-pulse 0.7s ease-in-out infinite; }
   @keyframes refresh-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 }
+/* Document tabs (open documents), above the reader */
+.doc-tabs { display: flex; gap: 2px; align-items: flex-end; padding: 6px 8px 0; border-bottom: 1px solid var(--border); background: var(--card); overflow-x: auto; overflow-y: hidden; flex-shrink: 0; scrollbar-width: thin; }
+.doc-tab { display: inline-flex; align-items: center; gap: 6px; max-width: 240px; padding: 5px 6px 5px 10px; border: 1px solid transparent; border-bottom: none; border-radius: 8px 8px 0 0; color: var(--muted); cursor: pointer; font-size: 13px; white-space: nowrap; user-select: none; flex-shrink: 0; transition: background-color 0.12s, color 0.12s; }
+.doc-tab:hover { background: var(--accent); color: var(--fg); }
+.doc-tab.active { background: var(--bg); color: var(--fg); border-color: var(--border); margin-bottom: -1px; padding-bottom: 6px; font-weight: 600; box-shadow: inset 0 2px 0 var(--primary); }
+.doc-tab:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+.doc-tab-name { overflow: hidden; text-overflow: ellipsis; }
+.doc-tab-hint { color: var(--muted); font-size: 11px; font-weight: 400; overflow: hidden; text-overflow: ellipsis; max-width: 90px; }
+.doc-tab .tab-x { border: none; background: transparent; color: inherit; cursor: pointer; border-radius: 4px; width: 18px; height: 18px; line-height: 16px; padding: 0; font-size: 14px; opacity: 0; transition: opacity 0.12s, background-color 0.12s; }
+.doc-tab:hover .tab-x, .doc-tab.active .tab-x, .doc-tab .tab-x:focus-visible { opacity: 0.7; }
+.doc-tab .tab-x:hover { opacity: 1; background: color-mix(in srgb, var(--fg) 12%, transparent); }
+@media (hover: none) { .doc-tab .tab-x { opacity: 0.7; } }

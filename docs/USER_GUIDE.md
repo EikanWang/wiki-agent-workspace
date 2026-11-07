@@ -15,7 +15,8 @@ Contents: [Window layout](#window-layout) · [Folders (multi-root)](#folders-mul
 ```
 ┌ top bar: Files toggle · folder switcher · document session · Lock · Document | Terminal | Diff · Recent · Aa ┐
 ├ file tree (all folders) ┬ document / diff / terminal ───────────────────────┬ discussions panel ┤
-│ ＋ add folder  ↻ refresh │ header: path · format · branch · git status ·      │ Individual | Flat  │
+│ ＋ add folder  ↻ refresh │ tabs: guide.md × │ README.md × │ notes.md ×       │ Individual | Flat  │
+│                         │ header: path · format · branch · git status ·      │                    │
 │ ▾ wiki-a  (main)  ±     │ Read | Discuss · Ask about selection              │                    │
 │   ▸ docs                │ outline (foldable) │ rendered content              │                    │
 │ ▾ wiki-b  (dev)   ± ✕   │                                                    │                    │
@@ -46,6 +47,11 @@ state. Nothing is shared between folders except your login, terminals and prefer
 
 ## Reading documents
 
+- **Tabs**: every document you open gets a tab above the reader (like the terminal tabs); opening one that is
+  already open switches to it, and a new tab opens right after the current one. Click a tab to switch (also across
+  folders); close it with `×` or a middle-click — closing the active tab opens its neighbour. Drag tabs to reorder.
+  Tabs are remembered in this browser. Two files with the same name show their parent folder (or the folder name
+  when the same path is open in two wikis). Switching away from unsaved edits asks first.
 - The tree lists every file with a kind icon (folder, Markdown, image, PDF, notebook, code, script, data, text,
   archive, binary; a small arrow marks symlinks, a broken-link icon marks dangling ones). Git status badges show
   `untracked` / `modified` / `clean`.

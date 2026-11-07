@@ -22,6 +22,7 @@ import {
 } from "./api";
 import Login from "./components/Login";
 import FileTree, { notifyTreeChanged } from "./components/FileTree";
+import DocTabs, { DocTab, loadTabs, sameTab, withTab } from "./components/DocTabs";
 import Reader from "./components/Reader";
 import DiscussionPanel, { LiveJob, SessionChip, useJobStream } from "./components/DiscussionPanel";
 import SessionPicker from "./components/SessionPicker";
@@ -40,6 +41,9 @@ export default function App() {
   const [authed, setAuthed] = useState<boolean | null>(null);
   const [view, setView] = useState<View>("document");
   const [doc, setDoc] = useState<OpenDocument | null>(null);
+  // open documents as tabs (folder + path), remembered in this browser; `lastTab` = the tab read most recently
+  const [docTabs, setDocTabs] = useState<DocTab[]>(loadTabs);
+  const lastTab = useRef<(DocTab & { document_id: string }) | null>(null);
   const [docError, setDocError] = useState<string | null>(null);
   const [threads, setThreads] = useState<Thread[]>([]);
   const [marks, setMarks] = useState<ReviewMark[]>([]);
@@ -197,6 +201,12 @@ export default function App() {
       setDocError(null);
       try {
         const d = await get<OpenDocument>(`/documents/open?path=${encodeURIComponent(path)}`);
+        const tab = { ws: getWorkspace() ?? "", path: d.path };
+        const prev = lastTab.current;
+        // relinked (same document, new path): the tab follows; otherwise a new tab opens after the current one
+        const renamed = prev && prev.document_id === d.document_id && !sameTab(prev, tab) ? prev : null;
+        setDocTabs((tabs) => withTab(tabs, tab, prev, renamed));
+        lastTab.current = { ...tab, document_id: d.document_id };
         setDoc(d);
         setChanged(null);
         if (!keepThread) {
@@ -247,6 +257,58 @@ export default function App() {
       }
     },
     [openDocument, refreshSessions],
+  );
+
+  useEffect(() => {
+    localStorage.setItem("waw.docTabs", JSON.stringify(docTabs));
+  }, [docTabs]);
+  // tabs of folders that are no longer in the window go away (their data is kept server-side)
+  useEffect(() => {
+    if (!workspaces.length) return;
+    setDocTabs((tabs) => {
+      const keep = tabs.filter((t) => workspaces.some((w) => w.id === t.ws));
+      return keep.length === tabs.length ? tabs : keep;
+    });
+  }, [workspaces]);
+
+  const activateDocTab = useCallback(
+    (t: DocTab) => {
+      if (t.ws !== getWorkspace()) switchWorkspace(t.ws, false);
+      void openDocument(t.path);
+    },
+    [switchWorkspace, openDocument],
+  );
+
+  const closeDocTab = useCallback(
+    (t: DocTab) => {
+      const activeTab = doc ? { ws: activeWs ?? "", path: doc.path } : null;
+      const isActive = sameTab(t, activeTab);
+      if (isActive && !confirmLeaveEditor()) return;
+      const idx = docTabs.findIndex((x) => sameTab(x, t));
+      const rest = docTabs.filter((x) => !sameTab(x, t));
+      setDocTabs(rest);
+      // don't reopen a closed document at the next start
+      if (localStorage.getItem(`waw.lastPath.${t.ws}`) === t.path) {
+        const other = rest.find((x) => x.ws === t.ws);
+        if (other) localStorage.setItem(`waw.lastPath.${t.ws}`, other.path);
+        else localStorage.removeItem(`waw.lastPath.${t.ws}`);
+      }
+      if (localStorage.getItem("waw.lastPath") === t.path) localStorage.removeItem("waw.lastPath");
+      if (!isActive) return;
+      editorDirty.current = false;
+      lastTab.current = null;
+      const next = rest[idx] ?? rest[idx - 1];
+      if (next) activateDocTab(next);
+      else {
+        setDoc(null);
+        setThreads([]);
+        setMarks([]);
+        setActiveThread(null);
+        setChanged(null);
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [doc, activeWs, docTabs, activateDocTab],
   );
 
   // ---------------------------------------------------------------- global events
@@ -578,6 +640,24 @@ export default function App() {
         </aside>
 
         <section className="center" style={{ display: view === "document" ? undefined : "none" }}>
+          <DocTabs
+            tabs={workspaces.length ? docTabs.filter((t) => workspaces.some((w) => w.id === t.ws && w.available)) : docTabs}
+            active={doc ? { ws: activeWs ?? "", path: doc.path } : null}
+            workspaces={workspaces}
+            onActivate={activateDocTab}
+            onClose={closeDocTab}
+            onReorder={(moved, target) =>
+              setDocTabs((tabs) => {
+                const from = tabs.findIndex((x) => sameTab(x, moved));
+                const to = tabs.findIndex((x) => sameTab(x, target));
+                if (from < 0 || to < 0) return tabs;
+                const out = [...tabs];
+                out.splice(from, 1);
+                out.splice(to, 0, moved);
+                return out;
+              })
+            }
+          />
           {docError && <div className="banner warn">{docError}</div>}
           {doc ? (
             <Reader
