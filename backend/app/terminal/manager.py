@@ -29,6 +29,15 @@ router = APIRouter()
 MIN_COLS, MAX_COLS, MIN_ROWS, MAX_ROWS = 2, 1000, 1, 500
 
 
+def default_label(taken) -> str:
+    """Lowest "Terminal N" not used by a visible tab (closing Terminal 2 frees the name for the next one)."""
+    used = set(taken)
+    n = 1
+    while f"Terminal {n}" in used:
+        n += 1
+    return f"Terminal {n}"
+
+
 def terminal_dict(t: Terminal) -> dict[str, Any]:
     return {"id": t.id, "label": t.label, "cwd": t.cwd, "tab_order": t.tab_order, "state": t.state,
             "tmux_session": t.tmux_session, "created_at": iso(t.created_at), "updated_at": iso(t.updated_at)}
@@ -111,8 +120,11 @@ class TerminalManager:
         except TmuxError as exc:
             raise ApiError(503, "TMUX_ERROR", str(exc))
         with self.db.write() as s:
-            order = max([t.tab_order for t in s.query(Terminal).all()], default=-1) + 1
-            t = Terminal(id=tid, tmux_session=name, label=label or f"Terminal {order + 1}", cwd=str(start), tab_order=order, state="live")
+            # closed rows are kept (hidden) for history: number and place new tabs among the visible ones only
+            shown = s.query(Terminal).filter(Terminal.state != "closed").all()
+            order = max([t.tab_order for t in shown], default=-1) + 1
+            t = Terminal(id=tid, tmux_session=name, label=label or default_label(t.label for t in shown), cwd=str(start),
+                         tab_order=order, state="live")
             s.add(t)
             s.flush()
             d = terminal_dict(t)

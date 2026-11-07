@@ -170,7 +170,10 @@ or **delete** a document's app history (discussions, versions, position — the 
 Real shells in tmux on the server, in as many tabs as you like; new terminals start in the active folder. Closing the
 browser only detaches; reattach later and everything is still running, even across server restarts. **tmux
 history** shows the server-side scrollback. Tabs whose shell exited show *(exited)*: dismiss them with `×` or
-**Clear exited**; closing a live terminal asks first.
+**Clear exited**; closing a live terminal asks first. **Close terminal** ends the tmux session: its shell and
+programs get SIGHUP (as when an SSH connection closes) and nothing is left running, except programs started to
+outlive the shell (`nohup`, `setsid`). New tabs are named with the lowest free number (close *Terminal 2* and the
+next new tab is *Terminal 2* again); double-click a tab to rename it.
 
 **Keys the browser keeps for itself.** In a normal browser tab, Chrome/Edge/Firefox never pass a few shortcuts to the
 page — Ctrl+T, Ctrl+W, Ctrl+N, Ctrl+Tab and similar open/close tabs and windows instead. Three ways to send them:

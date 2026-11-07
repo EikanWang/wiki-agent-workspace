@@ -282,6 +282,23 @@ def test_killed_tmux_session_shows_exited_not_resumed(tc):
     tc.delete(f"/api/v1/terminals/{t['id']}", headers=tc.mut)
 
 
+def test_new_terminal_takes_the_lowest_free_number(tc):
+    new = lambda: tc.post("/api/v1/terminals", json={}, headers=tc.mut).json()  # noqa: E731
+    t1, t2, t3 = new(), new(), new()
+    assert [t["label"] for t in (t1, t2, t3)] == ["Terminal 1", "Terminal 2", "Terminal 3"]
+    tc.delete(f"/api/v1/terminals/{t2['id']}", headers=tc.mut)
+    t4 = new()
+    assert t4["label"] == "Terminal 2"  # the closed tab's name is reused
+    assert t4["tab_order"] > t3["tab_order"]  # but the new tab still opens at the end
+    # a renamed tab does not hold a number; closing everything starts again at 1
+    tc.patch(f"/api/v1/terminals/{t1['id']}", json={"label": "build"}, headers=tc.mut)
+    assert new()["label"] == "Terminal 1"
+    for t in tc.get("/api/v1/terminals").json()["terminals"]:
+        tc.delete(f"/api/v1/terminals/{t['id']}", headers=tc.mut)
+    first = new()
+    assert first["label"] == "Terminal 1" and first["tab_order"] == 0
+
+
 def test_terminal_create_rejects_bad_cwd(tc):
     r = tc.post("/api/v1/terminals", json={"cwd": "/definitely/not/here"}, headers=tc.mut)
     assert r.status_code == 400
