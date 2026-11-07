@@ -485,7 +485,7 @@ export default function App() {
     >
       <header className="topbar">
         <button
-          className={`btn small toggle ${sidebarOpen ? "on" : ""}`}
+          className={`btn small toggle files-toggle ${sidebarOpen ? "on" : ""}`}
           onClick={() => setSidebarOpen((s) => !s)}
           title={sidebarOpen ? "Hide the file tree" : "Show the file tree"}
           aria-pressed={sidebarOpen}

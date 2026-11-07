@@ -1039,3 +1039,24 @@ test("file tree: only the list scrolls; the header with ＋ and ↻ stays in pla
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("Files button: on hover the icon slides toward where the tree goes and the button lights up", async ({ page }) => {
+  await login(page);
+  const btn = page.getByTestId("toggle-sidebar");
+  const glyph = btn.locator(".toggle-glyph");
+  if ((await btn.getAttribute("data-state")) !== "open") await btn.click();
+  await page.mouse.move(0, 400); // not hovering
+  await expect(glyph).toHaveCSS("translate", "none");
+  await expect(btn).toHaveCSS("box-shadow", "none");
+  await btn.hover();
+  await expect(glyph).toHaveCSS("translate", "-3px"); // open: hints "hide" (left)
+  await expect(btn).not.toHaveCSS("box-shadow", "none"); // glow ring, visible even in the "on" state
+  await page.mouse.move(0, 400);
+  await expect(glyph).toHaveCSS("translate", "none"); // eases back
+  await btn.click(); // close the tree
+  await expect(btn).toHaveAttribute("data-state", "closed");
+  await btn.hover();
+  await expect(glyph).toHaveCSS("translate", "3px"); // closed: hints "show" (right)
+  await btn.click(); // reopen for the following tests
+  await expect(btn).toHaveAttribute("data-state", "open");
+});

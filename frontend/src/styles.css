@@ -55,6 +55,21 @@ a { color: var(--primary); }
 .btn.toggle { display: inline-flex; align-items: center; gap: 5px; }
 .btn.toggle.on { background: var(--accent); border-color: var(--primary); color: var(--primary); }
 .toggle-glyph { font-size: 14px; line-height: 1; }
+/* Files button: on hover the panel icon slides toward where the tree goes (left = hide, right = show), with a
+   little overshoot; the button lights up like the refresh button. A transition, so leaving eases back. */
+.files-toggle { transition: background-color 0.15s, color 0.15s, border-color 0.15s, box-shadow 0.15s, transform 0.1s; }
+/* the glow ring also shows when the button is already "on" (tree open: accent background + primary border) */
+.files-toggle:hover { background: var(--accent); color: var(--primary); border-color: var(--primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 22%, transparent); }
+.files-toggle:active { transform: scale(0.95); }
+.files-toggle:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.files-toggle .toggle-glyph { display: inline-block; transition: translate 0.3s cubic-bezier(0.34, 1.8, 0.64, 1); }
+.files-toggle[data-state="open"]:hover .toggle-glyph { translate: -3px 0; }
+.files-toggle[data-state="closed"]:hover .toggle-glyph { translate: 3px 0; }
+@media (prefers-reduced-motion: reduce) {
+  .files-toggle .toggle-glyph { transition: none; }
+  .files-toggle:hover .toggle-glyph { translate: none !important; }
+}
 .btn.session-btn { display: inline-flex; align-items: center; gap: 6px; }
 .btn.session-btn .chip { background: transparent; padding: 0; font-size: 13px; }
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
