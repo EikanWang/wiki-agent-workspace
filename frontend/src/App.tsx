@@ -21,7 +21,7 @@ import {
   subscribeGlobal,
 } from "./api";
 import Login from "./components/Login";
-import FileTree from "./components/FileTree";
+import FileTree, { notifyTreeChanged } from "./components/FileTree";
 import Reader from "./components/Reader";
 import DiscussionPanel, { LiveJob, SessionChip, useJobStream } from "./components/DiscussionPanel";
 import SessionPicker from "./components/SessionPicker";
@@ -48,6 +48,8 @@ export default function App() {
   const [terminals, setTerminals] = useState<TerminalInfo[]>([]);
   const [activeTerminal, setActiveTerminal] = useState<string | null>(() => localStorage.getItem("waw.activeTerminal"));
   const [treeKey, setTreeKey] = useState(0);
+  const [diffTick, setDiffTick] = useState(0);
+  const diffThrottle = useRef<number | undefined>(undefined);
   const [changed, setChanged] = useState<{ sha256?: string; missing?: boolean } | null>(null);
   const [liveJobId, setLiveJobId] = useState<string | null>(null);
   const [showSessions, setShowSessions] = useState(false);
@@ -251,7 +253,16 @@ export default function App() {
   useEffect(() => {
     if (!authed) return;
     return subscribeGlobal((ev) => {
-      if (ev.type === "tree_changed") setTreeKey((k) => k + 1);
+      if (ev.type === "tree_changed") {
+        // the tree reloads only the folders that changed; the diff view (whole-folder diff) at most every 2 s
+        notifyTreeChanged({ ws: ev.workspace_id ?? null, dirs: Array.isArray(ev.dirs) ? ev.dirs : null });
+        if (diffThrottle.current === undefined) {
+          diffThrottle.current = window.setTimeout(() => {
+            diffThrottle.current = undefined;
+            setDiffTick((t) => t + 1);
+          }, 2000);
+        }
+      }
       if (ev.type === "watcher_ready") setWatcherReady(true);
       if (ev.type === "workspaces_changed") {
         void refreshWorkspaces();
@@ -635,7 +646,7 @@ export default function App() {
               isDir={diffTarget.isDir}
               sessions={sessions}
               defaultProvider={boot.default_provider}
-              refreshKey={treeKey}
+              refreshKey={treeKey + diffTick}
               onOpenDocument={(p) => void openDocument(p)}
               onOpenThread={(p, tid) => {
                 restoreThreadRef.current = tid;

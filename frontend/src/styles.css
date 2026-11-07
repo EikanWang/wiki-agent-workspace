@@ -133,6 +133,8 @@ body.resizing { cursor: col-resize; user-select: none; }
 .git-badge.untracked, .git-badge.modified, .git-badge.deleted { background: var(--warn-bg); color: var(--warn); }
 .tree-loading, .tree-empty, .tree-error { padding: 6px 8px; color: var(--muted); font-size: 13px; }
 .tree-error { color: var(--red); }
+.tree-error.stale { color: var(--muted); font-style: italic; }
+.tree-error .link-btn { font-size: 12px; }
 
 /* reader */
 .reader { display: flex; flex-direction: column; min-height: 0; flex: 1; }

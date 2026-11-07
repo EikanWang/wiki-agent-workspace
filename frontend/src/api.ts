@@ -34,20 +34,33 @@ export function getCsrf(): string | null {
 
 const BASE = "/api/v1";
 
-export async function api<T>(method: string, path: string, body?: unknown, opts: { idempotencyKey?: string; workspace?: string | null } = {}): Promise<T> {
+export async function api<T>(method: string, path: string, body?: unknown, opts: { idempotencyKey?: string; workspace?: string | null; timeoutMs?: number } = {}): Promise<T> {
   const headers: Record<string, string> = { Accept: "application/json" };
   const ws = opts.workspace !== undefined ? opts.workspace : workspaceId;
   if (ws) headers["X-Workspace"] = ws;
   if (body !== undefined) headers["Content-Type"] = "application/json";
   if (method !== "GET" && csrfToken) headers["X-CSRF-Token"] = csrfToken;
   if (opts.idempotencyKey) headers["Idempotency-Key"] = opts.idempotencyKey;
-  const resp = await fetch(BASE + path, {
-    method,
-    headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
-    credentials: "same-origin",
-  });
-  const text = await resp.text();
+  const ctl = opts.timeoutMs ? new AbortController() : null;
+  const timer = ctl ? window.setTimeout(() => ctl.abort(), opts.timeoutMs) : undefined;
+  let resp: Response;
+  let text: string;
+  try {
+    resp = await fetch(BASE + path, {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+      credentials: "same-origin",
+      signal: ctl?.signal,
+    });
+    text = await resp.text();
+  } catch (e) {
+    // fetch() rejects only when no HTTP response arrived: server unreachable, connection dropped, or our timeout
+    if (ctl?.signal.aborted) throw new ApiError(0, "TIMEOUT", `no answer from the server within ${Math.round(opts.timeoutMs! / 1000)} s`, {});
+    throw new ApiError(0, "NETWORK", `cannot reach the server (${(e as Error).message})`, {});
+  } finally {
+    window.clearTimeout(timer);
+  }
   let data: unknown = null;
   try {
     data = text ? JSON.parse(text) : null;
@@ -63,7 +76,7 @@ export async function api<T>(method: string, path: string, body?: unknown, opts:
 
 export const get = <T,>(path: string) => api<T>("GET", path);
 /** GET scoped to a specific root folder (e.g. the multi-root file tree loading a non-active root). */
-export const getIn = <T,>(workspace: string, path: string) => api<T>("GET", path, undefined, { workspace });
+export const getIn = <T,>(workspace: string, path: string, opts: { timeoutMs?: number } = {}) => api<T>("GET", path, undefined, { workspace, ...opts });
 export const post = <T,>(path: string, body?: unknown, opts?: { idempotencyKey?: string; workspace?: string | null }) => api<T>("POST", path, body ?? {}, opts);
 export const put = <T,>(path: string, body?: unknown) => api<T>("PUT", path, body ?? {});
 export const patch = <T,>(path: string, body?: unknown) => api<T>("PATCH", path, body ?? {});

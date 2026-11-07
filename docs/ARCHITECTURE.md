@@ -95,6 +95,12 @@ child dies or the pipe breaks, the watcher restarts it with backoff (2, 4, 8… 
 it is ready, publishes `tree_changed` so clients pick up what changed in the gap. A child that reports its own error
 (e.g. inotify watch limit) is not restarted; its message is shown instead.
 
+`tree_changed` from the watcher carries `dirs`: the folders whose listing changed (omitted above 200 → reload all).
+The FileTree requests only *visible* folders (root and every parent expanded and listed), parents before children,
+at most 4 at a time with a 20 s timeout. Refreshes never overlap: requests made during one are merged into the next,
+and watcher events are folded for 1 s, then only the changed folders and their parents are reloaded. Expanded
+folders are remembered in `localStorage`; ones that vanished are forgotten when their parent is listed or on 404.
+
 `require_auth` / `require_auth_mutating` return a *scoped copy* of `AppContext` (`deps.scoped`) whose `documents`,
 `locks`, `watcher`, `workspace_id` and `workspace_root` belong to one root. The root is chosen as:
 

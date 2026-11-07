@@ -139,3 +139,26 @@ async def test_child_reported_error_is_kept_and_not_retried(tmp_path: Path):
     w._lost("the watcher process closed its pipe")
     assert w._restart_handle is None
     assert "inotify watch limit" in (w.error or "")
+
+
+async def test_tree_changed_names_the_folders_that_changed(tmp_path: Path):
+    """Clients reload only these folders instead of every folder they show."""
+    root = tmp_path / "wiki"
+    (root / "a" / "b").mkdir(parents=True)
+    bus = Bus()
+    w = W.WorkspaceWatcher(root, Docs(), bus)
+    w.start()
+    try:
+        assert await _wait(lambda: w.ready)
+        (root / "a" / "b" / "new.md").write_text("# new\n")
+        (root / "top.txt").write_text("x")
+        assert await _wait(lambda: any(e.get("type") == "tree_changed" for e in bus.events), 15)
+        await asyncio.sleep(1.0)  # let a second batch (if the two writes were split) arrive
+        dirs = set()
+        for e in bus.events:
+            if e.get("type") == "tree_changed":
+                assert "dirs" in e, e
+                dirs |= set(e["dirs"])
+        assert dirs == {"a/b", ""}, dirs
+    finally:
+        await w.stop()

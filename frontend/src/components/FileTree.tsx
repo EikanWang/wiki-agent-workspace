@@ -1,19 +1,47 @@
 import RefreshButton from "./RefreshButton";
-import { useCallback, useEffect, useState } from "react";
-import { FileItem, GitSummary, WorkspaceInfo, getIn } from "../api";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { ApiError, FileItem, GitSummary, WorkspaceInfo, getIn } from "../api";
 import { FileIcon, KIND_LABEL, formatSize } from "./FileIcon";
 
 interface DirState {
   items: FileItem[];
   loading: boolean;
+  /** last refresh failed; `loaded` tells whether `items` still hold an earlier good listing */
   error: string | null;
+  loaded: boolean;
 }
 
 const key = (ws: string, path: string) => `${ws}\u0000${path}`;
+const parentOf = (path: string) => (path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "");
+const isUnder = (path: string, dir: string) => dir === "" || path === dir || path.startsWith(dir + "/");
+
+const LOAD_TIMEOUT_MS = 20_000;
+const MAX_PARALLEL = 4; // the browser allows ~6 connections per host and the event stream holds one
+const EVENT_THROTTLE_MS = 1_000; // file changes arriving in bursts are folded into one refresh
+
+/** The watcher's `tree_changed` events, handed from App's event stream to the tree (no second EventSource). */
+type TreeChange = { ws: string | null; dirs: string[] | null };
+const treeListeners = new Set<(c: TreeChange) => void>();
+export function notifyTreeChanged(c: TreeChange): void {
+  for (const l of treeListeners) l(c);
+}
+
+async function inParallel<T>(items: T[], limit: number, fn: (t: T) => Promise<unknown>): Promise<void> {
+  let i = 0;
+  const worker = async () => {
+    while (i < items.length) await fn(items[i++]);
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+}
 
 /**
  * Multi-root file tree (VS Code-style "folders in a workspace"). Each root folder is a top-level node with its own
  * Git badge and actions; entries below it are loaded with that root's X-Workspace scope, so roots never mix.
+ *
+ * Only *visible* folders are ever requested: a folder is visible when its root and every parent are expanded and
+ * listed. Expanded folders are remembered across reloads; ones that disappeared are forgotten when their parent is
+ * listed (or when they answer 404). Refreshes never overlap: one runs at a time, at most MAX_PARALLEL requests
+ * each, and file-change events only reload the folders that changed.
  */
 export default function FileTree({
   workspaces,
@@ -36,10 +64,12 @@ export default function FileTree({
   onToggleLock?: (workspace: string, path: string, locked: boolean) => void;
   onAddFolder?: () => void;
   onRemoveFolder?: (workspace: WorkspaceInfo) => void;
+  /** bumped for changes that can affect any folder (commit, lock, agent turn finished): reload what is shown */
   refreshKey: number;
 }) {
   const [dirs, setDirs] = useState<Record<string, DirState>>({});
-  const [expanded, setExpanded] = useState<Set<string>>(() => {
+  const dirsRef = useRef(dirs); // read synchronously by the refresh loop
+  const [expanded, setExpandedState] = useState<Set<string>>(() => {
     try {
       const saved = JSON.parse(localStorage.getItem("waw.treeExpanded") || "null");
       if (Array.isArray(saved)) return new Set(saved as string[]);
@@ -48,9 +78,27 @@ export default function FileTree({
     }
     return new Set<string>();
   });
+  const expandedRef = useRef(expanded);
+  const workspacesRef = useRef(workspaces);
+  workspacesRef.current = workspaces;
   const multi = workspaces.length > 1;
 
+  const putDir = (k: string, st: DirState | null) => {
+    const next = { ...dirsRef.current };
+    if (st) next[k] = st;
+    else delete next[k];
+    dirsRef.current = next;
+    setDirs(next);
+  };
+  const setExpanded = (fn: (s: Set<string>) => Set<string>) => {
+    const next = fn(expandedRef.current);
+    if (next === expandedRef.current) return;
+    expandedRef.current = next;
+    setExpandedState(next);
+  };
+
   // every available root is expanded by default the first time it is seen
+  const wsSignature = workspaces.map((w) => `${w.id}:${w.available ? 1 : 0}`).join(",");
   useEffect(() => {
     setExpanded((s) => {
       const n = new Set(s);
@@ -67,38 +115,172 @@ export default function FileTree({
       }
       return changed ? n : s;
     });
-  }, [workspaces]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wsSignature]);
 
   useEffect(() => {
     localStorage.setItem("waw.treeExpanded", JSON.stringify([...expanded]));
   }, [expanded]);
 
+  /** Forget a folder and everything remembered below it (it no longer exists). */
+  const forget = (ws: string, path: string) => {
+    if (path === "") return; // a root's availability is reported by the server, not guessed here
+    setExpanded((s) => {
+      const n = new Set([...s].filter((k) => {
+        const [w, p] = k.split("\u0000");
+        return !(w === ws && isUnder(p, path));
+      }));
+      return n.size === s.size ? s : n;
+    });
+    for (const k of Object.keys(dirsRef.current)) {
+      const [w, p] = k.split("\u0000");
+      if (w === ws && isUnder(p, path)) putDir(k, null);
+    }
+  };
+
   const load = useCallback(async (ws: string, path: string) => {
     const k = key(ws, path);
-    setDirs((d) => ({ ...d, [k]: { items: d[k]?.items ?? [], loading: true, error: null } }));
+    const prev = dirsRef.current[k];
+    putDir(k, { items: prev?.items ?? [], loading: true, error: null, loaded: prev?.loaded ?? false });
     try {
-      const r = await getIn<{ items: FileItem[]; git: GitSummary }>(ws, `/files?path=${encodeURIComponent(path)}`);
-      setDirs((d) => ({ ...d, [k]: { items: r.items, loading: false, error: null } }));
+      const r = await getIn<{ items: FileItem[]; git: GitSummary }>(ws, `/files?path=${encodeURIComponent(path)}`, { timeoutMs: LOAD_TIMEOUT_MS });
+      putDir(k, { items: r.items, loading: false, error: null, loaded: true });
+      // remembered sub-folders that are gone (deleted, renamed, moved away) are forgotten
+      const present = new Set(r.items.filter((it) => it.type === "dir").map((it) => it.path));
+      for (const ek of expandedRef.current) {
+        const [w, p] = ek.split("\u0000");
+        if (w === ws && p !== path && !ek.endsWith("\u0001seen") && parentOf(p) === path && !present.has(p)) forget(ws, p);
+      }
     } catch (e) {
-      setDirs((d) => ({ ...d, [k]: { items: [], loading: false, error: (e as Error).message } }));
+      if (e instanceof ApiError && e.status === 404) {
+        forget(ws, path);
+        return;
+      }
+      // keep showing what we had; the next refresh tries again
+      putDir(k, { items: prev?.items ?? [], loading: false, error: (e as Error).message, loaded: prev?.loaded ?? false });
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const expandedEntries = () =>
-    [...expanded].filter((k) => !k.endsWith("\u0001seen")).map((k) => {
-      const [ws, path] = k.split("\u0000");
-      return { ws, path };
-    }).filter(({ ws }) => workspaces.some((w) => w.id === ws && w.available));
+  /** Expanded folders whose root and parents are expanded and listed, parents before children. */
+  const visibleLevels = (): { ws: string; path: string }[][] => {
+    const exp = expandedRef.current;
+    const levels: { ws: string; path: string }[][] = [];
+    let level = workspacesRef.current.filter((w) => w.available && exp.has(key(w.id, ""))).map((w) => ({ ws: w.id, path: "" }));
+    while (level.length) {
+      levels.push(level);
+      const next: { ws: string; path: string }[] = [];
+      for (const { ws, path } of level) {
+        const st = dirsRef.current[key(ws, path)];
+        if (!st?.loaded) continue;
+        for (const it of st.items) if (it.type === "dir" && exp.has(key(ws, it.path))) next.push({ ws, path: it.path });
+      }
+      level = next;
+    }
+    return levels;
+  };
+
+  /** Reload visible folders level by level (fresh parent listings decide which children are still there). */
+  const reloadVisible = async (only: Map<string, Set<string>> | null) => {
+    const done = new Set<string>();
+    for (;;) {
+      const targets = visibleLevels().flat().filter(({ ws, path }) => {
+        const k = key(ws, path);
+        if (done.has(k)) return false;
+        if (only && !only.get(ws)?.has(path)) return false;
+        return true;
+      });
+      if (!targets.length) return;
+      // parents first: the shallowest pending level, then look again
+      const depth = (p: string) => (p === "" ? 0 : p.split("/").length);
+      const min = Math.min(...targets.map((t) => depth(t.path)));
+      const batch = targets.filter((t) => depth(t.path) === min);
+      batch.forEach((t) => done.add(key(t.ws, t.path)));
+      await inParallel(batch, MAX_PARALLEL, (t) => load(t.ws, t.path));
+    }
+  };
+
+  // ---- one refresh at a time; requests made meanwhile are merged into the next run
+  const running = useRef(false);
+  const pendingAll = useRef(false);
+  const pendingDirs = useRef(new Map<string, Set<string>>());
+  const waiters = useRef<(() => void)[]>([]);
+  const throttle = useRef<number | undefined>(undefined);
+
+  const pump = async () => {
+    if (running.current) return;
+    running.current = true;
+    try {
+      while (pendingAll.current || pendingDirs.current.size) {
+        const only = pendingAll.current ? null : pendingDirs.current;
+        pendingAll.current = false;
+        pendingDirs.current = new Map();
+        const mine = waiters.current;
+        waiters.current = [];
+        try {
+          await reloadVisible(only);
+        } finally {
+          mine.forEach((r) => r());
+        }
+      }
+    } finally {
+      running.current = false;
+    }
+  };
+
+  /** ↻ button: reload everything shown; resolves when that reload finished (at most one queued run later). */
+  const refreshNow = () =>
+    new Promise<void>((resolve) => {
+      pendingAll.current = true;
+      waiters.current.push(resolve);
+      void pump();
+    });
+
+  const requestRefresh = (change: TreeChange | null) => {
+    if (!change || change.dirs === null || change.ws === null) pendingAll.current = true;
+    else {
+      // the folder that changed and its parents (their Git badges summarize it)
+      const set = pendingDirs.current.get(change.ws) ?? new Set<string>();
+      for (const d of change.dirs) for (let p = d; ; p = parentOf(p)) {
+        set.add(p);
+        if (p === "") break;
+      }
+      pendingDirs.current.set(change.ws, set);
+    }
+    if (throttle.current === undefined) {
+      throttle.current = window.setTimeout(() => {
+        throttle.current = undefined;
+        void pump();
+      }, EVENT_THROTTLE_MS);
+    }
+  };
 
   useEffect(() => {
-    for (const { ws, path } of expandedEntries()) void load(ws, path);
+    const l = (c: TreeChange) => requestRefresh(c);
+    treeListeners.add(l);
+    return () => {
+      treeListeners.delete(l);
+      window.clearTimeout(throttle.current);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refreshKey, workspaces]);
+  }, []);
 
+  const firstRefresh = useRef(true);
   useEffect(() => {
-    for (const { ws, path } of expandedEntries()) if (!dirs[key(ws, path)]) void load(ws, path);
+    if (firstRefresh.current) {
+      firstRefresh.current = false; // the first load comes from the effect below
+      return;
+    }
+    requestRefresh(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [expanded]);
+  }, [refreshKey, wsSignature]);
+
+  // newly visible folders (expanded by the user, or uncovered by a parent's listing) are loaded once
+  useEffect(() => {
+    const missing = visibleLevels().flat().filter(({ ws, path }) => !dirsRef.current[key(ws, path)]);
+    void inParallel(missing, MAX_PARALLEL, (t) => load(t.ws, t.path));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expanded, dirs, wsSignature]);
 
   const toggle = (ws: string, path: string) => {
     setExpanded((s) => {
@@ -112,12 +294,15 @@ export default function FileTree({
 
   const renderDir = (ws: WorkspaceInfo, path: string, depth: number, first: boolean): React.ReactNode => {
     const st = dirs[key(ws.id, path)];
-    if (!st) return <div className="tree-loading" style={{ paddingLeft: depth * 14 + 8 }}>Loading…</div>;
-    if (st.error) return <div className="tree-error" style={{ paddingLeft: depth * 14 + 8 }}>{st.error}</div>;
-    if (st.items.length === 0 && !st.loading) return <div className="tree-empty" style={{ paddingLeft: depth * 14 + 8 }}>(empty)</div>;
+    const pad = { paddingLeft: depth * 14 + 8 };
+    if (!st || (!st.loaded && st.loading)) return <div className="tree-loading" style={pad}>Loading…</div>;
+    const retry = <button className="link-btn" onClick={() => void load(ws.id, path)} data-testid="tree-retry">Retry</button>;
+    if (st.error && !st.loaded) return <div className="tree-error" style={pad} data-testid="tree-error">Could not list this folder: {st.error}. {retry}</div>;
+    const stale = st.error ? <div key="\u0000stale" className="tree-error stale" style={pad} data-testid="tree-error" title={st.error}>Could not refresh; showing the earlier listing. {retry}</div> : null;
+    if (st.items.length === 0) return stale ?? <div className="tree-empty" style={pad}>(empty)</div>;
     // test ids stay path-based for the first root; other roots are distinguished by data-ws
     const tid = (p: string) => (first ? `tree-file-${p}` : `tree-file-${ws.name}:${p}`);
-    return st.items.map((it) => {
+    return [stale, ...st.items.map((it) => {
       const tip = [
         it.path,
         KIND_LABEL[it.type === "dir" ? "dir" : it.kind] ?? it.kind,
@@ -168,7 +353,7 @@ export default function FileTree({
           {it.git_status && <span className={`git-badge ${it.git_status}`}>{gitLabel(it.git_status)}</span>}
         </div>
       );
-    });
+    })];
   };
 
   return (
@@ -177,7 +362,7 @@ export default function FileTree({
         <span className="ws-name">{multi ? `${workspaces.filter((w) => w.available).length} folders` : workspaces[0]?.name ?? ""}</span>
         <span className="spacer" />
         {onAddFolder && <button className="icon-btn" onClick={onAddFolder} title="Add a folder (another wiki) to this window" data-testid="tree-add-folder">＋</button>}
-        <RefreshButton onRefresh={() => Promise.all(expandedEntries().map(({ ws, path }) => load(ws, path)))} title="Refresh file tree" testId="tree-refresh" />
+        <RefreshButton onRefresh={refreshNow} title="Refresh file tree" testId="tree-refresh" />
       </div>
       <div className="tree-body">
         {workspaces.map((ws, i) => {

@@ -1060,3 +1060,63 @@ test("Files button: on hover the icon slides toward where the tree goes and the 
   await btn.click(); // reopen for the following tests
   await expect(btn).toHaveAttribute("data-state", "open");
 });
+
+test("file tree: no request storm — only visible folders load, vanished ones are forgotten, changes reload one folder", async ({ page }) => {
+  const ws = workspaceDir();
+  const base = path.join(ws, "storm");
+  fs.mkdirSync(path.join(base, "keep", "deep"), { recursive: true });
+  fs.mkdirSync(path.join(base, "hidden", "inner"), { recursive: true });
+  fs.writeFileSync(path.join(base, "keep", "deep", "a.md"), "# a\n");
+  fs.writeFileSync(path.join(base, "hidden", "inner", "b.md"), "# b\n");
+  const files: string[] = [];
+  page.on("request", (r) => {
+    const u = new URL(r.url());
+    if (u.pathname === "/api/v1/files") files.push(u.searchParams.get("path") ?? "");
+  });
+  try {
+    await login(page);
+    const wsId = await page.getByTestId("tree-root").first().getAttribute("data-ws");
+    // Remembered state as left behind by an older session: an expanded folder that has since been deleted
+    // (with an expanded child), and an expanded folder inside a *collapsed* parent.
+    const k = (p: string) => `${wsId}\u0000${p}`;
+    await page.evaluate((keys) => {
+      const saved = JSON.parse(localStorage.getItem("waw.treeExpanded") || "[]");
+      localStorage.setItem("waw.treeExpanded", JSON.stringify([...new Set([...saved, ...keys])]));
+    }, [k("storm"), k("storm/keep"), k("storm/gone"), k("storm/gone/child"), k("storm/hidden/inner")]);
+    await page.reload();
+    await expect(page.getByTestId("tree-file-storm/keep/deep/a.md")).toHaveCount(0); // deep is collapsed
+    await expect(page.locator(".tree-row.dir", { hasText: "deep" })).toBeVisible();
+    await page.waitForTimeout(800);
+    // never requested: the vanished folders and the folder hidden under the collapsed "hidden"
+    expect(files.filter((p) => p.startsWith("storm/gone") || p === "storm/hidden/inner")).toEqual([]);
+    // and the vanished ones are forgotten (they would otherwise come back on every reload)
+    const saved: string[] = await page.evaluate(() => JSON.parse(localStorage.getItem("waw.treeExpanded") || "[]"));
+    expect(saved.filter((s) => s.includes("storm/gone"))).toEqual([]);
+    expect(saved).toContain(k("storm/hidden/inner")); // still remembered for when "hidden" is opened again
+
+    // A burst of changes in one folder reloads that folder (and its parents), not everything that is shown.
+    files.length = 0;
+    for (let i = 0; i < 20; i++) fs.writeFileSync(path.join(base, "keep", `burst-${i}.md`), `# ${i}\n`);
+    await expect(page.getByTestId("tree-file-storm/keep/burst-19.md")).toBeVisible({ timeout: 10000 });
+    await page.waitForTimeout(2500);
+    expect(new Set(files)).toEqual(new Set(["storm/keep", "storm", ""])); // the changed folder and its ancestors only
+    expect(files.length).toBeLessThanOrEqual(9); // folded into a few refreshes, not one per file
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("file tree ↻: the spinner stops when the server cannot be reached; the earlier listing stays, Retry works", async ({ page }) => {
+  await login(page);
+  const btn = page.getByTestId("tree-refresh");
+  await expect(page.getByTestId("tree-file-README.md")).toBeVisible();
+  await page.route("**/api/v1/files**", (route) => route.abort("connectionrefused"));
+  await btn.click();
+  await expect(btn).toHaveAttribute("data-spinning", "true");
+  await expect(btn).toHaveAttribute("data-spinning", "false", { timeout: 10000 }); // stops by itself
+  await expect(page.getByTestId("tree-error").first()).toContainText("Could not refresh");
+  await expect(page.getByTestId("tree-file-README.md")).toBeVisible(); // earlier listing kept
+  await page.unroute("**/api/v1/files**");
+  await page.getByTestId("tree-retry").first().click();
+  await expect(page.getByTestId("tree-error")).toHaveCount(0, { timeout: 10000 });
+});

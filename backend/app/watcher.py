@@ -251,9 +251,12 @@ class WorkspaceWatcher:
                 self._loop.create_task(asyncio.to_thread(self._handle, msg.get("items", [])))
 
     # ------------------------------------------------------------------ handling (worker thread)
+    MAX_CHANGED_DIRS = 200  # above this, tree_changed carries no `dirs` and clients reload everything they show
+
     def _handle(self, items: list[list[Any]]) -> None:
         kinds = {1: "added", 2: "modified", 3: "deleted"}
         tree_changed = False
+        dirs: set[str] = set()  # folders whose listing changed (the parent of every added/deleted/modified entry)
         for code, path in items:
             p = Path(path)
             try:
@@ -263,11 +266,14 @@ class WorkspaceWatcher:
                     rel = p.relative_to(self.root).as_posix()
                 except ValueError:
                     continue
+            parent = rel.rsplit("/", 1)[0] if "/" in rel else ""
             if p.suffix.lower() not in MARKDOWN_SUFFIXES:
                 if code in (1, 3):
                     tree_changed = True
+                    dirs.add(parent)
                 continue
             tree_changed = True
+            dirs.add(parent)
             try:
                 info = self.docs.observe_file_change(rel)
             except Exception as exc:  # a bad file must not kill the watcher
@@ -280,7 +286,10 @@ class WorkspaceWatcher:
                 ev.update({k: v for k, v in info.items() if k != "path"})
             self._publish(ev)
         if tree_changed:
-            self._publish({"type": "tree_changed", "workspace_id": self.docs.workspace_id})
+            ev: dict[str, Any] = {"type": "tree_changed", "workspace_id": self.docs.workspace_id}
+            if len(dirs) <= self.MAX_CHANGED_DIRS:
+                ev["dirs"] = sorted(dirs)
+            self._publish(ev)
 
     def _publish(self, event: dict[str, Any]) -> None:
         if self._loop and not self._loop.is_closed():
