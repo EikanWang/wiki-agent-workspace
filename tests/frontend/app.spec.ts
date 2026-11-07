@@ -1014,3 +1014,28 @@ test("refresh buttons spin while refreshing and stop at the end of a turn", asyn
   await expect(page.getByTestId("tree-file-refresh-spin.md")).toBeVisible();
   fs.unlinkSync(path.join(workspaceDir(), "refresh-spin.md"));
 });
+
+test("file tree: only the list scrolls; the header with ＋ and ↻ stays in place", async ({ page }) => {
+  await login(page);
+  const dir = path.join(workspaceDir(), "many");
+  fs.mkdirSync(dir, { recursive: true });
+  for (let i = 0; i < 80; i++) fs.writeFileSync(path.join(dir, `note-${String(i).padStart(2, "0")}.md`), `# ${i}\n`);
+  try {
+    await page.getByTestId("tree-refresh").click();
+    const root = page.getByTestId("tree-root").first();
+    await root.locator(".tree-row.dir", { hasText: "many" }).first().click();
+    await expect(page.getByTestId("tree-file-many/note-79.md")).toBeAttached();
+    const body = page.locator(".tree-body");
+    const header = page.locator(".tree-header");
+    const y0 = (await header.boundingBox())!.y;
+    expect(await body.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true); // the list overflows
+    await body.evaluate((el) => { el.scrollTop = el.scrollHeight; });
+    await expect(page.getByTestId("tree-file-many/note-79.md")).toBeInViewport();
+    expect((await header.boundingBox())!.y).toBe(y0); // header did not move
+    await expect(page.getByTestId("tree-refresh")).toBeInViewport();
+    await expect(page.getByTestId("tree-add-folder")).toBeInViewport();
+    expect(await page.locator(".sidebar").evaluate((el) => el.scrollTop)).toBe(0); // the sidebar itself never scrolls
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
