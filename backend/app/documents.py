@@ -390,7 +390,9 @@ class DocumentService:
             return None
         sha = sha256_bytes(data)
         if sha == doc.last_sha256:
-            return None
+            # content is what we already know, e.g. the watcher seeing our own save (written atomically, then
+            # recorded by save_content): not a change on disk
+            return {"document_id": doc.id, "path": norm, "unchanged": True}
         try:
             model_text = self.model_text(norm, data)
         except ApiError:

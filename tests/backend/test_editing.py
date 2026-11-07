@@ -84,3 +84,39 @@ async def test_edit_through_internal_symlink_writes_the_target_and_refuses_escap
     r = await api.put(f"/api/v1/documents/{es['document_id']}/content", json={"text": "hacked", "base_sha256": es["sha256"]})
     assert r.status_code == 403 and r.json()["error"]["code"] == "PATH_ESCAPES_WORKSPACE"
     assert outside.read_text() == "# outside\n"
+
+
+async def test_own_save_is_not_announced_again_by_the_watcher(running_app):
+    """Saving publishes one file_changed (with the new hash, source=user_edit). The watcher then sees the atomic
+    replace of the same content and must stay quiet: a hash-less event made the reader show a false
+    "The document changed on disk" banner when it arrived after the post-save reload."""
+    import asyncio
+    import time
+
+    h = await running_app()
+    w = h.ctx.watcher
+    t0 = time.time()
+    while not w.ready and time.time() - t0 < 30:
+        await asyncio.sleep(0.1)
+    events: list[dict] = []
+    orig = w.bus.publish
+
+    def spy(ch, ev):
+        if ev.get("type") == "file_changed":
+            events.append(dict(ev))
+        return orig(ch, ev)
+
+    w.bus.publish = spy
+    doc = await h.api.open_doc("docs/guide.md")
+    r = await h.api.put(f"/api/v1/documents/{doc['document_id']}/content", json={"text": "# saved by me\n", "base_sha256": doc["sha256"]})
+    assert r.status_code == 200, r.text
+    await asyncio.sleep(2.5)  # > watcher debounce
+    mine = [e for e in events if e.get("path") == "docs/guide.md"]
+    assert len(mine) == 1 and mine[0].get("source") == "user_edit" and mine[0]["sha256"] == r.json()["sha256"], mine
+    # a real external change is still announced, with its hash
+    (h.ctx.documents.root / "docs" / "guide.md").write_text("# changed outside\n")
+    t0 = time.time()
+    while time.time() - t0 < 10 and len([e for e in events if e.get("path") == "docs/guide.md"]) < 2:
+        await asyncio.sleep(0.1)
+    ext = [e for e in events if e.get("path") == "docs/guide.md"][1:]
+    assert ext and ext[0].get("sha256") and ext[0].get("source") is None, ext

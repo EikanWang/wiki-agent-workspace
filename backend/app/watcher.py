@@ -273,6 +273,8 @@ class WorkspaceWatcher:
             except Exception as exc:  # a bad file must not kill the watcher
                 log.warning("observe_file_change(%s) failed: %s", rel, exc)
                 info = None
+            if info and info.get("unchanged"):
+                continue  # same content as the recorded version: announcing it would show a false "changed on disk"
             ev = {"type": "file_changed", "path": rel, "change": kinds.get(code, "modified"), "workspace_id": self.docs.workspace_id}
             if info:
                 ev.update({k: v for k, v in info.items() if k != "path"})
