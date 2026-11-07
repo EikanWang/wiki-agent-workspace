@@ -1,3 +1,4 @@
+import RefreshButton from "./RefreshButton";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { COMPOSER_HINT, composerKeyDown } from "./keys";
 import { AgentSession, ApiError, DiffComment, DiffFile, DiffResult, GitRefs, Review, ReviewComment, del, get, post, put } from "../api";
@@ -377,7 +378,7 @@ export default function DiffReview({
             Review{review?.pending.comments.length ? ` (${review.pending.comments.length})` : ""}
           </button>
           <button className={`btn small toggle ${showCommit ? "on" : ""}`} onClick={() => setShowCommit((v) => !v)} title="Select changed files, draft a commit message with the agent, commit, push, open a pull request" data-testid="commit-toggle" aria-pressed={showCommit}>Commit…</button>
-          <button className="btn small" onClick={() => void load()} title="Reload">↻</button>
+          <RefreshButton className="btn small" onRefresh={load} title="Reload the diff" testId="diff-reload" />
           <button className="icon-btn" onClick={onClose} title="Close diff review">×</button>
         </div>
       </div>

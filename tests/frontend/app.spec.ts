@@ -551,7 +551,7 @@ test("Diff review of a folder with line comments that become discussions", async
   await expect(page.getByTestId("diff-viewed-count")).toContainText("1 /");
   fs.appendFileSync(path.join(ws, "docs", "draft.md"), "\nmore text\n");
   await page.getByTestId("tree-diff-root").click();
-  await page.getByRole("button", { name: "↻" }).last().click();
+  await page.getByTestId("diff-reload").click();
   await expect(page.locator('[data-testid="diff-file"][data-path="docs/draft.md"]')).toHaveAttribute("data-viewed", "0", { timeout: 10000 });
   await expect(page.locator('[data-testid="diff-file"][data-path="docs/draft.md"] .viewed-box')).toContainText("changed since");
   await page.getByTestId("diff-comment-marker").first().getByTestId("diff-open-thread").click();
@@ -993,4 +993,24 @@ test("terminal copy: tmux mouse selection, program OSC 52, Shift+drag + Ctrl+Shi
   await page.evaluate(() => navigator.clipboard.writeText("-"));
   await page.getByTestId("term-history-copy").click();
   await expect.poll(clip, { timeout: 10000 }).toMatch(/^COPYMEWORD\n/); // trailing blanks trimmed
+});
+
+test("refresh buttons spin while refreshing and stop at the end of a turn", async ({ page }) => {
+  await login(page);
+  const btn = page.getByTestId("tree-refresh");
+  await expect(btn).toHaveAttribute("data-spinning", "false");
+  // hover: highlighted, icon turns a little
+  const before = await btn.evaluate((el) => getComputedStyle(el).backgroundColor);
+  await btn.hover();
+  await expect.poll(() => btn.evaluate((el) => getComputedStyle(el).backgroundColor)).not.toBe(before);
+  await expect(btn.locator(".refresh-icon")).toHaveCSS("rotate", "60deg");
+  // a new file appears only after the refresh (whether or not the watcher saw it)
+  fs.writeFileSync(path.join(workspaceDir(), "refresh-spin.md"), "# spin\n");
+  await btn.click();
+  await expect(btn).toHaveAttribute("data-spinning", "true");
+  await expect(btn.locator(".refresh-icon")).toHaveCSS("animation-name", "refresh-spin");
+  await expect(btn).toHaveAttribute("data-spinning", "false", { timeout: 5000 }); // stops by itself
+  await expect(btn.locator(".refresh-icon")).toHaveCSS("animation-name", "none");
+  await expect(page.getByTestId("tree-file-refresh-spin.md")).toBeVisible();
+  fs.unlinkSync(path.join(workspaceDir(), "refresh-spin.md"));
 });

@@ -58,6 +58,8 @@ state. Nothing is shared between folders except your login, terminals and prefer
 - Your reading position is saved when you stop scrolling for a second and restored next time; nothing is marked
   reviewed by scrolling.
 - When a file changes on disk (agent, terminal, Git), a banner offers **Refresh**; your position is kept.
+- **↻** (file tree, diff view) re-reads from disk. Its icon spins until the refresh is done, at least one full turn.
+  Normally not needed: the file watcher keeps the tree up to date.
 - **Read | Discuss** in the document header: *Read* is a plain viewer — selecting text only shows a small copy icon;
   *Discuss* opens the question box on selection. **Ask about selection** works in both modes.
 

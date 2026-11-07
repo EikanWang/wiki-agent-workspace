@@ -1,3 +1,4 @@
+import RefreshButton from "./RefreshButton";
 import { useCallback, useEffect, useState } from "react";
 import { FileItem, GitSummary, WorkspaceInfo, getIn } from "../api";
 import { FileIcon, KIND_LABEL, formatSize } from "./FileIcon";
@@ -176,7 +177,7 @@ export default function FileTree({
         <span className="ws-name">{multi ? `${workspaces.filter((w) => w.available).length} folders` : workspaces[0]?.name ?? ""}</span>
         <span className="spacer" />
         {onAddFolder && <button className="icon-btn" onClick={onAddFolder} title="Add a folder (another wiki) to this window" data-testid="tree-add-folder">＋</button>}
-        <button className="icon-btn" onClick={() => { for (const { ws, path } of expandedEntries()) void load(ws, path); }} title="Refresh file tree" data-testid="tree-refresh">↻</button>
+        <RefreshButton onRefresh={() => Promise.all(expandedEntries().map(({ ws, path }) => load(ws, path)))} title="Refresh file tree" testId="tree-refresh" />
       </div>
       <div className="tree-body">
         {workspaces.map((ws, i) => {
