@@ -195,8 +195,8 @@ export default function App() {
   );
 
   const openDocument = useCallback(
-    async (path: string, keepThread = false) => {
-      if (!keepThread && !confirmLeaveEditor()) return;
+    async (path: string, keepThread = false, quiet = false): Promise<boolean> => {
+      if (!keepThread && !confirmLeaveEditor()) return false;
       if (!keepThread) editorDirty.current = false;
       setDocError(null);
       try {
@@ -219,19 +219,41 @@ export default function App() {
         await refreshThreads(d.document_id);
         setView("document");
         setMobilePane("doc");
+        return true;
       } catch (e) {
         const ae = e as ApiError;
-        setDocError(`${ae.code}: ${ae.message}`);
+        if (!quiet) setDocError(`${ae.code}: ${ae.message}`);
+        return false;
       }
     },
     [refreshThreads],
   );
 
+  /**
+   * Reopen what you were reading in folder `ws`: its last document, else one of its open tabs. Never a path
+   * remembered without a folder (old builds stored one; opening it in another folder gave FILE_NOT_FOUND).
+   * Remembered documents that no longer exist are dropped quietly instead of showing an error.
+   */
+  const restoreLast = useCallback(
+    async (ws: string) => {
+      localStorage.removeItem("waw.lastPath");
+      const candidates = [localStorage.getItem(`waw.lastPath.${ws}`), ...loadTabs().filter((t) => t.ws === ws).map((t) => t.path)];
+      const tried = new Set<string>();
+      for (const p of candidates) {
+        if (!p || tried.has(p)) continue;
+        tried.add(p);
+        if (getWorkspace() !== ws) return; // the user switched folders meanwhile
+        if (await openDocument(p, false, true)) return;
+        // gone (deleted, renamed, or never in this folder): forget it
+        if (localStorage.getItem(`waw.lastPath.${ws}`) === p) localStorage.removeItem(`waw.lastPath.${ws}`);
+        setDocTabs((tabs) => tabs.filter((t) => !(t.ws === ws && t.path === p)));
+      }
+    },
+    [openDocument],
+  );
+
   useEffect(() => {
-    if (authed && !doc && activeWs) {
-      const last = localStorage.getItem(`waw.lastPath.${activeWs}`) ?? localStorage.getItem("waw.lastPath");
-      if (last) void openDocument(last);
-    }
+    if (authed && !doc && activeWs) void restoreLast(activeWs);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authed, activeWs && boot ? "ready" : "wait"]);
 
@@ -251,12 +273,9 @@ export default function App() {
       setDiffTarget(null);
       setView((v) => (v === "terminal" ? v : "document"));
       void refreshSessions();
-      if (openLast) {
-        const last = localStorage.getItem(`waw.lastPath.${id}`);
-        if (last) void openDocument(last);
-      }
+      if (openLast) void restoreLast(id);
     },
-    [openDocument, refreshSessions],
+    [restoreLast, refreshSessions],
   );
 
   useEffect(() => {
@@ -293,7 +312,6 @@ export default function App() {
         if (other) localStorage.setItem(`waw.lastPath.${t.ws}`, other.path);
         else localStorage.removeItem(`waw.lastPath.${t.ws}`);
       }
-      if (localStorage.getItem("waw.lastPath") === t.path) localStorage.removeItem("waw.lastPath");
       if (!isActive) return;
       editorDirty.current = false;
       lastTab.current = null;

@@ -1278,3 +1278,37 @@ test("file tree: ↻ on a folder refreshes just that folder (and what is open in
     fs.rmSync(base, { recursive: true, force: true });
   }
 });
+
+test("startup: no FILE_NOT_FOUND from stale remembered documents (old folder-less entry, deleted file)", async ({ page }) => {
+  const ws = workspaceDir();
+  fs.writeFileSync(path.join(ws, "docs", "soon-gone.md"), "# Soon gone\n");
+  await login(page);
+  const wsId = await page.getByTestId("tree-root").first().getAttribute("data-ws");
+  await page.evaluate(({ id }) => {
+    // what an old build left behind: a path without a folder (from another wiki), and documents since deleted
+    localStorage.setItem("waw.lastPath", "wiki/concepts/only-in-another-wiki.md");
+    localStorage.setItem(`waw.lastPath.${id}`, "docs/soon-gone.md");
+    localStorage.setItem("waw.docTabs", JSON.stringify([{ ws: id, path: "docs/soon-gone.md" }, { ws: id, path: "README.md" }]));
+  }, { id: wsId });
+  fs.unlinkSync(path.join(ws, "docs", "soon-gone.md"));
+  const opened: string[] = [];
+  page.on("request", (r) => {
+    const u = new URL(r.url());
+    if (u.pathname === "/api/v1/documents/open") opened.push(u.searchParams.get("path") ?? "");
+  });
+  await page.reload();
+  // falls back to the folder's other open tab, quietly
+  await expect(page.getByTestId("markdown-body").locator("h1")).toHaveText("Repo", { timeout: 10000 });
+  await expect(page.locator(".banner.warn", { hasText: "FILE_NOT_FOUND" })).toHaveCount(0);
+  expect(opened).not.toContain("wiki/concepts/only-in-another-wiki.md"); // the folder-less entry is never used
+  await expect(page.locator('[data-testid="doc-tab"][data-path="docs/soon-gone.md"]')).toHaveCount(0); // dropped
+  expect(await page.evaluate(() => localStorage.getItem("waw.lastPath"))).toBeNull();
+  // nothing left to restore: the start page, still no error
+  await page.evaluate(({ id }) => {
+    localStorage.setItem(`waw.lastPath.${id}`, "docs/also-gone.md");
+    localStorage.setItem("waw.docTabs", "[]");
+  }, { id: wsId });
+  await page.reload();
+  await expect(page.getByText("Open a Markdown file")).toBeVisible({ timeout: 10000 });
+  await expect(page.locator(".banner.warn", { hasText: "FILE_NOT_FOUND" })).toHaveCount(0);
+});
