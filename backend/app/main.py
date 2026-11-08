@@ -249,8 +249,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         resp = await call_next(request)
         resp.headers.setdefault("X-Content-Type-Options", "nosniff")
         resp.headers.setdefault("Referrer-Policy", "no-referrer")
-        # /raw may be embedded by the app's own PDF viewer; everything else refuses framing
-        resp.headers.setdefault("X-Frame-Options", "SAMEORIGIN" if request.url.path == "/api/v1/raw" else "DENY")
+        # PDFs shown by the app's own viewer frames (PDF files, Office layout view) may be framed by this origin only;
+        # everything else refuses framing
+        resp.headers.setdefault("X-Frame-Options", "SAMEORIGIN" if request.url.path in FRAMEABLE_PATHS else "DENY")
         if not request.url.path.startswith("/api/"):
             resp.headers.setdefault("Content-Security-Policy",
                                     "default-src 'self'; img-src 'self' data: blob: https: http:; style-src 'self' 'unsafe-inline'; "
@@ -261,6 +262,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     _mount_frontend(app, settings)
     return app
+
+
+FRAMEABLE_PATHS = {"/api/v1/raw", "/api/v1/office/pdf"}
 
 
 def _frontend_dist(settings: Settings) -> Path | None:

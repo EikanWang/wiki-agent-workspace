@@ -124,6 +124,8 @@ async def test_layout_render_docx_pptx_cached_and_wiki_untouched(api, workspace:
         r = await api.get(f"/api/v1/office/pdf?path=docs/{name}")
         assert r.status_code == 200 and r.content.startswith(b"%PDF")
         assert r.headers["content-type"] == "application/pdf"
+        # shown in the reader's frame: framing by the app itself must be allowed (DENY = "refused to connect")
+        assert r.headers["x-frame-options"] == "SAMEORIGIN"
         # cached: the next status is immediately ready
         r2 = await api.get(f"/api/v1/office/render?path=docs/{name}")
         assert r2.json()["state"] == "ready"

@@ -1351,6 +1351,13 @@ prs.save(${JSON.stringify(path.join(ws, "docs", "layout-deck.pptx"))})
     const pdf = await page.request.get(src!);
     expect(pdf.status()).toBe(200);
     expect(pdf.headers()["content-type"]).toBe("application/pdf");
+    expect(pdf.headers()["x-frame-options"]).toBe("SAMEORIGIN"); // the reader's frame may show it
+    // and the frame really loads it: a refused frame never fires "load" with a PDF response
+    const frameResp = page.waitForResponse((r) => r.url().includes("/api/v1/office/pdf"));
+    await page.getByTestId("office-pdf").evaluate((f: HTMLIFrameElement) => { f.src = f.src; });
+    const fr = await frameResp;
+    expect(fr.status()).toBe(200);
+    expect(fr.headers()["x-frame-options"]).not.toBe("DENY");
     expect((await pdf.body()).subarray(0, 4).toString()).toBe("%PDF");
     await expect(page.getByTestId("markdown-body")).toBeHidden();
     // Ask in the layout view: passages are picked in the text view
