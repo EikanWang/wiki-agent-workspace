@@ -117,13 +117,19 @@ body.resizing { cursor: col-resize; user-select: none; }
 .tree-row:hover { background: var(--accent); }
 .tree-row.selected { background: var(--accent); color: var(--primary); font-weight: 600; }
 .tree-row.inert .name { color: var(--muted); }
+.tree-row.inert { cursor: default; }
 .tree-row.escapes .name { text-decoration: underline dotted var(--warn); }
 .tree-main { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; border: none; background: transparent; padding: 2px 0; text-align: left; cursor: pointer; color: inherit; }
 .tree-main:disabled { cursor: default; }
 .tree-row .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tree-row .chev { width: 12px; color: var(--muted); flex: none; }
-.tree-action { border: none; background: transparent; color: var(--muted); cursor: pointer; padding: 0 4px; border-radius: 4px; font-weight: 700; visibility: hidden; }
-.tree-row:hover .tree-action { visibility: visible; }
+/* Row actions (↻ ± 🔒 ✕) appear on hover as a group pinned over the row's right end: they take no room, so file
+   names keep their width, and nothing moves under the pointer when they appear. */
+.tree-row, .tree-root { position: relative; cursor: pointer; }
+.tree-action { border: none; background: transparent; color: var(--muted); cursor: pointer; padding: 0 4px; border-radius: 4px; font-weight: 700; flex: none; }
+.tree-actions { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); display: none; align-items: center; gap: 1px; padding: 1px 2px; border-radius: 6px; background: var(--accent); box-shadow: -8px 0 8px -4px var(--accent); }
+.tree-row:hover .tree-actions, .tree-row:focus-within .tree-actions, .tree-root:hover .tree-actions, .tree-root:focus-within .tree-actions,
+.tree-actions:has([data-spinning="true"]) { display: inline-flex; }
 .tree-action:hover { color: var(--primary); background: var(--bg); }
 .fi-wrap { position: relative; display: inline-flex; flex: none; width: 16px; height: 16px; }
 .fi { display: block; }
@@ -449,9 +455,11 @@ mark.waw-hl.review.needs_review { border-bottom: 2px dashed var(--warn); }
 .tree-root-group { border-bottom: 1px solid var(--border); padding-bottom: 2px; }
 .tree-root { display: flex; align-items: center; gap: 4px; padding: 3px 8px; font-weight: 600; font-size: 12px; text-transform: none; }
 .tree-root:hover { background: var(--accent); }
-.tree-root .tree-action { visibility: visible; } /* the root's ± is a primary entry point: always shown */
-.tree-root .tree-action.remove { visibility: hidden; }
-.tree-root:hover .tree-action.remove { visibility: visible; }
+/* root rows: the ± is a primary entry point and always shown; ↻ and ✕ join it on hover */
+.tree-root .tree-actions.root-actions { display: inline-flex; background: transparent; box-shadow: none; }
+.tree-root:hover .tree-actions.root-actions, .tree-root:focus-within .tree-actions.root-actions { background: var(--accent); box-shadow: -8px 0 8px -4px var(--accent); }
+.tree-root .tree-action.hover-only { display: none; }
+.tree-root:hover .tree-action.hover-only, .tree-root:focus-within .tree-action.hover-only, .tree-root .tree-action.hover-only[data-spinning="true"] { display: inline-block; }
 .tree-root.unavailable { opacity: 0.6; }
 .tree-root-group.active > .tree-root .root-name { color: var(--primary); }
 .root-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -514,3 +522,6 @@ mark.waw-hl.review.needs_review { border-bottom: 2px dashed var(--warn); }
 .doc-tab:hover .tab-x, .doc-tab.active .tab-x, .doc-tab .tab-x:focus-visible { opacity: 0.7; }
 .doc-tab .tab-x:hover { opacity: 1; background: color-mix(in srgb, var(--fg) 12%, transparent); }
 @media (hover: none) { .doc-tab .tab-x { opacity: 0.7; } }
+/* per-folder ↻ (shown on hover like the other row actions; stays visible while it spins) */
+.tree-action.refresh-btn { font-weight: 400; font-size: 13px; }
+

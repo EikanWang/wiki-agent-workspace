@@ -1220,3 +1220,61 @@ test("document tabs: open several, switch, close (× / middle-click), unsaved-ed
     fs.rmSync(path.join(ws, "docs", "tabs-new.md"), { force: true });
   }
 });
+
+test("file tree: ↻ on a folder refreshes just that folder (and what is open inside it); expanding re-fetches", async ({ page }) => {
+  const ws = workspaceDir();
+  const base = path.join(ws, "solo");
+  fs.mkdirSync(path.join(base, "a", "inner"), { recursive: true });
+  fs.mkdirSync(path.join(base, "b"), { recursive: true });
+  fs.writeFileSync(path.join(base, "a", "inner", "x.md"), "# x\n");
+  fs.writeFileSync(path.join(base, "b", "y.md"), "# y\n");
+  const files: string[] = [];
+  page.on("request", (r) => {
+    const u = new URL(r.url());
+    if (u.pathname === "/api/v1/files") files.push(u.searchParams.get("path") ?? "");
+  });
+  try {
+    await login(page);
+    await page.getByTestId("tree-refresh").click();
+    await expect(page.getByTestId("tree-refresh")).toHaveAttribute("data-spinning", "false");
+    const root = page.getByTestId("tree-root").first();
+    const row = (name: string) => root.locator(".tree-row.dir", { has: page.locator(".name", { hasText: new RegExp(`^${name}$`) }) }).first();
+    const expand = async (name: string) => {
+      if ((await row(name).locator(".chev").textContent()) === "›") await row(name).locator("button.tree-main").click();
+    };
+    await expand("solo");
+    await expand("a");
+    await expand("inner");
+    await expand("b");
+    await expect(page.getByTestId("tree-file-solo/a/inner/x.md")).toBeVisible();
+    await expect(page.getByTestId("tree-file-solo/b/y.md")).toBeVisible();
+    await page.waitForTimeout(1500); // let watcher events from the setup settle
+
+    // ↻ on "a": reloads solo/a and the open solo/a/inner, nothing else
+    files.length = 0;
+    await row("a").hover();
+    const btn = page.getByTestId("tree-refresh-solo/a");
+    await btn.click();
+    await expect(btn).toHaveAttribute("data-spinning", "false", { timeout: 10000 });
+    expect(files).toContain("solo/a");
+    expect(files).toContain("solo/a/inner");
+    expect(files.filter((p) => p === "" || p === "solo" || p.startsWith("solo/b"))).toEqual([]);
+
+    // ↻ on the root folder: everything that is open in it
+    files.length = 0;
+    await root.locator(".tree-root").hover();
+    await page.getByTestId("tree-refresh-root").click();
+    await expect(page.getByTestId("tree-refresh-root")).toHaveAttribute("data-spinning", "false", { timeout: 10000 });
+    for (const p of ["", "solo", "solo/a", "solo/a/inner", "solo/b"]) expect(files).toContain(p);
+
+    // a collapsed folder is not followed by change events; expanding it fetches it again
+    await row("b").locator("button.tree-main").click(); // collapse
+    await expect(page.getByTestId("tree-file-solo/b/y.md")).toHaveCount(0);
+    fs.writeFileSync(path.join(base, "b", "added-while-collapsed.md"), "# z\n");
+    await page.waitForTimeout(1500);
+    await row("b").locator("button.tree-main").click(); // expand
+    await expect(page.getByTestId("tree-file-solo/b/added-while-collapsed.md")).toBeVisible({ timeout: 5000 });
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});

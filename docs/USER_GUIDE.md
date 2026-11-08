@@ -67,6 +67,10 @@ state. Nothing is shared between folders except your login, terminals and prefer
 - **↻** (file tree, diff view) re-reads from disk. Its icon spins until the refresh is done, at least one full turn.
   Normally not needed: the file watcher keeps the tree up to date. If a folder cannot be listed (server
   unreachable), the tree keeps the earlier listing with a **Retry** link.
+- **Refresh one folder**: hover a folder (or a root folder) in the tree and click its **↻**. Only that folder and
+  the folders open inside it are re-read. Expanding a folder always re-reads it too.
+- Row actions (↻, ±, lock, ✕) appear on hover at the right end of the row, so file names keep their full width;
+  a click anywhere else on a row opens the file or expands/collapses the folder.
 - **Read | Discuss** in the document header: *Read* is a plain viewer — selecting text only shows a small copy icon;
   *Discuss* opens the question box on selection. **Ask about selection** works in both modes.
 

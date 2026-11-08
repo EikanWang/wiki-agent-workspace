@@ -180,14 +180,25 @@ export default function FileTree({
     return levels;
   };
 
-  /** Reload visible folders level by level (fresh parent listings decide which children are still there). */
-  const reloadVisible = async (only: Map<string, Set<string>> | null) => {
+  /**
+   * Reload visible folders level by level (fresh parent listings decide which children are still there).
+   * `only`: just these folders; `trees`: these folders (even if collapsed) and the visible folders inside them.
+   */
+  const reloadVisible = async (only: Map<string, Set<string>> | null, trees: Map<string, Set<string>> = new Map()) => {
     const done = new Set<string>();
+    const roots = [...trees].flatMap(([ws, set]) => [...set].map((path) => ({ ws, path })));
+    // the folders asked for by name first, whether expanded or not (a collapsed folder's cached listing is renewed)
+    if (roots.length) {
+      roots.forEach((t) => done.add(key(t.ws, t.path)));
+      await inParallel(roots, MAX_PARALLEL, (t) => load(t.ws, t.path));
+    }
+    const inTree = (ws: string, path: string) => [...(trees.get(ws) ?? [])].some((t) => isUnder(path, t));
     for (;;) {
       const targets = visibleLevels().flat().filter(({ ws, path }) => {
         const k = key(ws, path);
         if (done.has(k)) return false;
-        if (only && !only.get(ws)?.has(path)) return false;
+        if (inTree(ws, path)) return true;
+        if (only && !only.get(ws)?.has(path)) return false; // `only` empty: nothing outside the requested folders
         return true;
       });
       if (!targets.length) return;
@@ -204,6 +215,7 @@ export default function FileTree({
   const running = useRef(false);
   const pendingAll = useRef(false);
   const pendingDirs = useRef(new Map<string, Set<string>>());
+  const pendingTrees = useRef(new Map<string, Set<string>>());
   const waiters = useRef<(() => void)[]>([]);
   const throttle = useRef<number | undefined>(undefined);
 
@@ -211,14 +223,17 @@ export default function FileTree({
     if (running.current) return;
     running.current = true;
     try {
-      while (pendingAll.current || pendingDirs.current.size) {
-        const only = pendingAll.current ? null : pendingDirs.current;
+      while (pendingAll.current || pendingDirs.current.size || pendingTrees.current.size) {
+        const all = pendingAll.current;
+        const only = all ? null : pendingDirs.current;
+        const trees = pendingTrees.current;
         pendingAll.current = false;
         pendingDirs.current = new Map();
+        pendingTrees.current = new Map();
         const mine = waiters.current;
         waiters.current = [];
         try {
-          await reloadVisible(only);
+          await reloadVisible(all ? null : only, trees);
         } finally {
           mine.forEach((r) => r());
         }
@@ -232,6 +247,16 @@ export default function FileTree({
   const refreshNow = () =>
     new Promise<void>((resolve) => {
       pendingAll.current = true;
+      waiters.current.push(resolve);
+      void pump();
+    });
+
+  /** ↻ on a folder: that folder (even collapsed) and the expanded folders inside it, nothing else. */
+  const refreshFolder = (ws: string, path: string) =>
+    new Promise<void>((resolve) => {
+      const set = pendingTrees.current.get(ws) ?? new Set<string>();
+      set.add(path);
+      pendingTrees.current.set(ws, set);
       waiters.current.push(resolve);
       void pump();
     });
@@ -283,13 +308,22 @@ export default function FileTree({
   }, [expanded, dirs, wsSignature]);
 
   const toggle = (ws: string, path: string) => {
+    const k = key(ws, path);
+    const opening = !expandedRef.current.has(k);
     setExpanded((s) => {
       const n = new Set(s);
-      const k = key(ws, path);
       if (n.has(k)) n.delete(k);
       else n.add(k);
       return n;
     });
+    // a cached listing may be old (changes only refresh visible folders): show it, and fetch it again
+    if (opening && dirsRef.current[k]) void refreshFolder(ws, path);
+  };
+
+  /** A click on a row's empty space or badges acts like a click on its name; its buttons keep their own action. */
+  const onRowClick = (e: React.MouseEvent, act: () => void) => {
+    if ((e.target as Element).closest("button")) return;
+    act();
   };
 
   const renderDir = (ws: WorkspaceInfo, path: string, depth: number, first: boolean): React.ReactNode => {
@@ -316,20 +350,23 @@ export default function FileTree({
         const isOpen = expanded.has(key(ws.id, it.path));
         return (
           <div key={it.path}>
-            <div className={`tree-row dir ${it.escapes ? "escapes" : ""}`} style={{ paddingLeft: depth * 14 + 8 }} title={tip} data-ws={ws.id}>
+            <div className={`tree-row dir ${it.escapes ? "escapes" : ""}`} style={{ paddingLeft: depth * 14 + 8 }} title={tip} data-ws={ws.id} onClick={(e) => onRowClick(e, () => toggle(ws.id, it.path))}>
               <button className="tree-main" onClick={() => toggle(ws.id, it.path)}>
                 <span className="chev">{isOpen ? "⌄" : "›"}</span>
                 <FileIcon item={it} open={isOpen} />
                 <span className="name">{it.name}</span>
               </button>
-              {onOpenDiff && it.git_status && it.git_status !== "clean" && (
-                <button className="tree-action" onClick={() => onOpenDiff(ws.id, it.path, true)} title="Review all changes in this folder" data-testid={first ? `tree-diff-${it.path}` : undefined}>±</button>
-              )}
-              {onToggleLock && !it.lock_inherited && (
-                <button className="tree-action" onClick={() => onToggleLock(ws.id, it.path, !it.locked)} title={it.locked ? "Unlock this folder" : "Lock this folder (read-only for the app and app-driven agents)"} data-testid={first ? `tree-lock-${it.path}` : undefined}>{it.locked ? "🔓" : "🔒"}</button>
-              )}
               {it.locked && <span className={`lock-badge ${it.lock_inherited ? "inherited" : ""}`} title={it.lock_inherited ? "Locked by a parent folder" : "Locked"}>🔒</span>}
               {it.git_status && it.git_status !== "clean" && <span className={`git-badge ${it.git_status}`}>{gitLabel(it.git_status)}</span>}
+              <span className="tree-actions">
+                <RefreshButton className="tree-action" onRefresh={() => refreshFolder(ws.id, it.path)} title={`Refresh ${it.name}`} testId={first ? `tree-refresh-${it.path}` : undefined} />
+                {onOpenDiff && it.git_status && it.git_status !== "clean" && (
+                  <button className="tree-action" onClick={() => onOpenDiff(ws.id, it.path, true)} title="Review all changes in this folder" data-testid={first ? `tree-diff-${it.path}` : undefined}>±</button>
+                )}
+                {onToggleLock && !it.lock_inherited && (
+                  <button className="tree-action" onClick={() => onToggleLock(ws.id, it.path, !it.locked)} title={it.locked ? "Unlock this folder" : "Lock this folder (read-only for the app and app-driven agents)"} data-testid={first ? `tree-lock-${it.path}` : undefined}>{it.locked ? "🔓" : "🔒"}</button>
+                )}
+              </span>
             </div>
             {isOpen && renderDir(ws, it.path, depth + 1, first)}
           </div>
@@ -338,19 +375,23 @@ export default function FileTree({
       const openable = it.openable === true;
       const selected = activeWorkspace === ws.id && selectedPath === it.path;
       return (
-        <div key={it.path} className={`tree-row file ${selected ? "selected" : ""} ${openable ? "" : "inert"} ${it.kind}`} style={{ paddingLeft: depth * 14 + 22 }} title={tip} data-testid={tid(it.path)} data-kind={it.kind} data-ws={ws.id}>
+        <div key={it.path} className={`tree-row file ${selected ? "selected" : ""} ${openable ? "" : "inert"} ${it.kind}`} style={{ paddingLeft: depth * 14 + 22 }} title={tip} data-testid={tid(it.path)} data-kind={it.kind} data-ws={ws.id} onClick={(e) => openable && onRowClick(e, () => onOpen(ws.id, it.path))}>
           <button className="tree-main" onClick={() => (openable ? onOpen(ws.id, it.path) : undefined)} disabled={!openable} aria-disabled={!openable}>
             <FileIcon item={it} />
             <span className="name">{it.name}</span>
           </button>
-          {onOpenDiff && it.git_status && it.git_status !== "clean" && it.git_status !== "untracked" && (
-            <button className="tree-action" onClick={() => onOpenDiff(ws.id, it.path, false)} title="Review changes in this file" data-testid={first ? `tree-diff-${it.path}` : undefined}>±</button>
-          )}
-          {onToggleLock && !it.lock_inherited && (
-            <button className="tree-action" onClick={() => onToggleLock(ws.id, it.path, !it.locked)} title={it.locked ? "Unlock this file" : "Lock this file (read-only for the app and app-driven agents)"} data-testid={first ? `tree-lock-${it.path}` : undefined}>{it.locked ? "🔓" : "🔒"}</button>
-          )}
           {it.locked && <span className={`lock-badge ${it.lock_inherited ? "inherited" : ""}`} title={it.lock_inherited ? "Locked by a parent folder" : "Locked"}>🔒</span>}
           {it.git_status && <span className={`git-badge ${it.git_status}`}>{gitLabel(it.git_status)}</span>}
+          {((onOpenDiff && it.git_status && it.git_status !== "clean" && it.git_status !== "untracked") || (onToggleLock && !it.lock_inherited)) && (
+            <span className="tree-actions">
+              {onOpenDiff && it.git_status && it.git_status !== "clean" && it.git_status !== "untracked" && (
+                <button className="tree-action" onClick={() => onOpenDiff(ws.id, it.path, false)} title="Review changes in this file" data-testid={first ? `tree-diff-${it.path}` : undefined}>±</button>
+              )}
+              {onToggleLock && !it.lock_inherited && (
+                <button className="tree-action" onClick={() => onToggleLock(ws.id, it.path, !it.locked)} title={it.locked ? "Unlock this file" : "Lock this file (read-only for the app and app-driven agents)"} data-testid={first ? `tree-lock-${it.path}` : undefined}>{it.locked ? "🔓" : "🔒"}</button>
+              )}
+            </span>
+          )}
         </div>
       );
     })];
@@ -370,7 +411,7 @@ export default function FileTree({
           const active = ws.id === activeWorkspace;
           return (
             <div key={ws.id} className={`tree-root-group ${active ? "active" : ""}`} data-testid="tree-root" data-ws={ws.id}>
-              <div className={`tree-root ${ws.available ? "" : "unavailable"}`} title={`${ws.root}${ws.git?.branch ? `\nbranch: ${ws.git.branch}` : ""}${ws.configured ? "\n(defined in config.toml)" : ""}`}>
+              <div className={`tree-root ${ws.available ? "" : "unavailable"}`} onClick={(e) => ws.available && onRowClick(e, () => toggle(ws.id, ""))} title={`${ws.root}${ws.git?.branch ? `\nbranch: ${ws.git.branch}` : ""}${ws.configured ? "\n(defined in config.toml)" : ""}`}>
                 <button className="tree-main" onClick={() => ws.available && toggle(ws.id, "")} disabled={!ws.available}>
                   <span className="chev">{open ? "⌄" : "›"}</span>
                   <FileIcon item={{ type: "dir", kind: "dir" }} open={open} />
@@ -378,12 +419,17 @@ export default function FileTree({
                   {ws.git?.branch && <span className="git-badge clean" title="current branch">{ws.git.branch}</span>}
                   {!ws.available && <span className="git-badge deleted">missing</span>}
                 </button>
-                {ws.available && onOpenDiff && (
-                  <button className="tree-action" onClick={() => onOpenDiff(ws.id, "", true)} title="Review all uncommitted changes in this folder" data-testid={i === 0 ? "tree-diff-root" : `tree-diff-root-${ws.name}`}>±</button>
-                )}
-                {onRemoveFolder && !ws.configured && (
-                  <button className="tree-action remove" onClick={() => onRemoveFolder(ws)} title="Remove this folder from the window (its discussions and history are kept)" data-testid={`tree-remove-${ws.name}`}>✕</button>
-                )}
+                <span className="tree-actions root-actions">
+                  {onRemoveFolder && !ws.configured && (
+                    <button className="tree-action remove hover-only" onClick={() => onRemoveFolder(ws)} title="Remove this folder from the window (its discussions and history are kept)" data-testid={`tree-remove-${ws.name}`}>✕</button>
+                  )}
+                  {ws.available && (
+                    <RefreshButton className="tree-action hover-only" onRefresh={() => refreshFolder(ws.id, "")} title={`Refresh ${ws.name}`} testId={i === 0 ? "tree-refresh-root" : `tree-refresh-root-${ws.name}`} />
+                  )}
+                  {ws.available && onOpenDiff && (
+                    <button className="tree-action" onClick={() => onOpenDiff(ws.id, "", true)} title="Review all uncommitted changes in this folder" data-testid={i === 0 ? "tree-diff-root" : `tree-diff-root-${ws.name}`}>±</button>
+                  )}
+                </span>
               </div>
               {ws.available && open && renderDir(ws, "", multi ? 1 : 0, i === 0)}
             </div>
