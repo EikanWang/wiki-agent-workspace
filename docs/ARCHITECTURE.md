@@ -24,8 +24,11 @@ backend/app/
                    relink, recent, hide/delete history;
                    routes under /files, /documents, /recent, /raw
   textmodel.py     markdown-it-py rendering, text/source → code block, .docx → HTML (mammoth), .pptx → HTML
-                   (python-pptx: slide sections, nested bullets, tables, inline images, notes), the deterministic
+                   (python-pptx: slide sections, nested bullets, tables, inline images, notes), .vsdx → HTML
+                   (pages and shape text in reading order), the deterministic
                    text model (mirrors frontend/src/textmodel.ts)
+  office.py        OfficeRenderer: Layout view, LibreOffice headless → PDF, content-addressed cache, parallel
+                   limit, timeout, private profiles; routes /office/render (status, starts work), /office/pdf
   anchors.py       anchor resolution algorithm (attached/moved/ambiguous/orphaned) + offset validation
   annotations.py   ThreadService: threads, messages, retry, reanchor, context relocation; prompt building;
                    /jobs routes (SSE, cancel, permission decisions)

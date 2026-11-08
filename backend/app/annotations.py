@@ -15,7 +15,7 @@ from .deps import AppContext, require_auth, require_auth_mutating
 from .errors import ApiError, bad_request, conflict, not_found, DOCUMENT_VERSION_CONFLICT, INVALID_ANCHOR
 from .models import AgentSession, AnchorHistory, Document, Job, Message, Thread
 from .sessions import SessionService
-from .textmodel import TextModel, build_text_model_from_html
+from .textmodel import NO_TEXT_FORMATS, TextModel, build_text_model_from_html
 
 router = APIRouter()
 
@@ -91,7 +91,7 @@ class ThreadService:
         """Full text model (with headings) of the current content, any supported format."""
         _, data, sha = self.docs.current_content(doc)
         fmt, html = self.docs.render(doc.path, data)
-        if fmt == "pdf":
+        if fmt in NO_TEXT_FORMATS:
             return TextModel(text="", headings=[]), sha
         return build_text_model_from_html(html), sha
 

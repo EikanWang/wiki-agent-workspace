@@ -715,6 +715,8 @@ export default function App() {
               onToggleToc={() => updatePrefs({ tocOpen: !prefs.tocOpen })}
               readerMode={prefs.readerMode}
               onReaderModeChange={(m) => updatePrefs({ readerMode: m })}
+              officeView={prefs.officeView ?? "layout"}
+              onOfficeViewChange={(v) => updatePrefs({ officeView: v })}
               onEdited={(sha) => {
                 ownSaves.current.add(sha);
                 notify("Saved.");

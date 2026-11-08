@@ -52,14 +52,24 @@ state. Nothing is shared between folders except your login, terminals and prefer
   folders); close it with `×` or a middle-click — closing the active tab opens its neighbour. Drag tabs to reorder.
   Tabs are remembered in this browser. Two files with the same name show their parent folder (or the folder name
   when the same path is open in two wikis). Switching away from unsaved edits asks first.
-- The tree lists every file with a kind icon (folder, Markdown, image, PDF, notebook, code, script, data, text,
-  archive, binary; a small arrow marks symlinks, a broken-link icon marks dangling ones). Git status badges show
+- The tree lists every file with a kind icon (folder, Markdown, image, PDF, Word, PowerPoint, Visio diagram,
+  notebook, code, script, data, text, archive, binary; a small arrow marks symlinks, a broken-link icon marks dangling ones). Git status badges show
   `untracked` / `modified` / `clean`.
 - The reader opens **Markdown**, **any text or source file** (C/C++, Python, YAML, XML, JSON, shell…, shown as
-  numbered code), **Word .docx** (converted to HTML), **PowerPoint .pptx** (one card per slide: title, text with
-  bullet levels, tables, pictures and speaker notes; the outline lists the slides) and **PDF** (browser viewer).
-  Selecting text, discussions, review marks and diff comments work on Word and PowerPoint text like on Markdown.
-  Older binary formats (`.doc`, `.ppt`) and other files are listed for orientation only.
+  numbered code), **Word**, **PowerPoint**, **Visio** and **PDF** (browser viewer).
+- **Word, PowerPoint and Visio** (`.docx`, `.pptx`, `.vsdx`) have two views, switched with **Layout | Text** in
+  the document header (your choice is remembered):
+  - **Layout** (default) shows the original: pages, slides and diagrams exactly as their authors made them,
+    rendered once by LibreOffice on the server and shown in the browser's PDF viewer (zoom, page navigation,
+    search). The first opening of a file takes a few seconds; afterwards it opens at once until the file changes.
+    **Download the original** fetches the file itself.
+  - **Text** shows selectable text — Word as a document, PowerPoint one card per slide (title, bullets, tables,
+    pictures, speaker notes), Visio one section per page with its shapes' text. Selecting text, discussions,
+    review marks and diff comments work here like on Markdown. **Ask about a passage…** in the Layout view and
+    opening a discussion from the panel switch to Text.
+  - Older and OpenDocument formats (`.doc`, `.ppt`, `.pps(x)`, `.vsd`, `.rtf`, `.odt`, `.odp`, `.odg`) have the
+    Layout view only; like PDFs, discussions on them are about the whole document (**Ask about this document**).
+  - Layout needs LibreOffice on the server (see DEPLOYMENT.md); without it the Text view still works.
 - Links to sections (`#heading`, `other.md#heading`) scroll inside the reader; heading ids follow GitHub's rules.
 - Your reading position is saved when you stop scrolling for a second and restored next time; nothing is marked
   reviewed by scrolling.

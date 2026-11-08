@@ -32,7 +32,7 @@ from .models import (
     Thread,
     Workspace,
 )
-from .textmodel import build_text_model, build_text_model_from_html, document_format, render_document
+from .textmodel import NO_TEXT_FORMATS, OFFICE_FORMATS, build_text_model, build_text_model_from_html, document_format, render_document
 
 MARKDOWN_SUFFIXES = {".md", ".markdown"}
 
@@ -176,6 +176,7 @@ class DocumentService:
         "pdf": {".pdf"},
         "slides": {".pptx", ".ppt", ".odp", ".key"},
         "word": {".docx", ".doc", ".odt", ".rtf"},
+        "diagram": {".vsdx", ".vsd", ".vsdm", ".vss", ".vssx", ".vst", ".vstx", ".odg"},
         "notebook": {".ipynb"},
         "code": {".py", ".js", ".ts", ".tsx", ".jsx", ".c", ".cc", ".cpp", ".h", ".hpp", ".cu", ".rs", ".go", ".java", ".kt", ".swift",
                  ".rb", ".php", ".cs", ".scala", ".lua", ".pl", ".r", ".m", ".mm", ".cl", ".glsl", ".asm", ".s"},
@@ -233,7 +234,7 @@ class DocumentService:
         if not path.is_file():
             raise not_found(f"{norm} is not a file", "FILE_NOT_FOUND")
         if document_format(Path(norm).name) == "unsupported":
-            raise bad_request("this file type cannot be opened in the reader (Markdown, text/source, .docx, .pptx and .pdf are supported)", "UNSUPPORTED_FORMAT")
+            raise bad_request("this file type cannot be opened in the reader (Markdown, text/source, PDF, Word, PowerPoint and Visio are supported)", "UNSUPPORTED_FORMAT")
         size = path.stat().st_size
         if size > self.max_bytes:
             raise ApiError(413, "DOCUMENT_TOO_LARGE", f"document is {size} bytes; limit is {self.max_bytes}")
@@ -248,9 +249,9 @@ class DocumentService:
 
     @staticmethod
     def render(norm: str, data: bytes) -> tuple[str, str]:
-        """(format, html) for a document; pdf renders no HTML (shown natively by the browser)."""
+        """(format, html) for a document; PDFs and layout-only Office files render no HTML (they are shown as PDF)."""
         fmt = document_format(Path(norm).name)
-        if fmt == "pdf":
+        if fmt in NO_TEXT_FORMATS:
             return fmt, ""
         try:
             return fmt, render_document(fmt, data, Path(norm).name)
@@ -262,7 +263,7 @@ class DocumentService:
     def model_text(self, norm: str, data: bytes) -> str:
         """Rendered-text model for anchors, for any supported format."""
         fmt, html = self.render(norm, data)
-        if fmt == "pdf":
+        if fmt in NO_TEXT_FORMATS:
             return ""
         return build_text_model_from_html(html).text
 
@@ -362,7 +363,7 @@ class DocumentService:
             "format": fmt,
             "editable": fmt in ("markdown", "text"),
             "text": text,
-            "html": html if fmt in ("docx", "pptx", "text") else None,  # markdown is rendered client-side; others server-side
+            "html": html if fmt in ("docx", "pptx", "visio", "text") else None,  # markdown is rendered client-side; others server-side
             "sha256": sha,
             "git": {**self.git_summary(info), "file_status": self._file_status(info, norm)},
             "reading_state": self._reading_state_dict(rs),
@@ -796,6 +797,44 @@ def raw_file(path: str = Query(...), ctx: AppContext = Depends(require_auth)):
         pass
     return RawResponse(content=p.read_bytes(), media_type=ctype,
                        headers={"Content-Disposition": "inline", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-cache"})
+
+
+def _office_file(ctx: AppContext, path: str) -> tuple[str, Path]:
+    svc = _svc(ctx)
+    norm, p = svc.resolve(path)
+    if not p.is_file():
+        raise not_found(f"{norm} not found", "FILE_NOT_FOUND")
+    if document_format(p.name) not in OFFICE_FORMATS:
+        raise bad_request("only Word, PowerPoint, Visio and OpenDocument files have a layout view", "UNSUPPORTED_FORMAT")
+    if ctx.office is None:
+        raise ApiError(503, "OFFICE_UNAVAILABLE", "the layout renderer is not set up")
+    return norm, p
+
+
+@router.get("/office/render")
+def office_render(path: str = Query(...), retry: bool = False, ctx: AppContext = Depends(require_auth)):
+    """State of the Layout view (PDF rendered by LibreOffice) of an Office file; starts the conversion if needed.
+    Poll until `state` is `ready` (then GET /office/pdf), `failed` or `unavailable`."""
+    norm, p = _office_file(ctx, path)
+    return {"path": norm, **ctx.office.status(p, retry=retry)}
+
+
+@router.get("/office/pdf")
+def office_pdf(path: str = Query(...), ctx: AppContext = Depends(require_auth)):
+    """The rendered PDF (shown by the browser's PDF viewer in the Layout view)."""
+    from fastapi.responses import FileResponse
+
+    norm, p = _office_file(ctx, path)
+    pdf = ctx.office.pdf_path(p)
+    if pdf is None:
+        raise ApiError(409, "RENDER_NOT_READY", "the layout view is not rendered yet; poll /office/render first")
+    from urllib.parse import quote
+
+    name = Path(norm).stem + ".pdf"
+    ascii_name = name.encode("ascii", "replace").decode().replace('"', "").replace("?", "_")
+    disposition = f"inline; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(name)}"  # RFC 5987: any file name
+    return FileResponse(pdf, media_type="application/pdf", headers={
+        "Content-Disposition": disposition, "X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-cache"})
 
 
 @router.get("/documents/open")

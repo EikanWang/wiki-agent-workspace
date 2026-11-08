@@ -22,6 +22,7 @@ workspace root … no longer exists; relocating …     # only after you moved t
 | --- | --- | --- |
 | Discussions, sessions, jobs, reading state, review marks, terminal tabs, logins | `<state_dir>/workspace.sqlite3` (+ `-wal`, `-shm` while running) | schema: [SCHEMA.md](SCHEMA.md) |
 | Exact bytes of every document version referenced by discussions/previews | `<state_dir>/snapshots/<document_id>/<sha256>.md`, `<state_dir>/snapshots/previews/<preview_id>.md` | |
+| Layout-view renders (PDFs of Office files) and LibreOffice profiles | `<state_dir>/renders/`, `<state_dir>/lo-profiles/` | cache, capped by `[office] cache_mb`; safe to delete at any time; not in backups. Contains rendered copies of your documents: same confidentiality as the wiki |
 | App-owned tmux socket name / config | `<state_dir>/tmux-socket`, `<state_dir>/tmux.conf` | socket lives in `/tmp/tmux-<uid>/<name>` |
 | Config incl. secrets | `~/.config/wiki-agent-workspace/config.toml` (or `WAW_CONFIG`) | mode 0600 |
 | Code, Python venv, built UI | the repository (`.venv/`, `frontend/dist/`) | rebuildable with `scripts/setup.sh` |
@@ -132,8 +133,12 @@ dismissed.
 | `lock_violation` event in a discussion | An app-driven agent turn modified a locked file anyway (OpenCode CLI mode cannot be sandboxed by the app). Review the diff; revert with Git if unwanted. Codex turns on locked files run read-only. |
 | "The selected text could not be located…" (`INVALID_ANCHOR`) | The offsets sent by the browser did not match the current file and the quote plus its surrounding context could not be located uniquely (e.g. the passage is repeated verbatim and the file changed while the question box was open). Refresh the document and reselect. |
 | `PATH_ESCAPES_WORKSPACE` | Only raised for *writes* through a symlink that points outside the workspace (reads through such links are allowed and flagged in the tree). Edit the real target in your terminal. |
-| `UNSUPPORTED_FORMAT` when opening | Only Markdown, text/source, `.docx`, `.pptx` and `.pdf` open in the reader. Legacy `.doc` / `.ppt`: save them as `.docx` / `.pptx`. Other files are listed with their icon for orientation. |
-| `RENDER_FAILED` | The Word/PowerPoint file could not be parsed (corrupt, password-protected or not really Office Open XML). |
+| `UNSUPPORTED_FORMAT` when opening | The reader opens Markdown, text/source, PDF, Word, PowerPoint, Visio and OpenDocument files. Other files are listed with their icon for orientation. |
+| `RENDER_FAILED` | The Text view could not parse the Word/PowerPoint/Visio file (corrupt, password-protected, or not Office Open XML). Try the **Layout** view. |
+| Layout view: "LibreOffice is not installed" | Install it (DEPLOYMENT.md §1) or set `[office] soffice`, then restart. The Text view works meanwhile. |
+| Layout view: "could not be shown" / "did not finish within … s" | LibreOffice failed on this file (damaged, password-protected) or took longer than `[office] timeout`. `server.log` has the reason (`waw.office`). **Try again** re-runs it; raise `timeout` for huge decks. |
+| Layout view stays on "Waiting for another document" | `[office] max_parallel` conversions are already running; it starts when one finishes. |
+| Layout view: "the file is … MiB" | Above `[office] max_bytes`. Raise it if the server has the memory. |
 | `WORKSPACE_NOT_OPEN` / folder shown as *missing* | The folder was removed from the window or no longer exists on disk. Add it again with **＋** in the file tree (data comes back), or remove the stale entry. |
 | `ALREADY_OPEN` when adding a folder | That folder (or the same resolved path) is already one of the window's folders. |
 | `WRONG_WORKSPACE` | A request tried to read a document through another folder; reload the page (the browser had a stale folder selection). |

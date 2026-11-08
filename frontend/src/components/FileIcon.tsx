@@ -10,6 +10,7 @@ const COLORS: Record<string, string> = {
   pdf: "#e02e2a",
   slides: "#d24726",
   word: "#2b579a",
+  diagram: "#3955a3",
   notebook: "#f37626",
   code: "#00a240",
   shell: "#2f8f6f",
@@ -29,6 +30,7 @@ export const KIND_LABEL: Record<string, string> = {
   pdf: "PDF",
   slides: "Presentation (PowerPoint)",
   word: "Word document",
+  diagram: "Diagram (Visio)",
   notebook: "Jupyter notebook",
   code: "Source code",
   shell: "Script",
@@ -100,6 +102,16 @@ export function FileIcon({ item, open = false }: { item: Pick<FileItem, "type" |
         <>
           <path d="M3.5 1.5h6l3 3v10h-9z" fill="none" stroke={c} strokeWidth="1.3" strokeLinejoin="round" />
           <text x="4.4" y="12" fontSize="6" fontWeight="700" fill={c} fontFamily="sans-serif">W</text>
+        </>
+      );
+      break;
+    case "diagram":
+      body = (
+        <>
+          <rect x="1.5" y="2" width="5" height="4" rx="0.8" fill="none" stroke={c} strokeWidth="1.3" />
+          <rect x="9.5" y="10" width="5" height="4" rx="0.8" fill="none" stroke={c} strokeWidth="1.3" />
+          <path d="M4 6v6h5.5" fill="none" stroke={c} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+          <circle cx="12" cy="4" r="2" fill="none" stroke={c} strokeWidth="1.2" />
         </>
       );
       break;

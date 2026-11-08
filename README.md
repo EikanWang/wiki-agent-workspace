@@ -41,6 +41,7 @@ Design specification: [`DESIGN.md`](DESIGN.md). Visual reference (mockup only): 
 - Linux, the **same OS user** that owns the wiki checkout and the agent logins (never root)
 - Python 3.11–3.13, Git, tmux 3.2+ (3.5a tested), Node.js 20+ (22 recommended; only needed to build the frontend)
 - Optional: `opencode` and/or `codex` on `PATH`, already logged in. Without them the reader and terminal still work.
+- Optional: LibreOffice (Writer, Impress, Draw) for the original-layout view of Word, PowerPoint and Visio files.
 
 `scripts/setup.sh` does **not** install system packages; it names any missing dependency and how to install it.
 Install commands per distro, the recommended `fs.inotify.max_user_watches` increase for large wikis, and a
@@ -88,7 +89,7 @@ Everything below is explained step by step in **[docs/USER_GUIDE.md](docs/USER_G
 | Area | What you get |
 | --- | --- |
 | Folders | Several wiki folders in one window ("add folder", like VS Code), each fully isolated: documents, discussions, sessions, locks, reviews, Git state |
-| Reading | Markdown, any text/source file (numbered code), Word `.docx`, PowerPoint `.pptx` (slides with notes), PDF; kind icons; section links; Read / Discuss modes; reading position restore; tabs for open documents (switch, close, reorder, across folders) |
+| Reading | Markdown, any text/source file (numbered code), Word, PowerPoint, Visio in their original layout (LibreOffice) plus a selectable text view (`.docx`, `.pptx`, `.vsdx`), PDF; kind icons; section links; Read / Discuss modes; reading position restore; tabs for open documents (switch, close, reorder, across folders) |
 | Asking | Select words or lines → question box (copy icon, Enter to send); anchors survive edits; orphaned/ambiguous detection and manual reanchor; review marks |
 | Discussions | Individual or Flat (all discussions as one stream) panel; streaming answers rendered as Markdown; retry / cancel |
 | Agents | OpenCode and Codex with your existing login; per-session **model and effort**; link provider sessions; per-session job queueing |
@@ -159,8 +160,8 @@ separately (`~/.config/wiki-agent-workspace/config.toml`). Backup, restore and m
 ## Running the tests
 
 ```bash
-scripts/test.sh            # backend: pytest (91 tests; real git + tmux + fake agents), ~25 s
-scripts/test.sh --e2e      # + Playwright browser suite (35 scenarios) against the production build
+scripts/test.sh            # backend: pytest (100 tests; real git + tmux + fake agents), ~25 s
+scripts/test.sh --e2e      # + Playwright browser suite (38 scenarios) against the production build
 # or individually
 .venv/bin/python -m pytest tests/backend -q
 cd frontend && npx playwright install chromium && npm run test:e2e

@@ -20,6 +20,7 @@ Contents: [1 Prerequisites](#1-prerequisites) · [2 Get the code](#2-get-the-cod
 | tmux | **3.2+** (3.5a tested) | persistent terminals; without it the reader works but terminals are disabled | `tmux -V` |
 | Node.js + npm | **20+** (22 recommended) | builds the browser UI once (not needed at runtime) | `node --version` |
 | OpenCode and/or Codex CLI | current | agent providers, logged in as the same user | `opencode --version`, `codex --version` |
+| LibreOffice (Writer, Impress, Draw) | 7.x+ (25.2 tested) | optional: the original-layout view of Word, PowerPoint and Visio files; without it only their text view is available | `soffice --version` |
 | `infocmp`/ncurses terminfo | usual | tmux picks `tmux-256color`/`screen-256color` for the inner `$TERM` | `infocmp tmux-256color` |
 
 Install commands (choose your distro):
@@ -27,11 +28,14 @@ Install commands (choose your distro):
 ```bash
 # Debian / Ubuntu
 sudo apt update && sudo apt install -y git tmux python3 python3-venv python3-pip curl
+# optional: original layout of Word / PowerPoint / Visio files
+sudo apt install -y --no-install-recommends libreoffice-writer libreoffice-impress libreoffice-draw
 # Node 22 via NodeSource (or use nvm: https://github.com/nvm-sh/nvm)
 curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt install -y nodejs
 
 # Fedora / RHEL
 sudo dnf install -y git tmux python3 python3-pip nodejs npm
+sudo dnf install -y libreoffice-writer libreoffice-impress libreoffice-draw   # optional, see above
 
 # No root? Python via uv/pyenv, Node via nvm, tmux built from source into ~/.local all work:
 #   curl -LsSf https://astral.sh/uv/install.sh | sh && uv python install 3.12

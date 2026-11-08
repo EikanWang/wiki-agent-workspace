@@ -133,6 +133,7 @@ export interface Bootstrap {
   default_provider: string | null;
   providers: Record<string, Capabilities>;
   terminals: TerminalInfo[];
+  office_info?: { available: boolean; install_hint: string | null; max_bytes: number };
   terminal_info: { tmux_available: boolean; tmux_version: string | null; inner_term: string; locale_warning: string | null; history_limit: number; install_hint: string | null };
   settings: { codex_sandbox: string; opencode_mode: string; max_document_bytes: number; watcher_error: string | null };
   watcher: { ready: boolean; error: string | null; registering_seconds: number | null } | null;
@@ -204,7 +205,8 @@ export interface OpenDocument {
   document_id: string;
   path: string;
   /** markdown | text | docx | pdf */
-  format: "markdown" | "text" | "docx" | "pptx" | "pdf";
+  /** visio = .vsdx (text view + layout); office = layout-only (.doc, .ppt, .vsd, OpenDocument, RTF) */
+  format: "markdown" | "text" | "docx" | "pptx" | "visio" | "office" | "pdf";
   /** text formats (Markdown, text/source) can be edited in the browser */
   editable?: boolean;
   /** server-rendered HTML for text/docx (markdown renders client-side; pdf has none) */

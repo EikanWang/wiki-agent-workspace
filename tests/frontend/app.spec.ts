@@ -940,6 +940,7 @@ prs.save(${JSON.stringify(path.join(ws, "docs", "roadmap.pptx"))})
   if ((await page.getByTestId("tree-file-docs/roadmap.pptx").count()) === 0) await dir.click();
   await expect(page.getByTestId("tree-file-docs/roadmap.pptx")).toHaveAttribute("data-kind", "slides");
   await page.getByTestId("tree-file-docs/roadmap.pptx").locator("button.tree-main").click();
+  await page.getByTestId("office-view-text").click(); // Layout (original slides) is the default; slides as text here
   const body = page.getByTestId("markdown-body");
   await expect(body.locator("section.slide")).toHaveCount(2);
   await expect(body.locator("section.slide").first().locator("h2")).toHaveText("Slide 1: Roadmap");
@@ -1311,4 +1312,85 @@ test("startup: no FILE_NOT_FOUND from stale remembered documents (old folder-les
   await page.reload();
   await expect(page.getByText("Open a Markdown file")).toBeVisible({ timeout: 10000 });
   await expect(page.locator(".banner.warn", { hasText: "FILE_NOT_FOUND" })).toHaveCount(0);
+});
+
+test("site icon: favicon (SVG + ICO), apple-touch icon and manifest are served", async ({ page, request }) => {
+  await page.goto("/");
+  await expect(page.locator('link[rel="icon"][type="image/svg+xml"]')).toHaveAttribute("href", "/favicon.svg");
+  for (const [u, type] of [["/favicon.svg", "image/svg+xml"], ["/favicon.ico", "image/"], ["/apple-touch-icon.png", "image/png"], ["/icon-512.png", "image/png"], ["/manifest.webmanifest", "application/manifest+json"]]) {
+    const r = await request.get(u);
+    expect(r.status(), u).toBe(200);
+    expect(r.headers()["content-type"], u).toContain(type); // not the app page served as a fallback
+  }
+  const m = await (await request.get("/manifest.webmanifest")).json();
+  expect(m.icons.length).toBeGreaterThan(1);
+});
+
+test("Office layout view: a .pptx opens in its original layout (LibreOffice → PDF); Text and Ask switch to the text", async ({ page }) => {
+  await login(page);
+  const ws = workspaceDir();
+  const cp = require("child_process") as typeof import("child_process");
+  const py = path.resolve(__dirname, "../../.venv/bin/python");
+  cp.execFileSync(py, ["-c", `
+from pptx import Presentation
+prs = Presentation()
+s = prs.slides.add_slide(prs.slide_layouts[1])
+s.shapes.title.text = "Layout deck"
+s.placeholders[1].text_frame.text = "Rendered by LibreOffice"
+prs.save(${JSON.stringify(path.join(ws, "docs", "layout-deck.pptx"))})
+`]);
+  try {
+    await page.getByTestId("tree-refresh").click();
+    const dir = page.getByTestId("tree-root").first().locator(".tree-row.dir", { hasText: "docs" }).first();
+    if ((await page.getByTestId("tree-file-docs/layout-deck.pptx").count()) === 0) await dir.click();
+    await page.getByTestId("tree-file-docs/layout-deck.pptx").locator("button.tree-main").click();
+    const view = page.getByTestId("office-view");
+    await expect(page.getByTestId("office-view-layout")).toHaveAttribute("aria-selected", "true"); // default
+    await expect(view).toHaveAttribute("data-state", "ready", { timeout: 60000 });
+    const src = await page.getByTestId("office-pdf").getAttribute("src");
+    const pdf = await page.request.get(src!);
+    expect(pdf.status()).toBe(200);
+    expect(pdf.headers()["content-type"]).toBe("application/pdf");
+    expect((await pdf.body()).subarray(0, 4).toString()).toBe("%PDF");
+    await expect(page.getByTestId("markdown-body")).toBeHidden();
+    // Ask in the layout view: passages are picked in the text view
+    await page.getByTestId("ask-current-selection").click();
+    await expect(page.getByTestId("office-view-text")).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByTestId("office-text-hint")).toBeVisible();
+    await expect(page.getByTestId("markdown-body").locator("h2").first()).toHaveText("Slide 1: Layout deck");
+    // the choice is remembered; Layout brings the original back (cached: ready at once)
+    await page.getByTestId("office-view-layout").click();
+    await expect(view).toHaveAttribute("data-state", "ready", { timeout: 5000 });
+  } finally {
+    fs.rmSync(path.join(ws, "docs", "layout-deck.pptx"), { force: true });
+  }
+});
+
+test("Visio: a .vsdx has a text view (pages and shape text) for asking about a passage", async ({ page }) => {
+  await login(page);
+  const ws = workspaceDir();
+  const cp = require("child_process") as typeof import("child_process");
+  const py = path.resolve(__dirname, "../../.venv/bin/python");
+  cp.execFileSync(py, ["-c", `
+import sys; sys.path.insert(0, ${JSON.stringify(path.resolve(__dirname, "../backend"))})
+from pathlib import Path
+from test_office import make_vsdx
+make_vsdx(Path(${JSON.stringify(path.join(ws, "docs", "flow.vsdx"))}))
+`]);
+  try {
+    await page.getByTestId("tree-refresh").click();
+    const dir = page.getByTestId("tree-root").first().locator(".tree-row.dir", { hasText: "docs" }).first();
+    if ((await page.getByTestId("tree-file-docs/flow.vsdx").count()) === 0) await dir.click();
+    await expect(page.getByTestId("tree-file-docs/flow.vsdx")).toHaveAttribute("data-kind", "diagram");
+    await page.getByTestId("tree-file-docs/flow.vsdx").locator("button.tree-main").click();
+    await expect(page.locator(".doc-meta .chip").first()).toHaveText("VISIO");
+    await page.getByTestId("office-view-text").click();
+    const body = page.getByTestId("markdown-body");
+    await expect(body.locator("h2")).toHaveText(["Page 1: Overview", "Page 2: Details"]);
+    if ((await page.getByTestId("reader-mode-discuss").getAttribute("aria-selected")) !== "true") await page.getByTestId("reader-mode-discuss").click();
+    await selectText(page, "Grouped A");
+    await expect(page.getByTestId("selection-quote")).toHaveText("Grouped A");
+  } finally {
+    fs.rmSync(path.join(ws, "docs", "flow.vsdx"), { force: true });
+  }
 });

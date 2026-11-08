@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { COMPOSER_HINT, composerKeyDown } from "./keys";
 import Editor from "./Editor";
+import OfficeView from "./OfficeView";
 import { AgentSession, ApiError, OpenDocument, ReviewMark, Thread, getWorkspace, put } from "../api";
 import { renderMarkdown, sanitizeHtml, slugify } from "../markdown";
 import { SelectionAnchor, TextModel, anchorFromSelection, buildTextModel, makeAnchor, rangeFromOffsets, resolveAnchor } from "../textmodel";
@@ -29,6 +30,8 @@ export interface ReaderProps {
   onToggleToc?: () => void;
   readerMode?: "read" | "discuss";
   onReaderModeChange?: (m: "read" | "discuss") => void;
+  officeView?: "layout" | "text";
+  onOfficeViewChange?: (v: "layout" | "text") => void;
   /** after a save in the editor: reload the document (keeps the open discussion) */
   onEdited?: (sha256: string) => void;
   onDirtyChange?: (dirty: boolean) => void;
@@ -38,10 +41,12 @@ export interface ReaderProps {
 const SELECTION_DELAY_MS = 350;
 
 export default function Reader(props: ReaderProps) {
-  const { doc, threads, marks, activeThreadId, changedNotice, onRefresh, onRelink, onOpenThread, initialFragment, onFragmentConsumed, tocOpen = true, onToggleToc, readerMode = "discuss", onReaderModeChange, onEdited, onDirtyChange, onSend, onMarkReviewed, onReanchor, onOpenInternalLink, sessions, defaultSessionId, defaultProvider } = props;
+  const { doc, threads, marks, activeThreadId, changedNotice, onRefresh, onRelink, onOpenThread, initialFragment, onFragmentConsumed, tocOpen = true, onToggleToc, readerMode = "discuss", onReaderModeChange, officeView = "layout", onOfficeViewChange, onEdited, onDirtyChange, onSend, onMarkReviewed, onReanchor, onOpenInternalLink, sessions, defaultSessionId, defaultProvider } = props;
   const [sheet, setSheet] = useState<SelectionAnchor | null>(null); // mobile / header-button composer
   const [copyChip, setCopyChip] = useState<{ text: string; x: number; y: number; done: boolean } | null>(null); // read mode
   const [editing, setEditing] = useState(false);
+  const [textHint, setTextHint] = useState(false);
+  useEffect(() => setTextHint(false), [doc.document_id]);
   useEffect(() => setEditing(false), [doc.document_id]);
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -52,10 +57,31 @@ export default function Reader(props: ReaderProps) {
   const pointerDown = useRef(false);
   const restoredFor = useRef<string | null>(null);
   const isTouch = useMemo(() => typeof window !== "undefined" && window.matchMedia("(pointer: coarse)").matches, []);
+  // Office files: Layout (faithful, LibreOffice → PDF) or Text (selectable, anchored discussions)
+  const isOffice = ["docx", "pptx", "visio", "office"].includes(doc.format);
+  const hasText = doc.format !== "pdf" && doc.format !== "office"; // false: discussions are about the whole document
+  const [localView, setLocalView] = useState(officeView);
+  useEffect(() => setLocalView(officeView), [officeView]);
+  const layout = isOffice && (!hasText || localView === "layout");
+  const setView = (v: "layout" | "text") => {
+    setLocalView(v);
+    onOfficeViewChange?.(v);
+  };
+  // opening a discussion from the panel shows its passage, which lives in the text view
+  const threadDoc = useRef(doc.document_id);
+  useEffect(() => {
+    if (threadDoc.current !== doc.document_id) {
+      threadDoc.current = doc.document_id; // restored with the document: keep the chosen view
+      return;
+    }
+    if (activeThreadId && isOffice && hasText && localView === "layout") setLocalView("text");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeThreadId]);
+  const fmtLabel = doc.format === "office" ? (doc.path.split(".").pop() ?? "office").toUpperCase() : doc.format === "visio" ? "VISIO" : doc.format.toUpperCase();
 
   const html = useMemo(() => {
     if (doc.format === "markdown") return renderMarkdown(doc.text, doc.path);
-    if (doc.format === "pdf") return "";
+    if (!hasText) return "";
     return sanitizeHtml(doc.html ?? "", doc.path);
   }, [doc.text, doc.html, doc.format, doc.path]);
 
@@ -442,7 +468,13 @@ export default function Reader(props: ReaderProps) {
           ))}
         </div>
         <div className="doc-meta">
-          <span className="chip">{doc.format.toUpperCase()}</span>
+          <span className="chip">{fmtLabel}</span>
+          {isOffice && hasText && (
+            <span className="mode-switch" role="tablist" aria-label="Office view" title="Layout: the original pages, slides or diagram. Text: selectable text for asking about a passage.">
+              <button role="tab" aria-selected={layout} className={layout ? "active" : ""} onClick={() => setView("layout")} data-testid="office-view-layout">Layout</button>
+              <button role="tab" aria-selected={!layout} className={!layout ? "active" : ""} onClick={() => setView("text")} data-testid="office-view-text">Text</button>
+            </span>
+          )}
           {doc.lock && (
             <span className="chip locked" title={`Locked${doc.lock.is_dir && doc.lock.path !== doc.path ? ` by folder ${doc.lock.path || "(workspace)"}` : ""}${doc.lock.reason ? ` — ${doc.lock.reason}` : ""}. The app and app-driven agents will not modify this file; your terminal is unrestricted.`} data-testid="doc-lock-badge">
               🔒 locked{doc.lock.is_dir && doc.lock.path !== doc.path ? " (folder)" : ""}
@@ -464,7 +496,7 @@ export default function Reader(props: ReaderProps) {
               ✎ Edit
             </button>
           )}
-          {onReaderModeChange && (
+          {onReaderModeChange && hasText && !layout && (
             <span className="mode-switch" role="tablist" aria-label="Reader mode" title="Read: selecting text only copies. Discuss: selecting text opens the question box.">
               <button role="tab" aria-selected={readerMode === "read"} className={readerMode === "read" ? "active" : ""} onClick={() => onReaderModeChange("read")} data-testid="reader-mode-read">Read</button>
               <button role="tab" aria-selected={readerMode === "discuss"} className={readerMode === "discuss" ? "active" : ""} onClick={() => onReaderModeChange("discuss")} data-testid="reader-mode-discuss">Discuss</button>
@@ -474,18 +506,24 @@ export default function Reader(props: ReaderProps) {
             className="btn small"
             data-testid="ask-current-selection"
             onClick={() => {
-              if (doc.format === "pdf") {
-                // no text anchors for PDFs: start a discussion about the document as a whole
+              if (!hasText) {
+                // no text anchors (PDF, .doc, .vsd…): start a discussion about the document as a whole
                 setSheet({ quote: doc.path, prefix: "", suffix: "", start: 0, end: 0, heading: null });
+                return;
+              }
+              if (layout) {
+                // passages are selected in the text view
+                setView("text");
+                setTextHint(true);
                 return;
               }
               const a = computeSelection() ?? props.pendingSelectionRef.current;
               if (a) setSheet(a);
               else alert("Select some text in the document first.");
             }}
-            title={doc.format === "pdf" ? "Ask the agent about this PDF" : "On touch devices: select text first, then tap here to ask"}
+            title={!hasText ? "Ask the agent about this document" : layout ? "Switch to the text view and select the passage to ask about" : "On touch devices: select text first, then tap here to ask"}
           >
-            {doc.format === "pdf" ? "Ask about this PDF" : "Ask about selection"}
+            {doc.format === "pdf" ? "Ask about this PDF" : !hasText ? "Ask about this document" : layout ? "Ask about a passage…" : "Ask about selection"}
           </button>
         </div>
       </div>
@@ -510,7 +548,7 @@ export default function Reader(props: ReaderProps) {
         </div>
       )}
       <div className="reader-body" ref={scrollRef}>
-        {headings.length > 1 && !editing && (
+        {headings.length > 1 && !editing && !layout && (
           <nav className={`toc ${tocOpen ? "" : "collapsed"}`} data-testid="toc">
             <button className="toc-toggle" onClick={onToggleToc} title={tocOpen ? "Fold outline" : "Unfold outline"} data-testid="toc-toggle">
               {tocOpen ? "▾ Outline" : "▸"}
@@ -536,13 +574,20 @@ export default function Reader(props: ReaderProps) {
             onDirtyChange={(d) => onDirtyChange?.(d)}
           />
         )}
+        {textHint && !layout && (
+          <div className="banner" role="status" data-testid="office-text-hint">
+            Select the passage you want to ask about. <b>Layout</b> brings the original view back.
+            <button className="icon-btn" onClick={() => setTextHint(false)} aria-label="Dismiss">×</button>
+          </div>
+        )}
+        {isOffice && layout && <OfficeView path={doc.path} sha256={doc.sha256} onShowText={hasText ? () => setView("text") : null} />}
         {doc.format === "pdf" ? (
           <div className="pdf-view" data-testid="pdf-view">
             <div className="muted small">PDF shown with the browser's viewer. Discussions on PDFs attach to the document (no text anchors); use the discussion panel to ask about it.</div>
             <iframe title={doc.path} src={`/api/v1/raw?path=${encodeURIComponent(doc.path)}${getWorkspace() ? `&workspace=${encodeURIComponent(getWorkspace()!)}` : ""}`} />
           </div>
         ) : (
-          <article className="markdown-body" ref={containerRef} data-testid="markdown-body" style={editing ? { display: "none" } : undefined} />
+          <article className="markdown-body" ref={containerRef} data-testid="markdown-body" style={editing || layout ? { display: "none" } : undefined} />
         )}
         {copyChip && (
           <button

@@ -89,8 +89,17 @@ LANG_BY_SUFFIX = {
 }
 
 
+# Shown in their original layout only (rendered to PDF by LibreOffice): no text model, so discussions attach to the
+# whole document, as for PDFs. .docx / .pptx / .vsdx have a text view as well (formats "docx" / "pptx" / "visio").
+LAYOUT_ONLY_SUFFIXES = {".doc", ".rtf", ".odt", ".ppt", ".pps", ".ppsx", ".odp", ".vsd", ".vsdm", ".odg"}
+# formats rendered with LibreOffice for the "Layout" view
+OFFICE_FORMATS = {"docx", "pptx", "visio", "office"}
+# formats without a text model (no anchored passages; discussions are about the whole document)
+NO_TEXT_FORMATS = {"pdf", "office"}
+
+
 def document_format(name: str) -> str:
-    """markdown | text | docx | pptx | pdf | unsupported"""
+    """markdown | text | docx | pptx | visio | office | pdf | unsupported"""
     lower = name.lower()
     suffix = Path(lower).suffix
     if suffix in (".md", ".markdown"):
@@ -99,6 +108,10 @@ def document_format(name: str) -> str:
         return "docx"
     if suffix == ".pptx":
         return "pptx"
+    if suffix == ".vsdx":
+        return "visio"
+    if suffix in LAYOUT_ONLY_SUFFIXES:
+        return "office"
     if suffix == ".pdf":
         return "pdf"
     if suffix in TEXT_SUFFIXES or lower in TEXT_SUFFIXES or lower in TEXT_NAMES or (not suffix and lower.split(".")[0] in TEXT_NAMES):
@@ -246,7 +259,91 @@ def render_document(fmt: str, data: bytes, name: str) -> str:
         return render_docx(data)
     if fmt == "pptx":
         return render_pptx(data)
+    if fmt == "visio":
+        return render_visio(data)
     raise ValueError(f"unsupported document format: {fmt}")
+
+
+VISIO_MAX_XML_BYTES = 64 * 1024 * 1024  # total uncompressed page XML read from one .vsdx (zip-bomb guard)
+
+
+def render_visio(data: bytes) -> str:
+    """Visio (.vsdx) → HTML for the text view: one <section> per foreground page ("Page N: name") listing the text
+    of its shapes, top-to-bottom then left-to-right (grouped shapes keep their order). The faithful drawing is the
+    Layout view (LibreOffice). Sanitized by DOMPurify in the browser."""
+    import html
+    import io
+    import posixpath
+    import zipfile
+    import xml.etree.ElementTree as ET
+
+    ns = {"v": "http://schemas.microsoft.com/office/visio/2012/main"}
+    rel_ns = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
+    z = zipfile.ZipFile(io.BytesIO(data))
+    budget = [VISIO_MAX_XML_BYTES]
+
+    def read_xml(name: str) -> ET.Element:
+        info = z.getinfo(name)
+        budget[0] -= info.file_size
+        if budget[0] < 0:
+            raise ValueError("diagram is too large to extract text from")
+        raw = z.read(name)
+        if b"<!DOCTYPE" in raw[:2048] or b"<!ENTITY" in raw:
+            raise ValueError("unexpected DTD in diagram XML")
+        return ET.fromstring(raw)
+
+    def cell(shape: ET.Element, name: str) -> float:
+        c = shape.find(f"v:Cell[@N='{name}']", ns)
+        try:
+            return float(c.get("V", "0")) if c is not None else 0.0
+        except ValueError:
+            return 0.0
+
+    def shape_text(shape: ET.Element) -> str:
+        t = shape.find("v:Text", ns)
+        if t is None:
+            return ""
+        return re.sub(r"[ \t]+", " ", "".join(t.itertext()).replace("\r\n", "\n").replace("\r", "\n")).strip()
+
+    def walk(shapes: ET.Element | None, out: list[str], top: bool) -> None:
+        if shapes is None:
+            return
+        items = shapes.findall("v:Shape", ns)
+        if top:  # reading order for the page's own shapes; a group's members keep their stacking order
+            items.sort(key=lambda sh: (-round(cell(sh, "PinY"), 1), cell(sh, "PinX")))
+        for sh in items:
+            txt = shape_text(sh)
+            if txt and (not out or out[-1] != txt):
+                out.append(txt)
+            walk(sh.find("v:Shapes", ns), out, False)
+
+    pages_xml = read_xml("visio/pages/pages.xml")
+    rels: dict[str, str] = {}
+    try:
+        rel_root = read_xml("visio/pages/_rels/pages.xml.rels")
+        for r in rel_root:
+            rels[r.get("Id", "")] = posixpath.normpath(posixpath.join("visio/pages", r.get("Target", "")))
+    except KeyError:
+        pass
+    parts: list[str] = []
+    n = 0
+    for page in pages_xml.findall("v:Page", ns):
+        if page.get("Background") == "1":
+            continue  # background pages are drawn behind others, not read on their own
+        rel = page.find("v:Rel", ns)
+        target = rels.get(rel.get(rel_ns, "") if rel is not None else "")
+        if not target or target not in z.namelist():
+            continue
+        n += 1
+        name = page.get("Name") or page.get("NameU") or ""
+        texts: list[str] = []
+        walk(read_xml(target).find("v:Shapes", ns), texts, True)
+        title = f"Page {n}" + (f": {name}" if name else "")
+        body = "".join(f"<li>{html.escape(t).replace(chr(10), '<br>')}</li>" for t in texts) if texts else ""
+        parts.append(f'<section class="slide diagram-page"><h2>{html.escape(title)}</h2>'
+                     + (f"<ul>{body}</ul>" if body else '<p class="muted">(no text on this page)</p>') + "</section>")
+    return "".join(parts) or '<p class="muted">(no pages)</p>'
+
 
 
 @dataclass

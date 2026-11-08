@@ -89,7 +89,7 @@ class ReviewService:
 
     def add_comment(self, body: "ReviewCommentIn") -> dict[str, Any]:
         rel = self.docs.normalize_rel(body.path)
-        if document_format(rel.rsplit("/", 1)[-1]) not in ("markdown", "text", "docx", "pptx"):
+        if document_format(rel.rsplit("/", 1)[-1]) not in ("markdown", "text", "docx", "pptx", "visio"):
             raise bad_request("comments can only be attached to files the reader can open", "UNSUPPORTED_FORMAT")
         r = self.pending(body.base, body.target, create=True)
         assert r is not None

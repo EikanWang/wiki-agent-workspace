@@ -100,6 +100,7 @@ async def bootstrap(request: Request, ctx: AppContext = Depends(require_auth)):
         "providers": caps,
         "terminals": ctx.terminals.list(),
         "terminal_info": ctx.terminals.info(),
+        "office_info": ctx.office.info() if ctx.office else {"available": False, "install_hint": None, "max_bytes": 0},
         "settings": {
             "codex_sandbox": ctx.settings.provider("codex").sandbox,
             "opencode_mode": ctx.settings.provider("opencode").mode,
@@ -191,6 +192,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ctx.jobs.documents = primary.docs
     tmux = Tmux(settings)
     ctx.terminals = terminal.TerminalManager(db, tmux, bus, primary.root)
+    from .office import OfficeRenderer
+
+    ctx.office = OfficeRenderer(settings)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -267,6 +271,9 @@ def _frontend_dist(settings: Settings) -> Path | None:
 
 
 def _mount_frontend(app: FastAPI, settings: Settings) -> None:
+    import mimetypes
+
+    mimetypes.add_type("application/manifest+json", ".webmanifest")  # the site icon manifest
     dist = _frontend_dist(settings)
 
     @app.get("/{full_path:path}", include_in_schema=False)

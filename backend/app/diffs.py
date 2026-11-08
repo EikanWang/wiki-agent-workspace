@@ -22,7 +22,7 @@ from .documents import MARKDOWN_SUFFIXES, DocumentService, sha256_bytes
 from .errors import ApiError, bad_request, not_found
 from .gitinfo import git_info, git_run, valid_ref
 from .models import Document, FileReview, Message, Thread
-from .textmodel import document_format
+from .textmodel import NO_TEXT_FORMATS, document_format
 
 router = APIRouter()
 
@@ -46,7 +46,10 @@ class DiffService:
         """Text to diff: Office documents are compared by their rendered text (one line per block: slide titles,
         bullets, table rows, notes), everything else by its UTF-8 content."""
         fmt = document_format(Path(rel).name)
-        if fmt in ("docx", "pptx"):
+        if fmt in NO_TEXT_FORMATS:
+            # binary layouts (.doc, .vsd, PDF…): no readable text to compare; the file list still shows the change
+            return f"<{Path(rel).suffix or 'binary'} document: compare it in the reader's Layout view>\n"
+        if fmt in ("docx", "pptx", "visio"):
             try:
                 from .textmodel import build_text_model_from_html, render_document
 
@@ -152,7 +155,7 @@ class DiffService:
                 "identical": a == b, "document_id": doc_ids.get(frel),
                 "target_sha256": sha256_bytes(b.encode("utf-8")) if b is not None else None,
                 "is_markdown": Path(frel).suffix.lower() in MARKDOWN_SUFFIXES,
-                "commentable": document_format(Path(frel).name) in ("markdown", "text", "docx", "pptx"),
+                "commentable": document_format(Path(frel).name) in ("markdown", "text", "docx", "pptx", "visio"),
                 "lock": self.ctx.locks.covering(frel) if self.ctx.locks is not None else None,
             })
         reviews = self.reviews_for(base, [f["path"] for f in out_files])
@@ -205,8 +208,8 @@ class DiffService:
         with the same workflow (session, streaming, retry). The anchor is the commented line's text when it exists
         in the current file; otherwise the thread records the diff context only."""
         rel = self._rel(body.path)
-        if document_format(Path(rel).name) not in ("markdown", "text", "docx", "pptx"):
-            raise bad_request("comments can only be attached to files the reader can open (Markdown, text/source, .docx)", "UNSUPPORTED_FORMAT")
+        if document_format(Path(rel).name) not in ("markdown", "text", "docx", "pptx", "visio"):
+            raise bad_request("comments can only be attached to files the reader can open (Markdown, text/source, .docx, .pptx, .vsdx)", "UNSUPPORTED_FORMAT")
         doc = self.docs.get_or_create_document(rel)
         try:
             _, data, sha = self.docs.current_content(doc)

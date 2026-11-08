@@ -11,7 +11,9 @@ export interface DocTab {
 export const sameTab = (a: DocTab | null | undefined, b: DocTab | null | undefined) => !!a && !!b && a.ws === b.ws && a.path === b.path;
 
 const KIND_BY_EXT: Record<string, string> = {
-  md: "markdown", markdown: "markdown", mdx: "markdown", pdf: "pdf", docx: "word", pptx: "slides", ipynb: "notebook",
+  md: "markdown", markdown: "markdown", mdx: "markdown", pdf: "pdf", docx: "word", doc: "word", odt: "word", rtf: "word",
+  pptx: "slides", ppt: "slides", pps: "slides", ppsx: "slides", odp: "slides", ipynb: "notebook",
+  vsdx: "diagram", vsd: "diagram", vsdm: "diagram", odg: "diagram",
   png: "image", jpg: "image", jpeg: "image", gif: "image", svg: "image", webp: "image",
   py: "code", ts: "code", tsx: "code", js: "code", c: "code", cc: "code", cpp: "code", h: "code", hpp: "code", rs: "code", go: "code", java: "code",
   sh: "shell", bash: "shell", json: "data", yaml: "data", yml: "data", toml: "data", csv: "data",

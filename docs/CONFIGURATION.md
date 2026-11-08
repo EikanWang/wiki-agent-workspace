@@ -58,6 +58,22 @@ root = "/home/me/team-wiki"
 The browser selects the folder per request with the `X-Workspace` header (or `?workspace=<id>`, used for images and
 PDFs). Requests that address an object (document, discussion, review, session…) always use that object's folder.
 
+## `[office]`
+
+Layout view of Word / PowerPoint / Visio / OpenDocument files: rendered to PDF by LibreOffice on the server.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `soffice` | found on `PATH` | Path to LibreOffice's `soffice`. Without LibreOffice the Layout view says so and the Text view still works. |
+| `max_parallel` | `2` | LibreOffice conversions running at the same time (each takes one CPU core and ~200–500 MB while it runs). |
+| `timeout` | `180` | Seconds before a conversion is stopped and reported as failed (**Try again** retries). |
+| `max_bytes` | `209715200` (200 MiB) | Largest file the Layout view renders. Independent of `workspace.max_document_bytes`, which limits the Text view. |
+| `cache_mb` | `2048` | Size cap of the render cache (`<state_dir>/renders`); least recently viewed renders are removed first. |
+
+Each conversion copies the file to a temporary folder and runs headless LibreOffice there with a private profile
+(`<state_dir>/lo-profiles`): your wiki is never written to, and your own LibreOffice settings are not touched.
+Renders are cached by content hash, so an unchanged file is converted once.
+
 ## `[terminal]`
 
 | Key | Default | Meaning |
@@ -135,6 +151,12 @@ name = "Notes"
 
 [terminal]
 tmux_history_limit = 10000
+
+[office]
+max_parallel = 2
+timeout = 180
+max_bytes = 209715200
+cache_mb = 2048
 
 [auth]
 access_token = "…generated…"

@@ -18,6 +18,7 @@ if TYPE_CHECKING:  # pragma: no cover
     from .documents import DocumentService
     from .events import EventBus
     from .locks import LockService
+    from .office import OfficeRenderer
     from .terminal.manager import TerminalManager
     from .watcher import WorkspaceWatcher
     from .workspaces import WorkspaceRegistry
@@ -33,6 +34,7 @@ class AppContext:
     providers: "ProviderRegistry | None" = None
     jobs: "JobManager | None" = None
     terminals: "TerminalManager | None" = None
+    office: "OfficeRenderer | None" = None
     events: "EventBus | None" = None
     watcher: "WorkspaceWatcher | None" = None
     locks: "LockService | None" = None

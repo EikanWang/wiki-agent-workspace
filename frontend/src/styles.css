@@ -525,3 +525,12 @@ mark.waw-hl.review.needs_review { border-bottom: 2px dashed var(--warn); }
 /* per-folder ↻ (shown on hover like the other row actions; stays visible while it spins) */
 .tree-action.refresh-btn { font-weight: 400; font-size: 13px; }
 
+/* Layout view of Office files (LibreOffice → PDF) */
+.office-view { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.office-view.office-status { padding: 24px; gap: 12px; }
+.office-note { padding: 6px 12px; }
+.office-pending { display: flex; align-items: center; gap: 12px; padding: 18px; border: 1px dashed var(--border); border-radius: 10px; max-width: 560px; }
+.office-actions { display: flex; gap: 8px; }
+.spinner { width: 22px; height: 22px; border-radius: 50%; border: 3px solid var(--accent); border-top-color: var(--primary); animation: refresh-spin 0.8s linear infinite; flex: none; }
+.diagram-page ul { list-style: none; padding-left: 0; }
+.diagram-page li { padding: 3px 8px; margin: 3px 0; border-left: 3px solid var(--accent); }

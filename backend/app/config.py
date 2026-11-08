@@ -58,6 +58,12 @@ class Settings:
     gateway_user_header: str = ""     # header the gateway sets, required when gateway_auth
     max_document_bytes: int = 20 * 1024 * 1024
     tmux_history_limit: int = 10000
+    # [office] — Layout view of Word / PowerPoint / Visio files, rendered to PDF by LibreOffice
+    office_soffice: str | None = None  # path to soffice; default: found on PATH
+    office_max_parallel: int = 2
+    office_timeout: int = 180
+    office_max_bytes: int = 200 * 1024 * 1024
+    office_cache_mb: int = 2048
     shell: str | None = None
     session_days: int = 30
     frontend_dist: Path | None = None
@@ -125,6 +131,12 @@ class Settings:
             "terminal": {
                 "tmux_history_limit": self.tmux_history_limit,
             },
+            "office": {
+                "max_parallel": self.office_max_parallel,
+                "timeout": self.office_timeout,
+                "max_bytes": self.office_max_bytes,
+                "cache_mb": self.office_cache_mb,
+            },
             "auth": {
                 "access_token": self.access_token,
                 "server_secret": self.server_secret,
@@ -133,6 +145,8 @@ class Settings:
         }
         if self.shell:
             d["terminal"]["shell"] = self.shell
+        if self.office_soffice:
+            d["office"]["soffice"] = self.office_soffice
         if self.workspaces:
             d["workspaces"] = [{k: v for k, v in w.items() if v} for w in self.workspaces]
         if self.frontend_dist:
@@ -183,6 +197,7 @@ def load_settings(path: Path | None = None, env: dict[str, str] | None = None) -
     server = raw.get("server", {})
     ws = raw.get("workspace", {})
     term = raw.get("terminal", {})
+    office = raw.get("office", {}) or {}
     auth = raw.get("auth", {})
     agents = raw.get("agents", {})
 
@@ -224,6 +239,11 @@ def load_settings(path: Path | None = None, env: dict[str, str] | None = None) -
         gateway_user_header=str(server.get("gateway_user_header", "")),
         max_document_bytes=int(ws.get("max_document_bytes", 20 * 1024 * 1024)),
         tmux_history_limit=int(term.get("tmux_history_limit", 10000)),
+        office_soffice=str(office.get("soffice") or "") or None,
+        office_max_parallel=int(office.get("max_parallel", 2)),
+        office_timeout=int(office.get("timeout", 180)),
+        office_max_bytes=int(office.get("max_bytes", 200 * 1024 * 1024)),
+        office_cache_mb=int(office.get("cache_mb", 2048)),
         shell=term.get("shell") or None,
         session_days=int(server.get("session_days", 30)),
         frontend_dist=Path(frontend_dist).expanduser() if frontend_dist else None,

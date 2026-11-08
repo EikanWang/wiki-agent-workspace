@@ -58,6 +58,8 @@ export interface Prefs {
   panelMode: "individual" | "flat";
   /** Reader interaction: "read" = plain viewer (selection only copies), "discuss" = selection opens the question box. */
   readerMode: "read" | "discuss";
+  /** Word / PowerPoint / Visio: the original layout (LibreOffice) or the text view (anchored discussions) */
+  officeView: "layout" | "text";
 }
 
 export const DEFAULT_PREFS: Prefs = {
@@ -72,6 +74,7 @@ export const DEFAULT_PREFS: Prefs = {
   tocOpen: true,
   panelMode: "individual",
   readerMode: "discuss",
+  officeView: "layout",
 };
 
 const KEY = "waw.prefs";
