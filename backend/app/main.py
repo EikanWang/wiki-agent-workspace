@@ -310,7 +310,8 @@ def run() -> None:  # pragma: no cover - process entry point
     settings = load_settings()
     app = create_app(settings)
     uvicorn.run(app, host=settings.bind, port=settings.port, log_level=settings.log_level.lower(), proxy_headers=bool(settings.trusted_proxies),
-                forwarded_allow_ips=",".join(settings.trusted_proxies) if settings.trusted_proxies else None, ws_ping_interval=20, ws_ping_timeout=20)
+                forwarded_allow_ips=",".join(settings.trusted_proxies) if settings.trusted_proxies else None, ws_ping_interval=20, ws_ping_timeout=20,
+                timeout_graceful_shutdown=10)  # live event streams never end: stop waiting for them
 
 
 app: FastAPI | None = None
