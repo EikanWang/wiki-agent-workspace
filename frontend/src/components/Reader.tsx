@@ -4,7 +4,7 @@ import Editor from "./Editor";
 import OfficeView from "./OfficeView";
 import { AgentSession, ApiError, OpenDocument, ReviewMark, Thread, getWorkspace, put } from "../api";
 import { renderMarkdown, sanitizeHtml, slugify } from "../markdown";
-import { SelectionAnchor, TextModel, anchorFromSelection, buildTextModel, makeAnchor, rangeFromOffsets, resolveAnchor } from "../textmodel";
+import { SelectionAnchor, TextModel, anchorFromSelection, buildTextModel, makeAnchor, rangeFromOffsets, resolveAnchor, wholeDocument } from "../textmodel";
 
 export interface ReaderProps {
   doc: OpenDocument;
@@ -519,13 +519,17 @@ export default function Reader(props: ReaderProps) {
           )}
           <button
             className="btn small"
+            data-testid="ask-whole-document"
+            onClick={() => setSheet(wholeDocument())}
+            title="Ask the agent about this document as a whole (no passage selected)"
+          >
+            {doc.format === "pdf" ? "Ask about this PDF" : "Ask about this document"}
+          </button>
+          {hasText && (
+          <button
+            className="btn small"
             data-testid="ask-current-selection"
             onClick={() => {
-              if (!hasText) {
-                // no text anchors (PDF, .doc, .vsd…): start a discussion about the document as a whole
-                setSheet({ quote: doc.path, prefix: "", suffix: "", start: 0, end: 0, heading: null });
-                return;
-              }
               if (layout) {
                 // passages are selected in the text view
                 setView("text");
@@ -536,10 +540,11 @@ export default function Reader(props: ReaderProps) {
               if (a) setSheet(a);
               else alert("Select some text in the document first.");
             }}
-            title={!hasText ? "Ask the agent about this document" : layout ? "Switch to the text view and select the passage to ask about" : "On touch devices: select text first, then tap here to ask"}
+            title={layout ? "Switch to the text view and select the passage to ask about" : "On touch devices: select text first, then tap here to ask"}
           >
-            {doc.format === "pdf" ? "Ask about this PDF" : !hasText ? "Ask about this document" : layout ? "Ask about a passage…" : "Ask about selection"}
+            {layout ? "Ask about a passage…" : "Ask about selection"}
           </button>
+          )}
         </div>
       </div>
       {changedNotice && (
@@ -728,9 +733,12 @@ function SelectionPopover({ anchor, style, sessions, defaultSessionId, defaultPr
   return (
     <div className={`sel-popover ${className ?? ""}`} style={style} data-testid="selection-popover" onMouseDown={(e) => e.stopPropagation()}>
       <div className="sel-head">
-        <span>Ask about the selected text</span>
+        <span>{anchor.whole_document ? "Ask about the whole document" : "Ask about the selected text"}</span>
         <button className="icon-btn" onClick={onClose} aria-label="Close">×</button>
       </div>
+      {anchor.whole_document ? (
+        <div className="sel-whole muted small" data-testid="selection-whole">The agent reads the whole file; no passage is attached to this discussion.</div>
+      ) : (
       <div className="sel-quote-wrap">
         <blockquote className="sel-quote" data-testid="selection-quote">{anchor.quote}</blockquote>
         <button
@@ -747,11 +755,12 @@ function SelectionPopover({ anchor, style, sessions, defaultSessionId, defaultPr
           {copied ? <CheckIcon /> : <CopyIcon />}
         </button>
       </div>
+      )}
       {anchor.heading && <div className="sel-heading">Section: {anchor.heading}</div>}
       <textarea
         ref={taRef}
         className="sel-input"
-        placeholder={`Your question about the selected text (${COMPOSER_HINT})`}
+        placeholder={`Your question about ${anchor.whole_document ? "the document" : "the selected text"} (${COMPOSER_HINT})`}
         value={question}
         onChange={(e) => setQuestion(e.target.value)}
         onKeyDown={(e) => composerKeyDown(e, () => void send(), setQuestion, onClose)}
@@ -774,8 +783,8 @@ function SelectionPopover({ anchor, style, sessions, defaultSessionId, defaultPr
       {error && <div className="error-text" role="alert" data-testid="selection-error">{error}</div>}
       <div className="sel-actions">
         <button className="btn primary" onClick={() => void send()} disabled={busy || !question.trim()} data-testid="selection-send">{busy ? "Sending…" : "Send"}</button>
-        <button className="btn" onClick={onMark} title="Explicitly mark as reviewed; scrolling never marks automatically">Mark reviewed</button>
-        {onReanchor && <button className="btn" onClick={onReanchor}>Reanchor current discussion here</button>}
+        {!anchor.whole_document && <button className="btn" onClick={onMark} title="Explicitly mark as reviewed; scrolling never marks automatically">Mark reviewed</button>}
+        {onReanchor && !anchor.whole_document && <button className="btn" onClick={onReanchor}>Reanchor current discussion here</button>}
       </div>
     </div>
   );

@@ -439,3 +439,37 @@ async def test_model_switch_per_session_is_passed_to_both_providers(api: Api, fa
     r4 = await api.post(f"/api/v1/threads/{tid}/messages", json={"text": "three", "session_id": r.json()["id"]})
     await api.wait_job(r4.json()["job_id"])
     assert (fake_env / "codex_last_model").read_text() == "gpt-5" and (fake_env / "codex_last_effort").read_text() == "low"
+
+
+async def test_question_about_the_whole_document(api, workspace):
+    """A discussion about the document as a whole, for any format (Markdown, PDF, layout-only Office files)."""
+    from backend.app.annotations import build_prompt
+
+    (workspace / "docs" / "spec.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
+    for path in ("docs/guide.md", "docs/spec.pdf"):
+        d = await api.open_doc(path)
+        r = await api.post(f"/api/v1/documents/{d['document_id']}/threads",
+                           json={"whole_document": True, "version_sha256": d["sha256"], "question": f"summarize {path}"})
+        assert r.status_code == 201, r.text
+        await api.wait_job(r.json()["job_id"])
+        t = next(x for x in (await api.threads(d["document_id"]))["threads"] if x["id"] == r.json()["thread_id"])
+        assert t["anchor_state"] == "document" and t["anchor"]["quote"] == "" and t["current_start"] is None
+        assert t["messages"][-1]["content"] == f"echo: summarize {path}"
+        # a reply stays about the whole document
+        r2 = await api.post(f"/api/v1/threads/{t['id']}/messages", json={"text": "and more?"})
+        assert r2.status_code in (200, 201), r2.text
+        await api.wait_job(r2.json()["job_id"])
+    # still a whole-document discussion after the file changes (nothing to re-anchor or orphan)
+    d = await api.open_doc("docs/guide.md")
+    (workspace / "docs" / "guide.md").write_text("# Completely new\n\nnothing in common\n")
+    d = await api.open_doc("docs/guide.md")
+    states = {x["anchor_state"] for x in (await api.threads(d["document_id"]))["threads"]}
+    assert states == {"document"}
+    # older clients sent the path as the quote with empty offsets ("Ask about this PDF")
+    d = await api.open_doc("docs/spec.pdf")
+    r = await api.post(f"/api/v1/documents/{d['document_id']}/threads",
+                       json={"quote": "docs/spec.pdf", "start": 0, "end": 0, "version_sha256": d["sha256"], "question": "legacy"})
+    assert r.status_code == 201, r.text
+    # the agent is told it is about the whole document, without a quoted passage
+    p = build_prompt(question="q", quote="", document_path="docs/guide.md", sha256="x", heading=None, prior=None, versions=None, whole_document=True)
+    assert "as a whole" in p and "SELECTED_PASSAGE" not in p and "answer about the document" in p

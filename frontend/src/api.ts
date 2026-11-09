@@ -262,7 +262,7 @@ export interface Thread {
   document_id: string;
   original_anchor: Anchor;
   anchor: Anchor;
-  anchor_state: "attached" | "moved" | "ambiguous" | "orphaned";
+  anchor_state: "attached" | "moved" | "ambiguous" | "orphaned" | "document";
   diff?: { base: string; target: string; side: string; line_no: number | null; line_end?: number | null; line_text: string; anchored: boolean } | null;
   current_start: number | null;
   current_end: number | null;

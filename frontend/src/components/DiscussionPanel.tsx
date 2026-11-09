@@ -194,11 +194,11 @@ export default function DiscussionPanel({
           {onCollapse && <button className="icon-btn" onClick={onCollapse} title="Hide discussions panel" data-testid="panel-collapse">›</button>}
         </div>
         <div className="thread-list">
-          {threads.length === 0 && <div className="muted pad">Select text in the document to start a discussion.</div>}
+          {threads.length === 0 && <div className="muted pad">Select text in the document to start a discussion, or use Ask about this document.</div>}
           {threads.map((t, i) => (
             <button key={t.id} className="thread-item" onClick={() => onSelectThread(t.id)} data-testid="thread-item">
               <div className="thread-title">Discussion {i + 1} · {t.messages[0]?.content.slice(0, 50)}</div>
-              <div className="thread-quote">"{t.anchor.quote.slice(0, 80)}"</div>
+              <div className="thread-quote">{quoteLabel(t, 80)}</div>
               <div className="thread-meta">
                 <AnchorBadge state={t.anchor_state} />
                 <span className="muted">{t.messages.length} messages</span>
@@ -254,8 +254,14 @@ export default function DiscussionPanel({
       </div>
       <div className="thread-body">
         <section className="quote-box">
-          <div className="label">Quoted passage <AnchorBadge state={thread.anchor_state} /></div>
-          <blockquote data-testid="thread-quote">{thread.anchor.quote}</blockquote>
+          {thread.anchor_state === "document" ? (
+            <div className="label" data-testid="thread-whole-document">About the whole document <AnchorBadge state={thread.anchor_state} /></div>
+          ) : (
+            <>
+              <div className="label">Quoted passage <AnchorBadge state={thread.anchor_state} /></div>
+              <blockquote data-testid="thread-quote">{thread.anchor.quote}</blockquote>
+            </>
+          )}
           {thread.anchor.heading && <div className="muted small">Section: {thread.anchor.heading}</div>}
           {(thread.anchor_state === "orphaned" || thread.anchor_state === "ambiguous") && (
             <div className="warn small">
@@ -511,7 +517,7 @@ function FlatPanel({ threads, sessions, sessionsById, defaultSessionId, liveJob,
         {onCollapse && <button className="icon-btn" onClick={onCollapse} title="Hide discussions panel" data-testid="panel-collapse">›</button>}
       </div>
       <div className="thread-body flat-stream" data-testid="flat-stream">
-        {ordered.length === 0 && <div className="muted pad">Select text in the document to start a discussion. In flat mode all discussions of this document appear here as one stream.</div>}
+        {ordered.length === 0 && <div className="muted pad">Select text in the document to start a discussion, or use Ask about this document. In flat mode all discussions of this document appear here as one stream.</div>}
         {ordered.map((t, i) => {
           const live = liveJob && liveJob.threadId === t.id ? liveJob : null;
           const liveMessageId = t.messages.find((m) => m.job_id === live?.jobId)?.id;
@@ -522,7 +528,7 @@ function FlatPanel({ threads, sessions, sessionsById, defaultSessionId, liveJob,
                 <button className="flat-quote" onClick={() => { setTargetId(t.id); onSelectThread(t.id); }} title="Reply to this discussion and scroll the document to its passage">
                   <span className="flat-index">#{i + 1}</span>
                   <AnchorBadge state={t.anchor_state} />
-                  <span className="quote-text">"{t.anchor.quote.slice(0, 140)}{t.anchor.quote.length > 140 ? "…" : ""}"</span>
+                  <span className="quote-text">{quoteLabel(t, 140)}</span>
                 </button>
                 <span className="muted small">{new Date(t.created_at).toLocaleString()}{differs ? " · other session" : ""}</span>
               </header>
@@ -537,11 +543,11 @@ function FlatPanel({ threads, sessions, sessionsById, defaultSessionId, liveJob,
       <div className="composer">
         {target ? (
           <div className="muted small flat-target" data-testid="flat-target">
-            Replying to <b>#{ordered.findIndex((t) => t.id === target.id) + 1}</b> "{target.anchor.quote.slice(0, 50)}{target.anchor.quote.length > 50 ? "…" : ""}"
+            Replying to <b>#{ordered.findIndex((t) => t.id === target.id) + 1}</b> {quoteLabel(target, 50)}
             {ordered.length > 1 && (
               <select className="flat-target-select" value={target.id} onChange={(e) => setTargetId(e.target.value)} data-testid="flat-target-select" title="Choose which discussion to continue">
                 {ordered.map((t, i) => (
-                  <option key={t.id} value={t.id}>#{i + 1} {t.anchor.quote.slice(0, 40)}</option>
+                  <option key={t.id} value={t.id}>#{i + 1} {quoteLabel(t, 40)}</option>
                 ))}
               </select>
             )}
@@ -566,4 +572,11 @@ function FlatPanel({ threads, sessions, sessionsById, defaultSessionId, liveJob,
       </div>
     </aside>
   );
+}
+
+/** How a discussion is named in lists: its quoted passage, or "whole document". */
+function quoteLabel(t: { anchor_state: string; anchor: { quote: string } }, max: number): string {
+  if (t.anchor_state === "document" || !t.anchor.quote) return "📄 whole document";
+  const q = t.anchor.quote;
+  return `"${q.slice(0, max)}${q.length > max ? "…" : ""}"`;
 }

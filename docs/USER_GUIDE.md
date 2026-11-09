@@ -124,6 +124,11 @@ Anchors survive edits: if the passage moves, the discussion follows; if the text
 discussion is flagged *orphaned* / *ambiguous* and keeps the original quote — use **Reanchor manually** to attach it
 to the new text. **Mark reviewed** marks a passage reviewed; it turns *needs review* when that text changes.
 
+**Asking about the whole document.** **Ask about this document** in the document header (**Ask about this PDF**
+for PDFs) opens the question box without a passage: the agent reads the whole file. Works for every format,
+including Office files in their Layout view. Such discussions are listed as *📄 whole document*, highlight
+nothing, and never become *orphaned* when the file changes; replies stay about the whole document.
+
 ## Discussions panel
 
 - **Individual** — one discussion at a time: quoted passage, session (and its model), messages, **View diff**

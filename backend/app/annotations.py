@@ -23,7 +23,7 @@ router = APIRouter()
 # ---------------------------------------------------------------------- prompt building
 
 def build_prompt(*, question: str, quote: str, document_path: str, sha256: str, heading: str | None,
-                 prior: list[dict[str, str]] | None, versions: list[dict[str, Any]] | None) -> str:
+                 prior: list[dict[str, str]] | None, versions: list[dict[str, Any]] | None, whole_document: bool = False) -> str:
     parts = [
         "You are assisting with a Markdown wiki document in this workspace via the Wiki Agent Workspace reader.",
         f"Document path: {document_path}",
@@ -35,8 +35,8 @@ def build_prompt(*, question: str, quote: str, document_path: str, sha256: str, 
         refs = ", ".join(f"{v['sha256'][:12]} ({v.get('git_commit') or 'uncommitted'}{', ' + v['git_branch'] if v.get('git_branch') else ''})" for v in versions[:5])
         parts.append(f"Known earlier recorded versions of this file (content hashes, Git commit if any): {refs}. "
                      "Only Git history and these recorded snapshots are available as history; do not claim to know earlier reasoning that is not in them.")
-    if quote == document_path:
-        parts.append("The user is asking about this document as a whole (no specific passage selected; e.g. a PDF).")
+    if whole_document or quote == document_path:
+        parts.append("The user is asking about this document as a whole (no specific passage selected). Read the file at the path above.")
     else:
         parts.append("The user selected this exact passage in the rendered document (verbatim):")
         parts.append("<<<SELECTED_PASSAGE\n" + quote + "\nSELECTED_PASSAGE>>>")
@@ -46,7 +46,7 @@ def build_prompt(*, question: str, quote: str, document_path: str, sha256: str, 
     parts.append("User message:")
     parts.append(question)
     parts.append(
-        "Instructions: answer about the selected passage and the document. Only modify files if this user message "
+        f"Instructions: answer about {'the document' if whole_document or quote == document_path else 'the selected passage and the document'}. Only modify files if this user message "
         "explicitly asks for a change; in that case edit the document file at the path above in place and summarize what changed. "
         "Do not ask for additional confirmation beyond your own configured permission rules."
     )
@@ -168,7 +168,12 @@ class ThreadService:
         if sha != body.version_sha256:
             raise conflict(DOCUMENT_VERSION_CONFLICT, "the document changed since you selected the passage; reload and reselect",
                            current_sha256=sha, submitted_sha256=body.version_sha256)
-        err = anchoring.validate_offsets(model.text, body.start, body.end, body.quote)
+        if body.quote == doc.path and body.start == body.end == 0:
+            body.whole_document = True  # older clients: "Ask about this PDF" sent the path as the quote
+        if body.whole_document:
+            # a question about the document as a whole: no passage, nothing to validate or re-anchor later
+            body.quote, body.prefix, body.suffix, body.start, body.end, body.heading = "", "", "", 0, 0, None
+        err = None if body.whole_document else anchoring.validate_offsets(model.text, body.start, body.end, body.quote)
         if err:
             # Offsets did not match the server model (stale selection after a re-render, or a renderer edge case).
             # Re-locate the quote with its stored context exactly like re-anchoring does; accept a unique hit.
@@ -182,7 +187,7 @@ class ThreadService:
             body.prefix = res.prefix if res.prefix is not None else body.prefix
             body.suffix = res.suffix if res.suffix is not None else body.suffix
         sess = await self._session_for_new_thread(doc, body.session_id)
-        heading = body.heading or model.heading_for(body.start)
+        heading = None if body.whole_document else (body.heading or model.heading_for(body.start))
         user_msg_id = new_id()
         agent_msg_id = new_id()
         thread_id = new_id()
@@ -200,7 +205,7 @@ class ThreadService:
             s.add(Message(id=user_msg_id, thread_id=thread_id, session_id=sess.id, role="user", content=body.question, status="completed"))
             s.add(Message(id=agent_msg_id, thread_id=thread_id, session_id=sess.id, role="agent", content="", status="queued"))
         prompt = build_prompt(question=body.question, quote=body.quote, document_path=doc.path, sha256=sha, heading=heading,
-                              prior=None, versions=self.docs.list_versions(doc_id))
+                              prior=None, versions=self.docs.list_versions(doc_id), whole_document=body.whole_document)
         job_id = self.jobs.enqueue_turn(session_id=sess.id, thread_id=thread_id, prompt=prompt,
                                         context={"document_id": doc_id, "document_path": doc.path, "sha256": sha, "quote": body.quote},
                                         agent_message_id=agent_msg_id)
@@ -241,7 +246,7 @@ class ThreadService:
                 tt.last_session_id = sess.id
                 tt.updated_at = utcnow()
         prompt = build_prompt(question=body.text, quote=t.cur_quote, document_path=doc.path, sha256=sha, heading=t.cur_heading,
-                              prior=prior, versions=self.docs.list_versions(doc.id))
+                              prior=prior, versions=self.docs.list_versions(doc.id), whole_document=t.anchor_state == "document")
         job_id = self.jobs.enqueue_turn(session_id=sess.id, thread_id=thread_id, prompt=prompt,
                                         context={"document_id": doc.id, "document_path": doc.path, "sha256": sha, "quote": t.cur_quote},
                                         agent_message_id=agent_msg_id)

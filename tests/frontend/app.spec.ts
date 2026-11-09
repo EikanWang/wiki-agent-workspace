@@ -1514,3 +1514,34 @@ test("named workspaces: create one (its own folders, tabs, terminals), switch ba
     fs.rmSync(other, { recursive: true, force: true });
   }
 });
+
+test("discussions: ask about the whole document (Markdown and PDF), not only a selection", async ({ page }) => {
+  await login(page);
+  const ws = workspaceDir();
+  fs.writeFileSync(path.join(ws, "docs", "whole.pdf"), "%PDF-1.4\n%%EOF\n");
+  try {
+    await openGuide(page);
+    await page.getByTestId("ask-whole-document").click();
+    await expect(page.getByTestId("selection-whole")).toBeVisible();
+    await expect(page.getByTestId("selection-quote")).toHaveCount(0);
+    await page.getByTestId("selection-question").fill("Summarize this page");
+    await page.getByTestId("selection-send").click();
+    if ((await page.getByTestId("mode-individual").count()) > 0) await page.getByTestId("mode-individual").click();
+    await expect(page.locator('[data-testid="message-agent"][data-status="completed"]').last()).toContainText("Summarize this page", { timeout: 20000 });
+    await expect(page.getByTestId("thread-whole-document")).toBeVisible();
+    await expect(page.locator("mark.waw-hl.thread", { hasText: "Summarize" })).toHaveCount(0); // nothing highlighted for it
+    // the selection button is still there for passages
+    await expect(page.getByTestId("ask-current-selection")).toBeVisible();
+    // PDFs: the same, which failed before ("invalid anchor")
+    await page.getByTestId("tree-refresh").click();
+    await expect(page.getByTestId("tree-refresh")).toHaveAttribute("data-spinning", "false");
+    await page.getByTestId("tree-file-docs/whole.pdf").locator("button.tree-main").click();
+    await page.getByTestId("ask-whole-document").click();
+    await page.getByTestId("selection-question").fill("What is in this PDF?");
+    await page.getByTestId("selection-send").click();
+    await expect(page.locator('[data-testid="message-agent"][data-status="completed"]').last()).toContainText("What is in this PDF?", { timeout: 20000 });
+    await expect(page.getByTestId("thread-whole-document")).toBeVisible();
+  } finally {
+    fs.rmSync(path.join(ws, "docs", "whole.pdf"), { force: true });
+  }
+});

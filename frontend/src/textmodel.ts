@@ -196,7 +196,12 @@ export interface SelectionAnchor {
   start: number;
   end: number;
   heading: string | null;
+  /** a question about the document as a whole: no passage (quote empty) */
+  whole_document?: boolean;
 }
+
+/** The "anchor" of a question about the whole document. */
+export const wholeDocument = (): SelectionAnchor => ({ quote: "", prefix: "", suffix: "", start: 0, end: 0, heading: null, whole_document: true });
 
 export function anchorFromSelection(model: TextModel, root: HTMLElement, sel: Selection): SelectionAnchor | null {
   if (sel.rangeCount === 0 || sel.isCollapsed) return null;
