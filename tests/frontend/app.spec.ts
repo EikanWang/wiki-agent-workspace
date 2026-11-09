@@ -1553,18 +1553,19 @@ async function signOut(page: Page) {
   await page.getByTestId("sign-out").click();
 }
 
-/** One-click "Continue with GitHub" setup (app manifest flow against the fake GitHub), once per test server. */
+/** First "Continue with GitHub" on the login page sets it up (app manifest flow against the fake GitHub) and signs in. */
 async function ensureGithubSignIn(page: Page) {
   await page.goto("/");
   const opts = await (await page.request.get("/api/v1/auth/options")).json();
-  if (opts.github) return;
-  await login(page);
-  await page.getByTestId("account-menu").click();
-  await page.getByTestId("github-setup").click(); // posts the manifest to "GitHub", which creates the app and comes back
-  await expect(page.locator(".toast")).toContainText("Continue with GitHub is ready", { timeout: 15000 });
+  if (!opts.github_setup) return;
+  await expect(page.getByTestId("login-github")).toHaveAttribute("href", "/api/v1/auth/github/setup/begin");
+  await page.getByTestId("login-github").click(); // GitHub: "Create GitHub App" → "Authorize" → back, signed in
+  await expect(page.getByTestId("view-document")).toBeVisible({ timeout: 15000 });
+  await expect(page.getByTestId("account-menu")).toContainText("e2e-user");
   await page.getByTestId("account-menu").click();
   await expect(page.getByTestId("github-setup-status")).toContainText("on for e2e-user");
   await page.getByTestId("sign-out").click();
+  await expect(page.getByTestId("login-github")).toHaveAttribute("href", "/api/v1/auth/github/start");
 }
 
 test("login page: Sign in with GitHub (allowed account), refused account and cancel are explained", async ({ page, context }) => {

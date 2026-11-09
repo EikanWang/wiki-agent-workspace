@@ -109,8 +109,10 @@ of `client_id`, `client_secret` and `allowed_users` are set.
 | `allowed_users` | `[]` | GitHub logins allowed to sign in (case-insensitive), e.g. `["EikanWang"]`. Any other account is refused — having a GitHub account is never enough. Empty = GitHub sign-in off. |
 | `callback_url` | the address the browser used + `/api/v1/auth/github/callback` | Set it when the server is reached under several addresses (it must equal the OAuth app's *Authorization callback URL*). |
 
-**Easiest: one click from the app.** Signed in (with the token), open the account menu (top right) →
-**Set up “Continue with GitHub”…**. GitHub shows *Create GitHub App* with everything filled in (a private app with
+**Easiest: one click from the login page.** If the server user's `gh` CLI is logged in, its account is taken as
+the server's owner and the login page shows **Continue with GitHub** even before setup; the first click starts
+the setup below, which is accepted only if GitHub reports that this owner created the app, and continues straight
+into sign-in. The same is in the account menu (top right) → **Set up “Continue with GitHub”…** when signed in. GitHub shows *Create GitHub App* with everything filled in (a private app with
 no permissions; its callback is this server's address); click **Create**. GitHub hands the new app's client ID and
 secret back to the server, which saves them in `<state_dir>/github-signin.json` (mode 0600), allows only the GitHub
 account that created it, and the login page offers **Continue with GitHub** right away — no restart, nothing to

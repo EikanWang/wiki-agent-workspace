@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { ApiError, get, post, setCsrf } from "../api";
 
 const LOGIN_ERRORS: Record<string, string> = {
+  github_setup_not_owner: "GitHub sign-in can only be set up by this server's owner's GitHub account. Sign in to GitHub as that account and try again.",
   google_not_allowed: "That Google account is not allowed to use this server. Ask the owner to add its email to [auth.google] allowed_emails.",
   google_unverified: "Google has not verified that account's email address, so it cannot be used to sign in.",
   google_cancelled: "Google sign-in was cancelled.",
@@ -42,10 +43,12 @@ export default function Login({ onDone }: { onDone: () => void }) {
   const [token, setToken] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [providers, setProviders] = useState<{ github: boolean; google: boolean }>({ github: false, google: false });
+  const [providers, setProviders] = useState<{ github: boolean; google: boolean; githubSetup: boolean }>({ github: false, google: false, githubSetup: false });
   const social = providers.github || providers.google;
   useEffect(() => {
-    void get<{ github: boolean; google: boolean }>("/auth/options").then((o) => setProviders({ github: !!o.github, google: !!o.google })).catch(() => undefined);
+    void get<{ github: boolean; google: boolean; github_setup?: boolean }>("/auth/options")
+      .then((o) => setProviders({ github: !!o.github, google: !!o.google, githubSetup: !!o.github_setup }))
+      .catch(() => undefined);
     // coming back from GitHub with an error: explain it, then clean the address bar
     const p = new URLSearchParams(window.location.search);
     const code = p.get("login_error");
@@ -91,7 +94,12 @@ export default function Login({ onDone }: { onDone: () => void }) {
                 </a>
               )}
               {providers.github && (
-                <a className="btn social-btn github-btn" href="/api/v1/auth/github/start" data-testid="login-github">
+                <a
+                  className="btn social-btn github-btn"
+                  href={providers.githubSetup ? "/api/v1/auth/github/setup/begin" : "/api/v1/auth/github/start"}
+                  title={providers.githubSetup ? "First time: GitHub asks you to create this server's sign-in app (one click), then to authorize it" : undefined}
+                  data-testid="login-github"
+                >
                   <GitHubMark /> Continue with GitHub
                 </a>
               )}

@@ -155,7 +155,9 @@ def main() -> None:
     settings.frontend_dist = ROOT / "frontend" / "dist"
     # "Sign in with GitHub" against a fake GitHub served by this same server (routes below)
     base = f"http://127.0.0.1:{settings.port}/fake-github"
-    # GitHub starts unconfigured: the e2e test sets it up with the one-click (app manifest) flow
+    # GitHub starts unconfigured (no client id): the first click on the login page sets it up via the app manifest
+    # flow. The server's owner is e2e-user (normally taken from `gh`).
+    settings.github_allowed_users = ["e2e-user"]
     settings.github_oauth_base, settings.github_api_base = base, base
     g = f"http://127.0.0.1:{settings.port}/fake-google"
     settings.google_client_id, settings.google_client_secret = "e2e-google", "e2e-google-secret"

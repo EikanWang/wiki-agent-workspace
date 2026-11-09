@@ -7,7 +7,17 @@ from urllib.parse import parse_qs, urlsplit
 
 import httpx
 
+import pytest
+
 from conftest import TOKEN
+
+
+@pytest.fixture(autouse=True)
+def _no_host_gh(monkeypatch):
+    """Never ask the host's `gh` who owns the server; tests that need an owner set one."""
+    from backend.app import social_login
+
+    monkeypatch.setattr(social_login, "server_owner", lambda s: s.github_allowed_users[0] if s.github_allowed_users else "")
 
 
 def _fake_github(users_by_code: dict[str, str], seen: list):
@@ -39,7 +49,7 @@ async def _start(api) -> str:
 
 async def test_github_sign_in_disabled_by_default(running_app):
     h = await running_app(login=False)
-    assert (await h.api.c.get("/api/v1/auth/options")).json() == {"token": True, "github": False, "google": False}
+    assert (await h.api.c.get("/api/v1/auth/options")).json() == {"token": True, "github": False, "github_setup": False, "google": False}
     r = await h.api.c.get("/api/v1/auth/github/start")
     assert r.status_code == 303 and r.headers["location"] == "/?login_error=github_disabled"
 
@@ -126,7 +136,7 @@ async def test_google_sign_in_verified_allowed_emails_only(running_app, settings
         "other": {"email": "other@example.com", "email_verified": True},
     }, seen)
     api = h.api
-    assert (await api.c.get("/api/v1/auth/options")).json() == {"token": True, "github": False, "google": True}
+    assert (await api.c.get("/api/v1/auth/options")).json() == {"token": True, "github": False, "github_setup": False, "google": True}
 
     async def start() -> str:
         r = await api.c.get("/api/v1/auth/google/start")
@@ -199,3 +209,47 @@ async def test_one_click_github_setup_via_app_manifest(running_app, settings):
 async def test_github_setup_requires_sign_in(running_app):
     h = await running_app(login=False)
     assert (await h.api.c.get("/api/v1/auth/github/setup")).status_code == 401
+
+
+async def test_login_page_github_button_sets_up_for_the_server_owner_only(running_app, settings, monkeypatch):
+    """Before GitHub sign-in exists, the login page's button creates the app on GitHub; only the server owner's
+    GitHub account (here from `gh`) can complete it, then sign-in continues right away."""
+    import json
+    from backend.app import social_login
+
+    monkeypatch.setattr(social_login, "server_owner", lambda s: "EikanWang")
+    creator = {"login": "intruder"}
+
+    def gh(req: httpx.Request) -> httpx.Response:
+        if req.url.path == "/app-manifests/mcode/conversions":
+            return httpx.Response(201, json={"slug": "waw-x", "client_id": "Iv23x", "client_secret": "sx", "owner": creator, "html_url": "https://github.com/apps/waw-x"})
+        return httpx.Response(404)
+
+    h = await running_app(login=False)
+    h.ctx.extra["github_transport"] = httpx.MockTransport(gh)
+    api = h.api
+    assert (await api.c.get("/api/v1/auth/options")).json() == {"token": True, "github": True, "github_setup": True, "google": False}
+
+    async def begin() -> str:
+        r = await api.c.get("/api/v1/auth/github/setup/begin")
+        assert r.status_code == 200 and 'action="https://github.com/settings/apps/new?state=' in r.text
+        csp = r.headers["content-security-policy"]
+        assert "form-action https://github.com;" in csp and "script-src 'nonce-" in csp
+        return r.text.split("state=")[1].split('"')[0]
+
+    # someone else's GitHub account creates the app: nothing is kept, nobody gets in
+    st = await begin()
+    r = await api.c.get(f"/api/v1/auth/github/setup/callback?code=mcode&state={st}")
+    assert r.headers["location"] == "/?login_error=github_setup_not_owner"
+    assert not (settings.state_dir / "github-signin.json").exists()
+    assert (await api.c.get("/api/v1/auth/options")).json()["github_setup"] is True
+    # the owner: saved, and straight on to signing in with the new app
+    creator["login"] = "eikanwang"
+    st = await begin()
+    r = await api.c.get(f"/api/v1/auth/github/setup/callback?code=mcode&state={st}")
+    assert r.headers["location"] == "/api/v1/auth/github/start"
+    assert json.loads((settings.state_dir / "github-signin.json").read_text())["allowed_users"] == ["eikanwang"]
+    assert (await api.c.get("/api/v1/auth/options")).json() == {"token": True, "github": True, "github_setup": False, "google": False}
+    assert "client_id=Iv23x" in (await api.c.get("/api/v1/auth/github/start")).headers["location"]
+    # once set up, the begin URL just signs in
+    assert (await api.c.get("/api/v1/auth/github/setup/begin")).headers["location"] == "/api/v1/auth/github/start"

@@ -12,8 +12,10 @@ Contents: [Window layout](#window-layout) · [Folders (multi-root)](#folders-mul
 
 ## Signing in
 
-To turn on **Continue with GitHub** once: account menu (👤, top right) → **Set up “Continue with GitHub”…** → on
-GitHub click **Create GitHub App** → back in the app it is on (only your GitHub account may use it).
+**Continue with GitHub** works out of the box when the server's `gh` CLI is logged in (its account is the
+server's owner): the first click takes you to GitHub's **Create GitHub App** page (one click, filled in), then to
+GitHub's sign-in/authorize page, then into the app. Only the owner's GitHub account can complete that first setup
+and sign in. (Signed in with the token, the account menu has the same **Set up “Continue with GitHub”…**.)
 
 Open the app and click **Continue with Google** or **Continue with GitHub** (shown when the server has them set
 up, see CONFIGURATION.md `[auth.google]` / `[auth.github]`), or enter the access token. Only the accounts the owner
