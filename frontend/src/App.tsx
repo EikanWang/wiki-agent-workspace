@@ -24,6 +24,7 @@ import Login from "./components/Login";
 import FileTree, { notifyTreeChanged } from "./components/FileTree";
 import DocTabs, { DocTab, loadTabs, sameTab, tabsKey, withTab } from "./components/DocTabs";
 import WorkspaceMenu from "./components/WorkspaceMenu";
+import AccountMenu from "./components/AccountMenu";
 import Reader from "./components/Reader";
 import DiscussionPanel, { LiveJob, SessionChip, useJobStream } from "./components/DiscussionPanel";
 import SessionPicker from "./components/SessionPicker";
@@ -155,6 +156,20 @@ export default function App() {
   useEffect(() => {
     void loadBootstrap();
   }, [loadBootstrap]);
+  useEffect(() => {
+    const p = new URLSearchParams(window.location.search);
+    const r = p.get("github_setup");
+    if (!r) return;
+    notify({
+      ok: "Continue with GitHub is ready: the login page now offers it (only your GitHub account is allowed).",
+      state: "GitHub setup expired or did not start here; open the account menu and try again.",
+      failed: "GitHub did not hand over the new app's keys; try the setup again.",
+      unreachable: "The server could not reach GitHub to finish the setup (network or proxy); try again.",
+    }[r] ?? `GitHub setup: ${r}`);
+    p.delete("github_setup");
+    window.history.replaceState(null, "", window.location.pathname + (p.toString() ? `?${p}` : "") + window.location.hash);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const refreshSessions = useCallback(async () => {
     try {
@@ -648,15 +663,7 @@ export default function App() {
           {showFonts && <FontSettings prefs={prefs} onChange={updatePrefs} onClose={() => setShowFonts(false)} />}
         </span>
         <a className="btn small hide-mobile" href="/api/v1/export" download title="Download a backup of the SQLite database and document snapshots">Backup</a>
-        {(() => {
-          const [via, who] = boot.identity?.includes(":") ? [boot.identity.split(":")[0], boot.identity.slice(boot.identity.indexOf(":") + 1)] : ["token", ""];
-          const provider = via === "github" ? "GitHub" : via === "google" ? "Google" : "";
-          return (
-            <button className="btn small" onClick={() => void logout()} title={provider ? `Signed in with ${provider} as ${who}. Sign out` : "Signed in with the access token. Sign out"} data-testid="sign-out">
-              {provider ? `Sign out ${who}` : "Sign out"}
-            </button>
-          );
-        })()}
+        <AccountMenu identity={boot.identity} onSignOut={() => void logout()} onNotify={notify} />
       </header>
 
       {providerWarn && <div className="banner warn">{providerWarn}</div>}

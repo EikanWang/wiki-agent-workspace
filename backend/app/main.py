@@ -208,6 +208,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from .office import OfficeRenderer
 
     ctx.office = OfficeRenderer(settings)
+    from .social_login import apply_saved
+
+    apply_saved(settings)  # keys from the one-click "Continue with GitHub" setup
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):

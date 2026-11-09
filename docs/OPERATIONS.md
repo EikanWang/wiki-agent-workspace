@@ -27,6 +27,7 @@ workspace root … no longer exists; relocating …     # only after you moved t
 | Config incl. secrets | `~/.config/wiki-agent-workspace/config.toml` (or `WAW_CONFIG`) | mode 0600 |
 | Code, Python venv, built UI | the repository (`.venv/`, `frontend/dist/`) | rebuildable with `scripts/setup.sh` |
 | Folders added in the UI | `workspaces` table in the database | no config entry needed; removing a folder keeps its data |
+| Keys of the one-click GitHub sign-in setup | `<state_dir>/github-signin.json` (mode 0600) | client ID/secret of the GitHub App it created and the allowed account; `config.toml` `[auth.github]` wins; delete to undo |
 | Named workspaces (sets of folders) | `named_workspaces` table; terminal tabs reference them | deleting one keeps folders, data and running terminals |
 | Your wiki | `workspace.root` | the app only writes there when you explicitly ask an agent to edit, or apply a preview |
 | Provider transcripts | OpenCode's store / `~/.codex/sessions` | independent copies; the app keeps its own Q&A text |

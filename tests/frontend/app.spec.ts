@@ -1548,7 +1548,27 @@ test("discussions: ask about the whole document (Markdown and PDF), not only a s
   }
 });
 
+async function signOut(page: Page) {
+  await page.getByTestId("account-menu").click();
+  await page.getByTestId("sign-out").click();
+}
+
+/** One-click "Continue with GitHub" setup (app manifest flow against the fake GitHub), once per test server. */
+async function ensureGithubSignIn(page: Page) {
+  await page.goto("/");
+  const opts = await (await page.request.get("/api/v1/auth/options")).json();
+  if (opts.github) return;
+  await login(page);
+  await page.getByTestId("account-menu").click();
+  await page.getByTestId("github-setup").click(); // posts the manifest to "GitHub", which creates the app and comes back
+  await expect(page.locator(".toast")).toContainText("Continue with GitHub is ready", { timeout: 15000 });
+  await page.getByTestId("account-menu").click();
+  await expect(page.getByTestId("github-setup-status")).toContainText("on for e2e-user");
+  await page.getByTestId("sign-out").click();
+}
+
 test("login page: Sign in with GitHub (allowed account), refused account and cancel are explained", async ({ page, context }) => {
+  await ensureGithubSignIn(page);
   await page.goto("/");
   await expect(page.getByTestId("login-github")).toBeVisible();
   await expect(page.getByTestId("login-token")).toBeVisible(); // the token stays available
@@ -1565,12 +1585,13 @@ test("login page: Sign in with GitHub (allowed account), refused account and can
   await context.clearCookies();
   await page.getByTestId("login-github").click();
   await expect(page.getByTestId("view-document")).toBeVisible({ timeout: 15000 });
-  await expect(page.getByTestId("sign-out")).toHaveText("Sign out e2e-user");
-  await page.getByTestId("sign-out").click();
+  await expect(page.getByTestId("account-menu")).toContainText("e2e-user");
+  await signOut(page);
   await expect(page.getByTestId("login-github")).toBeVisible();
 });
 
 test("login page: Continue with Google (verified, allowed email); other accounts are refused", async ({ page, context }) => {
+  await ensureGithubSignIn(page);
   await page.goto("/");
   await expect(page.getByTestId("login-google")).toHaveText("Continue with Google");
   await expect(page.getByTestId("login-github")).toHaveText("Continue with GitHub");
@@ -1580,7 +1601,7 @@ test("login page: Continue with Google (verified, allowed email); other accounts
   await context.clearCookies();
   await page.getByTestId("login-google").click();
   await expect(page.getByTestId("view-document")).toBeVisible({ timeout: 15000 });
-  await expect(page.getByTestId("sign-out")).toHaveText("Sign out e2e@example.com");
-  await page.getByTestId("sign-out").click();
+  await expect(page.getByTestId("account-menu")).toContainText("e2e@example.com");
+  await signOut(page);
   await expect(page.getByTestId("login-google")).toBeVisible();
 });

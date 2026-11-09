@@ -149,3 +149,53 @@ async def test_google_sign_in_verified_allowed_emails_only(running_app, settings
     assert r.status_code == 303 and r.headers["location"] == "/"
     b = await api.c.get("/api/v1/bootstrap")
     assert b.status_code == 200 and b.json()["identity"] == "google:me@example.com"
+
+
+async def test_one_click_github_setup_via_app_manifest(running_app, settings):
+    import json
+    import stat
+
+    seen: list = []
+
+    def gh(req: httpx.Request) -> httpx.Response:
+        seen.append((req.method, req.url.path))
+        if req.url.path == "/app-manifests/mcode/conversions" and req.method == "POST":
+            return httpx.Response(201, json={"id": 7, "slug": "wiki-agent-workspace-abc", "client_id": "Iv23made", "client_secret": "sek",
+                                             "owner": {"login": "EikanWang"}, "html_url": "https://github.com/apps/wiki-agent-workspace-abc"})
+        return httpx.Response(404, json={"message": "Not Found"})
+
+    h = await running_app()  # signed in with the token
+    h.ctx.extra["github_transport"] = httpx.MockTransport(gh)
+    api = h.api
+    assert (await api.c.get("/api/v1/auth/options")).json()["github"] is False
+    info = (await api.c.get("/api/v1/auth/github/setup")).json()
+    assert info["enabled"] is False and info["action"].startswith("https://github.com/settings/apps/new?state=")
+    m = json.loads(info["manifest"])
+    assert m["callback_urls"] == ["http://testserver/api/v1/auth/github/callback"] and m["default_permissions"] == {} and m["public"] is False
+    assert m["redirect_url"] == "http://testserver/api/v1/auth/github/setup/callback"
+    state = info["action"].split("state=")[1]
+    # a forged return (wrong state) changes nothing
+    r = await api.c.get(f"/api/v1/auth/github/setup/callback?code=mcode&state={state}x")
+    assert r.headers["location"] == "/?github_setup=state" and seen == []
+    info = (await api.c.get("/api/v1/auth/github/setup")).json()
+    state = info["action"].split("state=")[1]
+    r = await api.c.get(f"/api/v1/auth/github/setup/callback?code=mcode&state={state}")
+    assert r.headers["location"] == "/?github_setup=ok"
+    saved = settings.state_dir / "github-signin.json"
+    assert stat.S_IMODE(saved.stat().st_mode) == 0o600
+    assert json.loads(saved.read_text())["allowed_users"] == ["EikanWang"]
+    # live: the login page offers it now, and sign-in goes to GitHub with the new app
+    assert (await api.c.get("/api/v1/auth/options")).json()["github"] is True
+    loc = (await api.c.get("/api/v1/auth/github/start")).headers["location"]
+    assert "client_id=Iv23made" in loc
+    # the state is single-use
+    assert (await api.c.get(f"/api/v1/auth/github/setup/callback?code=mcode&state={state}")).headers["location"] == "/?github_setup=state"
+    # and it survives a restart
+    await h.stop()
+    h2 = await running_app(login=False)
+    assert (await h2.api.c.get("/api/v1/auth/options")).json()["github"] is True
+
+
+async def test_github_setup_requires_sign_in(running_app):
+    h = await running_app(login=False)
+    assert (await h.api.c.get("/api/v1/auth/github/setup")).status_code == 401

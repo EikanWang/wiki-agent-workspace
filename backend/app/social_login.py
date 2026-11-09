@@ -16,8 +16,12 @@ provider disabled.
 from __future__ import annotations
 
 import hmac
+import json
 import logging
+import os
 import secrets
+import time
+from pathlib import Path
 from urllib.parse import urlencode
 
 import httpx
@@ -25,7 +29,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import RedirectResponse
 
 from .config import Settings
-from .deps import AppContext, get_ctx
+from .deps import AppContext, get_ctx, require_auth
 
 log = logging.getLogger("waw.auth")
 
@@ -181,3 +185,120 @@ async def google_callback(request: Request, code: str = Query(""), state: str = 
     ctx.auth.create_login(resp, request, identity=f"google:{email}")
     log.info("signed in with Google as %s", email)
     return resp
+
+
+# ---------------------------------------------------------------------- one-click GitHub setup (app manifest flow)
+#
+# Instead of registering an OAuth app by hand and copying its id/secret, the signed-in user clicks "Set up Continue
+# with GitHub": the browser posts a GitHub App *manifest* to github.com, the user confirms "Create GitHub App", and
+# GitHub redirects back with a one-time code that the server converts into the new app's client id and secret
+# (POST /app-manifests/{code}/conversions). They are saved in <state_dir>/github-signin.json (mode 0600; config.toml
+# values win), the creating account becomes the only allowed user, and the login page shows the button at once.
+
+SETUP_COOKIE = "waw_gh_setup"
+_setup_states: dict[str, float] = {}  # state -> issued at (only issued to signed-in sessions)
+
+
+def saved_path(settings: Settings) -> Path:
+    return settings.state_dir / "github-signin.json"
+
+
+def apply_saved(settings: Settings) -> None:
+    """At startup: use the keys saved by the one-click setup unless config.toml sets GitHub sign-in itself."""
+    p = saved_path(settings)
+    if settings.github_client_id or not p.is_file():
+        return
+    try:
+        d = json.loads(p.read_text())
+    except (OSError, ValueError):
+        log.warning("ignoring unreadable %s", p)
+        return
+    settings.github_client_id = d.get("client_id", "")
+    settings.github_client_secret = settings.github_client_secret or d.get("client_secret", "")
+    settings.github_allowed_users = settings.github_allowed_users or list(d.get("allowed_users") or [])
+
+
+def _base(request: Request) -> str:
+    return str(request.base_url).rstrip("/")
+
+
+@router.get("/auth/github/setup")
+def github_setup_info(request: Request, ctx: AppContext = Depends(require_auth)):
+    """For the signed-in user: is GitHub sign-in on, and the manifest to create its GitHub App with one click."""
+    s = ctx.settings
+    saved = None
+    if saved_path(s).is_file():
+        try:
+            d = json.loads(saved_path(s).read_text())
+            saved = {"app_url": d.get("app_url"), "slug": d.get("slug"), "created_at": d.get("created_at")}
+        except (OSError, ValueError):
+            pass
+    base = _base(request)
+    state = secrets.token_urlsafe(24)
+    now = time.time()
+    for k, t in list(_setup_states.items()):
+        if now - t > 900:
+            del _setup_states[k]
+    _setup_states[state] = now
+    manifest = {
+        "name": f"Wiki Agent Workspace {secrets.token_hex(3)}",  # app names are unique across GitHub
+        "url": base,
+        "redirect_url": f"{base}/api/v1/auth/github/setup/callback",
+        "callback_urls": [s.github_callback_url or f"{base}{CALLBACK_PATH}"],
+        "description": "Sign-in for a self-hosted Wiki Agent Workspace. Reads only your public GitHub identity.",
+        "public": False,
+        "default_permissions": {},
+        "request_oauth_on_install": False,
+    }
+    from fastapi.responses import JSONResponse
+
+    resp = JSONResponse({
+        "enabled": github_enabled(s), "configured_in": "config.toml" if s.github_client_id and not saved else ("setup" if saved else None),
+        "allowed_users": s.github_allowed_users, "saved": saved,
+        "action": f"{s.github_oauth_base}/settings/apps/new?{urlencode({'state': state})}", "manifest": json.dumps(manifest),
+    })
+    resp.set_cookie(SETUP_COOKIE, state, max_age=900, httponly=True, samesite="lax",
+                    secure=s.cookie_secure or request.url.scheme == "https", path="/api/v1/auth/github/setup")
+    return resp
+
+
+@router.get("/auth/github/setup/callback")
+async def github_setup_callback(request: Request, code: str = Query(""), state: str = Query(""), ctx: AppContext = Depends(get_ctx)):
+    """GitHub returns here after "Create GitHub App". The state was issued to a signed-in session and is bound to
+    this browser by a cookie; the code is single-use and expires after an hour (GitHub)."""
+    s = ctx.settings
+
+    def done(result: str) -> RedirectResponse:
+        r = RedirectResponse(f"/?{urlencode({'github_setup': result})}", status_code=303)
+        r.delete_cookie(SETUP_COOKIE, path="/api/v1/auth/github/setup")
+        return r
+
+    cookie = request.cookies.get(SETUP_COOKIE, "")
+    if not code or not state or not cookie or not hmac.compare_digest(state, cookie) or _setup_states.pop(state, None) is None:
+        return done("state")
+    transport = ctx.extra.get("github_transport")
+    try:
+        async with httpx.AsyncClient(timeout=30, transport=transport, headers={"Accept": "application/vnd.github+json", "User-Agent": "wiki-agent-workspace"}) as client:
+            r = await client.post(f"{s.github_api_base}/app-manifests/{code}/conversions")
+            data = r.json() if r.status_code in (200, 201) else {}
+    except (httpx.HTTPError, ValueError) as exc:
+        log.warning("GitHub setup: cannot reach GitHub: %s", exc)
+        return done("unreachable")
+    owner = (data.get("owner") or {}).get("login") or ""
+    if not data.get("client_id") or not data.get("client_secret") or not owner:
+        log.warning("GitHub setup: manifest conversion failed (HTTP %s): %s", r.status_code, str(data)[:200])
+        return done("failed")
+    record = {"client_id": data["client_id"], "client_secret": data["client_secret"], "allowed_users": [owner],
+              "slug": data.get("slug"), "app_url": data.get("html_url"), "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    p = saved_path(s)
+    tmp = p.with_suffix(".tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        json.dump(record, fh, indent=2)
+    os.replace(tmp, p)
+    # live: the login page offers the button immediately (config.toml values, if any, still win)
+    if not s.github_client_id or s.github_client_id == record["client_id"] or not s.github_client_secret:
+        s.github_client_id, s.github_client_secret = record["client_id"], record["client_secret"]
+        s.github_allowed_users = s.github_allowed_users or [owner]
+    log.info("GitHub sign-in set up: app %s, allowed user %s", record["slug"], owner)
+    return done("ok")

@@ -88,6 +88,18 @@ def add_fake_github(app) -> None:
         user = request.cookies.get("fake_gh_user", "e2e-user")
         return RedirectResponse(f"{q['redirect_uri']}?{urlencode({'code': user, 'state': q['state']})}", status_code=302)
 
+    async def new_app(request: Request):  # github.com/settings/apps/new: the user confirms "Create GitHub App"
+        import json
+        from urllib.parse import parse_qs
+
+        form = {k: v[0] for k, v in parse_qs((await request.body()).decode()).items()}
+        manifest = json.loads(form["manifest"])
+        return RedirectResponse(f"{manifest['redirect_url']}?{urlencode({'code': 'mcode', 'state': request.query_params['state']})}", status_code=302)
+
+    async def conversions(request: Request):
+        return JSONResponse({"id": 1, "slug": "wiki-agent-workspace-e2e", "client_id": "e2e-client", "client_secret": "e2e-secret",
+                             "owner": {"login": "e2e-user"}, "html_url": "https://github.com/apps/wiki-agent-workspace-e2e"}, status_code=201)
+
     async def token(request: Request):
         from urllib.parse import parse_qs
 
@@ -117,7 +129,9 @@ def add_fake_github(app) -> None:
         return JSONResponse({"sub": "1", "email": email, "email_verified": True})
 
     # before the SPA catch-all route
-    for r in reversed([Route("/fake-google/auth", g_auth), Route("/fake-google/token", g_token, methods=["POST"]),
+    for r in reversed([Route("/fake-github/settings/apps/new", new_app, methods=["POST"]),
+                       Route("/fake-github/app-manifests/mcode/conversions", conversions, methods=["POST"]),
+                       Route("/fake-google/auth", g_auth), Route("/fake-google/token", g_token, methods=["POST"]),
                        Route("/fake-google/userinfo", g_userinfo),Route("/fake-github/login/oauth/authorize", authorize), Route("/fake-github/login/oauth/access_token", token, methods=["POST"]),
                        Route("/fake-github/user", user)]):
         app.router.routes.insert(0, r)
@@ -141,8 +155,7 @@ def main() -> None:
     settings.frontend_dist = ROOT / "frontend" / "dist"
     # "Sign in with GitHub" against a fake GitHub served by this same server (routes below)
     base = f"http://127.0.0.1:{settings.port}/fake-github"
-    settings.github_client_id, settings.github_client_secret = "e2e-client", "e2e-secret"
-    settings.github_allowed_users = ["e2e-user"]
+    # GitHub starts unconfigured: the e2e test sets it up with the one-click (app manifest) flow
     settings.github_oauth_base, settings.github_api_base = base, base
     g = f"http://127.0.0.1:{settings.port}/fake-google"
     settings.google_client_id, settings.google_client_secret = "e2e-google", "e2e-google-secret"

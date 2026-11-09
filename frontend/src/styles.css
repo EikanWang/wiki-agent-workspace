@@ -567,3 +567,6 @@ mark.waw-hl.review.needs_review { border-bottom: 2px dashed var(--warn); }
 .github-btn:hover { background: #32383f; border-color: #32383f; color: #fff; }
 .login-or { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; }
 .login-or::before, .login-or::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+.account-menu { left: auto; right: 0; min-width: 280px; }
+.account-who, .account-status { padding: 6px 8px; }
+.account-status { color: var(--green); }

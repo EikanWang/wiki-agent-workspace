@@ -12,6 +12,9 @@ Contents: [Window layout](#window-layout) · [Folders (multi-root)](#folders-mul
 
 ## Signing in
 
+To turn on **Continue with GitHub** once: account menu (👤, top right) → **Set up “Continue with GitHub”…** → on
+GitHub click **Create GitHub App** → back in the app it is on (only your GitHub account may use it).
+
 Open the app and click **Continue with Google** or **Continue with GitHub** (shown when the server has them set
 up, see CONFIGURATION.md `[auth.google]` / `[auth.github]`), or enter the access token. Only the accounts the owner
 listed are let in (Google: verified email addresses). A login lasts 30 days; **Sign out** (top right; it shows your

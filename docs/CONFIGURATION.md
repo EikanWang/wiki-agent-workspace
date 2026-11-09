@@ -109,7 +109,15 @@ of `client_id`, `client_secret` and `allowed_users` are set.
 | `allowed_users` | `[]` | GitHub logins allowed to sign in (case-insensitive), e.g. `["EikanWang"]`. Any other account is refused — having a GitHub account is never enough. Empty = GitHub sign-in off. |
 | `callback_url` | the address the browser used + `/api/v1/auth/github/callback` | Set it when the server is reached under several addresses (it must equal the OAuth app's *Authorization callback URL*). |
 
-Setup, once: on GitHub, **Settings → Developer settings → OAuth Apps → New OAuth App**. *Homepage URL*: the
+**Easiest: one click from the app.** Signed in (with the token), open the account menu (top right) →
+**Set up “Continue with GitHub”…**. GitHub shows *Create GitHub App* with everything filled in (a private app with
+no permissions; its callback is this server's address); click **Create**. GitHub hands the new app's client ID and
+secret back to the server, which saves them in `<state_dir>/github-signin.json` (mode 0600), allows only the GitHub
+account that created it, and the login page offers **Continue with GitHub** right away — no restart, nothing to
+copy. Keys set in `config.toml` (below) take precedence over that file; delete the file (and the app on GitHub,
+*Settings → Developer settings → GitHub Apps*) to undo.
+
+**Manually** instead: on GitHub, **Settings → Developer settings → OAuth Apps → New OAuth App**. *Homepage URL*: the
 address you open the app at (e.g. `http://10.239.60.122:8765`); *Authorization callback URL*: that address plus
 `/api/v1/auth/github/callback`. Copy the client ID, generate a client secret, put both and your login into
 `config.toml`, restart:
