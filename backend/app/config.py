@@ -65,6 +65,14 @@ class Settings:
     # endpoints (only changed by tests)
     github_oauth_base: str = "https://github.com"
     github_api_base: str = "https://api.github.com"
+    # [auth.google] — "Continue with Google" (OpenID Connect); enabled when client id, secret and allowed emails are set
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    google_allowed_emails: list[str] = field(default_factory=list)
+    google_callback_url: str = ""
+    google_auth_url: str = "https://accounts.google.com/o/oauth2/v2/auth"
+    google_token_url: str = "https://oauth2.googleapis.com/token"
+    google_userinfo_url: str = "https://openidconnect.googleapis.com/v1/userinfo"
     tmux_history_limit: int = 10000
     # [office] — Layout view of Word / PowerPoint / Visio files, rendered to PDF by LibreOffice
     office_soffice: str | None = None  # path to soffice; default: found on PATH
@@ -162,6 +170,13 @@ class Settings:
             if self.github_callback_url:
                 gh["callback_url"] = self.github_callback_url
             d["auth"]["github"] = gh
+        if self.google_client_id or self.google_allowed_emails:
+            go: dict[str, Any] = {"client_id": self.google_client_id, "allowed_emails": self.google_allowed_emails}
+            if self.google_client_secret:
+                go["client_secret"] = self.google_client_secret
+            if self.google_callback_url:
+                go["callback_url"] = self.google_callback_url
+            d["auth"]["google"] = go
         if self.workspaces:
             d["workspaces"] = [{k: v for k, v in w.items() if v} for w in self.workspaces]
         if self.frontend_dist:
@@ -227,6 +242,7 @@ def load_settings(path: Path | None = None, env: dict[str, str] | None = None) -
     access_token = env.get(ENV_ACCESS_TOKEN) or auth.get("access_token") or ""
     server_secret = auth.get("server_secret") or env.get("WAW_SERVER_SECRET") or ""
     gh = auth.get("github", {}) or {}
+    go = auth.get("google", {}) or {}
 
     workspace_root = Path(env.get("WAW_WORKSPACE") or ws.get("root") or os.getcwd()).expanduser()
     state_dir = Path(env.get("WAW_STATE_DIR") or server.get("state_dir") or DEFAULT_STATE_DIR).expanduser()
@@ -258,6 +274,10 @@ def load_settings(path: Path | None = None, env: dict[str, str] | None = None) -
         github_client_secret=str(env.get("WAW_GITHUB_CLIENT_SECRET") or gh.get("client_secret", "") or ""),
         github_allowed_users=[str(u).strip() for u in (gh.get("allowed_users") or []) if str(u).strip()],
         github_callback_url=str(gh.get("callback_url", "") or ""),
+        google_client_id=str(go.get("client_id", "") or ""),
+        google_client_secret=str(env.get("WAW_GOOGLE_CLIENT_SECRET") or go.get("client_secret", "") or ""),
+        google_allowed_emails=[str(u).strip().lower() for u in (go.get("allowed_emails") or []) if str(u).strip()],
+        google_callback_url=str(go.get("callback_url", "") or ""),
         tmux_history_limit=int(term.get("tmux_history_limit", 10000)),
         office_soffice=str(office.get("soffice") or "") or None,
         office_max_parallel=int(office.get("max_parallel", 2)),

@@ -12,9 +12,10 @@ Contents: [Window layout](#window-layout) · [Folders (multi-root)](#folders-mul
 
 ## Signing in
 
-Open the app and enter the access token, or click **Sign in with GitHub** if the server has it set up
-(CONFIGURATION.md, `[auth.github]`): only the GitHub accounts the owner listed are let in. A login lasts 30 days;
-**Sign out** (top right; it shows your GitHub name) ends it. Pushes and pull requests always use the server's own
+Open the app and click **Continue with Google** or **Continue with GitHub** (shown when the server has them set
+up, see CONFIGURATION.md `[auth.google]` / `[auth.github]`), or enter the access token. Only the accounts the owner
+listed are let in (Google: verified email addresses). A login lasts 30 days; **Sign out** (top right; it shows your
+GitHub name or email) ends it. Pushes and pull requests always use the server's own
 Git/GitHub credentials, whoever is signed in.
 
 ## Window layout

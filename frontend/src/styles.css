@@ -559,7 +559,11 @@ mark.waw-hl.review.needs_review { border-bottom: 2px dashed var(--warn); }
 .tree-root .hover-only-group { display: none; }
 .tree-root:hover .hover-only-group, .tree-root:focus-within .hover-only-group { display: inline-flex; }
 /* login: Sign in with GitHub */
-.github-btn { display: flex; align-items: center; justify-content: center; gap: 8px; background: #24292f; color: #fff; border-color: #24292f; font-weight: 600; text-decoration: none; padding: 9px 12px; }
+.social-buttons { display: flex; flex-direction: column; gap: 8px; }
+.social-btn { display: flex; align-items: center; justify-content: center; gap: 10px; font-weight: 600; text-decoration: none; padding: 9px 12px; border-radius: 8px; transition: background-color 0.15s, box-shadow 0.15s; }
+.google-btn { background: #fff; color: #1f1f1f; border: 1px solid #dadce0; }
+.google-btn:hover { background: #f7f8f8; box-shadow: 0 1px 3px rgba(60, 64, 67, 0.25); color: #1f1f1f; }
+.github-btn { background: #24292f; color: #fff; border: 1px solid #24292f; }
 .github-btn:hover { background: #32383f; border-color: #32383f; color: #fff; }
 .login-or { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; }
 .login-or::before, .login-or::after { content: ""; flex: 1; height: 1px; background: var(--border); }

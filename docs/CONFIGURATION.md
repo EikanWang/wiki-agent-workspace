@@ -5,7 +5,7 @@ environment variable, default `~/.config/wiki-agent-workspace/config.toml`. `scr
 mode 0600; `config.example.toml` is the annotated template. Restart the server after editing.
 
 Environment variables override the file for a few deployment-time values (useful for containers/services):
-`WAW_ACCESS_TOKEN`, `WAW_SERVER_SECRET`, `WAW_GITHUB_CLIENT_SECRET`, `WAW_WORKSPACE`, `WAW_STATE_DIR`, `WAW_BIND`,
+`WAW_ACCESS_TOKEN`, `WAW_SERVER_SECRET`, `WAW_GITHUB_CLIENT_SECRET`, `WAW_GOOGLE_CLIENT_SECRET`, `WAW_WORKSPACE`, `WAW_STATE_DIR`, `WAW_BIND`,
 `WAW_PORT`, `WAW_FRONTEND_DIST`, `WAW_CONFIG`.
 
 Show the effective configuration with secrets redacted:
@@ -97,9 +97,9 @@ the browser via OSC 52), `window-size latest`, status bar off, UTF-8 locale when
 
 Both may instead come from `WAW_ACCESS_TOKEN` / `WAW_SERVER_SECRET`.
 
-### `[auth.github]` — Sign in with GitHub (optional)
+### `[auth.github]` — Continue with GitHub (optional)
 
-Adds a **Sign in with GitHub** button to the login page (the access token keeps working). Enabled when all three
+Adds a **Continue with GitHub** button to the login page (the access token keeps working). Enabled when all three
 of `client_id`, `client_secret` and `allowed_users` are set.
 
 | Key | Default | Meaning |
@@ -124,6 +124,33 @@ allowed_users = ["EikanWang"]
 The server talks to `github.com` / `api.github.com` (through `https_proxy` if set). It asks for no scopes (public
 identity only), uses GitHub's token for one `GET /user` and discards it. Pushing and pull requests do not use
 this login: they run as the server's user with its own `git` / `gh` credentials.
+
+### `[auth.google]` — Continue with Google (optional)
+
+Adds a **Continue with Google** button (OpenID Connect). Enabled when `client_id`, `client_secret` and
+`allowed_emails` are set. Google identifies you by email: only **verified** addresses in `allowed_emails` get in.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `client_id` | — | OAuth client ID (type *Web application*) from Google Cloud. |
+| `client_secret` | — | Its client secret (or `WAW_GOOGLE_CLIENT_SECRET`, which wins). |
+| `allowed_emails` | `[]` | Email addresses allowed to sign in (case-insensitive). Empty = Google sign-in off. |
+| `callback_url` | the address the browser used + `/api/v1/auth/google/callback` | Must equal an *Authorized redirect URI* of the client. |
+
+Setup, once: [Google Cloud console](https://console.cloud.google.com/) → *APIs & Services* → *OAuth consent screen*
+(external or internal, scope `email`), then *Credentials → Create credentials → OAuth client ID → Web application*,
+with *Authorized redirect URI* = your address + `/api/v1/auth/google/callback`. Note: Google accepts plain `http://`
+redirect URIs only for `localhost`; for an address such as `http://10.0.0.5:8765` serve the app over HTTPS with a host
+name (DEPLOYMENT.md §8) or reach it through an SSH tunnel as `http://localhost:8765`.
+
+```toml
+[auth.google]
+client_id = "1234-abc.apps.googleusercontent.com"
+client_secret = "GOCSPX-…"   # or export WAW_GOOGLE_CLIENT_SECRET
+allowed_emails = ["me@example.com"]
+```
+
+The app asks for `openid email` only, reads the email once from Google's userinfo endpoint and discards the token.
 
 ## `[agents]`
 

@@ -1,4 +1,4 @@
-"""Sign in with GitHub: OAuth web flow against a fake GitHub (httpx MockTransport)."""
+"""Social sign-in (GitHub, Google): OAuth / OpenID Connect web flows against fakes (httpx MockTransport)."""
 
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ async def _start(api) -> str:
 
 async def test_github_sign_in_disabled_by_default(running_app):
     h = await running_app(login=False)
-    assert (await h.api.c.get("/api/v1/auth/options")).json() == {"token": True, "github": False}
+    assert (await h.api.c.get("/api/v1/auth/options")).json() == {"token": True, "github": False, "google": False}
     r = await h.api.c.get("/api/v1/auth/github/start")
     assert r.status_code == 303 and r.headers["location"] == "/?login_error=github_disabled"
 
@@ -99,3 +99,53 @@ async def test_token_login_still_works_and_records_identity(running_app, setting
     r = await h.api.login(TOKEN)
     assert r.status_code == 200
     assert (await h.api.c.get("/api/v1/bootstrap")).json()["identity"] == "token"
+
+
+def _fake_google(people: dict[str, dict], seen: list):
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append((req.method, req.url.host, req.url.path))
+        if req.url.path == "/token":
+            form = parse_qs(req.content.decode())
+            code = form["code"][0]
+            ok = form["client_id"] == ["gid"] and form["client_secret"] == ["gsecret"] and form["grant_type"] == ["authorization_code"]
+            return httpx.Response(200, json={"access_token": f"g-{code}", "id_token": "x"}) if ok and code in people else httpx.Response(400, json={"error": "invalid_grant"})
+        if req.url.path == "/v1/userinfo":
+            code = (req.headers.get("authorization") or "").removeprefix("Bearer g-")
+            return httpx.Response(200, json={"sub": "1", **people[code]}) if code in people else httpx.Response(401)
+        return httpx.Response(404)
+    return httpx.MockTransport(handler)
+
+
+async def test_google_sign_in_verified_allowed_emails_only(running_app, settings):
+    s = dataclasses.replace(settings, google_client_id="gid", google_client_secret="gsecret", google_allowed_emails=["me@example.com"])
+    seen: list = []
+    h = await running_app(s, login=False)
+    h.ctx.extra["google_transport"] = _fake_google({
+        "me": {"email": "Me@Example.com", "email_verified": True},
+        "unverified": {"email": "me@example.com", "email_verified": False},
+        "other": {"email": "other@example.com", "email_verified": True},
+    }, seen)
+    api = h.api
+    assert (await api.c.get("/api/v1/auth/options")).json() == {"token": True, "github": False, "google": True}
+
+    async def start() -> str:
+        r = await api.c.get("/api/v1/auth/google/start")
+        assert r.status_code == 302
+        loc = urlsplit(r.headers["location"])
+        q = parse_qs(loc.query)
+        assert loc.netloc == "accounts.google.com" and q["scope"] == ["openid email"] and q["response_type"] == ["code"]
+        assert q["redirect_uri"] == ["http://testserver/api/v1/auth/google/callback"]
+        return q["state"][0]
+
+    for code, expected in [("other", "google_not_allowed"), ("unverified", "google_unverified"), ("nope", "google_exchange")]:
+        st = await start()
+        r = await api.c.get(f"/api/v1/auth/google/callback?code={code}&state={st}")
+        assert r.headers["location"] == f"/?login_error={expected}", code
+    st = await start()
+    assert (await api.c.get(f"/api/v1/auth/google/callback?code=me&state={st}x")).headers["location"] == "/?login_error=google_state"
+    assert (await api.c.get("/api/v1/bootstrap")).status_code == 401
+    st = await start()
+    r = await api.c.get(f"/api/v1/auth/google/callback?code=me&state={st}")
+    assert r.status_code == 303 and r.headers["location"] == "/"
+    b = await api.c.get("/api/v1/bootstrap")
+    assert b.status_code == 200 and b.json()["identity"] == "google:me@example.com"

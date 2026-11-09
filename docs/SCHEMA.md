@@ -314,7 +314,7 @@ No plaintext secrets are stored.
 | `id` | UUID, PK | Login id (also scopes idempotency keys). |
 | `token_hash` | 64 hex, unique | SHA-256 of the session cookie value. |
 | `csrf_hash` | 64 hex | SHA-256 of the HMAC-derived CSRF token. |
-| `identity` | TEXT, nullable | Who signed in: `token` (access token) or `github:<login>` (Sign in with GitHub); `NULL` for logins from before it was recorded. No GitHub token is stored. |
+| `identity` | TEXT, nullable | Who signed in: `token` (access token), `github:<login>` or `google:<email>`; `NULL` for logins from before it was recorded. No provider token is stored. |
 | `expires_at` | DATETIME | Expiry (30 days, renewed while active). |
 | `created_at`, `last_seen_at` | DATETIME | Lifecycle. |
 

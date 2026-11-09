@@ -99,8 +99,26 @@ def add_fake_github(app) -> None:
     async def user(request: Request):
         return JSONResponse({"login": request.headers.get("authorization", "").removeprefix("Bearer tok-")})
 
+    async def g_auth(request: Request):
+        q = request.query_params
+        email = request.cookies.get("fake_google_user", "e2e@example.com")
+        return RedirectResponse(f"{q['redirect_uri']}?{urlencode({'code': email, 'state': q['state']})}", status_code=302)
+
+    async def g_token(request: Request):
+        from urllib.parse import parse_qs
+
+        form = {k: v[0] for k, v in parse_qs((await request.body()).decode()).items()}
+        if form.get("client_secret") != "e2e-google-secret":
+            return JSONResponse({"error": "invalid_client"}, status_code=401)
+        return JSONResponse({"access_token": f"g-{form.get('code')}"})
+
+    async def g_userinfo(request: Request):
+        email = request.headers.get("authorization", "").removeprefix("Bearer g-")
+        return JSONResponse({"sub": "1", "email": email, "email_verified": True})
+
     # before the SPA catch-all route
-    for r in reversed([Route("/fake-github/login/oauth/authorize", authorize), Route("/fake-github/login/oauth/access_token", token, methods=["POST"]),
+    for r in reversed([Route("/fake-google/auth", g_auth), Route("/fake-google/token", g_token, methods=["POST"]),
+                       Route("/fake-google/userinfo", g_userinfo),Route("/fake-github/login/oauth/authorize", authorize), Route("/fake-github/login/oauth/access_token", token, methods=["POST"]),
                        Route("/fake-github/user", user)]):
         app.router.routes.insert(0, r)
 
@@ -126,6 +144,10 @@ def main() -> None:
     settings.github_client_id, settings.github_client_secret = "e2e-client", "e2e-secret"
     settings.github_allowed_users = ["e2e-user"]
     settings.github_oauth_base, settings.github_api_base = base, base
+    g = f"http://127.0.0.1:{settings.port}/fake-google"
+    settings.google_client_id, settings.google_client_secret = "e2e-google", "e2e-google-secret"
+    settings.google_allowed_emails = ["e2e@example.com"]
+    settings.google_auth_url, settings.google_token_url, settings.google_userinfo_url = f"{g}/auth", f"{g}/token", f"{g}/userinfo"
     os.environ["NO_PROXY"] = ",".join(filter(None, [os.environ.get("NO_PROXY", ""), "127.0.0.1", "localhost"]))
     os.environ["no_proxy"] = os.environ["NO_PROXY"]
     app = create_app(settings)

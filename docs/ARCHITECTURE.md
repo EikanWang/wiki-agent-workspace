@@ -14,6 +14,8 @@ backend/app/
   db.py            SQLite (WAL) engine, serialized writes (RLock), Alembic runner (FK-safe), WAL checkpoint
   models.py        SQLAlchemy models (schema reference: docs/SCHEMA.md)
   auth.py          token login, HttpOnly cookie, HMAC CSRF token, Origin checks, WebSocket auth, gateway mode
+  social_login.py  Continue with GitHub (OAuth app) / Google (OpenID Connect): state cookie, server-side code
+                   exchange, allow-list (GitHub logins / verified Google emails), then a normal login session
   deps.py          AppContext + dependencies require_auth / require_auth_mutating, which also *scope* the context
                    to one root folder (see "Multi-root scoping")
   workspaces.py    WorkspaceRegistry: one WorkspaceRuntime (DocumentService + LockService + watcher) per root

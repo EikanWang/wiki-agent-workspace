@@ -40,6 +40,14 @@ client_secret = ""
 allowed_users = []           # e.g. ["EikanWang"]
 callback_url = ""            # empty: the address the browser used + /api/v1/auth/github/callback
 
+[auth.google]
+# "Continue with Google" (optional): a Google OAuth client (Web application) and the verified emails allowed in.
+# Off while any of the three is empty. The secret may come from WAW_GOOGLE_CLIENT_SECRET instead.
+client_id = ""
+client_secret = ""
+allowed_emails = []          # e.g. ["me@example.com"]
+callback_url = ""            # empty: the address the browser used + /api/v1/auth/google/callback
+
 [office]
 # Layout view of Word / PowerPoint / Visio files (LibreOffice).
 soffice = ""                 # empty: found on PATH

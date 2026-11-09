@@ -648,9 +648,15 @@ export default function App() {
           {showFonts && <FontSettings prefs={prefs} onChange={updatePrefs} onClose={() => setShowFonts(false)} />}
         </span>
         <a className="btn small hide-mobile" href="/api/v1/export" download title="Download a backup of the SQLite database and document snapshots">Backup</a>
-        <button className="btn small" onClick={() => void logout()} title={boot.identity?.startsWith("github:") ? `Signed in with GitHub as ${boot.identity.slice(7)}. Sign out` : "Signed in with the access token. Sign out"} data-testid="sign-out">
-          {boot.identity?.startsWith("github:") ? `Sign out ${boot.identity.slice(7)}` : "Sign out"}
-        </button>
+        {(() => {
+          const [via, who] = boot.identity?.includes(":") ? [boot.identity.split(":")[0], boot.identity.slice(boot.identity.indexOf(":") + 1)] : ["token", ""];
+          const provider = via === "github" ? "GitHub" : via === "google" ? "Google" : "";
+          return (
+            <button className="btn small" onClick={() => void logout()} title={provider ? `Signed in with ${provider} as ${who}. Sign out` : "Signed in with the access token. Sign out"} data-testid="sign-out">
+              {provider ? `Sign out ${who}` : "Sign out"}
+            </button>
+          );
+        })()}
       </header>
 
       {providerWarn && <div className="banner warn">{providerWarn}</div>}

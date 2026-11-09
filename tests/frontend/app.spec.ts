@@ -1536,6 +1536,8 @@ test("discussions: ask about the whole document (Markdown and PDF), not only a s
     await page.getByTestId("tree-refresh").click();
     await expect(page.getByTestId("tree-refresh")).toHaveAttribute("data-spinning", "false");
     await page.getByTestId("tree-file-docs/whole.pdf").locator("button.tree-main").click();
+    await expect(page.getByTestId("pdf-view")).toBeVisible(); // the PDF is open before asking about it
+    await expect(page.getByTestId("ask-whole-document")).toHaveText("Ask about this PDF");
     await page.getByTestId("ask-whole-document").click();
     await page.getByTestId("selection-question").fill("What is in this PDF?");
     await page.getByTestId("selection-send").click();
@@ -1566,4 +1568,19 @@ test("login page: Sign in with GitHub (allowed account), refused account and can
   await expect(page.getByTestId("sign-out")).toHaveText("Sign out e2e-user");
   await page.getByTestId("sign-out").click();
   await expect(page.getByTestId("login-github")).toBeVisible();
+});
+
+test("login page: Continue with Google (verified, allowed email); other accounts are refused", async ({ page, context }) => {
+  await page.goto("/");
+  await expect(page.getByTestId("login-google")).toHaveText("Continue with Google");
+  await expect(page.getByTestId("login-github")).toHaveText("Continue with GitHub");
+  await context.addCookies([{ name: "fake_google_user", value: "stranger@example.com", url: "http://127.0.0.1:8799" }]);
+  await page.getByTestId("login-google").click();
+  await expect(page.locator(".login-card [role=alert]")).toContainText("Google account is not allowed");
+  await context.clearCookies();
+  await page.getByTestId("login-google").click();
+  await expect(page.getByTestId("view-document")).toBeVisible({ timeout: 15000 });
+  await expect(page.getByTestId("sign-out")).toHaveText("Sign out e2e@example.com");
+  await page.getByTestId("sign-out").click();
+  await expect(page.getByTestId("login-google")).toBeVisible();
 });
