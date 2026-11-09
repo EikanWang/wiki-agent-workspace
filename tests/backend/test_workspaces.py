@@ -123,3 +123,103 @@ async def test_config_lists_several_roots_and_folder_picker(running_app, tmp_pat
     assert names["cfg-second"]["is_git"] is True and pick["parent"] == str(tmp_path.parent)
     assert (await h.api.get("/api/v1/fs/dirs", params={"path": str(second)})).json()["open_as"] == lst[1]["id"]
     assert (await h.api.get("/api/v1/fs/dirs", params={"path": "rel"})).status_code == 400
+
+
+# ---------------------------------------------------------------------- named workspaces, creating things
+
+async def test_named_workspaces_switch_folders_terminals_and_survive_restart(running_app, settings, workspace: Path, tmp_path: Path):
+    from conftest import requires_tmux  # noqa: F401  (terminal part is skipped below without tmux)
+    import shutil
+
+    h = await running_app()
+    api = h.api
+    named = (await api.get("/api/v1/named-workspaces")).json()
+    assert [n["name"] for n in named["workspaces"]] == ["Default"] and named["workspaces"][0]["current"]
+    default_id = named["current"]
+    second = tmp_path / "second-wiki"
+    make_workspace(second)
+    have_tmux = shutil.which("tmux") is not None
+    if have_tmux:
+        t_default = (await api.post("/api/v1/terminals", json={})).json()
+    # create a workspace with only the second folder: the window switches to it
+    r = await api.post("/api/v1/named-workspaces", json={"name": "Second only", "root": str(second)})
+    assert r.status_code == 201, r.text
+    nid = r.json()["current"]
+    assert nid != default_id
+    folders = (await api.get("/api/v1/workspaces")).json()["workspaces"]
+    assert [f["root"] for f in folders] == [str(second.resolve())]
+    assert folders[0]["configured"] is False  # removable here; config folders are only pinned in Default
+    if have_tmux:
+        assert (await api.get("/api/v1/terminals")).json()["terminals"] == []  # Default's terminal is not shown here
+        t_second = (await api.post("/api/v1/terminals", json={})).json()
+    # names are unique
+    assert (await api.post("/api/v1/named-workspaces", json={"name": "Default", "root": str(second)})).status_code == 409
+    # folders added here belong to this workspace only
+    third = tmp_path / "third-wiki"
+    make_workspace(third)
+    await _add(api, third, "Third")
+    # back to Default: config folder again, neither second nor third
+    r = await api.post(f"/api/v1/named-workspaces/{default_id}/open")
+    assert r.status_code == 200
+    roots = [f["root"] for f in (await api.get("/api/v1/workspaces")).json()["workspaces"]]
+    assert roots == [str(workspace.resolve())]
+    if have_tmux:
+        ids = [t["id"] for t in (await api.get("/api/v1/terminals")).json()["terminals"]]
+        assert ids == [t_default["id"]]
+    # can't delete the current or Default; deleting another moves its terminals to Default (shells keep running)
+    assert (await api.delete(f"/api/v1/named-workspaces/{default_id}")).status_code == 409
+    await api.post(f"/api/v1/named-workspaces/{nid}/open")
+    assert (await api.delete(f"/api/v1/named-workspaces/{nid}")).status_code == 409
+    # restart: the current workspace and its folders come back
+    await h.stop()
+    h2 = await running_app()
+    roots = [f["root"] for f in (await h2.api.get("/api/v1/workspaces")).json()["workspaces"]]
+    assert roots == [str(second.resolve()), str(third.resolve())]
+    assert (await h2.api.get("/api/v1/named-workspaces")).json()["current"] == nid
+    # rename, then delete from Default
+    assert (await h2.api.patch(f"/api/v1/named-workspaces/{nid}", json={"name": "Renamed"})).json()["workspaces"][1]["name"] == "Renamed"
+    await h2.api.post(f"/api/v1/named-workspaces/{default_id}/open")
+    r = await h2.api.delete(f"/api/v1/named-workspaces/{nid}")
+    assert r.status_code == 200 and [n["name"] for n in r.json()["workspaces"]] == ["Default"]
+    if have_tmux:
+        ids = {t["id"] for t in (await h2.api.get("/api/v1/terminals")).json()["terminals"]}
+        assert ids == {t_default["id"], t_second["id"]}
+
+
+async def test_create_file_and_folder_in_the_tree(api: Api, workspace: Path):
+    r = await api.post("/api/v1/files", json={"path": "notes/today.md", "kind": "file"})
+    assert r.status_code == 201, r.text
+    assert r.json() == {"path": "notes/today.md", "kind": "file", "format": "markdown", "openable": True}
+    assert (workspace / "notes" / "today.md").read_text() == "# today\n"  # missing parents created
+    assert (await api.post("/api/v1/files", json={"path": "notes/empty.txt", "kind": "file"})).status_code == 201
+    assert (workspace / "notes" / "empty.txt").read_text() == ""
+    assert (await api.post("/api/v1/files", json={"path": "notes/sub", "kind": "dir"})).status_code == 201
+    assert (workspace / "notes" / "sub").is_dir()
+    # refused: existing, traversal, .git, app-internal, a file as a folder
+    assert (await api.post("/api/v1/files", json={"path": "notes/today.md", "kind": "file"})).status_code == 409
+    assert (await api.post("/api/v1/files", json={"path": "../outside.md", "kind": "file"})).status_code == 400
+    assert (await api.post("/api/v1/files", json={"path": ".git/x", "kind": "file"})).status_code == 400
+    assert (await api.post("/api/v1/files", json={"path": ".waw-tmp-x", "kind": "file"})).status_code == 400
+    assert (await api.post("/api/v1/files", json={"path": "README.md/x.md", "kind": "file"})).status_code == 400
+    # a symlink leaving the folder is not written through
+    outside = workspace.parent / "outside-target"
+    outside.mkdir(exist_ok=True)
+    (workspace / "link-out").symlink_to(outside)
+    r = await api.post("/api/v1/files", json={"path": "link-out/new.md", "kind": "file"})
+    assert r.status_code == 403 and not (outside / "new.md").exists()
+    # locked folders refuse new entries
+    assert (await api.post("/api/v1/locks", json={"path": "notes"})).status_code in (200, 201)
+    r = await api.post("/api/v1/files", json={"path": "notes/locked.md", "kind": "file"})
+    assert r.status_code == 423 and not (workspace / "notes" / "locked.md").exists()
+
+
+async def test_folder_picker_can_create_a_folder(api: Api, tmp_path: Path):
+    r = await api.post("/api/v1/fs/mkdir", json={"parent": str(tmp_path), "name": "new-wiki", "git": True})
+    assert r.status_code == 201, r.text
+    assert r.json()["is_git"] is True and (tmp_path / "new-wiki" / ".git").is_dir()
+    assert (tmp_path / "new-wiki" / ".gitignore").read_text() == ".waw-tmp-*\n"
+    assert (await api.post("/api/v1/fs/mkdir", json={"parent": str(tmp_path), "name": "new-wiki"})).status_code == 409
+    assert (await api.post("/api/v1/fs/mkdir", json={"parent": str(tmp_path), "name": "a/b"})).status_code == 400
+    assert (await api.post("/api/v1/fs/mkdir", json={"parent": "relative", "name": "x"})).status_code == 400
+    r = await api.post("/api/v1/fs/mkdir", json={"parent": str(tmp_path), "name": "plain"})
+    assert r.status_code == 201 and r.json()["is_git"] is False

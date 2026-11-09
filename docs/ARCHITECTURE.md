@@ -91,6 +91,13 @@ The window can hold several root folders. `WorkspaceRegistry` keeps one `Workspa
 (`DocumentService`, `LockService`, `WorkspaceWatcher`) and the `workspaces` table records every folder ever opened.
 Every per-wiki row (documents, sessions, locks, reviews, file_reviews) carries `workspace_id`.
 
+Named workspaces (`named_workspaces`, VS Code-style) are named sets of folders; one is current and decides which
+runtimes the registry holds. `WorkspaceRegistry.switch()` keeps the runtimes of folders both workspaces share (no
+watcher re-registration for big trees), stops the others, starts the new ones, saves the folder list, rewires the
+process-wide defaults (`on_switch`: primary folder for jobs and terminals) and publishes `named_workspace_changed`;
+browsers reload. Terminal tabs carry `named_workspace_id` and are listed per workspace (`NULL` = Default). Document
+tabs live in the browser per workspace (`localStorage` `waw.docTabs.<id>`).
+
 Each `WorkspaceWatcher` runs `watchfiles` in a spawned child process and streams batches over a pipe. The server reads
 the raw descriptor itself (`_FrameReader` decodes the `multiprocessing` wire format), because uvloop (uvicorn's
 default loop) makes the descriptor non-blocking and `Connection.recv()` would fail on a partly arrived batch. If the

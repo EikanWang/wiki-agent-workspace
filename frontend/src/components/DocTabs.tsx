@@ -44,9 +44,14 @@ export function withTab(tabs: DocTab[], tab: DocTab, after: DocTab | null, renam
   return out;
 }
 
-export function loadTabs(): DocTab[] {
+/** Key of the open tabs of a named workspace (each workspace has its own tabs, like a VS Code window). */
+export const tabsKey = (named: string) => `waw.docTabs.${named}`;
+
+/** Open tabs of named workspace `named`; `legacy`: fall back to the tabs saved before named workspaces existed. */
+export function loadTabs(named: string = localStorage.getItem("waw.namedWorkspace") ?? "", legacy = true): DocTab[] {
   try {
-    const v = JSON.parse(localStorage.getItem("waw.docTabs") || "[]");
+    const raw = localStorage.getItem(tabsKey(named)) ?? (legacy ? localStorage.getItem("waw.docTabs") : null);
+    const v = JSON.parse(raw || "[]");
     return Array.isArray(v) ? v.filter((t) => t && typeof t.ws === "string" && typeof t.path === "string") : [];
   } catch {
     return [];

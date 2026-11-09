@@ -36,6 +36,9 @@ export interface ReaderProps {
   onEdited?: (sha256: string) => void;
   onDirtyChange?: (dirty: boolean) => void;
   pendingSelectionRef: React.MutableRefObject<SelectionAnchor | null>;
+  /** open the editor right away (a file just created from the tree) */
+  startEditing?: boolean;
+  onEditingStarted?: () => void;
 }
 
 const SELECTION_DELAY_MS = 350;
@@ -46,8 +49,20 @@ export default function Reader(props: ReaderProps) {
   const [copyChip, setCopyChip] = useState<{ text: string; x: number; y: number; done: boolean } | null>(null); // read mode
   const [editing, setEditing] = useState(false);
   const [textHint, setTextHint] = useState(false);
+  // a different document: leave the editor — unless this one was just created from the tree (start editing it)
+  const editingFor = useRef<string | null>(null);
+  useEffect(() => {
+    const start = !!(props.startEditing && doc.editable && !doc.lock);
+    if (editingFor.current !== doc.document_id) {
+      editingFor.current = doc.document_id;
+      setEditing(start); // only a document change resets the editor
+    } else if (start) {
+      setEditing(true);
+    }
+    if (start) props.onEditingStarted?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.startEditing, doc.document_id]);
   useEffect(() => setTextHint(false), [doc.document_id]);
-  useEffect(() => setEditing(false), [doc.document_id]);
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const modelRef = useRef<TextModel | null>(null);

@@ -121,6 +121,10 @@ class Api:
         h = {**self.mut, **(headers or {})}
         return await self.c.put(url, json=json, headers=h, **kw)
 
+    async def patch(self, url, json=None, headers=None, **kw):
+        h = {**self.mut, **(headers or {})}
+        return await self.c.patch(url, json=json, headers=h, **kw)
+
     async def delete(self, url, headers=None, **kw):
         h = {**self.mut, **(headers or {})}
         return await self.c.delete(url, headers=h, **kw)

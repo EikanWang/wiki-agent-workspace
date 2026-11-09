@@ -36,7 +36,8 @@ workspaces 1─┬─* documents 1─┬─* document_versions
              │                             └─* jobs 1─* job_events
              └─* agent_sessions ◄── documents.default_session_id, threads.last_session_id,
                                     messages.session_id, jobs.session_id
-login_sessions, idempotency_keys, terminals, alembic_version: standalone
+named_workspaces 1─* terminals  (named_workspaces.folders: JSON list of workspaces.id)
+login_sessions, idempotency_keys, alembic_version: standalone
 ```
 
 ---
@@ -54,8 +55,23 @@ existing row is relocated (see docs/OPERATIONS.md, "Moving or cloning").
 | `root_path` | TEXT, unique | Absolute, resolved path of the wiki folder. |
 | `name` | TEXT, nullable | Display name in the file tree / switcher (default: folder name). |
 | `position` | INTEGER | Order in the file tree. |
-| `active` | BOOLEAN | Open in the window. `false` = removed from the window; its data is kept and returns when the folder is added again. |
+| `active` | BOOLEAN | Open in the window, i.e. a folder of the current named workspace. `false` = not shown now; its data is kept and returns when the folder is shown again. |
 | `created_at` | DATETIME | First seen. |
+
+## `named_workspaces` — named sets of folders (VS Code-style workspaces)
+
+Which folders the window shows, in order. Exactly one row is `current`. "Default" (`is_default`) is created on the
+first start with this table from the folders open until then, always contains the folders of config.toml, and
+cannot be deleted. Folder data belongs to `workspaces`, so a folder in two named workspaces shares its data.
+
+| Column | Type | Meaning |
+| --- | --- | --- |
+| `id` | UUID, PK | Named workspace id. |
+| `name` | TEXT | Display name (unique among named workspaces; enforced by the app). |
+| `folders` | TEXT (JSON array of `workspaces.id`) | Folders in file-tree order, including currently unavailable ones. |
+| `is_default` | BOOLEAN | The Default workspace. |
+| `current` | BOOLEAN | The workspace the window shows now. |
+| `created_at`, `last_opened_at` | DATETIME | Lifecycle. |
 
 ## `documents` — identity of a Markdown file
 
@@ -286,6 +302,7 @@ event. The user's terminal is never restricted.
 | `cwd` | TEXT | Initial directory. |
 | `tab_order` | INTEGER | Tab position. |
 | `state` | `live` \| `exited` \| `unavailable` \| `closed` | `exited`: tmux session gone; `unavailable`: tmux missing; `closed`: user closed/dismissed (hidden). |
+| `named_workspace_id` | UUID, FK → `named_workspaces.id`, nullable | Workspace the tab is listed in; `NULL` = Default (tabs from before named workspaces, and tabs of deleted workspaces). |
 | `created_at`, `updated_at` | DATETIME | Lifecycle. |
 
 ## `login_sessions` — browser logins

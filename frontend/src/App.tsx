@@ -22,7 +22,8 @@ import {
 } from "./api";
 import Login from "./components/Login";
 import FileTree, { notifyTreeChanged } from "./components/FileTree";
-import DocTabs, { DocTab, loadTabs, sameTab, withTab } from "./components/DocTabs";
+import DocTabs, { DocTab, loadTabs, sameTab, tabsKey, withTab } from "./components/DocTabs";
+import WorkspaceMenu from "./components/WorkspaceMenu";
 import Reader from "./components/Reader";
 import DiscussionPanel, { LiveJob, SessionChip, useJobStream } from "./components/DiscussionPanel";
 import SessionPicker from "./components/SessionPicker";
@@ -42,7 +43,11 @@ export default function App() {
   const [view, setView] = useState<View>("document");
   const [doc, setDoc] = useState<OpenDocument | null>(null);
   // open documents as tabs (folder + path), remembered in this browser; `lastTab` = the tab read most recently
-  const [docTabs, setDocTabs] = useState<DocTab[]>(loadTabs);
+  // the named workspace (VS Code window) this page shows; tabs are remembered per named workspace
+  const namedRef = useRef<string>(localStorage.getItem("waw.namedWorkspace") ?? "");
+  const [docTabs, setDocTabs] = useState<DocTab[]>(() => loadTabs(namedRef.current));
+  const [showNewWorkspace, setShowNewWorkspace] = useState(false);
+  const [editNext, setEditNext] = useState<string | null>(null); // path of a just-created file to open in the editor
   const lastTab = useRef<(DocTab & { document_id: string }) | null>(null);
   const [docError, setDocError] = useState<string | null>(null);
   const [threads, setThreads] = useState<Thread[]>([]);
@@ -126,6 +131,14 @@ export default function App() {
         b = await get<Bootstrap>("/bootstrap");
       }
       if (b.csrf_token) setCsrf(b.csrf_token);
+      const named = b.named_workspaces?.current ?? "";
+      if (named && named !== namedRef.current) {
+        // first start, or switched from another browser: show that workspace's tabs
+        const isDefault = !!b.named_workspaces?.workspaces.find((w) => w.id === named)?.is_default;
+        namedRef.current = named;
+        localStorage.setItem("waw.namedWorkspace", named);
+        setDocTabs(loadTabs(named, isDefault));
+      }
       setWorkspaces(b.workspaces ?? []);
       setWorkspace(b.workspace.id);
       setActiveWs(b.workspace.id);
@@ -237,7 +250,7 @@ export default function App() {
   const restoreLast = useCallback(
     async (ws: string) => {
       localStorage.removeItem("waw.lastPath");
-      const candidates = [localStorage.getItem(`waw.lastPath.${ws}`), ...loadTabs().filter((t) => t.ws === ws).map((t) => t.path)];
+      const candidates = [localStorage.getItem(`waw.lastPath.${ws}`), ...loadTabs(namedRef.current).filter((t) => t.ws === ws).map((t) => t.path)];
       const tried = new Set<string>();
       for (const p of candidates) {
         if (!p || tried.has(p)) continue;
@@ -279,7 +292,7 @@ export default function App() {
   );
 
   useEffect(() => {
-    localStorage.setItem("waw.docTabs", JSON.stringify(docTabs));
+    localStorage.setItem(tabsKey(namedRef.current), JSON.stringify(docTabs));
   }, [docTabs]);
   // tabs of folders that are no longer in the window go away (their data is kept server-side)
   useEffect(() => {
@@ -344,6 +357,12 @@ export default function App() {
         }
       }
       if (ev.type === "watcher_ready") setWatcherReady(true);
+      if (ev.type === "named_workspace_changed" && ev.id && ev.id !== namedRef.current) {
+        // another browser switched the server's window to another workspace: follow it
+        notify("Another browser switched to a different workspace; reloading…");
+        localStorage.setItem("waw.namedWorkspace", ev.id);
+        window.setTimeout(() => window.location.reload(), 1200);
+      }
       if (ev.type === "workspaces_changed") {
         void refreshWorkspaces();
         setTreeKey((k) => k + 1);
@@ -587,6 +606,7 @@ export default function App() {
         </button>
         <span className="brand-mark">W</span>
         <span className="brand-title">Wiki Reader</span>
+        <WorkspaceMenu initial={boot.named_workspaces} onNew={() => setShowNewWorkspace(true)} beforeSwitch={confirmLeaveEditor} onNotify={notify} />
         {workspaces.filter((w) => w.available).length > 1 ? (
           <select className="ws-switch hide-mobile" value={activeWs ?? ""} onChange={(e) => switchWorkspace(e.target.value)} title="Folder (wiki) the window is working in" data-testid="workspace-switch">
             {workspaces.filter((w) => w.available).map((w) => (
@@ -652,6 +672,13 @@ export default function App() {
             onToggleLock={(ws, p, l) => void toggleLock(p, l, ws)}
             onAddFolder={() => setShowAddFolder(true)}
             onRemoveFolder={(w) => void removeFolder(w)}
+            onCreated={(ws, p, kind, openable) => {
+              if (kind !== "file") return notify(`Created folder ${p}.`);
+              if (!openable) return notify(`Created ${p}.`);
+              if (ws !== getWorkspace()) switchWorkspace(ws, false);
+              setEditNext(p);
+              void openDocument(p);
+            }}
             refreshKey={treeKey}
           />
           {sidebarOpen && <Resizer side="right" onResize={resizeSidebar} onEnd={persistPrefs} />}
@@ -715,6 +742,8 @@ export default function App() {
               onToggleToc={() => updatePrefs({ tocOpen: !prefs.tocOpen })}
               readerMode={prefs.readerMode}
               onReaderModeChange={(m) => updatePrefs({ readerMode: m })}
+              startEditing={editNext !== null && editNext === doc.path}
+              onEditingStarted={() => setEditNext(null)}
               officeView={prefs.officeView ?? "layout"}
               onOfficeViewChange={(v) => updatePrefs({ officeView: v })}
               onEdited={(sha) => {
@@ -817,6 +846,15 @@ export default function App() {
             switchWorkspace(w.id);
             notify(`Added ${w.name} (${w.root}).`);
           }}
+        />
+      )}
+      {showNewWorkspace && (
+        <AddFolderDialog
+          mode="new-workspace"
+          start={(activeWsInfo?.root ?? boot.workspace.root).split("/").slice(0, -1).join("/") || "/"}
+          onClose={() => setShowNewWorkspace(false)}
+          onAdded={() => undefined}
+          onWorkspaceCreated={() => window.location.reload()}
         />
       )}
       {showRecent && (

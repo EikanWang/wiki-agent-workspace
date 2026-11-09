@@ -1,6 +1,6 @@
 import RefreshButton from "./RefreshButton";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ApiError, FileItem, GitSummary, WorkspaceInfo, getIn } from "../api";
+import { ApiError, FileItem, GitSummary, WorkspaceInfo, getIn, post } from "../api";
 import { FileIcon, KIND_LABEL, formatSize } from "./FileIcon";
 
 interface DirState {
@@ -52,6 +52,7 @@ export default function FileTree({
   onToggleLock,
   onAddFolder,
   onRemoveFolder,
+  onCreated,
   refreshKey,
 }: {
   workspaces: WorkspaceInfo[];
@@ -64,6 +65,8 @@ export default function FileTree({
   onToggleLock?: (workspace: string, path: string, locked: boolean) => void;
   onAddFolder?: () => void;
   onRemoveFolder?: (workspace: WorkspaceInfo) => void;
+  /** a file or folder was created from the tree (open new files, …) */
+  onCreated?: (workspace: string, path: string, kind: "file" | "dir", openable: boolean) => void;
   /** bumped for changes that can affect any folder (commit, lock, agent turn finished): reload what is shown */
   refreshKey: number;
 }) {
@@ -307,6 +310,76 @@ export default function FileTree({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [expanded, dirs, wsSignature]);
 
+  // ---- New file / New folder (VS Code explorer): an inline name box at the top of the folder
+  const [creating, setCreating] = useState<{ ws: string; dir: string; kind: "file" | "dir" } | null>(null);
+  const [newName, setNewName] = useState("");
+  const [newError, setNewError] = useState<string | null>(null);
+  const [newBusy, setNewBusy] = useState(false);
+  const startCreate = (ws: string, dir: string, kind: "file" | "dir") => {
+    setExpanded((s) => {
+      const k = key(ws, dir);
+      if (s.has(k)) return s;
+      const n = new Set(s);
+      n.add(k);
+      return n;
+    });
+    setNewName("");
+    setNewError(null);
+    setCreating({ ws, dir, kind });
+  };
+  const submitCreate = async () => {
+    if (!creating || !newName.trim() || newBusy) return;
+    const rel = (creating.dir ? creating.dir + "/" : "") + newName.trim().replace(/^\/+|\/+$/g, "");
+    setNewBusy(true);
+    try {
+      const r = await post<{ path: string; kind: "file" | "dir"; openable: boolean }>("/files", { path: rel, kind: creating.kind }, { workspace: creating.ws });
+      const { ws, kind } = creating;
+      setCreating(null);
+      // show it: expand the folders on the way, then re-read the folder it was created in
+      const parts = r.path.split("/");
+      setExpanded((s) => {
+        const n = new Set(s);
+        for (let i = 1; i < parts.length; i++) n.add(key(ws, parts.slice(0, i).join("/")));
+        if (kind === "dir") n.add(key(ws, r.path));
+        return n;
+      });
+      await refreshFolder(ws, creating.dir);
+      onCreated?.(ws, r.path, kind, r.openable);
+    } catch (e) {
+      setNewError((e as ApiError).message);
+    } finally {
+      setNewBusy(false);
+    }
+  };
+  const newBox = (ws: string, dir: string, depth: number) =>
+    creating && creating.ws === ws && creating.dir === dir ? (
+      <div key="\u0000new">
+        <div className="tree-new" style={{ paddingLeft: depth * 14 + 8 }} data-testid="tree-new">
+          <FileIcon item={{ type: creating.kind, kind: creating.kind === "dir" ? "dir" : "file" }} />
+          <input
+            autoFocus
+            value={newName}
+            placeholder={creating.kind === "dir" ? "folder name" : "file name, e.g. notes.md (a/b.md creates folders)"}
+            onChange={(e) => { setNewName(e.target.value); setNewError(null); }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void submitCreate();
+              if (e.key === "Escape") setCreating(null);
+            }}
+            onBlur={() => { if (!newName.trim()) setCreating(null); }}
+            aria-label={creating.kind === "dir" ? "New folder name" : "New file name"}
+            data-testid="tree-new-name"
+          />
+        </div>
+        {newError && <div className="tree-new-error" style={{ paddingLeft: depth * 14 + 8 }} role="alert" data-testid="tree-new-error">{newError}</div>}
+      </div>
+    ) : null;
+  const newButtons = (ws: string, dir: string, testSuffix: string | undefined) => (
+    <>
+      <button className="tree-action new-entry" onClick={() => startCreate(ws, dir, "file")} title="New file" aria-label="New file" data-testid={testSuffix !== undefined ? `tree-new-file${testSuffix}` : undefined}>＋🗎</button>
+      <button className="tree-action new-entry" onClick={() => startCreate(ws, dir, "dir")} title="New folder" aria-label="New folder" data-testid={testSuffix !== undefined ? `tree-new-dir${testSuffix}` : undefined}>＋🗀</button>
+    </>
+  );
+
   const toggle = (ws: string, path: string) => {
     const k = key(ws, path);
     const opening = !expandedRef.current.has(k);
@@ -333,10 +406,11 @@ export default function FileTree({
     const retry = <button className="link-btn" onClick={() => void load(ws.id, path)} data-testid="tree-retry">Retry</button>;
     if (st.error && !st.loaded) return <div className="tree-error" style={pad} data-testid="tree-error">Could not list this folder: {st.error}. {retry}</div>;
     const stale = st.error ? <div key="\u0000stale" className="tree-error stale" style={pad} data-testid="tree-error" title={st.error}>Could not refresh; showing the earlier listing. {retry}</div> : null;
-    if (st.items.length === 0) return stale ?? <div className="tree-empty" style={pad}>(empty)</div>;
+    const box = newBox(ws.id, path, depth);
+    if (st.items.length === 0) return box ?? stale ?? <div className="tree-empty" style={pad}>(empty)</div>;
     // test ids stay path-based for the first root; other roots are distinguished by data-ws
     const tid = (p: string) => (first ? `tree-file-${p}` : `tree-file-${ws.name}:${p}`);
-    return [stale, ...st.items.map((it) => {
+    return [box, stale, ...st.items.map((it) => {
       const tip = [
         it.path,
         KIND_LABEL[it.type === "dir" ? "dir" : it.kind] ?? it.kind,
@@ -359,6 +433,7 @@ export default function FileTree({
               {it.locked && <span className={`lock-badge ${it.lock_inherited ? "inherited" : ""}`} title={it.lock_inherited ? "Locked by a parent folder" : "Locked"}>🔒</span>}
               {it.git_status && it.git_status !== "clean" && <span className={`git-badge ${it.git_status}`}>{gitLabel(it.git_status)}</span>}
               <span className="tree-actions">
+                {newButtons(ws.id, it.path, first ? `-${it.path}` : undefined)}
                 <RefreshButton className="tree-action" onRefresh={() => refreshFolder(ws.id, it.path)} title={`Refresh ${it.name}`} testId={first ? `tree-refresh-${it.path}` : undefined} />
                 {onOpenDiff && it.git_status && it.git_status !== "clean" && (
                   <button className="tree-action" onClick={() => onOpenDiff(ws.id, it.path, true)} title="Review all changes in this folder" data-testid={first ? `tree-diff-${it.path}` : undefined}>±</button>
@@ -422,6 +497,9 @@ export default function FileTree({
                 <span className="tree-actions root-actions">
                   {onRemoveFolder && !ws.configured && (
                     <button className="tree-action remove hover-only" onClick={() => onRemoveFolder(ws)} title="Remove this folder from the window (its discussions and history are kept)" data-testid={`tree-remove-${ws.name}`}>✕</button>
+                  )}
+                  {ws.available && (
+                    <span className="hover-only-group">{newButtons(ws.id, "", i === 0 ? "-root" : `-root-${ws.name}`)}</span>
                   )}
                   {ws.available && (
                     <RefreshButton className="tree-action hover-only" onRefresh={() => refreshFolder(ws.id, "")} title={`Refresh ${ws.name}`} testId={i === 0 ? "tree-refresh-root" : `tree-refresh-root-${ws.name}`} />

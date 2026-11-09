@@ -43,6 +43,21 @@ class Workspace(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
+class NamedWorkspace(Base):
+    """A named set of folders (VS Code "workspace"): which folders the window shows, in order, with its own
+    terminals. Folder data (documents, discussions, sessions…) belongs to the folder, so a folder in two named
+    workspaces shares it. Exactly one row is `current`; the `is_default` row ("Default") always exists."""
+
+    __tablename__ = "named_workspaces"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    folders: Mapped[str] = mapped_column(Text, nullable=False, default="[]", server_default="[]")  # JSON list of workspaces.id
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    current: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    last_opened_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class Document(Base):
     __tablename__ = "documents"
     __table_args__ = (UniqueConstraint("workspace_id", "path", name="uq_documents_workspace_path"),)
@@ -213,6 +228,8 @@ class Terminal(Base):
     cwd: Mapped[str] = mapped_column(Text, nullable=False)
     tab_order: Mapped[int] = mapped_column(Integer, default=0)
     state: Mapped[str] = mapped_column(String(16), default="live")  # live | exited | unavailable | closed
+    # the named workspace the tab belongs to (NULL: the Default workspace — terminals from before named workspaces)
+    named_workspace_id: Mapped[str | None] = mapped_column(ForeignKey("named_workspaces.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 

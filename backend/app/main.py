@@ -96,6 +96,7 @@ async def bootstrap(request: Request, ctx: AppContext = Depends(require_auth)):
     return {
         "workspace": {"id": ctx.workspace_id, "root": str(ctx.documents.root), "name": next((w["name"] for w in ctx.workspaces.list() if w["id"] == ctx.workspace_id), ctx.documents.root.name) if ctx.workspaces else ctx.documents.root.name, "git": git},
         "workspaces": ctx.workspaces.list() if ctx.workspaces else [],
+        "named_workspaces": ctx.workspaces.named_list() if ctx.workspaces else {"workspaces": [], "current": ""},
         "default_provider": ctx.providers.default_provider(),
         "providers": caps,
         "terminals": ctx.terminals.list(),
@@ -192,6 +193,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ctx.jobs.documents = primary.docs
     tmux = Tmux(settings)
     ctx.terminals = terminal.TerminalManager(db, tmux, bus, primary.root)
+    ctx.terminals.scope = lambda: (reg.current, reg.current_is_default())
+
+    def _rewire(r: workspaces.WorkspaceRegistry) -> None:
+        """After switching named workspaces: process-wide defaults follow the new primary folder."""
+        p = r.primary
+        ctx.documents, ctx.locks, ctx.watcher = p.docs, p.locks, p.watcher
+        ctx.workspace_id, ctx.workspace_root = p.id, p.root
+        ctx.jobs.locks, ctx.jobs.documents, ctx.jobs.workspace = p.locks, p.docs, p.root
+        ctx.terminals.default_cwd = p.root
+
+    reg.on_switch = _rewire
     from .office import OfficeRenderer
 
     ctx.office = OfficeRenderer(settings)

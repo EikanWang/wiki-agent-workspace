@@ -74,6 +74,20 @@ export async function api<T>(method: string, path: string, body?: unknown, opts:
   return data as T;
 }
 
+/** A named set of folders (VS Code "workspace"); exactly one is current. */
+export interface NamedWorkspace {
+  id: string;
+  name: string;
+  current: boolean;
+  is_default: boolean;
+  folders: { id: string; name: string; root: string }[];
+  last_opened_at: string | null;
+}
+export interface NamedWorkspaceList {
+  workspaces: NamedWorkspace[];
+  current: string;
+}
+
 export const get = <T,>(path: string) => api<T>("GET", path);
 /** GET scoped to a specific root folder (e.g. the multi-root file tree loading a non-active root). */
 export const getIn = <T,>(workspace: string, path: string, opts: { timeoutMs?: number } = {}) => api<T>("GET", path, undefined, { workspace, ...opts });
@@ -133,6 +147,7 @@ export interface Bootstrap {
   default_provider: string | null;
   providers: Record<string, Capabilities>;
   terminals: TerminalInfo[];
+  named_workspaces?: NamedWorkspaceList;
   office_info?: { available: boolean; install_hint: string | null; max_bytes: number };
   terminal_info: { tmux_available: boolean; tmux_version: string | null; inner_term: string; locale_warning: string | null; history_limit: number; install_hint: string | null };
   settings: { codex_sandbox: string; opencode_mode: string; max_document_bytes: number; watcher_error: string | null };

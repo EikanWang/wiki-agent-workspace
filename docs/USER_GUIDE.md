@@ -13,7 +13,7 @@ Contents: [Window layout](#window-layout) · [Folders (multi-root)](#folders-mul
 ## Window layout
 
 ```
-┌ top bar: Files toggle · folder switcher · document session · Lock · Document | Terminal | Diff · Recent · Aa ┐
+┌ top bar: Files toggle · ▣ workspace ▾ · folder switcher · document session · Lock · Document | Terminal | Diff · Recent · Aa ┐
 ├ file tree (all folders) ┬ document / diff / terminal ───────────────────────┬ discussions panel ┤
 │ ＋ add folder  ↻ refresh │ tabs: guide.md × │ README.md × │ notes.md ×       │ Individual | Flat  │
 │                         │ header: path · format · branch · git status ·      │                    │
@@ -36,7 +36,9 @@ state. Nothing is shared between folders except your login, terminals and prefer
 
 - **Add a folder**: `＋` in the file-tree header opens a folder picker that browses the **server's** file system
   (where your wikis and agents live). Pick a folder (Git repositories are marked), optionally give it a display name,
-  **Add folder**. It persists across restarts.
+  **Add folder**. It persists across restarts. **＋ New folder** in the picker creates a folder in the one shown
+  (with **git init** ticked it becomes a Git repository, with a `.gitignore` for the app's temporary files) — handy
+  for starting a new wiki.
 - **Switch folder**: click any file in another folder's tree, use the folder selector in the top bar, or open an
   entry from *Recent*. The header, Diff, Commit, Review and the discussion panel always follow the active folder; the
   last document of each folder is remembered.
@@ -44,6 +46,32 @@ state. Nothing is shared between folders except your login, terminals and prefer
   same folder again and everything is back. Folders defined in `config.toml` can only be removed there.
 - A folder that disappeared from disk is shown as *missing*; restore it or remove it.
 - Folders can also be preconfigured: see `[[workspaces]]` in [CONFIGURATION.md](CONFIGURATION.md).
+
+### Workspaces (named sets of folders)
+
+Like VS Code windows: a **workspace** is a named set of folders with its own **document tabs** and **terminals**.
+The **▣ name ▾** menu in the top bar lists them:
+
+- **＋ New workspace…** asks for a name and its first folder (browse, or create one with **＋ New folder**);
+  *include this window's folders* starts from the current folders instead. The window switches to it.
+- Click a workspace to **switch**: the file tree, tabs and terminals change to that workspace's. Terminals of the
+  other workspaces keep running in tmux and are back when you switch back.
+- **✎** renames, **🗑** deletes a workspace (not the current one or *Default*). Deleting never touches folders or
+  their data; its terminal tabs move to *Default*.
+- Folders added (`＋`) or removed (`✕`) change the current workspace only.
+- *Default* holds the folders you had before workspaces existed and always contains the folders of `config.toml`;
+  in other workspaces those can be removed like any other folder.
+- A folder's discussions, sessions, history and Recent entries belong to the folder, so they are the same in every
+  workspace that shows it.
+- The current workspace is the server's: switching in one browser switches your other open browsers too (they
+  reload with a notice).
+
+### Creating files and folders
+
+Hover a folder (or a root folder) in the tree: **＋🗎** creates a file, **＋🗀** a folder, with a name box right
+in the tree (Enter creates, Esc cancels). A path such as `notes/2026/today.md` creates the folders on the way. A new
+Markdown or text file opens in the editor (a Markdown file starts with a heading from its name). Existing names,
+locked folders and paths through links that leave the folder are refused, with the reason under the name box.
 
 ## Reading documents
 

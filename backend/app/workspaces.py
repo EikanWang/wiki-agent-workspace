@@ -7,10 +7,16 @@ reviews, viewed marks) is keyed by that row's id, so roots never see each other'
 Roots come from the configuration (`[workspace] root` = the primary root, plus `[[workspaces]]` entries) and from the
 UI ("Add folder"), which persists them in the database. Removing a folder from the window only deactivates it; its
 data stays and comes back when the same folder is added again.
+
+Named workspaces (VS Code "workspaces", table `named_workspaces`) are named sets of folders; exactly one is current
+and decides which folders the window shows. "Default" is created from the folders open before named workspaces
+existed and always contains the folders defined in config.toml. Switching keeps the runtimes (and file watchers) of
+folders both workspaces share, stops the others and starts the new ones. Terminals belong to a named workspace.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -18,14 +24,14 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
 
-from .db import Database, utcnow
+from .db import Database, new_id, utcnow
 from .deps import AppContext, require_auth, require_auth_mutating
 from .documents import DocumentService
 from .errors import ApiError, bad_request, conflict, not_found
 from .events import EventBus
 from .gitinfo import git_info
 from .locks import LockService
-from .models import AgentSession, Document, Preview, Review, ReviewComment, Thread, Workspace
+from .models import AgentSession, Document, NamedWorkspace, Preview, Review, ReviewComment, Thread, Workspace
 from .watcher import WorkspaceWatcher
 
 log = logging.getLogger("waw.workspaces")
@@ -52,25 +58,93 @@ class WorkspaceRegistry:
         self.runtimes: dict[str, WorkspaceRuntime] = {}
         self.order: list[str] = []
         self.missing: list[dict[str, Any]] = []  # persisted roots whose folder no longer exists
+        self.current: str = ""  # id of the current named workspace
+        self.on_switch = None  # callback(registry) after the folders of the window changed (main.py rewires defaults)
 
     # ------------------------------------------------------------------ loading
-    def load(self) -> None:
-        roots: list[tuple[Path, str | None, bool]] = [(Path(self.settings.workspace_root), None, True)]
-        roots.extend((Path(str(w["root"])).expanduser(), w.get("name") or None, True)
+    def _config_roots(self) -> list[tuple[Path, str | None]]:
+        roots: list[tuple[Path, str | None]] = [(Path(self.settings.workspace_root), None)]
+        roots.extend((Path(str(w["root"])).expanduser(), w.get("name") or None)
                      for w in getattr(self.settings, "workspaces", []) or [] if w.get("root"))
-        for root, name, configured in roots:
-            self._open(root, name, configured=configured)
-        # folders added from the UI earlier
+        return roots
+
+    def load(self) -> None:
         with self.db.read() as s:
-            rows = s.query(Workspace).filter(Workspace.active.is_(True)).order_by(Workspace.position, Workspace.created_at).all()
-        for r in rows:
-            if r.id in self.runtimes:
+            named = s.query(NamedWorkspace).all()
+        if not named:
+            # first start with named workspaces: "Default" = what the window showed so far
+            for root, name in self._config_roots():
+                self._open(root, name, configured=True)
+            with self.db.read() as s:
+                rows = s.query(Workspace).filter(Workspace.active.is_(True)).order_by(Workspace.position, Workspace.created_at).all()
+            for r in rows:
+                if r.id not in self.runtimes:
+                    self._open_row(r)
+            with self.db.write() as s:
+                d = NamedWorkspace(id=new_id(), name="Default", is_default=True, current=True, last_opened_at=utcnow(),
+                                   folders=json.dumps(self.order + [m["id"] for m in self.missing]))
+                s.add(d)
+                self.current = d.id
+            return
+        cur = next((n for n in named if n.current), None) or next((n for n in named if n.is_default), None) or named[0]
+        self._load_named(cur)
+
+    def _open_row(self, r: Workspace) -> WorkspaceRuntime | None:
+        if not Path(r.root_path).is_dir():
+            self.missing.append({"id": r.id, "name": r.name or Path(r.root_path).name, "root": r.root_path})
+            log.warning("workspace folder %s no longer exists; skipped (remove it in the UI or restore the folder)", r.root_path)
+            return None
+        return self._open(Path(r.root_path), r.name, configured=False)
+
+    def _load_named(self, nw: NamedWorkspace, keep: dict[str, WorkspaceRuntime] | None = None) -> None:
+        """Make `nw` the window's folders. `keep`: runtimes already running that may be reused."""
+        self.runtimes, self.order, self.missing = dict(keep or {}), [], []
+        reuse = dict(self.runtimes)
+        self.runtimes = {}
+        ids: list[str] = json.loads(nw.folders or "[]")
+        with self.db.read() as s:
+            rows = {r.id: r for r in s.query(Workspace).filter(Workspace.id.in_(ids)).all()} if ids else {}
+
+        def add(rt: WorkspaceRuntime) -> None:
+            if rt.id not in self.runtimes:
+                self.runtimes[rt.id] = rt
+                self.order.append(rt.id)
+
+        if nw.is_default:  # the folders of config.toml are always part of Default
+            for root, name in self._config_roots():
+                r = next((x for x in reuse.values() if x.root == root.resolve()), None)
+                if r is not None:
+                    r.configured = True
+                    add(r)
+                else:
+                    self._open(root, name, configured=True)
+        for i in ids:
+            if i in self.runtimes:
                 continue
-            if not Path(r.root_path).is_dir():
-                self.missing.append({"id": r.id, "name": r.name or Path(r.root_path).name, "root": r.root_path})
-                log.warning("workspace folder %s no longer exists; skipped (remove it in the UI or restore the folder)", r.root_path)
-                continue
-            self._open(Path(r.root_path), r.name, configured=False)
+            if i in reuse:
+                reuse[i].configured = reuse[i].configured and bool(nw.is_default)
+                add(reuse[i])
+            elif i in rows:
+                self._open_row(rows[i])
+        if not self.order:
+            # a window needs a folder: fall back to the primary folder of config.toml
+            self._open(Path(self.settings.workspace_root), None, configured=False)
+        for rt in self.runtimes.values():
+            if not nw.is_default:
+                rt.configured = False
+        with self.db.write() as s:
+            for row in s.query(Workspace).all():
+                row.active = row.id in self.runtimes
+                if row.id in self.order:
+                    row.position = self.order.index(row.id)
+        self.current = nw.id
+
+    def _save_folders(self) -> None:
+        """Remember the window's folders (in tree order, unavailable ones too) in the current named workspace."""
+        with self.db.write() as s:
+            nw = s.get(NamedWorkspace, self.current)
+            if nw is not None:
+                nw.folders = json.dumps(self.order + [m["id"] for m in self.missing])
 
     def _open(self, root: Path, name: str | None, *, configured: bool) -> WorkspaceRuntime:
         resolved = root.resolve()
@@ -175,6 +249,7 @@ class WorkspaceRegistry:
                 row.name = name or row.name or rt.root.name
         rt.watcher.start()
         self.missing = [m for m in self.missing if m["id"] != rt.id]
+        self._save_folders()
         self.bus.publish("global", {"type": "workspaces_changed"})
         return rt
 
@@ -186,6 +261,7 @@ class WorkspaceRegistry:
                 if row is not None:
                     row.active = False
             self.missing.remove(missing)
+            self._save_folders()
             return {"id": workspace_id, "removed": True}
         rt = self.get(workspace_id)
         if rt.configured:
@@ -199,6 +275,7 @@ class WorkspaceRegistry:
             row = s.get(Workspace, workspace_id)
             if row is not None:
                 row.active = False
+        self._save_folders()
         self.bus.publish("global", {"type": "workspaces_changed"})
         return {"id": workspace_id, "removed": True, "data_kept": True}
 
@@ -225,6 +302,122 @@ class WorkspaceRegistry:
         out = [self.describe(self.runtimes[i]) for i in self.order]
         out += [{**m, "primary": False, "configured": False, "available": False, "git": None, "watcher": None} for m in self.missing]
         return out
+
+    # ------------------------------------------------------------------ named workspaces
+    def named_list(self) -> dict[str, Any]:
+        with self.db.read() as s:
+            rows = s.query(NamedWorkspace).order_by(NamedWorkspace.is_default.desc(), NamedWorkspace.created_at).all()
+            folders = {w.id: w for w in s.query(Workspace).all()}
+        out = []
+        for n in rows:
+            ids = json.loads(n.folders or "[]")
+            out.append({
+                "id": n.id, "name": n.name, "current": n.id == self.current, "is_default": n.is_default,
+                "folders": [{"id": i, "name": (folders[i].name or Path(folders[i].root_path).name), "root": folders[i].root_path}
+                            for i in ids if i in folders],
+                "last_opened_at": n.last_opened_at.isoformat() if n.last_opened_at else None,
+            })
+        return {"workspaces": out, "current": self.current}
+
+    def _folder_row(self, root: str) -> str:
+        """Id of the folder row for an absolute server path (created if new), without opening it."""
+        p = Path(root).expanduser()
+        if not p.is_absolute():
+            raise bad_request("give an absolute path on the server (e.g. /home/me/other-wiki)", "INVALID_PATH")
+        if not p.is_dir():
+            raise not_found(f"{p} is not a directory on the server", "FOLDER_NOT_FOUND")
+        resolved = str(p.resolve())
+        with self.db.write() as s:
+            row = s.query(Workspace).filter_by(root_path=resolved).one_or_none()
+            if row is None:
+                row = Workspace(id=new_id(), root_path=resolved, active=False, name=p.resolve().name)
+                s.add(row)
+            return row.id
+
+    async def switch(self, named_id: str) -> dict[str, Any]:
+        with self.db.read() as s:
+            nw = s.get(NamedWorkspace, named_id)
+        if nw is None:
+            raise not_found("unknown workspace", "NAMED_WORKSPACE_NOT_FOUND")
+        if named_id != self.current:
+            target = set(json.loads(nw.folders or "[]"))
+            if nw.is_default:
+                target |= {rt.id for rt in self.runtimes.values() if rt.root in {r.resolve() for r, _ in self._config_roots()}}
+            keep = {i: rt for i, rt in self.runtimes.items() if i in target}
+            for i, rt in list(self.runtimes.items()):
+                if i not in keep:
+                    await rt.watcher.stop()
+            self._load_named(nw, keep)
+            for i in self.order:
+                if i not in keep:
+                    self.runtimes[i].watcher.start()
+            with self.db.write() as s:
+                for row in s.query(NamedWorkspace).all():
+                    row.current = row.id == named_id
+                    if row.id == named_id:
+                        row.last_opened_at = utcnow()
+            self._save_folders()
+            if self.on_switch:
+                self.on_switch(self)
+            log.info("switched to workspace %s (%d folders)", nw.name, len(self.order))
+            self.bus.publish("global", {"type": "named_workspace_changed", "id": named_id})
+            self.bus.publish("global", {"type": "workspaces_changed"})
+        return self.named_list()
+
+    async def create_named(self, name: str, root: str | None, copy_current: bool) -> dict[str, Any]:
+        """New named workspace with a first folder (or the current window's folders) and switch to it."""
+        ids: list[str] = []
+        if copy_current:
+            ids = list(self.order) + [m["id"] for m in self.missing]
+        if root:
+            fid = self._folder_row(root)
+            if fid not in ids:
+                ids.append(fid)
+        if not ids:
+            raise bad_request("choose a folder for the new workspace", "NO_FOLDER")
+        with self.db.write() as s:
+            if s.query(NamedWorkspace).filter_by(name=name).first() is not None:
+                raise conflict("NAME_TAKEN", f"a workspace named {name!r} already exists")
+            nw = NamedWorkspace(id=new_id(), name=name, folders=json.dumps(ids))
+            s.add(nw)
+            nid = nw.id
+        return await self.switch(nid)
+
+    def rename_named(self, named_id: str, name: str) -> dict[str, Any]:
+        with self.db.write() as s:
+            nw = s.get(NamedWorkspace, named_id)
+            if nw is None:
+                raise not_found("unknown workspace", "NAMED_WORKSPACE_NOT_FOUND")
+            other = s.query(NamedWorkspace).filter(NamedWorkspace.name == name, NamedWorkspace.id != named_id).first()
+            if other is not None:
+                raise conflict("NAME_TAKEN", f"a workspace named {name!r} already exists")
+            nw.name = name
+        self.bus.publish("global", {"type": "named_workspaces_changed"})
+        return self.named_list()
+
+    def delete_named(self, named_id: str) -> dict[str, Any]:
+        """Delete a named workspace (not the current one, not Default). Its folders and their data are untouched;
+        its terminal tabs move to Default (their shells keep running)."""
+        from .models import Terminal
+
+        with self.db.write() as s:
+            nw = s.get(NamedWorkspace, named_id)
+            if nw is None:
+                raise not_found("unknown workspace", "NAMED_WORKSPACE_NOT_FOUND")
+            if nw.is_default:
+                raise conflict("DEFAULT_WORKSPACE", "the Default workspace cannot be deleted")
+            if named_id == self.current:
+                raise conflict("CURRENT_WORKSPACE", "switch to another workspace before deleting this one")
+            for t in s.query(Terminal).filter_by(named_workspace_id=named_id).all():
+                t.named_workspace_id = None
+            s.delete(nw)
+        self.bus.publish("global", {"type": "named_workspaces_changed"})
+        return self.named_list()
+
+    def current_is_default(self) -> bool:
+        with self.db.read() as s:
+            nw = s.get(NamedWorkspace, self.current)
+            return bool(nw and nw.is_default)
 
 
 # ---------------------------------------------------------------------- routes
@@ -267,6 +460,41 @@ async def remove_workspace(workspace_id: str, ctx: AppContext = Depends(require_
     return await _reg(ctx).remove(workspace_id)
 
 
+class NamedCreateIn(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    root: str | None = Field(None, max_length=4096)  # first folder (absolute server path)
+    copy_current: bool = False  # start with the folders of the current window
+
+
+class NamedRenameIn(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+
+
+@router.get("/named-workspaces")
+def list_named(ctx: AppContext = Depends(require_auth)):
+    return _reg(ctx).named_list()
+
+
+@router.post("/named-workspaces", status_code=201)
+async def create_named(body: NamedCreateIn, ctx: AppContext = Depends(require_auth_mutating)):
+    return await _reg(ctx).create_named(body.name.strip(), body.root, body.copy_current)
+
+
+@router.post("/named-workspaces/{named_id}/open")
+async def open_named(named_id: str, ctx: AppContext = Depends(require_auth_mutating)):
+    return await _reg(ctx).switch(named_id)
+
+
+@router.patch("/named-workspaces/{named_id}")
+def rename_named(named_id: str, body: NamedRenameIn, ctx: AppContext = Depends(require_auth_mutating)):
+    return _reg(ctx).rename_named(named_id, body.name.strip())
+
+
+@router.delete("/named-workspaces/{named_id}")
+def delete_named(named_id: str, ctx: AppContext = Depends(require_auth_mutating)):
+    return _reg(ctx).delete_named(named_id)
+
+
 @router.get("/fs/dirs")
 def list_server_dirs(path: str = Query("~"), hidden: bool = Query(False), ctx: AppContext = Depends(require_auth)):
     """Folder picker for "Add folder": subdirectories of an absolute server path. The authenticated user already
@@ -297,3 +525,41 @@ def list_server_dirs(path: str = Query("~"), hidden: bool = Query(False), ctx: A
     reg = _reg(ctx)
     return {"path": str(p), "parent": str(p.parent) if p.parent != p else None, "is_git": (p / ".git").exists(),
             "open_as": next((rt.id for rt in reg.runtimes.values() if rt.root == p), None), "entries": entries, "listed_at": utcnow().isoformat()}
+
+
+class MkdirIn(BaseModel):
+    parent: str = Field(min_length=1, max_length=4096)
+    name: str = Field(min_length=1, max_length=255)
+    git: bool = False
+
+
+@router.post("/fs/mkdir", status_code=201)
+def make_server_dir(body: MkdirIn, ctx: AppContext = Depends(require_auth_mutating)):
+    """"New folder" in the folder picker: create a directory on the server (optionally a Git repository), e.g. for a
+    new wiki. Like the picker itself this needs nothing the logged-in user's shell could not do already."""
+    import subprocess
+
+    name = body.name.strip()
+    if not name or name in (".", "..") or "/" in name or "\x00" in name:
+        raise bad_request("a folder name, without slashes", "INVALID_NAME")
+    parent = Path(body.parent).expanduser()
+    if not parent.is_absolute():
+        raise bad_request("absolute path required", "INVALID_PATH")
+    if not parent.is_dir():
+        raise not_found(f"{parent} is not a directory on the server", "FOLDER_NOT_FOUND")
+    target = parent / name
+    if target.exists() or target.is_symlink():
+        raise conflict("ALREADY_EXISTS", f"{target} already exists", path=str(target))
+    try:
+        target.mkdir()
+    except PermissionError:
+        raise ApiError(403, "PERMISSION_DENIED", f"cannot create a folder in {parent}")
+    git_error = None
+    if body.git:
+        p = subprocess.run(["git", "init", "-q"], cwd=target, capture_output=True, text=True, timeout=30, check=False)
+        if p.returncode != 0:
+            git_error = (p.stderr or p.stdout).strip()[:300] or "git init failed"
+        else:
+            (target / ".gitignore").write_text(".waw-tmp-*\n")  # the app's atomic-write temporaries
+    return {"path": str(target.resolve()), "is_git": (target / ".git").exists(), "git_error": git_error}
+

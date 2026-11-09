@@ -1289,7 +1289,7 @@ test("startup: no FILE_NOT_FOUND from stale remembered documents (old folder-les
     // what an old build left behind: a path without a folder (from another wiki), and documents since deleted
     localStorage.setItem("waw.lastPath", "wiki/concepts/only-in-another-wiki.md");
     localStorage.setItem(`waw.lastPath.${id}`, "docs/soon-gone.md");
-    localStorage.setItem("waw.docTabs", JSON.stringify([{ ws: id, path: "docs/soon-gone.md" }, { ws: id, path: "README.md" }]));
+    localStorage.setItem(`waw.docTabs.${localStorage.getItem("waw.namedWorkspace") ?? ""}`, JSON.stringify([{ ws: id, path: "docs/soon-gone.md" }, { ws: id, path: "README.md" }]));
   }, { id: wsId });
   fs.unlinkSync(path.join(ws, "docs", "soon-gone.md"));
   const opened: string[] = [];
@@ -1307,7 +1307,7 @@ test("startup: no FILE_NOT_FOUND from stale remembered documents (old folder-les
   // nothing left to restore: the start page, still no error
   await page.evaluate(({ id }) => {
     localStorage.setItem(`waw.lastPath.${id}`, "docs/also-gone.md");
-    localStorage.setItem("waw.docTabs", "[]");
+    localStorage.setItem(`waw.docTabs.${localStorage.getItem("waw.namedWorkspace") ?? ""}`, "[]");
   }, { id: wsId });
   await page.reload();
   await expect(page.getByText("Open a Markdown file")).toBeVisible({ timeout: 10000 });
@@ -1399,5 +1399,118 @@ make_vsdx(Path(${JSON.stringify(path.join(ws, "docs", "flow.vsdx"))}))
     await expect(page.getByTestId("selection-quote")).toHaveText("Grouped A");
   } finally {
     fs.rmSync(path.join(ws, "docs", "flow.vsdx"), { force: true });
+  }
+});
+
+test("file tree: New file opens it in the editor, New folder, errors shown inline", async ({ page }) => {
+  await login(page);
+  const ws = workspaceDir();
+  try {
+    const root = page.getByTestId("tree-root").first();
+    await root.locator(".tree-root").hover();
+    await page.getByTestId("tree-new-file-root").click();
+    const name = page.getByTestId("tree-new-name");
+    await name.fill("drafts/idea.md"); // missing folders are created
+    await name.press("Enter");
+    await expect(page.getByTestId("editor-text")).toHaveValue("# idea\n", { timeout: 10000 }); // straight into the editor
+    expect(fs.readFileSync(path.join(ws, "drafts", "idea.md"), "utf-8")).toBe("# idea\n");
+    await expect(page.getByTestId("tree-file-drafts/idea.md")).toBeVisible();
+    await expect(page.locator('[data-testid="doc-tab"][data-path="drafts/idea.md"]')).toHaveAttribute("aria-selected", "true");
+    await page.keyboard.press("Escape"); // leave the editor
+    // New folder inside a folder
+    const row = root.locator(".tree-row.dir", { hasText: "drafts" }).first();
+    await row.hover();
+    await page.getByTestId("tree-new-dir-drafts").click();
+    await page.getByTestId("tree-new-name").fill("assets");
+    await page.getByTestId("tree-new-name").press("Enter");
+    await expect.poll(() => fs.existsSync(path.join(ws, "drafts", "assets"))).toBe(true);
+    await expect(root.locator(".tree-row.dir", { hasText: "assets" })).toBeVisible();
+    // an existing name: the error shows under the box, nothing is overwritten
+    await row.hover();
+    await page.getByTestId("tree-new-file-drafts").click();
+    await page.getByTestId("tree-new-name").fill("idea.md");
+    await page.getByTestId("tree-new-name").press("Enter");
+    await expect(page.getByTestId("tree-new-error")).toContainText("already exists");
+    await page.getByTestId("tree-new-name").press("Escape");
+    await expect(page.getByTestId("tree-new")).toHaveCount(0);
+    expect(fs.readFileSync(path.join(ws, "drafts", "idea.md"), "utf-8")).toBe("# idea\n");
+  } finally {
+    fs.rmSync(path.join(ws, "drafts"), { recursive: true, force: true });
+  }
+});
+
+test("folder picker: New folder creates a directory (with git init) on the server and selects it", async ({ page }) => {
+  await login(page);
+  const parent = path.dirname(workspaceDir());
+  const target = path.join(parent, "fresh-wiki");
+  fs.rmSync(target, { recursive: true, force: true });
+  try {
+    await page.getByTestId("tree-add-folder").click();
+    await page.getByTestId("add-folder-path").fill(parent);
+    await page.getByTestId("add-folder-path").press("Enter");
+    await expect(page.getByTestId("add-folder-selected")).toContainText(parent);
+    await page.getByTestId("add-folder-newdir").click();
+    await page.getByTestId("add-folder-newdir-name").fill("fresh-wiki");
+    await page.getByTestId("add-folder-newdir-create").click();
+    await expect(page.getByTestId("add-folder-selected")).toContainText(target);
+    await expect(page.getByTestId("add-folder-selected")).toContainText("· Git repository");
+    expect(fs.existsSync(path.join(target, ".git"))).toBe(true);
+    await page.locator(".modal-head .icon-btn").click();
+  } finally {
+    fs.rmSync(target, { recursive: true, force: true });
+  }
+});
+
+test("named workspaces: create one (its own folders, tabs, terminals), switch back, rename, delete", async ({ page }) => {
+  await login(page);
+  const parent = path.dirname(workspaceDir());
+  const other = path.join(parent, "ws-only-wiki");
+  fs.rmSync(other, { recursive: true, force: true });
+  fs.mkdirSync(other, { recursive: true });
+  fs.writeFileSync(path.join(other, "only.md"), "# Only here\n");
+  const menu = page.getByTestId("ws-menu");
+  try {
+    await expect(menu).toContainText("Default");
+    const defaultTerminals = await (await page.request.get("/api/v1/terminals")).json();
+    // New workspace: name + first folder
+    await menu.click();
+    await page.getByTestId("ws-menu-new").click();
+    await page.getByTestId("new-workspace-name").fill("Side project");
+    await page.getByTestId("add-folder-path").fill(other);
+    await page.getByTestId("add-folder-path").press("Enter");
+    await expect(page.getByTestId("add-folder-selected")).toContainText(other);
+    await page.getByTestId("new-workspace-submit").click();
+    // the page reloads into the new workspace: only its folder, no terminals, no tabs from Default
+    await expect(menu).toContainText("Side project", { timeout: 15000 });
+    await expect(page.getByTestId("tree-root")).toHaveCount(1);
+    await expect(page.getByTestId("tree-file-only.md")).toBeVisible();
+    expect((await (await page.request.get("/api/v1/terminals")).json()).terminals).toEqual([]);
+    await expect(page.getByTestId("doc-tab")).toHaveCount(0);
+    await page.getByTestId("tree-file-only.md").locator("button.tree-main").click();
+    await expect(page.locator('[data-testid="doc-tab"][data-path="only.md"]')).toBeVisible();
+    // back to Default: its folders, terminals and tabs come back; this workspace's tab stays with it
+    await menu.click();
+    await page.locator('[data-testid="ws-menu-item"][data-name="Default"] .ws-menu-main').click();
+    await expect(menu).toContainText("Default", { timeout: 15000 });
+    await expect(page.getByTestId("tree-file-docs/guide.md").or(page.locator(".tree-row.dir", { hasText: "docs" })).first()).toBeVisible();
+    await expect(page.locator('[data-testid="doc-tab"][data-path="only.md"]')).toHaveCount(0);
+    expect((await (await page.request.get("/api/v1/terminals")).json()).terminals.length).toBe(defaultTerminals.terminals.length);
+    // rename and delete it from the menu
+    await menu.click();
+    page.once("dialog", (d) => d.accept("Side project 2"));
+    await page.locator('[data-testid="ws-menu-item"][data-name="Side project"] [data-testid="ws-menu-rename"]').click();
+    await expect(page.locator('[data-testid="ws-menu-item"][data-name="Side project 2"]')).toBeVisible();
+    page.once("dialog", (d) => d.accept());
+    await page.locator('[data-testid="ws-menu-item"][data-name="Side project 2"] [data-testid="ws-menu-delete"]').click();
+    await expect(page.getByTestId("ws-menu-item")).toHaveCount(1);
+  } finally {
+    // leave the shared test server in Default for the other tests
+    const named = await (await page.request.get("/api/v1/named-workspaces")).json();
+    const def = named.workspaces.find((w: any) => w.is_default);
+    if (named.current !== def.id) await page.evaluate(async (id) => {
+      const csrf = (await (await fetch("/api/v1/bootstrap")).json()).csrf_token;
+      await fetch(`/api/v1/named-workspaces/${id}/open`, { method: "POST", headers: { "X-CSRF-Token": csrf, "Content-Type": "application/json" }, body: "{}" });
+    }, def.id);
+    fs.rmSync(other, { recursive: true, force: true });
   }
 });

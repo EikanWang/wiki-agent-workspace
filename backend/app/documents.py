@@ -682,6 +682,36 @@ class DocumentService:
         return {"document_id": doc_id, "path": norm, "sha256": sha}
 
     # ------------------------------------------------------------------ writes (preview apply)
+    def create_entry(self, rel: str, kind: str) -> dict[str, Any]:
+        """New file or folder (VS Code's New File / New Folder). Missing parent folders are created ("notes/a.md").
+        Refuses existing paths, locked folders, `.git` and app-internal names, and paths through symlinks that leave
+        the folder. A new Markdown file starts with a heading made from its name; other files start empty."""
+        norm = self.normalize_rel(rel)
+        if not norm:
+            raise bad_request("give a name", "INVALID_PATH")
+        for part in norm.split("/"):
+            if part in EXCLUDED_DIRS or part.startswith(".waw") or "\x00" in part or len(part.encode()) > 255 or part != part.strip():
+                raise bad_request(f"invalid name: {part!r}", "INVALID_NAME")
+        if kind not in ("file", "dir"):
+            raise bad_request("kind must be file or dir", "INVALID_KIND")
+        if self.locks is not None:
+            self.locks.assert_writable(norm, "creating")
+        _, path = self.resolve(norm, must_exist=False, for_write=True)  # refuses symlinks that leave the folder
+        if path.exists() or path.is_symlink():
+            raise conflict("ALREADY_EXISTS", f"{norm} already exists", path=norm)
+        parent = path.parent
+        if parent.exists() and not parent.is_dir():
+            raise bad_request(f"{parent.relative_to(self.root).as_posix()} is a file, not a folder", "NOT_A_DIRECTORY")
+        if kind == "dir":
+            path.mkdir(parents=True)
+        else:
+            parent.mkdir(parents=True, exist_ok=True)
+            content = f"# {Path(norm).stem}\n" if Path(norm).suffix.lower() in (".md", ".markdown") else ""
+            with open(path, "x", encoding="utf-8") as fh:  # "x": never overwrite, even in a race
+                fh.write(content)
+        return {"path": norm, "kind": kind, "format": document_format(path.name) if kind == "file" else None,
+                "openable": kind == "file" and document_format(path.name) != "unsupported"}
+
     def write_atomic(self, rel: str, data: bytes) -> str:
         if self.locks is not None:
             self.locks.assert_writable(self.normalize_rel(rel), "writing")
@@ -809,6 +839,20 @@ def _office_file(ctx: AppContext, path: str) -> tuple[str, Path]:
     if ctx.office is None:
         raise ApiError(503, "OFFICE_UNAVAILABLE", "the layout renderer is not set up")
     return norm, p
+
+
+class CreateEntryIn(BaseModel):
+    path: str = Field(min_length=1, max_length=4096)
+    kind: str = Field("file", pattern="^(file|dir)$")
+
+
+@router.post("/files", status_code=201)
+def create_entry(body: CreateEntryIn, ctx: AppContext = Depends(require_auth_mutating)):
+    """New file or folder in the folder the request is scoped to."""
+    out = _svc(ctx).create_entry(body.path, body.kind)
+    parent = out["path"].rsplit("/", 1)[0] if "/" in out["path"] else ""
+    ctx.events.publish("global", {"type": "tree_changed", "workspace_id": ctx.workspace_id, "dirs": [parent]})
+    return out
 
 
 @router.get("/office/render")

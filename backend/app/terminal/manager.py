@@ -50,6 +50,19 @@ class TerminalManager:
         self.bus = bus
         self.default_cwd = default_cwd
         self.clients: dict[str, int] = {}
+        # (current named workspace id, whether it is Default): tabs are listed and created per named workspace
+        self.scope = lambda: ("", True)
+
+    def _in_scope(self, q):
+        """Only the current named workspace's tabs; NULL = Default (tabs from before named workspaces)."""
+        from sqlalchemy import or_
+
+        nid, is_default = self.scope()
+        if not nid:
+            return q
+        if is_default:
+            return q.filter(or_(Terminal.named_workspace_id == nid, Terminal.named_workspace_id.is_(None)))
+        return q.filter(Terminal.named_workspace_id == nid)
 
     # ------------------------------------------------------------------ discovery
     def reconcile(self) -> dict[str, Any]:
@@ -102,7 +115,7 @@ class TerminalManager:
     def list(self) -> list[dict[str, Any]]:
         self.refresh_states()
         with self.db.read() as s:
-            rows = s.query(Terminal).filter(Terminal.state != "closed").order_by(Terminal.tab_order, Terminal.created_at).all()
+            rows = self._in_scope(s.query(Terminal).filter(Terminal.state != "closed")).order_by(Terminal.tab_order, Terminal.created_at).all()
             return [terminal_dict(t) for t in rows]
 
     def create(self, cwd: str | None, label: str | None) -> dict[str, Any]:
@@ -121,10 +134,11 @@ class TerminalManager:
             raise ApiError(503, "TMUX_ERROR", str(exc))
         with self.db.write() as s:
             # closed rows are kept (hidden) for history: number and place new tabs among the visible ones only
-            shown = s.query(Terminal).filter(Terminal.state != "closed").all()
+            shown = self._in_scope(s.query(Terminal).filter(Terminal.state != "closed")).all()
             order = max([t.tab_order for t in shown], default=-1) + 1
+            nid, _ = self.scope()
             t = Terminal(id=tid, tmux_session=name, label=label or default_label(t.label for t in shown), cwd=str(start),
-                         tab_order=order, state="live")
+                         tab_order=order, state="live", named_workspace_id=nid or None)
             s.add(t)
             s.flush()
             d = terminal_dict(t)
