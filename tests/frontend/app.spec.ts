@@ -1545,3 +1545,25 @@ test("discussions: ask about the whole document (Markdown and PDF), not only a s
     fs.rmSync(path.join(ws, "docs", "whole.pdf"), { force: true });
   }
 });
+
+test("login page: Sign in with GitHub (allowed account), refused account and cancel are explained", async ({ page, context }) => {
+  await page.goto("/");
+  await expect(page.getByTestId("login-github")).toBeVisible();
+  await expect(page.getByTestId("login-token")).toBeVisible(); // the token stays available
+  // an account that is not allowed
+  await context.addCookies([{ name: "fake_gh_user", value: "someone-else", url: "http://127.0.0.1:8799" }]);
+  await page.getByTestId("login-github").click();
+  await expect(page.locator(".login-card [role=alert]")).toContainText("not allowed");
+  expect(page.url()).not.toContain("login_error"); // address bar cleaned
+  // cancelled on GitHub
+  await context.addCookies([{ name: "fake_gh_cancel", value: "1", url: "http://127.0.0.1:8799" }]);
+  await page.getByTestId("login-github").click();
+  await expect(page.locator(".login-card [role=alert]")).toContainText("cancelled");
+  // the allowed account: straight into the app, named on the Sign out button
+  await context.clearCookies();
+  await page.getByTestId("login-github").click();
+  await expect(page.getByTestId("view-document")).toBeVisible({ timeout: 15000 });
+  await expect(page.getByTestId("sign-out")).toHaveText("Sign out e2e-user");
+  await page.getByTestId("sign-out").click();
+  await expect(page.getByTestId("login-github")).toBeVisible();
+});

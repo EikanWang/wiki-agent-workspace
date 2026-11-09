@@ -148,6 +148,8 @@ export interface Bootstrap {
   providers: Record<string, Capabilities>;
   terminals: TerminalInfo[];
   named_workspaces?: NamedWorkspaceList;
+  /** who is signed in: "token" or "github:<login>" (null for logins from before this was recorded) */
+  identity?: string | null;
   office_info?: { available: boolean; install_hint: string | null; max_bytes: number };
   terminal_info: { tmux_available: boolean; tmux_version: string | null; inner_term: string; locale_warning: string | null; history_limit: number; install_hint: string | null };
   settings: { codex_sandbox: string; opencode_mode: string; max_document_bytes: number; watcher_error: string | null };

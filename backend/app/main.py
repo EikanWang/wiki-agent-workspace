@@ -110,6 +110,7 @@ async def bootstrap(request: Request, ctx: AppContext = Depends(require_auth)):
         },
         "watcher": ctx.watcher.status() if ctx.watcher else None,
         "csrf_token": ctx.auth.csrf_token_for_request(request),
+        "identity": ctx.auth.identity_for_request(request),
         "default_provider_warning": (None if ctx.providers.default_provider() else
                                      "No agent provider detected (opencode/codex). Reader and terminal work; set agents.default_provider in the config file to enable discussions."),
     }
@@ -244,6 +245,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     api = APIRouter(prefix="/api/v1")
     api.include_router(core)
+    from . import github_auth
+
+    api.include_router(github_auth.router)
     api.include_router(documents.router)
     api.include_router(annotations.router)
     api.include_router(sessions.router)

@@ -37,12 +37,18 @@ def test_every_config_key_is_documented():
             else:
                 yield prefix + k, k
 
+    def tables(d):
+        for k, v in d.items():
+            if isinstance(v, dict):
+                yield k
+                yield from tables(v)
+
     missing = [full for full, leaf in keys(example) if f"`{leaf}`" not in conf_doc]
     assert not missing, "config keys missing from docs/CONFIGURATION.md: " + ", ".join(missing)
     # keys used by the loader must appear in the example file too
     loader = (ROOT / "backend" / "app" / "config.py").read_text("utf-8")
-    used = set(re.findall(r'(?:server|ws|term|auth|agents)\.get\("([a-z_]+)"', loader))
-    example_leaves = {leaf for _, leaf in keys(example)} | {"opencode", "codex"}
+    used = set(re.findall(r'(?:server|ws|term|auth|agents|office|gh)\.get\("([a-z_]+)"', loader))
+    example_leaves = {leaf for _, leaf in keys(example)} | set(tables(example))
     unknown = sorted(k for k in used if k not in example_leaves)
     assert not unknown, "config keys read by config.py but absent from config.example.toml: " + ", ".join(unknown)
 

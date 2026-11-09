@@ -558,3 +558,8 @@ mark.waw-hl.review.needs_review { border-bottom: 2px dashed var(--warn); }
 .tree-action.new-entry { font-weight: 400; font-size: 13px; }
 .tree-root .hover-only-group { display: none; }
 .tree-root:hover .hover-only-group, .tree-root:focus-within .hover-only-group { display: inline-flex; }
+/* login: Sign in with GitHub */
+.github-btn { display: flex; align-items: center; justify-content: center; gap: 8px; background: #24292f; color: #fff; border-color: #24292f; font-weight: 600; text-decoration: none; padding: 9px 12px; }
+.github-btn:hover { background: #32383f; border-color: #32383f; color: #fff; }
+.login-or { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; }
+.login-or::before, .login-or::after { content: ""; flex: 1; height: 1px; background: var(--border); }

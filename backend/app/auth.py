@@ -47,12 +47,12 @@ class AuthManager:
         return bool(expected) and hmac.compare_digest(token.encode("utf-8"), expected.encode("utf-8"))
 
     # ------------------------------------------------------------------ login
-    def create_login(self, response: Response, request: Request) -> tuple[str, str]:
+    def create_login(self, response: Response, request: Request, identity: str = "token") -> tuple[str, str]:
         raw = secrets.token_urlsafe(32)
         csrf = self.csrf_for_cookie(raw)
         expires = utcnow() + timedelta(days=self.settings.session_days)
         with self.db.write() as s:
-            s.add(LoginSession(id=new_id(), token_hash=sha256_hex(raw), csrf_hash=sha256_hex(csrf), expires_at=expires))
+            s.add(LoginSession(id=new_id(), token_hash=sha256_hex(raw), csrf_hash=sha256_hex(csrf), identity=identity, expires_at=expires))
         self._set_cookie(response, raw, request)
         return csrf, expires.isoformat().replace("+00:00", "Z")
 
@@ -221,6 +221,10 @@ class AuthManager:
                 if hmac.compare_digest(sha256_hex(token), row.csrf_hash):
                     return p
         raise forbidden("WebSocket CSRF subprotocol missing or invalid", "CSRF_INVALID")
+
+    def identity_for_request(self, request: Request) -> str | None:
+        row = self._lookup(request.cookies.get(COOKIE_NAME))
+        return row.identity if row else None
 
     def login_id_for_request(self, request: Request) -> str:
         raw = request.cookies.get(COOKIE_NAME)

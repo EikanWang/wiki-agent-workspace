@@ -10,6 +10,13 @@ Contents: [Window layout](#window-layout) · [Folders (multi-root)](#folders-mul
 [Reviews](#reviews-stash-then-submit) · [Committing, pushing, pull requests](#committing-pushing-pull-requests) ·
 [Recent work](#recent-work) · [Terminal](#terminal) · [Keyboard](#keyboard) · [Mobile](#mobile)
 
+## Signing in
+
+Open the app and enter the access token, or click **Sign in with GitHub** if the server has it set up
+(CONFIGURATION.md, `[auth.github]`): only the GitHub accounts the owner listed are let in. A login lasts 30 days;
+**Sign out** (top right; it shows your GitHub name) ends it. Pushes and pull requests always use the server's own
+Git/GitHub credentials, whoever is signed in.
+
 ## Window layout
 
 ```

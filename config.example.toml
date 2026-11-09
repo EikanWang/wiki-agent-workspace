@@ -32,6 +32,22 @@ shell = ""                  # shell for new terminals; empty = $SHELL
 access_token = ""
 server_secret = ""
 
+[auth.github]
+# "Sign in with GitHub" (optional): a GitHub OAuth app's client id/secret and the accounts allowed to sign in.
+# Off while any of the three is empty. The secret may come from WAW_GITHUB_CLIENT_SECRET instead.
+client_id = ""
+client_secret = ""
+allowed_users = []           # e.g. ["EikanWang"]
+callback_url = ""            # empty: the address the browser used + /api/v1/auth/github/callback
+
+[office]
+# Layout view of Word / PowerPoint / Visio files (LibreOffice).
+soffice = ""                 # empty: found on PATH
+max_parallel = 2
+timeout = 180
+max_bytes = 209715200
+cache_mb = 2048
+
 [agents]
 default_provider = "opencode"   # or "codex"; detected automatically at setup when empty
 

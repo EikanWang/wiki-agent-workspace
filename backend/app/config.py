@@ -57,6 +57,14 @@ class Settings:
     gateway_auth: bool = False       # explicitly configured already-authenticated gateway
     gateway_user_header: str = ""     # header the gateway sets, required when gateway_auth
     max_document_bytes: int = 20 * 1024 * 1024
+    # [auth.github] — "Sign in with GitHub" (OAuth app); enabled when client id, secret and allowed users are set
+    github_client_id: str = ""
+    github_client_secret: str = ""
+    github_allowed_users: list[str] = field(default_factory=list)
+    github_callback_url: str = ""  # default: <this server's address>/api/v1/auth/github/callback
+    # endpoints (only changed by tests)
+    github_oauth_base: str = "https://github.com"
+    github_api_base: str = "https://api.github.com"
     tmux_history_limit: int = 10000
     # [office] — Layout view of Word / PowerPoint / Visio files, rendered to PDF by LibreOffice
     office_soffice: str | None = None  # path to soffice; default: found on PATH
@@ -147,6 +155,13 @@ class Settings:
             d["terminal"]["shell"] = self.shell
         if self.office_soffice:
             d["office"]["soffice"] = self.office_soffice
+        if self.github_client_id or self.github_allowed_users:
+            gh: dict[str, Any] = {"client_id": self.github_client_id, "allowed_users": self.github_allowed_users}
+            if self.github_client_secret:
+                gh["client_secret"] = self.github_client_secret
+            if self.github_callback_url:
+                gh["callback_url"] = self.github_callback_url
+            d["auth"]["github"] = gh
         if self.workspaces:
             d["workspaces"] = [{k: v for k, v in w.items() if v} for w in self.workspaces]
         if self.frontend_dist:
@@ -211,6 +226,7 @@ def load_settings(path: Path | None = None, env: dict[str, str] | None = None) -
 
     access_token = env.get(ENV_ACCESS_TOKEN) or auth.get("access_token") or ""
     server_secret = auth.get("server_secret") or env.get("WAW_SERVER_SECRET") or ""
+    gh = auth.get("github", {}) or {}
 
     workspace_root = Path(env.get("WAW_WORKSPACE") or ws.get("root") or os.getcwd()).expanduser()
     state_dir = Path(env.get("WAW_STATE_DIR") or server.get("state_dir") or DEFAULT_STATE_DIR).expanduser()
@@ -238,6 +254,10 @@ def load_settings(path: Path | None = None, env: dict[str, str] | None = None) -
         gateway_auth=bool(server.get("gateway_auth", False)),
         gateway_user_header=str(server.get("gateway_user_header", "")),
         max_document_bytes=int(ws.get("max_document_bytes", 20 * 1024 * 1024)),
+        github_client_id=str(gh.get("client_id", "") or ""),
+        github_client_secret=str(env.get("WAW_GITHUB_CLIENT_SECRET") or gh.get("client_secret", "") or ""),
+        github_allowed_users=[str(u).strip() for u in (gh.get("allowed_users") or []) if str(u).strip()],
+        github_callback_url=str(gh.get("callback_url", "") or ""),
         tmux_history_limit=int(term.get("tmux_history_limit", 10000)),
         office_soffice=str(office.get("soffice") or "") or None,
         office_max_parallel=int(office.get("max_parallel", 2)),
