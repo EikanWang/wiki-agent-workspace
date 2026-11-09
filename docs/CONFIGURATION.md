@@ -112,11 +112,12 @@ of `client_id`, `client_secret` and `allowed_users` are set.
 **Easiest: one click from the login page.** If the server user's `gh` CLI is logged in, its account is taken as
 the server's owner and the login page shows **Continue with GitHub** even before setup; the first click starts
 the setup below, which is accepted only if GitHub reports that this owner created the app, and continues straight
-into sign-in. The same is in the account menu (top right) → **Set up “Continue with GitHub”…** when signed in. GitHub shows *Create GitHub App* with everything filled in (a private app with
-no permissions; its callback is this server's address); click **Create**. GitHub hands the new app's client ID and
+into sign-in. The same is in the account menu (top right) → **Set up “Continue with GitHub”…** when signed in. GitHub shows *Create GitHub App* with everything filled in (an app with no
+permissions, public so that every allowed account can use it; its callback is this server's address); click **Create**. GitHub hands the new app's client ID and
 secret back to the server, which saves them in `<state_dir>/github-signin.json` (mode 0600), allows only the GitHub
 account that created it, and the login page offers **Continue with GitHub** right away — no restart, nothing to
-copy. Keys set in `config.toml` (below) take precedence over that file; delete the file (and the app on GitHub,
+copy. To let more GitHub accounts in, add them to `allowed_users` in that file (or in
+`config.toml`) and restart. Keys set in `config.toml` (below) take precedence over that file; delete the file (and the app on GitHub,
 *Settings → Developer settings → GitHub Apps*) to undo.
 
 **Manually** instead: on GitHub, **Settings → Developer settings → OAuth Apps → New OAuth App**. *Homepage URL*: the

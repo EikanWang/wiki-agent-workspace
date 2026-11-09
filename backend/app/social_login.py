@@ -292,7 +292,9 @@ def _new_setup(request: Request, s: Settings, *, then_sign_in: bool) -> tuple[st
         "redirect_url": f"{base}/api/v1/auth/github/setup/callback",
         "callback_urls": [s.github_callback_url or f"{base}{CALLBACK_PATH}"],
         "description": "Sign-in for a self-hosted Wiki Agent Workspace. Reads only your public GitHub identity.",
-        "public": False,
+        # public: other allowed GitHub accounts can sign in too (a private app only works for its owner). The app has
+        # no permissions; who gets into this server is decided by allowed_users alone.
+        "public": True,
         "default_permissions": {},
         "request_oauth_on_install": False,
     }

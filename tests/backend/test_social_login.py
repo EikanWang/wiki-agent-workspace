@@ -181,7 +181,7 @@ async def test_one_click_github_setup_via_app_manifest(running_app, settings):
     info = (await api.c.get("/api/v1/auth/github/setup")).json()
     assert info["enabled"] is False and info["action"].startswith("https://github.com/settings/apps/new?state=")
     m = json.loads(info["manifest"])
-    assert m["callback_urls"] == ["http://testserver/api/v1/auth/github/callback"] and m["default_permissions"] == {} and m["public"] is False
+    assert m["callback_urls"] == ["http://testserver/api/v1/auth/github/callback"] and m["default_permissions"] == {} and m["public"] is True
     assert m["redirect_url"] == "http://testserver/api/v1/auth/github/setup/callback"
     state = info["action"].split("state=")[1]
     # a forged return (wrong state) changes nothing
