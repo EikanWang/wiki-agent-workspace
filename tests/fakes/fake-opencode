@@ -70,6 +70,11 @@ def main(argv):
             directory = args[i + 1]
             i += 2
             continue
+        if a.startswith("--file="):  # attachments (images of the document being discussed)
+            with (STATE / "opencode_last_files").open("a") as fh:
+                fh.write(a.split("=", 1)[1] + "\n")
+            i += 1
+            continue
         rest.append(a)
         i += 1
     prompt = " ".join(rest)

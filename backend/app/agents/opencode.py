@@ -183,6 +183,8 @@ class OpenCodeCliAdapter(AgentAdapter):
         if ctx.variant:
             args += ["--variant", ctx.variant]
         args += list(self.cfg.extra_args)
+        # "--file=PATH" (not "-f PATH"): the option takes several values and would swallow the prompt
+        args += [f"--file={p}" for p in ctx.attachments]
         args.append(ctx.prompt)
         return OpenCodeCliTurn(args, cwd=ctx.cwd or ctx.workspace)
 

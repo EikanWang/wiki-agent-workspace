@@ -74,7 +74,9 @@ export default function Reader(props: ReaderProps) {
   const isTouch = useMemo(() => typeof window !== "undefined" && window.matchMedia("(pointer: coarse)").matches, []);
   // Office files: Layout (faithful, LibreOffice → PDF) or Text (selectable, anchored discussions)
   const isOffice = ["docx", "pptx", "visio", "office"].includes(doc.format);
-  const hasText = doc.format !== "pdf" && doc.format !== "office"; // false: discussions are about the whole document
+  const hasText = doc.format !== "pdf" && doc.format !== "office" && doc.format !== "image"; // false: discussions are about the whole document
+  const [imgZoom, setImgZoom] = useState(false);
+  useEffect(() => setImgZoom(false), [doc.document_id]);
   const [localView, setLocalView] = useState(officeView);
   useEffect(() => setLocalView(officeView), [officeView]);
   const layout = isOffice && (!hasText || localView === "layout");
@@ -92,7 +94,7 @@ export default function Reader(props: ReaderProps) {
     if (activeThreadId && isOffice && hasText && localView === "layout") setLocalView("text");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeThreadId]);
-  const fmtLabel = doc.format === "office" ? (doc.path.split(".").pop() ?? "office").toUpperCase() : doc.format === "visio" ? "VISIO" : doc.format.toUpperCase();
+  const fmtLabel = doc.format === "office" || doc.format === "image" ? (doc.path.split(".").pop() ?? doc.format).toUpperCase() : doc.format === "visio" ? "VISIO" : doc.format.toUpperCase();
 
   const html = useMemo(() => {
     if (doc.format === "markdown") return renderMarkdown(doc.text, doc.path);
@@ -523,7 +525,7 @@ export default function Reader(props: ReaderProps) {
             onClick={() => setSheet(wholeDocument())}
             title="Ask the agent about this document as a whole (no passage selected)"
           >
-            {doc.format === "pdf" ? "Ask about this PDF" : "Ask about this document"}
+            {doc.format === "pdf" ? "Ask about this PDF" : doc.format === "image" ? "Ask about this image" : "Ask about this document"}
           </button>
           {hasText && (
           <button
@@ -601,7 +603,17 @@ export default function Reader(props: ReaderProps) {
           </div>
         )}
         {isOffice && layout && <OfficeView path={doc.path} sha256={doc.sha256} onShowText={hasText ? () => setView("text") : null} />}
-        {doc.format === "pdf" ? (
+        {doc.format === "image" ? (
+          <div className={`image-view ${imgZoom ? "zoomed" : ""}`} data-testid="image-view">
+            <img
+              src={`/api/v1/raw?path=${encodeURIComponent(doc.path)}${getWorkspace() ? `&workspace=${encodeURIComponent(getWorkspace()!)}` : ""}&v=${doc.sha256.slice(0, 12)}`}
+              alt={doc.path}
+              onClick={() => setImgZoom((z) => !z)}
+              title={imgZoom ? "Click to fit the window" : "Click for the actual size"}
+              data-testid="image-view-img"
+            />
+          </div>
+        ) : doc.format === "pdf" ? (
           <div className="pdf-view" data-testid="pdf-view">
             <div className="muted small">PDF shown with the browser's viewer. Discussions on PDFs attach to the document (no text anchors); use the discussion panel to ask about it.</div>
             <iframe title={doc.path} src={`/api/v1/raw?path=${encodeURIComponent(doc.path)}${getWorkspace() ? `&workspace=${encodeURIComponent(getWorkspace()!)}` : ""}`} />

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request
@@ -36,7 +37,12 @@ def build_prompt(*, question: str, quote: str, document_path: str, sha256: str, 
         parts.append(f"Known earlier recorded versions of this file (content hashes, Git commit if any): {refs}. "
                      "Only Git history and these recorded snapshots are available as history; do not claim to know earlier reasoning that is not in them.")
     if whole_document or quote == document_path:
-        parts.append("The user is asking about this document as a whole (no specific passage selected). Read the file at the path above.")
+        from .textmodel import IMAGE_SUFFIXES
+
+        if Path(document_path).suffix.lower() in IMAGE_SUFFIXES:
+            parts.append("The user is asking about this image as a whole. It is attached to this message; the file is at the path above.")
+        else:
+            parts.append("The user is asking about this document as a whole (no specific passage selected). Read the file at the path above.")
     else:
         parts.append("The user selected this exact passage in the rendered document (verbatim):")
         parts.append("<<<SELECTED_PASSAGE\n" + quote + "\nSELECTED_PASSAGE>>>")
@@ -51,6 +57,19 @@ def build_prompt(*, question: str, quote: str, document_path: str, sha256: str, 
         "Do not ask for additional confirmation beyond your own configured permission rules."
     )
     return "\n\n".join(parts)
+
+
+def image_attachments(docs, doc_path: str) -> list[str]:
+    """The image being discussed, attached to the agent's turn (OpenCode --file, Codex --image) so it really sees it."""
+    from .textmodel import document_format
+
+    if document_format(Path(doc_path).name) != "image":
+        return []
+    try:
+        _, p = docs.resolve(doc_path)
+    except Exception:
+        return []
+    return [str(p.resolve())] if p.is_file() else []
 
 
 # ---------------------------------------------------------------------- service
@@ -207,7 +226,8 @@ class ThreadService:
         prompt = build_prompt(question=body.question, quote=body.quote, document_path=doc.path, sha256=sha, heading=heading,
                               prior=None, versions=self.docs.list_versions(doc_id), whole_document=body.whole_document)
         job_id = self.jobs.enqueue_turn(session_id=sess.id, thread_id=thread_id, prompt=prompt,
-                                        context={"document_id": doc_id, "document_path": doc.path, "sha256": sha, "quote": body.quote},
+                                        context={"document_id": doc_id, "document_path": doc.path, "sha256": sha, "quote": body.quote,
+                                                 "attachments": image_attachments(self.docs, doc.path)},
                                         agent_message_id=agent_msg_id)
         with self.ctx.db.write() as s:
             m = s.get(Message, agent_msg_id)
@@ -248,7 +268,8 @@ class ThreadService:
         prompt = build_prompt(question=body.text, quote=t.cur_quote, document_path=doc.path, sha256=sha, heading=t.cur_heading,
                               prior=prior, versions=self.docs.list_versions(doc.id), whole_document=t.anchor_state == "document")
         job_id = self.jobs.enqueue_turn(session_id=sess.id, thread_id=thread_id, prompt=prompt,
-                                        context={"document_id": doc.id, "document_path": doc.path, "sha256": sha, "quote": t.cur_quote},
+                                        context={"document_id": doc.id, "document_path": doc.path, "sha256": sha, "quote": t.cur_quote,
+                                                 "attachments": image_attachments(self.docs, doc.path)},
                                         agent_message_id=agent_msg_id)
         with self.ctx.db.write() as s:
             m = s.get(Message, agent_msg_id)

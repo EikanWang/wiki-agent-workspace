@@ -97,6 +97,7 @@ class TurnContext:
     sandbox: str | None = None
     model: str | None = None     # provider model id; None = provider default
     variant: str | None = None   # reasoning effort / variant; None = default
+    attachments: list[Path] = field(default_factory=list)  # images attached to the prompt (e.g. the image discussed)
 
 
 class TurnHandle(ABC):

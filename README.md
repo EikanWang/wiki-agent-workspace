@@ -90,7 +90,7 @@ Everything below is explained step by step in **[docs/USER_GUIDE.md](docs/USER_G
 | --- | --- |
 | Folders | Several wiki folders in one window ("add folder", like VS Code), each fully isolated: documents, discussions, sessions, locks, reviews, Git state; named workspaces (sets of folders with their own tabs and terminals); create folders on the server and files/folders in the tree |
 | Reading | Markdown, any text/source file (numbered code), Word, PowerPoint, Visio in their original layout (LibreOffice) plus a selectable text view (`.docx`, `.pptx`, `.vsdx`), PDF; kind icons; section links; Read / Discuss modes; reading position restore; tabs for open documents (switch, close, reorder, across folders) |
-| Asking | Select words or lines → question box (copy icon, Enter to send), or ask about the whole document (any format); anchors survive edits; orphaned/ambiguous detection and manual reanchor; review marks |
+| Asking | Select words or lines → question box (copy icon, Enter to send), or ask about the whole document from the discussions panel (any format, images attached for the agent); anchors survive edits; orphaned/ambiguous detection and manual reanchor; review marks |
 | Discussions | Individual or Flat (all discussions as one stream) panel; streaming answers rendered as Markdown; retry / cancel |
 | Agents | OpenCode and Codex with your existing login; per-session **model and effort**; link provider sessions; per-session job queueing |
 | Editing | Edit Markdown and any text/source file in the browser: Ctrl/⌘+S, live Markdown preview, conflict-safe saves, versions + diff |
@@ -160,8 +160,8 @@ separately (`~/.config/wiki-agent-workspace/config.toml`). Backup, restore and m
 ## Running the tests
 
 ```bash
-scripts/test.sh            # backend: pytest (112 tests; real git + tmux + fake agents), ~25 s
-scripts/test.sh --e2e      # + Playwright browser suite (44 scenarios) against the production build
+scripts/test.sh            # backend: pytest (114 tests; real git + tmux + fake agents), ~25 s
+scripts/test.sh --e2e      # + Playwright browser suite (45 scenarios) against the production build
 # or individually
 .venv/bin/python -m pytest tests/backend -q
 cd frontend && npx playwright install chromium && npm run test:e2e

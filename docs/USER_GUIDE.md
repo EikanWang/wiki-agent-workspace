@@ -97,7 +97,8 @@ locked folders and paths through links that leave the folder are refused, with t
   notebook, code, script, data, text, archive, binary; a small arrow marks symlinks, a broken-link icon marks dangling ones). Git status badges show
   `untracked` / `modified` / `clean`.
 - The reader opens **Markdown**, **any text or source file** (C/C++, Python, YAML, XML, JSON, shell…, shown as
-  numbered code), **Word**, **PowerPoint**, **Visio** and **PDF** (browser viewer).
+  numbered code), **Word**, **PowerPoint**, **Visio**, **PDF** (browser viewer) and **images** (click for actual
+  size).
 - **Word, PowerPoint and Visio** (`.docx`, `.pptx`, `.vsdx`) have two views, switched with **Layout | Text** in
   the document header (your choice is remembered):
   - **Layout** (default) shows the original: pages, slides and diagrams exactly as their authors made them,
@@ -137,9 +138,11 @@ Anchors survive edits: if the passage moves, the discussion follows; if the text
 discussion is flagged *orphaned* / *ambiguous* and keeps the original quote — use **Reanchor manually** to attach it
 to the new text. **Mark reviewed** marks a passage reviewed; it turns *needs review* when that text changes.
 
-**Asking about the whole document.** **Ask about this document** in the document header (**Ask about this PDF**
-for PDFs) opens the question box without a passage: the agent reads the whole file. Works for every format,
-including Office files in their Layout view. Such discussions are listed as *📄 whole document*, highlight
+**Asking about the whole document.** The discussions panel has a question box at the top (*Ask about this
+document…*, also in Flat mode; **＋ New question** from an open discussion brings you back to it). Type and press
+Enter: the agent reads the whole file. **Ask about this document** in the document header does the same. Works for
+every format the reader opens — Markdown, text/source, PDF, Word, PowerPoint, Visio (also in Layout view) and
+**images** (PNG, JPEG, GIF, WebP, BMP, AVIF), whose picture is attached to the question so the agent sees it. Such discussions are listed as *📄 whole document*, highlight
 nothing, and never become *orphaned* when the file changes; replies stay about the whole document.
 
 ## Discussions panel

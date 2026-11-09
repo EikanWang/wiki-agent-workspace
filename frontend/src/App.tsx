@@ -33,7 +33,7 @@ import PreviewDialog from "./components/PreviewDialog";
 import RecentList from "./components/RecentList";
 import DiffReview from "./components/DiffReview";
 import AddFolderDialog from "./components/AddFolderDialog";
-import { SelectionAnchor } from "./textmodel";
+import { SelectionAnchor, wholeDocument } from "./textmodel";
 import { FONT_STACKS, FontSettings, Prefs, Resizer, loadPrefs, savePrefs } from "./components/Layout";
 
 type View = "document" | "terminal" | "diff";
@@ -820,6 +820,8 @@ export default function App() {
             mode={prefs.panelMode}
             onModeChange={(m) => updatePrefs({ panelMode: m })}
             onSessionChanged={() => void refreshSessions()}
+            onAskDocument={(q) => createThread(wholeDocument(), q, null)}
+            docFormat={doc.format}
             thread={activeThreadObj}
             threads={threads}
             sessions={sessions}

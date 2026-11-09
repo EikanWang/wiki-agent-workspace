@@ -199,14 +199,16 @@ async def test_file_tree_lists_all_kinds_with_icons_metadata(api: Api, workspace
     os.symlink(tmp_path / "outside.md", workspace / "docs" / "escape.md")
     items = {i["name"]: i for i in (await api.get("/api/v1/files", params={"path": "docs"})).json()["items"]}
     assert items["guide.md"]["kind"] == "markdown" and items["guide.md"]["openable"] is True
-    assert items["pic.png"]["kind"] == "image" and items["pic.png"]["openable"] is False and items["pic.png"]["size"] == 6
+    assert items["pic.png"]["kind"] == "image" and items["pic.png"]["openable"] is True and items["pic.png"]["size"] == 6
     assert items["script.py"]["kind"] == "code" and items["script.py"]["openable"] is True and items["script.py"]["format"] == "text"
     assert items["data.json"]["kind"] == "data" and items["notes.txt"]["kind"] == "text" and items["paper.pdf"]["kind"] == "pdf" and items["paper.pdf"]["format"] == "pdf"
     assert items["alias.md"]["symlink"] is True and items["alias.md"]["link_target"] == "guide.md" and items["alias.md"]["openable"] is True
     assert items["dangling.md"]["kind"] == "broken_link" and items["dangling.md"]["openable"] is False
     assert items["escape.md"]["escapes"] is True and items["escape.md"]["openable"] is True
     # unsupported or escaping entries are refused by the API; text/source files open as code
-    assert (await api.get("/api/v1/documents/open", params={"path": "docs/pic.png"})).json()["error"]["code"] == "UNSUPPORTED_FORMAT"
+    assert (await api.get("/api/v1/documents/open", params={"path": "docs/pic.png"})).json()["format"] == "image"
+    (workspace / "docs" / "blob.bin").write_bytes(b"\x00\x01")
+    assert (await api.get("/api/v1/documents/open", params={"path": "docs/blob.bin"})).json()["error"]["code"] == "UNSUPPORTED_FORMAT"
     assert (await api.get("/api/v1/documents/open", params={"path": "docs/escape.md"})).status_code == 200
     py = (await api.get("/api/v1/documents/open", params={"path": "docs/script.py"})).json()
     assert py["format"] == "text" and py["text"] == "print(1)\n" and 'class="language-python"' in py["html"]

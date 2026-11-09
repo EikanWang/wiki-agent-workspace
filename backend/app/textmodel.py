@@ -94,12 +94,14 @@ LANG_BY_SUFFIX = {
 LAYOUT_ONLY_SUFFIXES = {".doc", ".rtf", ".odt", ".ppt", ".pps", ".ppsx", ".odp", ".vsd", ".vsdm", ".odg"}
 # formats rendered with LibreOffice for the "Layout" view
 OFFICE_FORMATS = {"docx", "pptx", "visio", "office"}
+# raster images: shown as pictures; discussions are about the whole image, which is attached to the agent's turn
+IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".avif"}
 # formats without a text model (no anchored passages; discussions are about the whole document)
-NO_TEXT_FORMATS = {"pdf", "office"}
+NO_TEXT_FORMATS = {"pdf", "office", "image"}
 
 
 def document_format(name: str) -> str:
-    """markdown | text | docx | pptx | visio | office | pdf | unsupported"""
+    """markdown | text | docx | pptx | visio | office | pdf | image | unsupported"""
     lower = name.lower()
     suffix = Path(lower).suffix
     if suffix in (".md", ".markdown"):
@@ -114,6 +116,8 @@ def document_format(name: str) -> str:
         return "office"
     if suffix == ".pdf":
         return "pdf"
+    if suffix in IMAGE_SUFFIXES:
+        return "image"
     if suffix in TEXT_SUFFIXES or lower in TEXT_SUFFIXES or lower in TEXT_NAMES or (not suffix and lower.split(".")[0] in TEXT_NAMES):
         return "text"
     return "unsupported"

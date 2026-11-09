@@ -473,3 +473,54 @@ async def test_question_about_the_whole_document(api, workspace):
     # the agent is told it is about the whole document, without a quoted passage
     p = build_prompt(question="q", quote="", document_path="docs/guide.md", sha256="x", heading=None, prior=None, versions=None, whole_document=True)
     assert "as a whole" in p and "SELECTED_PASSAGE" not in p and "answer about the document" in p
+
+
+async def test_image_document_question_attaches_the_image(api, workspace, fake_env):
+    """Images open in the reader; asking about one attaches the image file to the agent's turn."""
+    import base64
+
+    png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+    (workspace / "docs" / "diagram.png").write_bytes(png)
+    items = {i["name"]: i for i in (await api.get("/api/v1/files?path=docs")).json()["items"]}
+    assert items["diagram.png"]["kind"] == "image" and items["diagram.png"]["openable"] is True
+    d = await api.open_doc("docs/diagram.png")
+    assert d["format"] == "image" and d["html"] is None
+    r = await api.post(f"/api/v1/documents/{d['document_id']}/threads",
+                       json={"whole_document": True, "version_sha256": d["sha256"], "question": "what does it show?"})
+    assert r.status_code == 201, r.text
+    await api.wait_job(r.json()["job_id"])
+    files = (fake_env / "opencode_last_files").read_text().split()
+    assert str((workspace / "docs" / "diagram.png").resolve()) in files
+    # Markdown documents attach nothing
+    (fake_env / "opencode_last_files").unlink()
+    d = await api.open_doc("docs/guide.md")
+    r = await api.post(f"/api/v1/documents/{d['document_id']}/threads", json={"whole_document": True, "version_sha256": d["sha256"], "question": "x"})
+    await api.wait_job(r.json()["job_id"])
+    assert not (fake_env / "opencode_last_files").exists()
+
+
+def test_codex_and_opencode_pass_attachments_without_swallowing_the_prompt(tmp_path):
+    """--image=/--file= forms: the options take several values and must not eat the prompt (or Codex's '-')."""
+    from pathlib import Path as P
+
+    from backend.app.agents.base import TurnContext
+    from backend.app.agents.codex import CodexAdapter
+    from backend.app.agents.opencode import OpenCodeCliAdapter as OpenCodeAdapter
+    from backend.app.config import ProviderConfig
+
+    img = tmp_path / "a.png"
+    img.write_bytes(b"x")
+    ctx = TurnContext(prompt="PROMPT", workspace=tmp_path, native_session_id=None, attachments=[img])
+    for cls in (CodexAdapter, OpenCodeAdapter):
+        a = cls(ProviderConfig())
+        a.exe = "/bin/true"
+        import asyncio
+
+        turn = asyncio.run(a.resume_turn(ctx))
+        args = turn.args
+        assert any(x in (f"--image={img}", f"--file={img}") for x in args), args
+        if cls is CodexAdapter:
+            assert args[-1] == "-" and args.index(f"--image={img}") < len(args) - 1
+        else:
+            assert args[-1] == "PROMPT"
+    assert P(img).exists()

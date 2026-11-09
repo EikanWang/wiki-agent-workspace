@@ -427,6 +427,7 @@ test("file tree shows distinct icons per kind; binary entries are not openable, 
   const ws = workspaceDir();
   fs.writeFileSync(path.join(ws, "docs", "diagram.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
   fs.writeFileSync(path.join(ws, "docs", "tool.py"), "print(1)\n");
+  fs.writeFileSync(path.join(ws, "docs", "blob.bin"), Buffer.from([0, 1, 2, 3]));
   fs.writeFileSync(path.join(ws, "docs", "config-with-a-very-long-name-that-hides-the-extension.json"), "{}\n");
   try { fs.symlinkSync("guide.md", path.join(ws, "docs", "alias.md")); } catch { /* exists */ }
   await page.getByTestId("tree-refresh").click();
@@ -441,7 +442,8 @@ test("file tree shows distinct icons per kind; binary entries are not openable, 
   const svg = async (id: string) => page.getByTestId(id).locator("svg.fi").innerHTML();
   expect(await svg("tree-file-docs/diagram.png")).not.toBe(await svg("tree-file-docs/tool.py"));
   expect(await svg("tree-file-docs/tool.py")).not.toBe(await svg("tree-file-docs/guide.md"));
-  await expect(page.getByTestId("tree-file-docs/diagram.png").locator("button.tree-main")).toBeDisabled();
+  await expect(page.getByTestId("tree-file-docs/diagram.png").locator("button.tree-main")).toBeEnabled(); // images open in the reader
+  await expect(page.getByTestId("tree-file-docs/blob.bin").locator("button.tree-main")).toBeDisabled(); // binaries do not
   await page.getByTestId("tree-file-docs/tool.py").locator("button.tree-main").click();
   await expect(page.locator(".source-view .ln").first()).toHaveText(/print\(1\)/);
   await expect(page.locator(".doc-meta .chip").first()).toHaveText("TEXT");
@@ -1126,8 +1128,13 @@ test("file tree ↻: the spinner stops when the server cannot be reached; the ea
   const btn = page.getByTestId("tree-refresh");
   await expect(page.getByTestId("tree-file-README.md")).toBeVisible();
   await page.route("**/api/v1/files**", (route) => route.abort("connectionrefused"));
+  // record inside the page whether it spun (a check from the test can come too late on a busy machine)
+  await btn.evaluate((el) => {
+    (window as any).__spun = false;
+    new MutationObserver(() => { if (el.getAttribute("data-spinning") === "true") (window as any).__spun = true; }).observe(el, { attributes: true });
+  });
   await btn.click();
-  await expect(btn).toHaveAttribute("data-spinning", "true");
+  await expect.poll(() => page.evaluate(() => (window as any).__spun)).toBe(true);
   await expect(btn).toHaveAttribute("data-spinning", "false", { timeout: 10000 }); // stops by itself
   await expect(page.getByTestId("tree-error").first()).toContainText("Could not refresh");
   await expect(page.getByTestId("tree-file-README.md")).toBeVisible(); // earlier listing kept
@@ -1605,4 +1612,43 @@ test("login page: Continue with Google (verified, allowed email); other accounts
   await expect(page.getByTestId("account-menu")).toContainText("e2e@example.com");
   await signOut(page);
   await expect(page.getByTestId("login-google")).toBeVisible();
+});
+
+test("ask directly in the discussion panel about the open document, incl. an image", async ({ page }) => {
+  await login(page);
+  const ws = workspaceDir();
+  const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
+  fs.writeFileSync(path.join(ws, "docs", "pixel.png"), png);
+  try {
+    await page.getByTestId("tree-refresh").click();
+    await expect(page.getByTestId("tree-refresh")).toHaveAttribute("data-spinning", "false");
+    const dir = page.getByTestId("tree-root").first().locator(".tree-row.dir", { hasText: "docs" }).first();
+    if ((await page.getByTestId("tree-file-docs/pixel.png").count()) === 0) await dir.click();
+    await expect(page.getByTestId("tree-file-docs/pixel.png")).toHaveAttribute("data-kind", "image");
+    await page.getByTestId("tree-file-docs/pixel.png").locator("button.tree-main").click();
+    // the image is shown, and loads
+    const img = page.getByTestId("image-view-img");
+    await expect(img).toBeVisible();
+    await expect.poll(() => img.evaluate((el: HTMLImageElement) => el.complete && el.naturalWidth)).toBe(1);
+    await expect(page.locator(".doc-meta .chip").first()).toHaveText("PNG");
+    await expect(page.getByTestId("ask-whole-document")).toHaveText("Ask about this image");
+    // ask straight from the panel (Individual mode)
+    if ((await page.getByTestId("mode-individual").getAttribute("aria-selected")) !== "true") await page.getByTestId("mode-individual").click();
+    if ((await page.getByTestId("thread-back").count()) > 0) await page.getByTestId("thread-back").click();
+    const input = page.getByTestId("ask-document-input");
+    await expect(input).toHaveAttribute("placeholder", /Ask about this image/);
+    await input.fill("What colour is this pixel?");
+    await input.press("Enter");
+    await expect(page.locator('[data-testid="message-agent"][data-status="completed"]').last()).toContainText("What colour is this pixel?", { timeout: 20000 });
+    await expect(page.getByTestId("thread-whole-document")).toBeVisible();
+    // from an open discussion: "＋ New question" goes to the box, ready to type
+    await page.getByTestId("new-doc-question").click();
+    await expect(page.getByTestId("ask-document-input")).toBeFocused();
+    // Flat mode has the same box
+    await page.getByTestId("mode-flat").click();
+    await expect(page.getByTestId("ask-document-input")).toBeVisible();
+    await page.getByTestId("mode-individual").click();
+  } finally {
+    fs.rmSync(path.join(ws, "docs", "pixel.png"), { force: true });
+  }
 });

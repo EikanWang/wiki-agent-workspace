@@ -223,7 +223,7 @@ export interface OpenDocument {
   path: string;
   /** markdown | text | docx | pdf */
   /** visio = .vsdx (text view + layout); office = layout-only (.doc, .ppt, .vsd, OpenDocument, RTF) */
-  format: "markdown" | "text" | "docx" | "pptx" | "visio" | "office" | "pdf";
+  format: "markdown" | "text" | "docx" | "pptx" | "visio" | "office" | "pdf" | "image";
   /** text formats (Markdown, text/source) can be edited in the browser */
   editable?: boolean;
   /** server-rendered HTML for text/docx (markdown renders client-side; pdf has none) */

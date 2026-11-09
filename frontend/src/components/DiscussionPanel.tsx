@@ -114,6 +114,8 @@ export default function DiscussionPanel({
   mode = "individual",
   onModeChange,
   onSessionChanged,
+  onAskDocument,
+  docFormat,
 }: {
   thread: Thread | null;
   threads: Thread[];
@@ -134,7 +136,12 @@ export default function DiscussionPanel({
   onModeChange?: (mode: "individual" | "flat") => void;
   /** Called after a session's model/variant was changed so the caller can refresh its session list. */
   onSessionChanged?: (s: AgentSession) => void;
+  /** Ask a question about the open document as a whole (no passage). */
+  onAskDocument?: (question: string) => Promise<void>;
+  docFormat?: string;
 }) {
+  const [focusAsk, setFocusAsk] = useState(0); // bumped by "＋ New question": focus the box
+  const askBox = onAskDocument ? <AskDocument onAsk={onAskDocument} format={docFormat} focusKey={focusAsk} /> : null;
   const [text, setText] = useState("");
   const [sessionChoice, setSessionChoice] = useState<string>("__last__");
   const [error, setError] = useState<string | null>(null);
@@ -178,6 +185,7 @@ export default function DiscussionPanel({
         resizer={resizer}
         modeSwitch={modeSwitch}
         onSessionChanged={onSessionChanged}
+        askBox={askBox}
       />
     );
   }
@@ -193,8 +201,9 @@ export default function DiscussionPanel({
           {modeSwitch}
           {onCollapse && <button className="icon-btn" onClick={onCollapse} title="Hide discussions panel" data-testid="panel-collapse">›</button>}
         </div>
+        {askBox}
         <div className="thread-list">
-          {threads.length === 0 && <div className="muted pad">Select text in the document to start a discussion, or use Ask about this document.</div>}
+          {threads.length === 0 && <div className="muted pad">Ask above about the whole document, or select text in it to ask about a passage.</div>}
           {threads.map((t, i) => (
             <button key={t.id} className="thread-item" onClick={() => onSelectThread(t.id)} data-testid="thread-item">
               <div className="thread-title">Discussion {i + 1} · {t.messages[0]?.content.slice(0, 50)}</div>
@@ -247,6 +256,9 @@ export default function DiscussionPanel({
       <div className="panel-head">
         <button className="icon-btn" onClick={() => onSelectThread(null)} title="Back to the discussion list">‹</button>
         <span>Discussion {idx + 1} / {threads.length}</span>
+        {onAskDocument && (
+          <button className="btn small" onClick={() => { onSelectThread(null); setFocusAsk((k) => k + 1); }} title="Ask a new question about this document" data-testid="new-doc-question">＋ New question</button>
+        )}
         <span className="spacer" />
         {modeSwitch}
         <button className="btn small" onClick={showDiff} title="Show the diff between the version this discussion was created on and the current file">View diff</button>
@@ -453,7 +465,8 @@ export function jobStatusLabel(s: string): string {
 /** Flat mode: every discussion of the document in one chronological stream. Each thread is a group headed by its
  *  quoted passage; messages keep their thread/session. The composer continues the selected thread (default: the
  *  most recent one) so related questions can be asked without switching threads. */
-function FlatPanel({ threads, sessions, sessionsById, defaultSessionId, liveJob, activeThreadId, onReply, onRetry, onCancel, onPermission, onSelectThread, onCollapse, resizer, modeSwitch, onSessionChanged }: {
+function FlatPanel({ threads, sessions, sessionsById, defaultSessionId, liveJob, activeThreadId, onReply, onRetry, onCancel, onPermission, onSelectThread, onCollapse, resizer, modeSwitch, onSessionChanged, askBox }: {
+  askBox?: React.ReactNode;
   threads: Thread[];
   sessions: AgentSession[];
   sessionsById: Record<string, AgentSession>;
@@ -516,8 +529,9 @@ function FlatPanel({ threads, sessions, sessionsById, defaultSessionId, liveJob,
         {modeSwitch}
         {onCollapse && <button className="icon-btn" onClick={onCollapse} title="Hide discussions panel" data-testid="panel-collapse">›</button>}
       </div>
+      {askBox}
       <div className="thread-body flat-stream" data-testid="flat-stream">
-        {ordered.length === 0 && <div className="muted pad">Select text in the document to start a discussion, or use Ask about this document. In flat mode all discussions of this document appear here as one stream.</div>}
+        {ordered.length === 0 && <div className="muted pad">Ask above about the whole document, or select text in it to ask about a passage. In flat mode all discussions of this document appear here as one stream.</div>}
         {ordered.map((t, i) => {
           const live = liveJob && liveJob.threadId === t.id ? liveJob : null;
           const liveMessageId = t.messages.find((m) => m.job_id === live?.jobId)?.id;
@@ -579,4 +593,49 @@ function quoteLabel(t: { anchor_state: string; anchor: { quote: string } }, max:
   if (t.anchor_state === "document" || !t.anchor.quote) return "📄 whole document";
   const q = t.anchor.quote;
   return `"${q.slice(0, max)}${q.length > max ? "…" : ""}"`;
+}
+
+/** "Ask about this document": a question box at the top of the panel, always about the whole open document. */
+function AskDocument({ onAsk, format, focusKey = 0 }: { onAsk: (q: string) => Promise<void>; format?: string; focusKey?: number }) {
+  const [q, setQ] = useState("");
+  const box = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    if (focusKey) box.current?.focus();
+  }, [focusKey]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const what = format === "pdf" ? "this PDF" : format === "image" ? "this image" : "this document";
+  const send = async () => {
+    if (!q.trim() || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await onAsk(q.trim());
+      setQ("");
+    } catch (e) {
+      const ae = e as ApiError;
+      setError(ae.code === "DOCUMENT_VERSION_CONFLICT" ? "The document changed meanwhile; refresh it and send again (your question is kept)." : ae.message || "Send failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="ask-document" data-testid="ask-document">
+      <textarea
+        ref={box}
+        value={q}
+        onChange={(e) => setQ(e.target.value)}
+        onKeyDown={(e) => composerKeyDown(e, () => void send(), setQ, () => setQ(""))}
+        placeholder={`Ask about ${what}… (${COMPOSER_HINT})`}
+        rows={2}
+        data-testid="ask-document-input"
+        aria-label={`Ask about ${what}`}
+      />
+      <div className="ask-document-row">
+        <span className="muted small">{format === "image" ? "The image is attached for the agent." : "The agent reads the whole file."} Select text to ask about a passage.</span>
+        <button className="btn small primary" onClick={() => void send()} disabled={busy || !q.trim()} data-testid="ask-document-send">{busy ? "Sending…" : "Ask"}</button>
+      </div>
+      {error && <div className="error-text small" role="alert">{error}</div>}
+    </div>
+  );
 }

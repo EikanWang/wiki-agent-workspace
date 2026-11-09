@@ -239,6 +239,8 @@ class CodexAdapter(AgentAdapter):
         if ctx.variant:
             common += ["-c", f'model_reasoning_effort="{ctx.variant}"']
         common += list(self.cfg.extra_args)
+        # "--image=PATH" (not "-i PATH"): the option takes several values and would swallow the "-" (prompt on stdin)
+        common += [f"--image={p}" for p in ctx.attachments]
         if ctx.native_session_id:
             args = [self.exe, "exec", "resume", *common, "-c", f'sandbox_mode="{sandbox}"', ctx.native_session_id, "-"]
         else:

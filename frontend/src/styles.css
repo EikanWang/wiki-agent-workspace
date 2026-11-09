@@ -570,3 +570,14 @@ mark.waw-hl.review.needs_review { border-bottom: 2px dashed var(--warn); }
 .account-menu { left: auto; right: 0; min-width: 280px; }
 .account-who, .account-status { padding: 6px 8px; }
 .account-status { color: var(--green); }
+/* image documents */
+.image-view { flex: 1; min-height: 0; overflow: auto; display: flex; align-items: flex-start; justify-content: center; padding: 16px;
+  background: repeating-conic-gradient(color-mix(in srgb, var(--fg) 6%, transparent) 0% 25%, transparent 0% 50%) 50% / 20px 20px; }
+.image-view img { max-width: 100%; max-height: calc(100vh - 220px); object-fit: contain; cursor: zoom-in; box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15); }
+.image-view.zoomed { justify-content: flex-start; }
+.image-view.zoomed img { max-width: none; max-height: none; cursor: zoom-out; }
+/* discussion panel: ask about the whole document */
+.ask-document { padding: 8px 10px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
+.ask-document textarea { width: 100%; resize: vertical; font: inherit; font-size: 13px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--fg); box-sizing: border-box; }
+.ask-document textarea:focus { outline: none; border-color: var(--primary); }
+.ask-document-row { display: flex; align-items: center; gap: 8px; justify-content: space-between; }

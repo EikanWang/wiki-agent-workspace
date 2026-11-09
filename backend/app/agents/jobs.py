@@ -260,7 +260,8 @@ class JobManager:
                     pre_sha = None
             turn = TurnContext(prompt=prompt, workspace=root, native_session_id=native_id,
                                title=display_name or (doc_path and f"Wiki: {doc_path}"),
-                               cwd=cwd, sandbox=sandbox, model=model, variant=variant)
+                               cwd=cwd, sandbox=sandbox, model=model, variant=variant,
+                               attachments=[Path(p) for p in context.get("attachments", []) if Path(p).is_file()])
             handle = await adapter.resume_turn(turn)
         except ProviderError as exc:
             self._finish(job_id, "failed", exc.code, exc.message, "")
