@@ -110,8 +110,11 @@ class WorkspaceRegistry:
                 self.runtimes[rt.id] = rt
                 self.order.append(rt.id)
 
-        if nw.is_default:  # the folders of config.toml are always part of Default
+        if nw.is_default:  # the folders of config.toml are part of Default — unless the user closed them
+            closed = set(json.loads(nw.closed_roots or "[]"))
             for root, name in self._config_roots():
+                if str(root.resolve()) in closed:
+                    continue
                 r = next((x for x in reuse.values() if x.root == root.resolve()), None)
                 if r is not None:
                     r.configured = True
@@ -249,6 +252,11 @@ class WorkspaceRegistry:
                 row.name = name or row.name or rt.root.name
         rt.watcher.start()
         self.missing = [m for m in self.missing if m["id"] != rt.id]
+        with self.db.write() as s:  # adding a closed config.toml folder again reopens it for good
+            nw = s.get(NamedWorkspace, self.current)
+            if nw is not None:
+                closed = [c for c in json.loads(nw.closed_roots or "[]") if c != str(rt.root)]
+                nw.closed_roots = json.dumps(closed)
         self._save_folders()
         self.bus.publish("global", {"type": "workspaces_changed"})
         return rt
@@ -264,10 +272,9 @@ class WorkspaceRegistry:
             self._save_folders()
             return {"id": workspace_id, "removed": True}
         rt = self.get(workspace_id)
-        if rt.configured:
-            raise conflict("CONFIGURED_WORKSPACE", "this folder is defined in config.toml; remove it there")
         if len(self.order) <= 1:
             raise conflict("LAST_WORKSPACE", "the window needs at least one folder")
+        was_primary = self.order[0] == workspace_id
         await rt.watcher.stop()
         del self.runtimes[workspace_id]
         self.order.remove(workspace_id)
@@ -275,7 +282,14 @@ class WorkspaceRegistry:
             row = s.get(Workspace, workspace_id)
             if row is not None:
                 row.active = False
+            if rt.configured:  # a config.toml folder: remember it is closed, so it does not come back at startup
+                nw = s.get(NamedWorkspace, self.current)
+                if nw is not None:
+                    closed = set(json.loads(nw.closed_roots or "[]")) | {str(rt.root)}
+                    nw.closed_roots = json.dumps(sorted(closed))
         self._save_folders()
+        if was_primary and self.on_switch:
+            self.on_switch(self)  # process-wide defaults (jobs, terminals) follow the new first folder
         self.bus.publish("global", {"type": "workspaces_changed"})
         return {"id": workspace_id, "removed": True, "data_kept": True}
 
@@ -562,4 +576,101 @@ def make_server_dir(body: MkdirIn, ctx: AppContext = Depends(require_auth_mutati
         else:
             (target / ".gitignore").write_text(".waw-tmp-*\n")  # the app's atomic-write temporaries
     return {"path": str(target.resolve()), "is_git": (target / ".git").exists(), "git_error": git_error}
+
+
+# ---------------------------------------------------------------------- clone a repository (add a project by URL)
+
+_clones: dict[str, dict[str, Any]] = {}
+_URL = __import__("re").compile(r"^(https?://|ssh://|git://|file://)[^\s]+$|^[\w.-]+@[\w.-]+:[^\s]+$")
+
+
+def _repo_name(url: str) -> str:
+    tail = url.rstrip("/").rsplit("/", 1)[-1].rsplit(":", 1)[-1]
+    return tail[:-4] if tail.endswith(".git") else tail
+
+
+class CloneIn(BaseModel):
+    url: str = Field(min_length=3, max_length=2000)
+    parent: str = Field(min_length=1, max_length=4096)
+    name: str | None = Field(None, max_length=255)
+    shallow: bool = False
+
+
+@router.post("/fs/clone", status_code=202)
+def clone_repository(body: CloneIn, ctx: AppContext = Depends(require_auth_mutating)):
+    """Clone a Git repository (https / ssh / git@host:path) into a new folder on the server, in the background.
+    Uses the server user's own Git credentials (e.g. `gh` for GitHub). Poll GET /fs/clone/{id}; when it is done,
+    add the folder with POST /workspaces."""
+    import subprocess
+    import threading
+    import time as _time
+
+    from .db import new_id
+
+    url = body.url.strip()
+    if not _URL.match(url) or url.startswith("-"):
+        raise bad_request("give a Git URL, e.g. https://github.com/owner/repo.git or git@github.com:owner/repo.git", "INVALID_URL")
+    name = (body.name or "").strip() or _repo_name(url)
+    if not name or name in (".", "..") or "/" in name or name.startswith("-"):
+        raise bad_request("invalid folder name", "INVALID_NAME")
+    parent = Path(body.parent).expanduser()
+    if not parent.is_absolute() or not parent.is_dir():
+        raise not_found(f"{parent} is not a directory on the server", "FOLDER_NOT_FOUND")
+    target = parent / name
+    if target.exists():
+        raise conflict("ALREADY_EXISTS", f"{target} already exists", path=str(target))
+    if any(c["target"] == str(target) and c["state"] == "running" for c in _clones.values()):
+        raise conflict("ALREADY_CLONING", f"{target} is being cloned already")
+    cid = new_id()
+    job: dict[str, Any] = {"id": cid, "url": url, "target": str(target), "state": "running", "progress": "Starting…", "error": None,
+                           "started": _time.time()}
+    _clones[cid] = job
+    args = ["git", "clone", "--progress"] + (["--depth", "1"] if body.shallow else []) + ["--", url, str(target)]
+
+    def run() -> None:
+        import os
+        import re as _re
+
+        env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_SSH_COMMAND": os.environ.get("GIT_SSH_COMMAND", "ssh -o BatchMode=yes")}
+        try:
+            p = subprocess.Popen(args, cwd=str(parent), env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.PIPE, text=True, bufsize=1)
+            tail: list[str] = []
+            buf = ""
+            assert p.stderr is not None
+            while True:
+                ch = p.stderr.read(1)
+                if not ch:
+                    break
+                if ch in "\r\n":
+                    if buf.strip():
+                        job["progress"] = buf.strip()[:200]
+                        tail = (tail + [buf.strip()])[-6:]
+                    buf = ""
+                else:
+                    buf += ch
+            rc = p.wait()
+            if rc == 0 and target.is_dir():
+                job.update(state="done", progress="Cloned", path=str(target.resolve()))
+                log.info("cloned %s into %s", url, target)
+            else:
+                msg = " ".join(ln for ln in tail if not _re.match(r"^(Cloning into|remote: (Enumerating|Counting|Compressing))", ln))
+                job.update(state="failed", error=(msg or f"git clone failed (exit {rc})")[-400:])
+                import shutil as _sh
+
+                if target.exists():
+                    _sh.rmtree(target, ignore_errors=True)  # no half-cloned folder left behind
+        except Exception as exc:  # pragma: no cover
+            job.update(state="failed", error=f"{exc.__class__.__name__}: {exc}")
+
+    threading.Thread(target=run, daemon=True, name=f"clone-{cid[:8]}").start()
+    return job
+
+
+@router.get("/fs/clone/{clone_id}")
+def clone_status(clone_id: str, ctx: AppContext = Depends(require_auth)):
+    job = _clones.get(clone_id)
+    if job is None:
+        raise not_found("unknown clone", "CLONE_NOT_FOUND")
+    return job
 

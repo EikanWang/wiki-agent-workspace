@@ -634,7 +634,7 @@ export default function App() {
   const activeWsInfo = useMemo(() => workspaces.find((w) => w.id === activeWs) ?? null, [workspaces, activeWs]);
   const removeFolder = useCallback(
     async (w: WorkspaceInfo) => {
-      if (!window.confirm(`Remove "${w.name}" (${w.root}) from this window? Its discussions, sessions and history are kept and come back if you add the folder again.`)) return;
+      if (!window.confirm(`Close "${w.name}" (${w.root})? It will not show again. Its discussions, sessions and history are kept and come back if you add the folder again with +.`)) return;
       try {
         await del(`/workspaces/${w.id}`);
         if (w.id === getWorkspace()) {
@@ -642,7 +642,7 @@ export default function App() {
           if (primary) switchWorkspace(primary.id);
         }
         await refreshWorkspaces();
-        notify(`Removed ${w.name} from the window.`);
+        notify(`Closed ${w.name}.`);
       } catch (e) {
         notify((e as ApiError).message);
       }

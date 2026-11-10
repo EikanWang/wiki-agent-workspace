@@ -69,7 +69,7 @@ async def test_add_folder_and_isolation_of_same_relative_paths(running_app, sett
     assert (await api.post("/api/v1/workspaces", json={"root": "relative/path"})).status_code == 400
     assert (await api.post("/api/v1/workspaces", json={"root": str(tmp_path / "nope")})).status_code == 404
     assert (await api.get("/api/v1/files", headers={"x-workspace": "00000000-0000-0000-0000-000000000000"})).status_code == 404
-    assert (await api.delete(f"/api/v1/workspaces/{ws1}")).json()["error"]["code"] == "CONFIGURED_WORKSPACE"
+    assert (await api.delete(f"/api/v1/workspaces/{ws1}")).status_code == 200  # config folders can be closed too
 
 
 async def test_added_folders_persist_and_removed_ones_keep_their_data(running_app, settings, tmp_path: Path):
@@ -117,7 +117,6 @@ async def test_config_lists_several_roots_and_folder_picker(running_app, tmp_pat
     h = await running_app(s)
     lst = (await h.api.get("/api/v1/workspaces")).json()["workspaces"]
     assert [w["name"] for w in lst] == [workspace.name, "From config"] and all(w["configured"] for w in lst)
-    assert (await h.api.delete(f"/api/v1/workspaces/{lst[1]['id']}")).json()["error"]["code"] == "CONFIGURED_WORKSPACE"
     pick = (await h.api.get("/api/v1/fs/dirs", params={"path": str(tmp_path)})).json()
     names = {e["name"]: e for e in pick["entries"]}
     assert names["cfg-second"]["is_git"] is True and pick["parent"] == str(tmp_path.parent)
@@ -223,3 +222,61 @@ async def test_folder_picker_can_create_a_folder(api: Api, tmp_path: Path):
     assert (await api.post("/api/v1/fs/mkdir", json={"parent": "relative", "name": "x"})).status_code == 400
     r = await api.post("/api/v1/fs/mkdir", json={"parent": str(tmp_path), "name": "plain"})
     assert r.status_code == 201 and r.json()["is_git"] is False
+
+
+async def test_close_a_config_folder_for_good_and_reopen_it(running_app, tmp_path: Path, workspace: Path):
+    """Closing a folder (also one from config.toml, also the first one) keeps it closed across restarts."""
+    second = tmp_path / "cfg-second"
+    make_workspace(second)
+    s = make_settings(tmp_path / "multi", workspace)
+    s.workspaces = [{"root": str(second), "name": "From config"}]
+    h = await running_app(s)
+    lst = (await h.api.get("/api/v1/workspaces")).json()["workspaces"]
+    assert (await h.api.delete(f"/api/v1/workspaces/{lst[0]['id']}")).status_code == 200  # the primary one
+    lst2 = (await h.api.get("/api/v1/workspaces")).json()["workspaces"]
+    assert [w["name"] for w in lst2] == ["From config"] and lst2[0]["primary"] is True
+    assert h.ctx.workspace_root == second.resolve()  # defaults follow the new first folder
+    assert (await h.api.delete(f"/api/v1/workspaces/{lst2[0]['id']}")).json()["error"]["code"] == "LAST_WORKSPACE"
+    await h.stop()
+    h2 = await running_app(s)
+    assert [w["name"] for w in (await h2.api.get("/api/v1/workspaces")).json()["workspaces"]] == ["From config"]  # stays closed
+    # adding it again reopens it for good
+    assert (await h2.api.post("/api/v1/workspaces", json={"root": str(workspace)})).status_code == 201
+    await h2.stop()
+    h3 = await running_app(s)
+    assert len((await h3.api.get("/api/v1/workspaces")).json()["workspaces"]) == 2
+
+
+async def _wait_clone(api, cid):
+    import asyncio
+
+    for _ in range(200):
+        j = (await api.get(f"/api/v1/fs/clone/{cid}")).json()
+        if j["state"] != "running":
+            return j
+        await asyncio.sleep(0.1)
+    raise AssertionError("clone did not finish")
+
+
+async def test_add_a_project_by_cloning_a_url(api: Api, tmp_path: Path):
+    import subprocess
+
+    src = tmp_path / "origin-wiki"
+    make_workspace(src)
+    bare = tmp_path / "origin.git"
+    subprocess.run(["git", "clone", "-q", "--bare", str(src), str(bare)], check=True)
+    dest = tmp_path / "projects"
+    dest.mkdir()
+    r = await api.post("/api/v1/fs/clone", json={"url": f"file://{bare}", "parent": str(dest)})
+    assert r.status_code == 202, r.text
+    j = await _wait_clone(api, r.json()["id"])
+    assert j["state"] == "done" and j["path"] == str((dest / "origin").resolve()) and (dest / "origin" / "README.md").is_file()
+    assert (await api.post("/api/v1/workspaces", json={"root": j["path"]})).status_code == 201
+    # refused: an existing folder, not a URL, option injection
+    assert (await api.post("/api/v1/fs/clone", json={"url": f"file://{bare}", "parent": str(dest)})).status_code == 409
+    assert (await api.post("/api/v1/fs/clone", json={"url": "not a url", "parent": str(dest)})).status_code == 400
+    assert (await api.post("/api/v1/fs/clone", json={"url": "--upload-pack=touch /tmp/x", "parent": str(dest)})).status_code == 400
+    # a failing clone reports git's message and leaves no folder behind
+    r = await api.post("/api/v1/fs/clone", json={"url": f"file://{tmp_path}/nope.git", "parent": str(dest), "name": "broken"})
+    j = await _wait_clone(api, r.json()["id"])
+    assert j["state"] == "failed" and j["error"] and not (dest / "broken").exists()

@@ -52,6 +52,8 @@ class NamedWorkspace(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     name: Mapped[str] = mapped_column(Text, nullable=False)
     folders: Mapped[str] = mapped_column(Text, nullable=False, default="[]", server_default="[]")  # JSON list of workspaces.id
+    # config.toml folders the user closed in this workspace (resolved paths): not re-added at startup
+    closed_roots: Mapped[str] = mapped_column(Text, nullable=False, default="[]", server_default="[]")
     is_default: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     current: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)

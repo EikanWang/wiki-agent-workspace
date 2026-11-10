@@ -496,8 +496,8 @@ export default function FileTree({
                   {!ws.available && <span className="git-badge deleted">missing</span>}
                 </button>
                 <span className="tree-actions root-actions">
-                  {onRemoveFolder && !ws.configured && (
-                    <button className="tree-action remove hover-only" onClick={() => onRemoveFolder(ws)} title="Remove this folder from the window (its discussions and history are kept)" data-testid={`tree-remove-${ws.name}`}>✕</button>
+                  {onRemoveFolder && (
+                    <button className="tree-action remove hover-only" onClick={() => onRemoveFolder(ws)} title="Close this folder (it stays closed; its discussions and history are kept — add it again with + to reopen)" data-testid={`tree-remove-${ws.name}`}>✕</button>
                   )}
                   {ws.available && (
                     <span className="hover-only-group">{newButtons(ws.id, "", i === 0 ? "-root" : `-root-${ws.name}`)}</span>

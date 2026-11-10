@@ -99,6 +99,7 @@ cannot be deleted. Folder data belongs to `workspaces`, so a folder in two named
 | `id` | UUID, PK | Named workspace id. |
 | `name` | TEXT | Display name (unique among named workspaces; enforced by the app). |
 | `folders` | TEXT (JSON array of `workspaces.id`) | Folders in file-tree order, including currently unavailable ones. |
+| `closed_roots` | TEXT (JSON array of paths) | `config.toml` folders closed in the UI in this workspace: not reopened at startup (until added again). |
 | `is_default` | BOOLEAN | The Default workspace. |
 | `current` | BOOLEAN | The workspace the window shows now. |
 | `created_at`, `last_opened_at` | DATETIME | Lifecycle. |

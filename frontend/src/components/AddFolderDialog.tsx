@@ -20,6 +20,13 @@ export default function AddFolderDialog({ start, onAdded, onClose, mode = "add",
   const [copyCurrent, setCopyCurrent] = useState(false);
   const [newDir, setNewDir] = useState<string | null>(null); // name being typed for "New folder"
   const [newDirGit, setNewDirGit] = useState(true);
+  // "Clone from URL": a Git repository cloned on the server into the folder shown, then opened
+  const [source, setSource] = useState<"folder" | "url">("folder");
+  const [url, setUrl] = useState("");
+  const [cloneName, setCloneName] = useState("");
+  const [shallow, setShallow] = useState(false);
+  const [clone, setClone] = useState<{ id: string; state: string; progress: string; error: string | null; path?: string; target: string } | null>(null);
+  const urlName = url.trim().replace(/\/+$/, "").split(/[/:]/).pop()?.replace(/\.git$/, "") ?? "";
   const [path, setPath] = useState(start);
   const [typed, setTyped] = useState(start);
   const [listing, setListing] = useState<DirListing | null>(null);
@@ -69,6 +76,36 @@ export default function AddFolderDialog({ start, onAdded, onClose, mode = "add",
     }
   };
 
+  const startClone = async () => {
+    if (!listing || !url.trim()) return;
+    setError(null);
+    try {
+      const j = await post<{ id: string; state: string; progress: string; error: string | null; target: string }>("/fs/clone", { url: url.trim(), parent: listing.path, name: cloneName.trim() || null, shallow });
+      setClone(j);
+      const poll = async () => {
+        const s = await get<{ id: string; state: string; progress: string; error: string | null; path?: string; target: string }>(`/fs/clone/${j.id}`);
+        setClone(s);
+        if (s.state === "running") window.setTimeout(() => void poll(), 800);
+        else if (s.state === "done" && s.path) {
+          // open it: as a folder of this window, or as the first folder of a new workspace
+          try {
+            if (mode === "new-workspace") {
+              await post("/named-workspaces", { name: wsName.trim() || (cloneName.trim() || urlName), root: s.path, copy_current: copyCurrent });
+              onWorkspaceCreated?.();
+            } else {
+              onAdded(await post<WorkspaceInfo>("/workspaces", { root: s.path, name: name.trim() || null }));
+            }
+          } catch (e) {
+            setError((e as ApiError).message);
+          }
+        }
+      };
+      window.setTimeout(() => void poll(), 500);
+    } catch (e) {
+      setError((e as ApiError).message);
+    }
+  };
+
   const add = async () => {
     if (!listing) return;
     setBusy(true);
@@ -96,6 +133,26 @@ export default function AddFolderDialog({ start, onAdded, onClose, mode = "add",
           <span>{mode === "new-workspace" ? "New workspace" : "Add a folder to this window"}</span>
           <button className="icon-btn" onClick={onClose}>×</button>
         </div>
+        <span className="mode-switch" role="tablist" aria-label="Source">
+          <button role="tab" aria-selected={source === "folder"} className={source === "folder" ? "active" : ""} onClick={() => setSource("folder")} data-testid="add-source-folder">Folder on the server</button>
+          <button role="tab" aria-selected={source === "url"} className={source === "url" ? "active" : ""} onClick={() => setSource("url")} data-testid="add-source-url">Clone from URL</button>
+        </span>
+        {source === "url" && (
+          <div className="clone-box" data-testid="clone-box">
+            <input className="path-input" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://github.com/owner/repo.git  or  git@github.com:owner/repo.git" autoFocus data-testid="clone-url"
+              onKeyDown={(e) => { if (e.key === "Enter") void startClone(); }} disabled={clone?.state === "running"} />
+            <div className="row">
+              <input value={cloneName} onChange={(e) => setCloneName(e.target.value)} placeholder={`Folder name (default: ${urlName || "repo name"})`} data-testid="clone-name" disabled={clone?.state === "running"} />
+              <label className="small" title="Only the latest commit: much faster for big repositories, but no history (diffs against older commits, blame)"><input type="checkbox" checked={shallow} onChange={(e) => setShallow(e.target.checked)} /> latest commit only</label>
+            </div>
+            <div className="muted small">Cloned into <code>{listing ? `${listing.path}/${cloneName.trim() || urlName || "…"}` : "…"}</code> with the server's Git credentials (e.g. <code>gh</code> for GitHub); browse below to choose another place.</div>
+            {clone && (
+              <div className={`small ${clone.state === "failed" ? "error-text" : ""}`} data-testid="clone-status" data-state={clone.state}>
+                {clone.state === "running" ? `Cloning… ${clone.progress}` : clone.state === "done" ? "Cloned; opening…" : `Clone failed: ${clone.error}`}
+              </div>
+            )}
+          </div>
+        )}
         {mode === "new-workspace" ? (
           <>
             <div className="muted small">
@@ -146,8 +203,12 @@ export default function AddFolderDialog({ start, onAdded, onClose, mode = "add",
           </div>
         )}
         <div className="row">
-          {mode === "add" && <input value={name} onChange={(e) => setName(e.target.value)} placeholder={`Display name (default: ${folderName})`} data-testid="add-folder-name" />}
-          {mode === "add" ? (
+          {mode === "add" && <input value={name} onChange={(e) => setName(e.target.value)} placeholder={`Display name (default: ${source === "url" ? cloneName.trim() || urlName || "repo name" : folderName})`} data-testid="add-folder-name" />}
+          {source === "url" ? (
+            <button className="btn primary" disabled={!url.trim() || !listing || loading || clone?.state === "running" || (mode === "new-workspace" && !wsName.trim())} onClick={() => void startClone()} data-testid="clone-submit">
+              {clone?.state === "running" ? "Cloning…" : mode === "new-workspace" ? "Clone and create workspace" : "Clone and add"}
+            </button>
+          ) : mode === "add" ? (
             <button className="btn primary" disabled={busy || stale || !!listing?.open_as} onClick={() => void add()} data-testid="add-folder-submit" title={stale ? "Press Enter / Go to open the typed path first" : undefined}>
               {listing?.open_as ? "Already open" : busy ? "Adding…" : loading ? "Loading…" : "Add folder"}
             </button>

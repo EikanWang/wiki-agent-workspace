@@ -51,12 +51,15 @@ state. Nothing is shared between folders except your login, terminals and prefer
   (where your wikis and agents live). Pick a folder (Git repositories are marked), optionally give it a display name,
   **Add folder**. It persists across restarts. **＋ New folder** in the picker creates a folder in the one shown
   (with **git init** ticked it becomes a Git repository, with a `.gitignore` for the app's temporary files) — handy
-  for starting a new wiki.
+  for starting a new wiki. **Clone from URL** (tab in the same dialog) clones a Git repository —
+  `https://github.com/owner/repo.git` or `git@github.com:owner/repo.git` — into the folder shown (name editable;
+  *latest commit only* for big repositories), with progress, using the server's Git credentials, then opens it.
 - **Switch folder**: click any file in another folder's tree, use the folder selector in the top bar, or open an
   entry from *Recent*. The header, Diff, Commit, Review and the discussion panel always follow the active folder; the
   last document of each folder is remembered.
-- **Remove a folder** from the window: hover its header row in the tree and click `✕`. Its data is kept — add the
-  same folder again and everything is back. Folders defined in `config.toml` can only be removed there.
+- **Close a folder**: hover its header row in the tree and click `✕`. It does not show again — also after a
+  restart, also for folders defined in `config.toml`. Its data is kept: add the same folder again with `＋` and
+  everything is back. The window needs at least one folder.
 - A folder that disappeared from disk is shown as *missing*; restore it or remove it.
 - Folders can also be preconfigured: see `[[workspaces]]` in [CONFIGURATION.md](CONFIGURATION.md).
 

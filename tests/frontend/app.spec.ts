@@ -2020,3 +2020,44 @@ test("diff line numbers are those of the files (Markdown '---' rules, no final n
     gitCommitAll(ws, "cleanup numbers");
   }
 });
+
+test("projects: add one by cloning a URL, close it, and it stays closed", async ({ page }) => {
+  await login(page);
+  const parent = path.dirname(workspaceDir());
+  const cp = require("child_process") as typeof import("child_process");
+  const src = path.join(parent, "clone-src");
+  const bare = path.join(parent, "clone-src.git");
+  const dest = path.join(parent, "clone-src-copy");
+  for (const d of [src, bare, dest]) fs.rmSync(d, { recursive: true, force: true });
+  fs.mkdirSync(src);
+  fs.writeFileSync(path.join(src, "hello.md"), "# Hello from a clone\n");
+  cp.execSync("git init -q && git add -A && git -c user.email=t@e -c user.name=T commit -qm init", { cwd: src });
+  cp.execSync(`git clone -q --bare "${src}" "${bare}"`);
+  try {
+    await expect(page.getByTestId("tree-root")).toHaveCount(1);
+    await page.getByTestId("tree-add-folder").click();
+    await page.getByTestId("add-folder-path").fill(parent);
+    await page.getByTestId("add-folder-path").press("Enter");
+    await expect(page.getByTestId("add-folder-selected")).toContainText(parent);
+    await page.getByTestId("add-source-url").click();
+    await page.getByTestId("clone-url").fill(`file://${bare}`);
+    await page.getByTestId("clone-name").fill("clone-src-copy");
+    await page.getByTestId("clone-submit").click();
+    // cloned and opened as a folder of the window
+    await expect(page.getByTestId("tree-root")).toHaveCount(2, { timeout: 30000 });
+    await expect(page.getByTestId("add-folder-dialog")).toHaveCount(0);
+    expect(fs.existsSync(path.join(dest, "hello.md"))).toBe(true);
+    const root = page.getByTestId("tree-root").nth(1);
+    await expect(root).toContainText("clone-src-copy");
+    // the config.toml folder can be closed too (button present); close the clone
+    await expect(page.getByTestId("tree-root").first().locator('[data-testid^="tree-remove-"]')).toHaveCount(1);
+    page.once("dialog", (d) => { expect(d.message()).toContain("will not show again"); d.accept(); });
+    await root.locator(".tree-root").hover();
+    await page.getByTestId("tree-remove-clone-src-copy").click();
+    await expect(page.getByTestId("tree-root")).toHaveCount(1);
+    await page.reload();
+    await expect(page.getByTestId("tree-root")).toHaveCount(1); // stays closed
+  } finally {
+    for (const d of [src, bare, dest]) fs.rmSync(d, { recursive: true, force: true });
+  }
+});

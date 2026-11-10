@@ -733,3 +733,4 @@ mark.waw-hl.review.needs_review { border-bottom: 2px dashed var(--warn); }
 /* GitHub "suggested change" blocks */
 .gh-comment-body pre:has(> code.language-suggestion) { border-left: 3px solid var(--green); }
 .gh-comment-body pre:has(> code.language-suggestion)::before { content: "Suggested change"; display: block; font-family: var(--sans, sans-serif); font-size: 11px; font-weight: 600; color: var(--green); margin-bottom: 4px; }
+.clone-box { display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 1px solid var(--border); border-radius: 8px; }
