@@ -183,9 +183,11 @@ class OpenCodeCliAdapter(AgentAdapter):
         if ctx.variant:
             args += ["--variant", ctx.variant]
         args += list(self.cfg.extra_args)
-        # "--file=PATH" (not "-f PATH"): the option takes several values and would swallow the prompt
+        # --file takes several values and swallows every following argument, even in the "--file=PATH" form
+        # (the prompt then becomes a "file": "File not found: <prompt>"). "--" ends the options, so the prompt
+        # is always the message — also when it starts with "-".
         args += [f"--file={p}" for p in ctx.attachments]
-        args.append(ctx.prompt)
+        args += ["--", ctx.prompt]
         return OpenCodeCliTurn(args, cwd=ctx.cwd or ctx.workspace)
 
     async def list_models(self) -> list[dict[str, Any]]:

@@ -70,10 +70,23 @@ def main(argv):
             directory = args[i + 1]
             i += 2
             continue
-        if a.startswith("--file="):  # attachments (images of the document being discussed)
-            with (STATE / "opencode_last_files").open("a") as fh:
-                fh.write(a.split("=", 1)[1] + "\n")
+        if a == "--":  # end of options: everything after it is the message
+            rest.extend(args[i + 1:])
+            break
+        if a.startswith("--file=") or a in ("--file", "-f"):
+            # like the real CLI (yargs array option): it takes this value AND every following argument up to the
+            # next option or "--" — a prompt placed right after it would be read as a file name
+            files = [a.split("=", 1)[1]] if "=" in a else []
             i += 1
+            while i < len(args) and not args[i].startswith("-"):
+                files.append(args[i])
+                i += 1
+            for f in files:
+                if not os.path.exists(f):
+                    sys.stderr.write(f"Error: File not found: {f}\n")
+                    return 1
+            with (STATE / "opencode_last_files").open("a") as fh:
+                fh.write("".join(f + "\n" for f in files))
             continue
         rest.append(a)
         i += 1

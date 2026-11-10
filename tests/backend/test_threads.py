@@ -522,7 +522,8 @@ def test_codex_and_opencode_pass_attachments_without_swallowing_the_prompt(tmp_p
         if cls is CodexAdapter:
             assert args[-1] == "-" and args.index(f"--image={img}") < len(args) - 1
         else:
-            assert args[-1] == "PROMPT"
+            # the real opencode's --file swallows following arguments: the prompt must come after "--"
+            assert args[-2:] == ["--", "PROMPT"] and args.index(f"--file={img}") < args.index("--")
     assert P(img).exists()
 
 
