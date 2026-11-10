@@ -38,10 +38,14 @@ def build_pr_prompt(*, question: str, quote: str, copy_text: str, copy_path: str
         "hardware/software concepts involved, and cite wiki pages you rely on.",
         f"The pull request (metadata, description and full diff) is in this file: {copy_path}",
     ]
+    copy_text, _, discussion = copy_text.partition("\n\x00DISCUSSION\x00")
     if len(copy_text) <= PR_INLINE_CHARS:
         parts.append("<<<PULL_REQUEST\n" + copy_text + "\nPULL_REQUEST>>>")
     else:
         parts.append("<<<PULL_REQUEST (first part; read the file for the rest)\n" + copy_text[:PR_INLINE_CHARS] + "\nPULL_REQUEST>>>")
+    if discussion.strip():
+        parts.append("What reviewers have said so far (conversation and review threads; consider it, don't repeat resolved points):")
+        parts.append("<<<REVIEW_DISCUSSION\n" + discussion[:40_000] + "\nREVIEW_DISCUSSION>>>")
     if target and target.get("kind") == "text" and quote:
         where = target.get("label") or "the diff"
         parts.append(f"The user selected these lines of {where} in the pull request (verbatim):")
@@ -59,7 +63,11 @@ def _pr_copy(docs, doc_path: str) -> tuple[str, str]:
     from .documents import pr_snapshot_path
 
     p = pr_snapshot_path(docs.snapshots_dir, doc_path)
-    return (p.read_text(encoding="utf-8") if p and p.is_file() else "", str(p) if p else "")
+    text = p.read_text(encoding="utf-8") if p and p.is_file() else ""
+    disc = p.with_name(p.stem + ".discussion.md") if p else None
+    if disc and disc.is_file():  # what reviewers said (written when the PR's comments load); kept apart from the diff
+        text += "\n\x00DISCUSSION\x00" + disc.read_text(encoding="utf-8")
+    return text, str(p) if p else ""
 
 
 def describe_target(target: dict[str, Any] | None, document_path: str) -> str | None:

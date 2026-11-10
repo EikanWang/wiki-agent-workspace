@@ -81,6 +81,7 @@ deleted. Kept when GitHub refuses the review.
 | `id` | UUID, PK | Draft id. |
 | `repo`, `number` | TEXT (owner/name, lower case), INTEGER | The pull request. |
 | `path` | TEXT | File in the PR. |
+| `subject` | `line` \| `file` | `file`: a comment on the whole file (`line` is 0). |
 | `side`, `line` | `LEFT` (old) \| `RIGHT` (new), INTEGER | Line the comment is on (the last line of a range). |
 | `start_side`, `start_line` | nullable | First line of a multi-line comment. |
 | `line_text` | TEXT | The commented diff lines, for display. |

@@ -135,12 +135,42 @@ def test_gh_errors_are_classified(monkeypatch):
             raise AssertionError("no error")
 
 
-def fake_pr_detail(calls):
+def fake_pr_detail(calls, gh=None):
+    """Fake GitHub GraphQL for one PR. `gh` (optional dict) holds threads/conversation/viewed state and records
+    mutations, so review features can be checked end to end."""
+    gh = gh if gh is not None else {}
+    gh.setdefault("viewed", {})
+    gh.setdefault("threads", [])
+    gh.setdefault("conversation", {"reviews": [], "comments": [], "pending": []})
+    gh.setdefault("mutations", [])
+
     def graphql(q, v):
         calls.append(v)
-        if "pullRequest(number" in q:
+        if q.lstrip().startswith("mutation"):
+            name = q.split()[1].split("(")[0]
+            gh["mutations"].append((name, v))
+            if gh.get("refuse") == name:
+                return {name and "x": None, "_errors": [{"message": "Line could not be resolved"}]}
+            key = {"MarkViewed": "markFileAsViewed", "MarkUnviewed": "unmarkFileAsViewed", "Resolve": "resolveReviewThread",
+                   "Unresolve": "unresolveReviewThread", "AddReview": "addPullRequestReview", "AddThread": "addPullRequestReviewThread",
+                   "Submit": "submitPullRequestReview", "DeleteReview": "deletePullRequestReview"}[name]
+            if name in ("MarkViewed", "MarkUnviewed"):
+                gh["viewed"][v["path"]] = "VIEWED" if name == "MarkViewed" else "UNVIEWED"
+            res = {"AddReview": {"pullRequestReview": {"id": "PRR_new"}}, "Submit": {"pullRequestReview": {"url": "https://github.com/pytorch/pytorch/pull/7#pullrequestreview-1"}},
+                   "Resolve": {"thread": {"id": v.get("id"), "isResolved": True}}, "Unresolve": {"thread": {"id": v.get("id"), "isResolved": False}}}.get(name, {"clientMutationId": None, "thread": {"id": "T"}})
+            return {key: res}
+        if "query PrFiles" in q:
+            return {"repository": {"pullRequest": {"files": {"pageInfo": {"hasNextPage": False}, "nodes": [{"path": k, "viewerViewedState": x} for k, x in gh["viewed"].items()]}}}}
+        if "query PrThreads" in q:
+            return {"repository": {"pullRequest": {"reviewThreads": {"pageInfo": {"hasNextPage": False}, "nodes": gh["threads"]}}}}
+        if "query PrConversation" in q:
+            c = gh["conversation"]
+            return {"repository": {"pullRequest": {"reviews": {"totalCount": len(c["reviews"]), "nodes": c["reviews"]},
+                                                    "comments": {"totalCount": len(c["comments"]), "nodes": c["comments"]},
+                                                    "pending": {"nodes": c["pending"]}}}}
+        if "query PrDetail" in q:
             return {"repository": {"nameWithOwner": "pytorch/pytorch", "isPrivate": False, "pullRequest": {
-                "number": 7, "title": "[xpu] Faster GEMM", "url": "https://github.com/pytorch/pytorch/pull/7", "body": "Speeds up **GEMM**.",
+                "id": "PR_node7", "number": 7, "title": "[xpu] Faster GEMM", "url": "https://github.com/pytorch/pytorch/pull/7", "body": "Speeds up **GEMM**.",
                 "state": "OPEN", "isDraft": False, "createdAt": "2026-11-01T00:00:00Z", "updatedAt": "2026-11-08T00:00:00Z", "mergeable": "MERGEABLE",
                 "additions": 3, "deletions": 1, "changedFiles": 2, "baseRefName": "main", "headRefName": "gemm", "reviewDecision": "REVIEW_REQUIRED",
                 "author": {"login": "alice"}, "labels": {"nodes": [{"name": "module: xpu", "color": "0e8a16"}]},
@@ -212,68 +242,98 @@ async def test_pull_request_tab_wiki_mapping_and_discussion(running_app, workspa
     assert (await api.get("/api/v1/github/pr/..%2Fx/y/1")).status_code in (400, 403, 404)
 
 
-async def test_pr_review_comments_drafts_publish_and_reply(running_app):
+async def test_pr_review_threads_conversation_viewed_drafts_and_publish(running_app, settings):
     github_hub.reset_cache()
     calls: list = []
+    gh = {"viewed": {"a.cpp": "DISMISSED", "b.md": "UNVIEWED"},
+          "threads": [
+              {"id": "PRRT_t1", "isResolved": False, "isOutdated": False, "path": "a.cpp", "line": 1, "originalLine": 1, "startLine": None,
+               "diffSide": "RIGHT", "startDiffSide": None, "subjectType": "LINE", "resolvedBy": None,
+               "comments": {"totalCount": 2, "nodes": [{"databaseId": 11, "author": {"login": "bob"}, "body": "why?", "createdAt": "2026-11-07T00:00:00Z", "url": "u", "diffHunk": "@@ -1 +1 @@\n-x\n+y"},
+                                                        {"databaseId": 12, "author": {"login": "alice"}, "body": "because", "createdAt": "2026-11-07T01:00:00Z", "url": "u2", "diffHunk": "@@"}]}},
+              {"id": "PRRT_t2", "isResolved": True, "isOutdated": True, "path": "a.cpp", "line": None, "originalLine": 5, "startLine": None,
+               "diffSide": "RIGHT", "startDiffSide": None, "subjectType": "LINE", "resolvedBy": {"login": "bob"},
+               "comments": {"totalCount": 1, "nodes": [{"databaseId": 13, "author": {"login": "bob"}, "body": "old", "createdAt": "2026-11-06T00:00:00Z", "url": "u3", "diffHunk": "@@"}]}},
+              {"id": "PRRT_t3", "isResolved": False, "isOutdated": False, "path": "b.md", "line": None, "originalLine": None, "startLine": None,
+               "diffSide": "RIGHT", "startDiffSide": None, "subjectType": "FILE", "resolvedBy": None,
+               "comments": {"totalCount": 1, "nodes": [{"databaseId": 14, "author": {"login": "carol"}, "body": "rename this file", "createdAt": "2026-11-08T00:00:00Z", "url": "u4", "diffHunk": None}]}}],
+          "conversation": {"reviews": [{"databaseId": 21, "author": {"login": "bob"}, "state": "CHANGES_REQUESTED", "body": "Needs tests", "submittedAt": "2026-11-07T02:00:00Z", "url": "r", "comments": {"totalCount": 1}}],
+                           "comments": [{"databaseId": 31, "author": {"login": "pytorch-bot"}, "body": "CI started", "createdAt": "2026-11-06T00:00:00Z", "url": "c"}],
+                           "pending": []}}
     sent: list = []
     h = await running_app()
     as_github(h, "EikanWang")
     h.ctx.extra["gh_owner"] = lambda: "EikanWang"
-    h.ctx.extra["gh_graphql"] = fake_pr_detail(calls)
-    h.ctx.extra["gh_pr_files"] = lambda o, r, n: [{"filename": "a.cpp", "status": "modified", "additions": 1, "deletions": 1, "patch": "@@ -1 +1 @@\n-x\n+y"}]
+    h.ctx.extra["gh_graphql"] = fake_pr_detail(calls, gh)
+    h.ctx.extra["gh_pr_files"] = lambda o, r, n: [{"filename": "a.cpp", "status": "modified", "additions": 1, "deletions": 1, "patch": "@@ -1 +1 @@\n-x\n+y"},
+                                                  {"filename": "b.md", "status": "added", "additions": 1, "deletions": 0, "patch": "@@ -0,0 +1 @@\n+hi"}]
 
     def rest(method, path, body=None):
         sent.append((method, path, body))
-        if method == "GET":
-            return [{"id": 11, "path": "a.cpp", "line": 1, "side": "RIGHT", "body": "why?", "user": {"login": "bob"}, "html_url": "u1"},
-                    {"id": 12, "path": "a.cpp", "line": 1, "side": "RIGHT", "body": "because", "user": {"login": "alice"}, "in_reply_to_id": 11},
-                    {"id": 13, "path": "a.cpp", "line": None, "original_line": 5, "side": "RIGHT", "body": "old", "user": {"login": "bob"}}]
-        if path.endswith("/reviews"):
-            return {"id": 99, "html_url": "https://github.com/pytorch/pytorch/pull/7#pullrequestreview-99"}
         if path.endswith("/replies"):
-            return {"id": 14, "path": "a.cpp", "line": 1, "side": "RIGHT", "body": body["body"], "user": {"login": "EikanWang"}, "in_reply_to_id": 11}
+            return {"id": 15, "body": body["body"], "user": {"login": "EikanWang"}}
+        if path.endswith("/issues/7/comments"):
+            return {"id": 32, "body": body["body"], "user": {"login": "EikanWang"}, "html_url": "c2", "created_at": "2026-11-09T00:00:00Z"}
         raise AssertionError(path)
 
     h.ctx.extra["gh_rest"] = rest
     api = h.api
     base = "/api/v1/github/pr/pytorch/pytorch/7"
-    head = (await api.get(base)).json()["pr"]["head_sha"]
+    files = {f["path"]: f for f in (await api.get(base)).json()["files"]}
+    assert files["a.cpp"]["viewed"] == "DISMISSED" and files["b.md"]["viewed"] == "UNVIEWED"  # viewed state from GitHub
     c = (await api.get(f"{base}/comments")).json()
-    assert [x["id"] for x in c["comments"]] == [11, 12, 13] and c["comments"][1]["in_reply_to_id"] == 11 and c["comments"][2]["outdated"] is True
-    assert c["drafts"] == []
-    # drafts: a one-line comment on the new side, a range starting on the old side
+    t = {x["id"]: x for x in c["threads"]}
+    assert [m["author"] for m in t["PRRT_t1"]["comments"]] == ["bob", "alice"] and t["PRRT_t1"]["resolved"] is False and t["PRRT_t1"]["diff_hunk"].startswith("@@")
+    assert t["PRRT_t2"]["resolved"] is True and t["PRRT_t2"]["outdated"] is True and t["PRRT_t2"]["resolved_by"] == "bob"
+    assert t["PRRT_t3"]["subject"] == "FILE" and t["PRRT_t3"]["path"] == "b.md"
+    assert [x["kind"] for x in c["conversation"]] == ["comment", "review"] and c["conversation"][1]["state"] == "CHANGES_REQUESTED"
+    assert c["pending_on_github"] is None and c["drafts"] == []
+    # the agent gets the discussion with the PR
+    disc = (settings.snapshots_dir / "github" / "pytorch" / "pytorch" / "7.discussion.md").read_text()
+    assert "bob (review: changes requested): Needs tests" in disc and "b.md [" not in disc and "rename this file" in disc and "[resolved, outdated]" in disc
+    # viewed, resolve, general comment, reply — straight to GitHub
+    assert (await api.put(f"{base}/viewed", json={"path": "a.cpp", "viewed": True})).json()["viewed"] == "VIEWED"
+    assert ("MarkViewed", {"pr": "PR_node7", "path": "a.cpp"}) in gh["mutations"]
+    assert (await api.put(f"{base}/viewed", json={"path": "a.cpp", "viewed": False})).json()["viewed"] == "UNVIEWED"
+    assert (await api.post(f"{base}/threads/PRRT_t1/resolve", json={"resolved": True})).json()["resolved"] is True
+    assert (await api.post(f"{base}/threads/PRRT_t2/resolve", json={"resolved": False})).json()["resolved"] is False
+    assert (await api.post(f"{base}/threads/bad%20id/resolve", json={"resolved": True})).status_code == 400
+    cm = (await api.post(f"{base}/conversation", json={"body": "LGTM overall"})).json()
+    assert cm["author"] == "EikanWang" and sent[-1][1] == "repos/pytorch/pytorch/issues/7/comments"
+    assert (await api.post(f"{base}/comments/11/reply", json={"body": "agreed"})).status_code == 201
+    # drafts: line, range from the old side, whole file
     d1 = (await api.post(f"{base}/drafts", json={"path": "a.cpp", "side": "RIGHT", "line": 1, "line_text": "y", "body": "nit: name"})).json()
-    d2 = (await api.post(f"{base}/drafts", json={"path": "a.cpp", "side": "RIGHT", "line": 1, "start_side": "LEFT", "start_line": 1, "body": "range"})).json()
-    assert d2["start_line"] == 1 and d2["start_side"] == "LEFT"
+    await api.post(f"{base}/drafts", json={"path": "a.cpp", "side": "RIGHT", "line": 1, "start_side": "LEFT", "start_line": 1, "body": "range"})
+    fd = (await api.post(f"{base}/drafts", json={"path": "b.md", "subject": "file", "body": "add a license header"})).json()
+    assert fd["subject"] == "file" and fd["line"] == 0
     assert (await api.post(f"{base}/drafts", json={"path": "a.cpp", "side": "MIDDLE", "line": 1, "body": "x"})).status_code == 400
     assert (await api.patch(f"{base}/drafts/{d1['id']}", json={"body": "nit: rename"})).json()["body"] == "nit: rename"
-    d3 = (await api.post(f"{base}/drafts", json={"path": "a.cpp", "side": "LEFT", "line": 1, "body": "drop me"})).json()
-    assert (await api.delete(f"{base}/drafts/{d3['id']}")).status_code == 200
-    assert len((await api.get(f"{base}/comments")).json()["drafts"]) == 2
-    # nothing to publish is refused; publish both as one review
     assert (await api.post(f"{base}/review", json={"event": "WHATEVER"})).status_code == 400
-    r = (await api.post(f"{base}/review", json={"event": "REQUEST_CHANGES", "body": "Please fix"})).json()
-    assert r["published"] == 2 and r["url"].endswith("pullrequestreview-99")
-    method, path, payload = sent[-1]
-    assert (method, path) == ("POST", "repos/pytorch/pytorch/pulls/7/reviews")
-    assert payload["event"] == "REQUEST_CHANGES" and payload["body"] == "Please fix" and payload["commit_id"] == head
-    assert payload["comments"] == [{"path": "a.cpp", "line": 1, "side": "RIGHT", "body": "nit: rename"},
-                                   {"path": "a.cpp", "line": 1, "side": "RIGHT", "body": "range", "start_line": 1, "start_side": "LEFT"}]
-    assert (await api.get(f"{base}/comments")).json()["drafts"] == []  # published drafts are gone
-    # reply to a thread (immediate)
-    rp = (await api.post(f"{base}/comments/11/reply", json={"body": "agreed"})).json()
-    assert rp["in_reply_to_id"] == 11 and sent[-1][1] == "repos/pytorch/pytorch/pulls/7/comments/11/replies"
-    # GitHub refusing keeps the drafts
-    await api.post(f"{base}/drafts", json={"path": "a.cpp", "side": "RIGHT", "line": 1, "body": "again"})
-
-    def refuse(method, path, body=None):
-        raise ApiError(502, "GH_ERROR", "GitHub refused: Unprocessable Entity: Line could not be resolved")
-
-    h.ctx.extra["gh_rest"] = refuse
+    # GitHub refusing a comment: the unfinished review is deleted there, drafts stay here
+    gh["refuse"] = "AddThread"
     r = await api.post(f"{base}/review", json={"event": "COMMENT"})
-    assert r.status_code == 502 and "could not be resolved" in r.json()["error"]["message"]
-    h.ctx.extra["gh_rest"] = rest
-    assert len((await api.get(f"{base}/comments")).json()["drafts"]) == 1
+    assert r.status_code == 502 and "could not be resolved" in r.json()["error"]["message"] and "(comment on a.cpp line 1)" in r.json()["error"]["message"]
+    assert gh["mutations"][-1][0] == "DeleteReview"
+    assert len((await api.get(f"{base}/comments")).json()["drafts"]) == 3
+    gh.pop("refuse")
+    gh["mutations"].clear()
+    r = (await api.post(f"{base}/review", json={"event": "REQUEST_CHANGES", "body": "Please fix"})).json()
+    assert r["published"] == 3 and r["url"].endswith("pullrequestreview-1")
+    names = [m[0] for m in gh["mutations"]]
+    assert names == ["AddReview", "AddThread", "AddThread", "AddThread", "Submit"]
+    assert gh["mutations"][0][1]["commit"] == "abc"  # the diff the user saw
+    th = [m[1] for m in gh["mutations"] if m[0] == "AddThread"]
+    assert th[0] == {"review": "PRR_new", "path": "a.cpp", "body": "nit: rename", "line": 1, "side": "RIGHT", "subject": "LINE"}
+    assert th[1]["startLine"] == 1 and th[1]["startSide"] == "LEFT"
+    assert th[2] == {"review": "PRR_new", "path": "b.md", "body": "add a license header", "subject": "FILE"}
+    assert gh["mutations"][-1][1] == {"review": "PRR_new", "event": "REQUEST_CHANGES", "body": "Please fix"}
+    assert (await api.get(f"{base}/comments")).json()["drafts"] == []
+    # a pending review started on github.com is reused (and announced)
+    gh["conversation"]["pending"] = [{"id": "PRR_web", "comments": {"totalCount": 2}}]
+    assert (await api.get(f"{base}/comments")).json()["pending_on_github"] == 2
+    gh["mutations"].clear()
+    r = (await api.post(f"{base}/review", json={"event": "COMMENT"})).json()
+    assert r["from_github"] == 2 and [m[0] for m in gh["mutations"]] == ["Submit"] and gh["mutations"][0][1]["review"] == "PRR_web"
     # owner only
     from backend.app.models import LoginSession
 
@@ -281,4 +341,5 @@ async def test_pr_review_comments_drafts_publish_and_reply(running_app):
         for row in s.query(LoginSession).all():
             row.identity = "token"
     assert (await api.get(f"{base}/comments")).status_code == 403
+    assert (await api.put(f"{base}/viewed", json={"path": "a.cpp", "viewed": True})).status_code == 403
     assert (await api.post(f"{base}/review", json={"event": "APPROVE"})).status_code == 403

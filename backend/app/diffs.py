@@ -73,12 +73,27 @@ class DiffService:
         except OSError:
             return None
 
+    @staticmethod
+    def _lines(text: str) -> list[str]:
+        """Split at "\n" only, like Git, GitHub and editors (str.splitlines also splits at form feeds, \x1c-\x1e,
+        \u2028…, which shifted every later line number)."""
+        if not text:
+            return []
+        parts = text.split("\n")
+        out = [p + "\n" for p in parts[:-1]]
+        if parts[-1]:
+            out.append(parts[-1])  # last line without a newline
+        return out
+
     def _unified(self, a: str | None, b: str | None, rel: str, a_label: str, b_label: str) -> str:
-        return "".join(difflib.unified_diff(
-            (a or "").splitlines(keepends=True), (b or "").splitlines(keepends=True),
+        lines = difflib.unified_diff(
+            self._lines(a or ""), self._lines(b or ""),
             fromfile=f"a/{rel} ({a_label})" if a is not None else "/dev/null",
             tofile=f"b/{rel} ({b_label})" if b is not None else "/dev/null", n=3,
-        ))
+        )
+        # difflib leaves a last line without "\n" unterminated, gluing it to the next diff line ("-old+new");
+        # write it like Git does
+        return "".join(ln if ln.endswith("\n") else ln + "\n\\ No newline at end of file\n" for ln in lines)
 
     def _changed_files(self, base: str, target: str | None, rel_dir: str, markdown_only: bool) -> list[dict[str, Any]]:
         """Files that differ between base and target (worktree when None), with Git status letters."""
@@ -148,8 +163,9 @@ class DiffService:
             total += len(unified)
             if total > MAX_DIFF_BYTES:
                 raise ApiError(413, "DIFF_TOO_LARGE", "diff output exceeds 4 MiB; narrow the folder or review file by file")
-            adds = sum(1 for ln in unified.splitlines() if ln.startswith("+") and not ln.startswith("+++"))
-            dels = sum(1 for ln in unified.splitlines() if ln.startswith("-") and not ln.startswith("---"))
+            body = unified.split("\n")[2:]  # after the "---" / "+++" file headers ("----" inside is a deleted "---")
+            adds = sum(1 for ln in body if ln.startswith("+"))
+            dels = sum(1 for ln in body if ln.startswith("-"))
             out_files.append({
                 "path": frel, "status": f["status"], "unified": unified, "additions": adds, "deletions": dels,
                 "identical": a == b, "document_id": doc_ids.get(frel),

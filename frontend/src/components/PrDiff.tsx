@@ -4,15 +4,15 @@ import { renderMarkdown, sanitizeHtml } from "../markdown";
 import { COMPOSER_HINT, composerKeyDown } from "./keys";
 import { Line, buildSplitRows, parseUnified } from "./DiffReview";
 
-/** A review comment on GitHub. */
-export interface GhComment {
-  id: number; path: string | null; line: number | null; side: "LEFT" | "RIGHT"; start_line: number | null; start_side: string | null;
-  original_line: number | null; outdated: boolean; body: string; author: string | null; created_at: string | null;
-  in_reply_to_id: number | null; url: string | null;
+/** A review thread on GitHub (line or whole-file), with all its comments. */
+export interface GhThread {
+  id: string; resolved: boolean; outdated: boolean; resolved_by: string | null; path: string; line: number | null; original_line: number | null;
+  start_line: number | null; side: "LEFT" | "RIGHT"; start_side: string | null; subject: "LINE" | "FILE"; total: number; diff_hunk: string | null;
+  comments: { id: number; author: string | null; body: string; created_at: string | null; url: string | null }[];
 }
 /** A comment written here, published with the next review. */
-export interface GhDraft { id: string; path: string; side: "LEFT" | "RIGHT"; line: number; start_side: string | null; start_line: number | null; line_text: string; body: string }
-export interface PrFile { path: string; previous_path: string | null; status: string; additions: number; deletions: number; unified: string; binary_or_large: boolean }
+export interface GhDraft { id: string; path: string; subject: "line" | "file"; side: "LEFT" | "RIGHT"; line: number; start_side: string | null; start_line: number | null; line_text: string; body: string }
+export interface PrFile { path: string; previous_path: string | null; status: string; additions: number; deletions: number; unified: string; binary_or_large: boolean; viewed: "VIEWED" | "UNVIEWED" | "DISMISSED" }
 
 type Sel = { from: number; to: number }; // indices into the parsed lines, inclusive
 
@@ -26,10 +26,11 @@ const ago = (iso: string | null) => (iso ? new Date(iso).toLocaleString() : "");
  * several) to write a review comment (published later with the review) or to ask the agent about those lines;
  * existing GitHub threads are shown at their lines and can be replied to.
  */
-export function PrFileDiff({ file, layout, comments, drafts, apiBase, canAsk, collapsedDefault, onChanged, onAsk, onError }: {
+export function PrFileDiff({ file, layout, threads, drafts, apiBase, canAsk, collapsedDefault, onChanged, onAsk, onError, onViewed }: {
   file: PrFile;
   layout: "unified" | "split";
-  comments: GhComment[];
+  threads: GhThread[];
+  onViewed: (viewed: boolean) => Promise<void>;
   drafts: GhDraft[];
   apiBase: string; // /github/pr/{owner}/{repo}/{n}
   canAsk: boolean;
@@ -38,7 +39,10 @@ export function PrFileDiff({ file, layout, comments, drafts, apiBase, canAsk, co
   onAsk: (quote: string, label: string, question: string) => Promise<void>;
   onError: (m: string) => void;
 }) {
-  const [collapsed, setCollapsed] = useState(collapsedDefault);
+  const [collapsed, setCollapsed] = useState(collapsedDefault || file.viewed === "VIEWED");
+  useEffect(() => { if (file.viewed === "VIEWED") setCollapsed(true); }, [file.viewed]);
+  const [fileComposer, setFileComposer] = useState(false);
+  const [fileText, setFileText] = useState("");
   const { lines } = useMemo(() => parseUnified(file.unified), [file.unified]);
   const rows = useMemo(() => (layout === "split" ? buildSplitRows(lines) : []), [layout, lines]);
   const [sel, setSel] = useState<Sel | null>(null);
@@ -91,6 +95,26 @@ export function PrFileDiff({ file, layout, comments, drafts, apiBase, canAsk, co
     return `${file.path} ${selected.length === 1 ? n(a) : `${n(a)}–${n(b)}`}`;
   };
 
+  const addFileComment = async () => {
+    if (!fileText.trim()) return;
+    setBusy(true);
+    try {
+      await post(`${apiBase}/drafts`, { path: file.path, subject: "file", body: fileText });
+      setFileText("");
+      setFileComposer(false);
+      await onChanged();
+    } catch (e) {
+      onError((e as ApiError).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  // GitHub's "suggested change": the selected new-side lines, to be edited into the replacement
+  const suggestable = selected.length > 0 && selected.every((l) => l.kind !== "del");
+  const insertSuggestion = () => {
+    const block = "```suggestion\n" + selected.map((l) => l.text).join("\n") + "\n```";
+    setText((t) => (t.trim() ? `${t.replace(/\s+$/, "")}\n\n${block}` : block));
+  };
   const addComment = async () => {
     if (!text.trim() || !selected.length) return;
     const first = selected[0], last = selected[selected.length - 1];
@@ -123,18 +147,22 @@ export function PrFileDiff({ file, layout, comments, drafts, apiBase, canAsk, co
   };
 
   // GitHub threads and drafts, keyed by "SIDE:line" of the line they end on
-  const roots = comments.filter((c) => !c.in_reply_to_id);
-  const replies = (id: number) => comments.filter((c) => c.in_reply_to_id === id);
+  const lineThreads = threads.filter((t) => t.subject !== "FILE" && !t.outdated && t.line);
+  const fileThreads = threads.filter((t) => t.subject === "FILE");
+  const outdated = threads.filter((t) => t.subject !== "FILE" && (t.outdated || !t.line));
+  const lineDrafts = drafts.filter((d) => d.subject !== "file");
+  const fileDrafts = drafts.filter((d) => d.subject === "file");
   const at = (ln: Line) => {
     const k = `${side(ln)}:${lineNo(ln)}`;
     const alt = ln.kind === "ctx" ? `LEFT:${ln.oldNo}` : null; // context lines can carry LEFT comments too
     return {
-      threads: roots.filter((c) => !c.outdated && (`${c.side}:${c.line}` === k || `${c.side}:${c.line}` === alt)),
-      drafts: drafts.filter((d) => `${d.side}:${d.line}` === k || `${d.side}:${d.line}` === alt),
+      threads: lineThreads.filter((t) => `${t.side}:${t.line}` === k || `${t.side}:${t.line}` === alt),
+      drafts: lineDrafts.filter((d) => `${d.side}:${d.line}` === k || `${d.side}:${d.line}` === alt),
     };
   };
-  const outdated = roots.filter((c) => c.outdated);
-  const total = comments.length + drafts.length;
+  const total = threads.reduce((n, t) => n + t.comments.length, 0) + drafts.length;
+  const unresolved = threads.filter((t) => !t.resolved).length;
+  const threadProps = { apiBase, onChanged, onError, canAsk, onAsk };
 
   const composerNode = composer && (
     <div className="diff-composer" data-testid="pr-composer" onPointerDown={(e) => e.stopPropagation()}>
@@ -144,6 +172,7 @@ export function PrFileDiff({ file, layout, comments, drafts, apiBase, canAsk, co
       <div className="row">
         <button className="btn small primary" disabled={busy || !text.trim()} onClick={() => void addComment()} title="Saved here; published to GitHub when you submit the review" data-testid="pr-add-comment">Add review comment</button>
         <button className="btn small" disabled={busy || !text.trim() || !canAsk} onClick={() => void ask()} title={canAsk ? "Ask the agent about these lines (the answer appears in the discussions panel)" : "Choose the agent's wiki first"} data-testid="pr-ask-lines">Ask agent</button>
+        <button className="btn small" disabled={!suggestable} onClick={insertSuggestion} title={suggestable ? "Propose replacement code (GitHub 'suggested change')" : "Suggestions apply to new or unchanged lines"} data-testid="pr-suggest">Suggest change</button>
         <button className="btn small" onClick={cancel}>Cancel</button>
       </div>
     </div>
@@ -152,8 +181,8 @@ export function PrFileDiff({ file, layout, comments, drafts, apiBase, canAsk, co
   const extras = (ln: Line, colSpan: number) => {
     const { threads, drafts: ds } = at(ln);
     return [
-      ...threads.map((c) => (
-        <tr key={`t${c.id}`} className="diff-comment-row"><td colSpan={colSpan}><GhThread root={c} replies={replies(c.id)} apiBase={apiBase} onChanged={onChanged} onError={onError} /></td></tr>
+      ...threads.map((t) => (
+        <tr key={`t${t.id}`} className="diff-comment-row"><td colSpan={colSpan}><ThreadBox thread={t} {...threadProps} /></td></tr>
       )),
       ...ds.map((d) => (
         <tr key={`d${d.id}`} className="diff-comment-row"><td colSpan={colSpan}><DraftBox draft={d} apiBase={apiBase} onChanged={onChanged} onError={onError} /></td></tr>
@@ -173,13 +202,37 @@ export function PrFileDiff({ file, layout, comments, drafts, apiBase, canAsk, co
         <span className="diff-path" title={file.path}>{file.previous_path && file.previous_path !== file.path ? `${file.previous_path} → ` : ""}{file.path}</span>
         <span className={`chip git ${file.status}`}>{file.status}</span>
         <span className="muted small"><span className="add">+{file.additions}</span> <span className="del">−{file.deletions}</span></span>
-        {total > 0 && <span className="chip" data-testid="pr-file-comments">{total} comment{total > 1 ? "s" : ""}</span>}
+        {total > 0 && <span className="chip" data-testid="pr-file-comments" title={`${unresolved} unresolved thread(s)`}>{total} comment{total > 1 ? "s" : ""}</span>}
+        {file.viewed === "DISMISSED" && <span className="chip pending" title="You marked this file viewed, but it changed since">changed since viewed</span>}
+        <span className="spacer" />
+        <button className="btn small" onClick={(e) => { e.stopPropagation(); setCollapsed(false); setFileComposer(true); }} title="Comment on the whole file" data-testid="pr-file-comment">Comment on file</button>
+        <label className={`viewed-box ${file.viewed === "VIEWED" ? "on" : ""}`} onClick={(e) => e.stopPropagation()} title="Mark as viewed (also on GitHub); viewed files fold">
+          <input type="checkbox" checked={file.viewed === "VIEWED"} onChange={(e) => { const v = e.target.checked; if (v) setCollapsed(true); void onViewed(v); }} data-testid="pr-viewed" />
+          <span>Viewed</span>
+        </label>
       </header>
+      {!collapsed && (fileThreads.length > 0 || fileDrafts.length > 0 || fileComposer) && (
+        <div className="pr-file-level pad" data-testid="pr-file-level">
+          {fileThreads.map((t) => <ThreadBox key={t.id} thread={t} {...threadProps} />)}
+          {fileDrafts.map((d) => <DraftBox key={d.id} draft={d} apiBase={apiBase} onChanged={onChanged} onError={onError} />)}
+          {fileComposer && (
+            <div className="diff-composer" data-testid="pr-file-composer">
+              <div className="muted small">Comment on the whole file</div>
+              <textarea autoFocus rows={3} value={fileText} onChange={(e) => setFileText(e.target.value)} placeholder={`Comment on ${file.path} (${COMPOSER_HINT})`}
+                onKeyDown={(e) => composerKeyDown(e, () => void addFileComment(), setFileText, () => setFileComposer(false))} data-testid="pr-file-composer-text" />
+              <div className="row">
+                <button className="btn small primary" disabled={busy || !fileText.trim()} onClick={() => void addFileComment()} data-testid="pr-file-composer-add">Add review comment</button>
+                <button className="btn small" onClick={() => setFileComposer(false)}>Cancel</button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
       {!collapsed && file.binary_or_large && <div className="muted small pad">No textual diff (binary or too large) — see it on GitHub.</div>}
       {!collapsed && outdated.length > 0 && (
         <details className="pr-outdated pad">
           <summary className="muted small">{outdated.length} comment thread{outdated.length > 1 ? "s" : ""} on code that changed since (outdated)</summary>
-          {outdated.map((c) => <GhThread key={c.id} root={c} replies={replies(c.id)} apiBase={apiBase} onChanged={onChanged} onError={onError} />)}
+          {outdated.map((t) => <ThreadBox key={t.id} thread={t} {...threadProps} />)}
         </details>
       )}
       {!collapsed && !file.binary_or_large && layout === "unified" && (
@@ -235,41 +288,77 @@ export function PrFileDiff({ file, layout, comments, drafts, apiBase, canAsk, co
   );
 }
 
-function GhThread({ root, replies, apiBase, onChanged, onError }: { root: GhComment; replies: GhComment[]; apiBase: string; onChanged: () => Promise<void>; onError: (m: string) => void }) {
+function ThreadBox({ thread, apiBase, onChanged, onError, canAsk, onAsk }: {
+  thread: GhThread; apiBase: string; onChanged: () => Promise<void>; onError: (m: string) => void;
+  canAsk: boolean; onAsk: (quote: string, label: string, question: string) => Promise<void>;
+}) {
   const [reply, setReply] = useState<string | null>(null);
+  const [asking, setAsking] = useState<string | null>(null);
+  const [show, setShow] = useState(!thread.resolved);
   const [busy, setBusy] = useState(false);
-  const send = async () => {
-    if (!reply?.trim()) return;
+  useEffect(() => setShow(!thread.resolved), [thread.resolved]);
+  const run = async (fn: () => Promise<unknown>) => {
     setBusy(true);
     try {
-      await post(`${apiBase}/comments/${root.id}/reply`, { body: reply });
-      setReply(null);
-      await onChanged();
+      await fn();
     } catch (e) {
       onError((e as ApiError).message);
     } finally {
       setBusy(false);
     }
   };
+  const first = thread.comments[0];
+  const where = thread.subject === "FILE" ? thread.path : `${thread.path} ${thread.side === "LEFT" ? "L" : "R"}${thread.line ?? thread.original_line ?? "?"}`;
+  const transcript = () => {
+    const code = thread.diff_hunk ? thread.diff_hunk.split("\n").slice(-8).join("\n") + "\n\n" : "";
+    return code + thread.comments.map((c) => `${c.author}: ${c.body}`).join("\n\n");
+  };
   return (
-    <div className="gh-thread" data-testid="gh-thread">
-      {[root, ...replies].map((c) => (
-        <div key={c.id} className="gh-comment">
-          <div className="gh-comment-head small"><b>{c.author}</b> <span className="muted">{ago(c.created_at)}</span>{c.url && <> · <a href={c.url} target="_blank" rel="noreferrer">GitHub</a></>}</div>
-          <div className="markdown-body gh-comment-body" dangerouslySetInnerHTML={{ __html: md(c.body) }} />
-        </div>
-      ))}
-      {reply === null ? (
-        <button className="link-btn small" onClick={() => setReply("")} data-testid="gh-reply">Reply…</button>
-      ) : (
-        <div className="gh-reply-box">
-          <textarea autoFocus rows={2} value={reply} onChange={(e) => setReply(e.target.value)} placeholder={`Reply on GitHub (${COMPOSER_HINT})`}
-            onKeyDown={(e) => composerKeyDown(e, () => void send(), (v) => setReply(v), () => setReply(null))} data-testid="gh-reply-text" />
-          <div className="row">
-            <button className="btn small primary" disabled={busy || !reply.trim()} onClick={() => void send()} title="Posted to GitHub right away" data-testid="gh-reply-send">Reply on GitHub</button>
-            <button className="btn small" onClick={() => setReply(null)}>Cancel</button>
-          </div>
-        </div>
+    <div className={`gh-thread ${thread.resolved ? "resolved" : ""}`} data-testid="gh-thread" data-resolved={thread.resolved ? "1" : "0"}>
+      {thread.resolved && (
+        <button className="link-btn small gh-resolved-head" onClick={() => setShow((v) => !v)} data-testid="gh-thread-toggle">
+          {show ? "▾" : "▸"} Resolved{thread.resolved_by ? ` by ${thread.resolved_by}` : ""} · {first?.author}: {first?.body.slice(0, 60)}
+        </button>
+      )}
+      {show && (
+        <>
+          {thread.comments.map((c) => (
+            <div key={c.id} className="gh-comment">
+              <div className="gh-comment-head small"><b>{c.author}</b> <span className="muted">{ago(c.created_at)}</span>{c.url && <> · <a href={c.url} target="_blank" rel="noreferrer">GitHub</a></>}</div>
+              <div className="markdown-body gh-comment-body" dangerouslySetInnerHTML={{ __html: md(c.body) }} />
+            </div>
+          ))}
+          {thread.total > thread.comments.length && <div className="muted small">… {thread.total - thread.comments.length} more on GitHub</div>}
+          {reply === null && asking === null && (
+            <div className="row gh-thread-actions">
+              <button className="link-btn small" onClick={() => setReply("")} data-testid="gh-reply">Reply…</button>
+              <button className="link-btn small" disabled={busy} onClick={() => void run(async () => { await post(`${apiBase}/threads/${thread.id}/resolve`, { resolved: !thread.resolved }); await onChanged(); })} data-testid="gh-resolve">
+                {thread.resolved ? "Unresolve" : "Resolve conversation"}
+              </button>
+              <button className="link-btn small" disabled={!canAsk} onClick={() => setAsking("")} title={canAsk ? "Ask the agent about this thread" : "Choose the agent's wiki first"} data-testid="gh-ask">Ask agent…</button>
+            </div>
+          )}
+          {reply !== null && (
+            <div className="gh-reply-box">
+              <textarea autoFocus rows={2} value={reply} onChange={(e) => setReply(e.target.value)} placeholder={`Reply on GitHub (${COMPOSER_HINT})`}
+                onKeyDown={(e) => composerKeyDown(e, () => void run(async () => { await post(`${apiBase}/comments/${first.id}/reply`, { body: reply }); setReply(null); await onChanged(); }), (v) => setReply(v), () => setReply(null))} data-testid="gh-reply-text" />
+              <div className="row">
+                <button className="btn small primary" disabled={busy || !reply.trim()} onClick={() => void run(async () => { await post(`${apiBase}/comments/${first.id}/reply`, { body: reply }); setReply(null); await onChanged(); })} title="Posted to GitHub right away" data-testid="gh-reply-send">Reply on GitHub</button>
+                <button className="btn small" onClick={() => setReply(null)}>Cancel</button>
+              </div>
+            </div>
+          )}
+          {asking !== null && (
+            <div className="gh-reply-box">
+              <textarea autoFocus rows={2} value={asking} onChange={(e) => setAsking(e.target.value)} placeholder={`Ask the agent about this thread, e.g. "Is the reviewer right?" (${COMPOSER_HINT})`}
+                onKeyDown={(e) => composerKeyDown(e, () => void run(async () => { await onAsk(transcript(), `thread on ${where}`, asking); setAsking(null); }), (v) => setAsking(v), () => setAsking(null))} data-testid="gh-ask-text" />
+              <div className="row">
+                <button className="btn small primary" disabled={busy || !asking.trim()} onClick={() => void run(async () => { await onAsk(transcript(), `thread on ${where}`, asking); setAsking(null); })} data-testid="gh-ask-send">Ask agent</button>
+                <button className="btn small" onClick={() => setAsking(null)}>Cancel</button>
+              </div>
+            </div>
+          )}
+        </>
       )}
     </div>
   );
@@ -319,7 +408,7 @@ function DraftBox({ draft, apiBase, onChanged, onError }: { draft: GhDraft; apiB
 }
 
 /** "Finish your review": summary + Comment / Approve / Request changes → one review on GitHub. */
-export function SubmitReview({ apiBase, drafts, owner, onDone, onError }: { apiBase: string; drafts: number; owner: string | null; onDone: (url: string | null) => Promise<void>; onError: (m: string) => void }) {
+export function SubmitReview({ apiBase, drafts, fromGithub = 0, owner, onDone, onError }: { apiBase: string; drafts: number; fromGithub?: number; owner: string | null; onDone: (url: string | null) => Promise<void>; onError: (m: string) => void }) {
   const [open, setOpen] = useState(false);
   const [body, setBody] = useState("");
   const [event, setEvent] = useState<"COMMENT" | "APPROVE" | "REQUEST_CHANGES">("COMMENT");
@@ -344,6 +433,7 @@ export function SubmitReview({ apiBase, drafts, owner, onDone, onError }: { apiB
       </button>
       {open && (
         <div className="ws-menu pr-submit" data-testid="pr-submit">
+          {fromGithub > 0 && <div className="small reviews-note" data-testid="pr-submit-github">Your pending review on github.com has {fromGithub} comment(s); they are submitted with this review.</div>}
           <textarea rows={4} value={body} onChange={(e) => setBody(e.target.value)} placeholder="Summary (optional, Markdown)" data-testid="pr-submit-body" />
           {(["COMMENT", "APPROVE", "REQUEST_CHANGES"] as const).map((ev) => (
             <label key={ev} className="pr-submit-opt">
@@ -353,7 +443,7 @@ export function SubmitReview({ apiBase, drafts, owner, onDone, onError }: { apiB
             </label>
           ))}
           <div className="row">
-            <button className="btn small primary" disabled={busy || (!drafts && !body.trim() && event !== "APPROVE")} onClick={() => void submit()} data-testid="pr-submit-send">
+            <button className="btn small primary" disabled={busy || (!drafts && !fromGithub && !body.trim() && event !== "APPROVE")} onClick={() => void submit()} data-testid="pr-submit-send">
               {busy ? "Publishing…" : `Submit review${drafts ? ` with ${drafts} comment${drafts > 1 ? "s" : ""}` : ""}`}
             </button>
             <span className="muted small">posted on GitHub as <b>{owner ?? "you"}</b></span>

@@ -1846,7 +1846,17 @@ test("GitHub PR tab: overview, files, choose the wiki once, ask about the PR and
   await expect(page.getByTestId("pr-title")).toContainText("[xpu] Fix the lazy Level Zero stub");
   await expect(page.getByTestId("pr-description")).toContainText("This PR fixes the lazy stub.");
   await expect(page.getByTestId("pr-checks").locator("li").first()).toContainText("xpu-test"); // failing first
-  await expect(page.getByTestId("pr-reviews")).toContainText("bob approved");
+  await expect(page.getByTestId("pr-reviews")).toContainText("bob requested changes");
+  // conversation: reviewers' summaries and general comments, in time order; post one
+  const conv = page.getByTestId("pr-conversation");
+  await expect(conv.getByTestId("pr-conv-item")).toHaveCount(2);
+  await expect(conv.getByTestId("pr-conv-item").first()).toContainText("CI started");
+  await expect(conv.getByTestId("pr-conv-item").last()).toContainText("requested changes");
+  await expect(conv.getByTestId("pr-conv-item").last()).toContainText("Please add a test.");
+  await page.getByTestId("pr-conv-text").fill("Thanks, looking now.");
+  await page.getByTestId("pr-conv-send").click();
+  await expect(conv.getByTestId("pr-conv-item")).toHaveCount(3);
+  await expect(conv.getByTestId("pr-conv-item").last()).toContainText("Thanks, looking now.");
   // first PR of this repository: choose the wiki the agent works in (once)
   await expect(page.getByTestId("pr-ask")).toBeDisabled();
   await page.getByTestId("pr-wiki-use").click();
@@ -1864,6 +1874,38 @@ test("GitHub PR tab: overview, files, choose the wiki once, ask about the PR and
   await expect(page.getByTestId("pr-file")).toHaveCount(2);
   const stub = page.locator('[data-testid="pr-file"][data-file="c10/xpu/stub.cpp"]');
   await expect(stub.getByTestId("gh-thread")).toContainText("Is ok ever false?");
+  // a file-level thread from another reviewer, at the top of its file
+  const notes = page.locator('[data-testid="pr-file"][data-file="docs/xpu.md"]');
+  // line numbers survive a deleted '---' and an added '++i' line: # XPU(1) ---(L2) XPU notes(R2) ++i counter(R3) end(L3/R4)
+  const nums = await notes.locator('[data-testid="pr-diff-row"]').evaluateAll((trs) => trs.map((tr) => {
+    const td = tr.querySelectorAll("td");
+    return `${td[0].textContent}|${td[1].textContent}|${(td[2].textContent ?? "").slice(1)}`;
+  }));
+  expect(nums).toEqual(["1|1|# XPU", "2||---", "|2|XPU notes", "|3|++i counter", "3|4|end"]);
+  await expect(notes.getByTestId("pr-file-level").getByTestId("gh-thread")).toContainText("Move these notes to the wiki?");
+  // viewed (synced to GitHub): the file folds, the counter moves
+  await expect(page.getByTestId("pr-viewed-count")).toContainText("0 / 2 files viewed");
+  await notes.getByTestId("pr-viewed").check();
+  await expect(page.getByTestId("pr-viewed-count")).toContainText("1 / 2 files viewed");
+  await expect(notes.getByTestId("pr-file-level")).toHaveCount(0); // folded
+  await notes.getByTestId("pr-viewed").uncheck();
+  await expect(page.getByTestId("pr-viewed-count")).toContainText("0 / 2 files viewed");
+  // a comment on the whole file (pending)
+  await notes.getByTestId("pr-file-comment").click();
+  await notes.getByTestId("pr-file-composer-text").fill("Please add a license header.");
+  await notes.getByTestId("pr-file-composer-add").click();
+  await expect(notes.getByTestId("pr-draft")).toContainText("license header");
+  // ask the agent about the other reviewer's thread
+  await stub.getByTestId("gh-ask").click();
+  await stub.getByTestId("gh-ask-text").fill("Is bob right?");
+  await stub.getByTestId("gh-ask-send").click();
+  await expect(page.locator('[data-testid="message-agent"][data-status="completed"]').last()).toContainText("Is bob right?", { timeout: 20000 });
+  await expect(page.getByTestId("thread-target")).toContainText("thread on c10/xpu/stub.cpp R11");
+  // resolve it; it folds
+  await stub.getByTestId("gh-resolve").click();
+  await expect(stub.getByTestId("gh-thread")).toHaveAttribute("data-resolved", "1");
+  await expect(stub.getByTestId("gh-thread-toggle")).toContainText("Resolved by e2e-user");
+  await stub.getByTestId("gh-thread-toggle").click(); // unfold to reply
   // reply to it (posted at once)
   await stub.getByTestId("gh-reply").click();
   await stub.getByTestId("gh-reply-text").fill("Yes, on old drivers.");
@@ -1878,6 +1920,10 @@ test("GitHub PR tab: overview, files, choose the wiki once, ask about the PR and
   await page.mouse.move(a2.x + 60, a2.y + a2.height / 2, { steps: 4 });
   await page.mouse.up();
   await expect(page.getByTestId("pr-composer")).toContainText("Lines R11–R12");
+  // a suggested change from the selected lines
+  await page.getByTestId("pr-suggest").click();
+  await expect(page.getByTestId("pr-composer-text")).toHaveValue("```suggestion\n  if (ok)\n    call();\n```");
+  await page.getByTestId("pr-composer-text").fill("Why guard call()?");
   await page.getByTestId("pr-composer-text").fill("Why guard call()?");
   await page.getByTestId("pr-ask-lines").click();
   await expect(page.locator('[data-testid="message-agent"][data-status="completed"]').last()).toContainText("Why guard call()?", { timeout: 20000 });
@@ -1891,7 +1937,7 @@ test("GitHub PR tab: overview, files, choose the wiki once, ask about the PR and
   await page.getByTestId("pr-composer-text").fill("Keep the unconditional call for the stub?");
   await page.getByTestId("pr-add-comment").click();
   await expect(stub.getByTestId("pr-draft")).toContainText("Keep the unconditional call");
-  await expect(page.getByTestId("pr-finish-review")).toContainText("Finish review (1)");
+  await expect(page.getByTestId("pr-finish-review")).toContainText("Finish review (2)");
   // a second one, then delete it
   await stub.locator('td.code.right.add').first().click();
   await page.getByTestId("pr-composer-text").fill("throwaway");
@@ -1903,7 +1949,7 @@ test("GitHub PR tab: overview, files, choose the wiki once, ask about the PR and
   await page.reload();
   await page.locator('[data-testid="doc-tab"][data-ws="github"]').click();
   await page.getByTestId("pr-tab-files").click();
-  await expect(page.getByTestId("pr-draft")).toHaveCount(1);
+  await expect(page.getByTestId("pr-draft")).toHaveCount(2);
   await expect(page.getByTestId("pr-layout-split")).toHaveAttribute("aria-selected", "true"); // layout remembered
   // finish the review: request changes with a summary → one review on GitHub
   await page.getByTestId("pr-finish-review").click();
@@ -1914,12 +1960,14 @@ test("GitHub PR tab: overview, files, choose the wiki once, ask about the PR and
   await expect(page.getByTestId("pr-notice")).toContainText("Review published on GitHub");
   await expect(page.getByTestId("pr-draft")).toHaveCount(0);
   const posted = await (await page.request.get("/fake-github/posted")).json();
-  const rev = posted.find((x: any) => x.path.endsWith("/reviews"));
-  expect(rev.path).toBe("repos/pytorch/pytorch/pulls/101/reviews");
-  expect(rev.body.event).toBe("REQUEST_CHANGES");
-  expect(rev.body.body).toBe("Nice, one question.");
-  expect(rev.body.comments).toEqual([{ path: "c10/xpu/stub.cpp", line: 11, side: "LEFT", body: "Keep the unconditional call for the stub?" }]);
-  expect(posted.find((x: any) => x.path.endsWith("/replies")).body).toEqual({ body: "Yes, on old drivers." });
+  const muts = posted.filter((x: any) => x.mutation).map((x: any) => x.mutation);
+  expect(muts).toEqual(["MarkViewed", "MarkUnviewed", "Resolve", "AddReview", "AddThread", "AddThread", "Submit"]);
+  const threads = posted.filter((x: any) => x.mutation === "AddThread").map((x: any) => x.variables);
+  expect(threads).toContainEqual({ review: "PRR_e2e", path: "docs/xpu.md", body: "Please add a license header.", subject: "FILE" });
+  expect(threads).toContainEqual({ review: "PRR_e2e", path: "c10/xpu/stub.cpp", body: "Keep the unconditional call for the stub?", line: 11, side: "LEFT", subject: "LINE" });
+  expect(posted.find((x: any) => x.mutation === "Submit").variables).toEqual({ review: "PRR_e2e", event: "REQUEST_CHANGES", body: "Nice, one question." });
+  expect(posted.find((x: any) => x.path?.endsWith("/replies")).body).toEqual({ body: "Yes, on old drivers." });
+  expect(posted.find((x: any) => x.path?.endsWith("/issues/101/comments")).body).toEqual({ body: "Thanks, looking now." });
   await page.getByTestId("pr-layout-unified").click();
   // the tab is remembered across reloads, and the wiki choice too
   await page.reload();
@@ -1932,4 +1980,43 @@ test("GitHub PR tab: overview, files, choose the wiki once, ask about the PR and
   await page.locator('[data-testid="doc-tab"][data-ws="github"]').getByTestId("doc-tab-close").click();
   await expect(page.locator('[data-testid="doc-tab"][data-ws="github"]')).toHaveCount(0);
   await signOut(page);
+});
+
+test("diff line numbers are those of the files (Markdown '---' rules, no final newline) in the wiki diff", async ({ page }) => {
+  await login(page);
+  const ws = workspaceDir();
+  const f = path.join(ws, "docs", "numbers.md");
+  const before = ["---", "title: numbers", "---", "# Numbers", "", "intro", "", "---", "", "after rule"].concat(Array.from({ length: 12 }, (_, i) => `p${i + 1}`));
+  fs.writeFileSync(f, before.join("\n")); // no final newline
+  gitCommitAll(ws, "numbers");
+  const after = before.filter((l, i) => i !== 7 && i !== 8); // delete the '---' rule (lines 8-9) …
+  after[after.length - 1] = "p12 changed"; // … and change the last line
+  fs.writeFileSync(f, after.join("\n"));
+  try {
+    await page.getByTestId("tree-refresh").click();
+    await expect(page.getByTestId("tree-refresh")).toHaveAttribute("data-spinning", "false");
+    const dir = page.getByTestId("tree-root").first().locator(".tree-row.dir", { hasText: "docs" }).first();
+    if ((await page.getByTestId("tree-file-docs/numbers.md").count()) === 0) await dir.click();
+    await page.getByTestId("tree-file-docs/numbers.md").locator("button.tree-main").click();
+    await expect(page.getByTestId("markdown-body").locator("h1")).toHaveText("Numbers"); // opened
+    await page.getByTestId("view-diff").click();
+    if ((await page.getByTestId("diff-layout-unified").getAttribute("aria-selected")) !== "true") await page.getByTestId("diff-layout-unified").click();
+    const rows = page.locator('[data-testid="diff-file"][data-path="docs/numbers.md"] [data-testid="diff-row"]');
+    await expect(rows.first()).toBeVisible({ timeout: 15000 });
+    // every row's old/new number points at exactly the text shown, in the committed / current file
+    const got = await rows.evaluateAll((trs) => trs.map((tr) => {
+      const td = tr.querySelectorAll("td");
+      return { o: td[0].textContent, n: td[1].textContent, text: (td[2].textContent ?? "").slice(1) };
+    }));
+    expect(got.length).toBeGreaterThan(4);
+    for (const r of got) {
+      if (r.o) expect(before[Number(r.o) - 1], `old line ${r.o}`).toBe(r.text.replace(/^ $/, ""));
+      if (r.n) expect(after[Number(r.n) - 1], `new line ${r.n}`).toBe(r.text.replace(/^ $/, ""));
+    }
+    expect(got.some((r) => r.o === "8" && r.text === "---")).toBe(true); // the deleted rule is shown, at its line
+    expect(got.some((r) => r.n === "20" && r.text === "p12 changed")).toBe(true);
+  } finally {
+    fs.rmSync(f, { force: true });
+    gitCommitAll(ws, "cleanup numbers");
+  }
 });

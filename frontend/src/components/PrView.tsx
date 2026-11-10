@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { AgentSession, ApiError, WorkspaceInfo, get, put } from "../api";
+import { AgentSession, ApiError, WorkspaceInfo, get, post, put } from "../api";
 import { renderMarkdown, sanitizeHtml } from "../markdown";
 import { SelectionAnchor, wholeDocument } from "../textmodel";
-import { GhComment, GhDraft, PrFileDiff, SubmitReview } from "./PrDiff";
+import { GhDraft, GhThread, PrFile, PrFileDiff, SubmitReview } from "./PrDiff";
+import { COMPOSER_HINT, composerKeyDown } from "./keys";
 import { SelectionPopover } from "./Reader";
 import RefreshButton from "./RefreshButton";
 
@@ -15,12 +16,16 @@ export interface PrData {
     reviews: { author: string | null; state: string; submitted_at: string | null; url: string | null }[]; requested: (string | null)[];
     ci: string | null; checks: Check[];
   };
-  files: { path: string; previous_path: string | null; status: string; additions: number; deletions: number; unified: string; binary_or_large: boolean }[];
+  files: PrFile[];
   wiki_workspace_id: string | null;
   doc_path: string;
 }
 
 const FOLD_LINES = 400; // longer diffs start folded
+
+interface ConvItem { kind: "review" | "comment"; id: number; author: string | null; state?: string; body: string; created_at: string | null; url: string | null; line_comments?: number }
+interface Review { threads: GhThread[]; conversation: ConvItem[]; drafts: GhDraft[]; pending_on_github: number | null; older_hidden: number }
+const md = (s: string) => sanitizeHtml(renderMarkdown(s || "", ""), "");
 
 const STATE_CLASS: Record<string, string> = { SUCCESS: "success", NEUTRAL: "success", SKIPPED: "none", FAILURE: "failure", ERROR: "failure", TIMED_OUT: "failure", CANCELLED: "failure", ACTION_REQUIRED: "pending", PENDING: "pending", IN_PROGRESS: "pending", QUEUED: "pending", EXPECTED: "pending" };
 const REVIEW_LABEL: Record<string, string> = { APPROVED: "approved", CHANGES_REQUESTED: "requested changes", COMMENTED: "commented", DISMISSED: "dismissed", PENDING: "pending" };
@@ -51,13 +56,15 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
   const [pick, setPick] = useState("");
   const [layout, setLayout] = useState<"unified" | "split">(() => (localStorage.getItem("waw.prDiffLayout") as "unified" | "split") || "unified");
   useEffect(() => localStorage.setItem("waw.prDiffLayout", layout), [layout]);
-  const [review, setReview] = useState<{ comments: GhComment[]; drafts: GhDraft[] }>({ comments: [], drafts: [] });
+  const [review, setReview] = useState<Review>({ threads: [], conversation: [], drafts: [], pending_on_github: null, older_hidden: 0 });
+  const [convText, setConvText] = useState("");
+  const [convBusy, setConvBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [owner, name] = repo.split("/");
   const apiBase = `/github/pr/${owner}/${name}/${number}`;
   const loadComments = async () => {
     try {
-      setReview(await get<{ comments: GhComment[]; drafts: GhDraft[] }>(`${apiBase}/comments`));
+      setReview(await get<Review>(`${apiBase}/comments`));
     } catch (e) {
       setError((e as ApiError).message);
     }
@@ -97,7 +104,31 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
 
   const body = useMemo(() => (data ? sanitizeHtml(renderMarkdown(data.pr.body || "_No description._", ""), "") : ""), [data]);
 
-  const commentsFor = (path: string) => review.comments.filter((c) => c.path === path);
+  const threadsFor = (path: string) => review.threads.filter((t) => t.path === path);
+  const setViewed = async (path: string, viewed: boolean) => {
+    const mark = (v: PrFile["viewed"]) => setData((d) => (d ? { ...d, files: d.files.map((f) => (f.path === path ? { ...f, viewed: v } : f)) } : d));
+    const before = data?.files.find((f) => f.path === path)?.viewed ?? "UNVIEWED";
+    mark(viewed ? "VIEWED" : "UNVIEWED"); // at once; undone if GitHub refuses
+    try {
+      await put(`${apiBase}/viewed`, { path, viewed });
+    } catch (e) {
+      mark(before);
+      setError((e as ApiError).message);
+    }
+  };
+  const postConversation = async () => {
+    if (!convText.trim()) return;
+    setConvBusy(true);
+    try {
+      await post(`${apiBase}/conversation`, { body: convText });
+      setConvText("");
+      await loadComments();
+    } catch (e) {
+      setError((e as ApiError).message);
+    } finally {
+      setConvBusy(false);
+    }
+  };
   const draftsFor = (path: string) => review.drafts.filter((d) => d.path === path);
 
   if (error && !data) return <div className="pr-view"><div className="banner warn" data-testid="pr-error">{error} <button className="btn small" onClick={() => void load(true)}>Retry</button></div></div>;
@@ -127,7 +158,7 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
               <button role="tab" aria-selected={layout === "split"} className={layout === "split" ? "active" : ""} onClick={() => setLayout("split")} data-testid="pr-layout-split">Side by side</button>
             </span>
           )}
-          <SubmitReview apiBase={apiBase} drafts={review.drafts.length} owner={githubLogin}
+          <SubmitReview apiBase={apiBase} drafts={review.drafts.length} fromGithub={review.pending_on_github ?? 0} owner={githubLogin}
             onDone={async (url) => { setNotice(url ? `Review published on GitHub.` : "Review published."); await loadComments(); await load(true); }}
             onError={(m) => setError(m)} />
           <span className="spacer" />
@@ -158,7 +189,34 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
       {tab === "overview" ? (
         <div className="pr-body" data-testid="pr-overview">
           <div className="pr-overview-grid">
-            <article className="markdown-body pr-description" dangerouslySetInnerHTML={{ __html: body }} data-testid="pr-description" />
+            <div className="pr-main-col">
+              <article className="markdown-body pr-description" dangerouslySetInnerHTML={{ __html: body }} data-testid="pr-description" />
+              <section className="pr-conversation" data-testid="pr-conversation">
+                <h3>Conversation</h3>
+                {review.older_hidden > 0 && <div className="muted small">{review.older_hidden} older item(s) are only on GitHub.</div>}
+                {review.conversation.length === 0 && <div className="muted small">No reviews or comments yet.</div>}
+                {review.conversation.map((c) => (
+                  <div key={`${c.kind}${c.id}`} className={`pr-conv-item ${c.kind} ${(c.state ?? "").toLowerCase()}`} data-testid="pr-conv-item" data-kind={c.kind}>
+                    <div className="small">
+                      <b>{c.author}</b>{" "}
+                      {c.kind === "review" ? <span className={`pr-review-state ${(c.state ?? "").toLowerCase()}`}>{REVIEW_LABEL[c.state ?? ""] ?? c.state?.toLowerCase()}</span> : <span className="muted">commented</span>}
+                      {c.kind === "review" && c.line_comments ? <span className="muted"> · {c.line_comments} line comment{c.line_comments > 1 ? "s" : ""} (in Files)</span> : null}
+                      <span className="muted"> · {c.created_at ? new Date(c.created_at).toLocaleString() : ""}</span>
+                      {c.url && <> · <a href={c.url} target="_blank" rel="noreferrer">GitHub</a></>}
+                    </div>
+                    {c.body.trim() && <div className="markdown-body gh-comment-body" dangerouslySetInnerHTML={{ __html: md(c.body) }} />}
+                  </div>
+                ))}
+                <div className="pr-conv-new">
+                  <textarea rows={3} value={convText} onChange={(e) => setConvText(e.target.value)} placeholder={`Add a comment to the conversation (posted on GitHub; ${COMPOSER_HINT})`}
+                    onKeyDown={(e) => composerKeyDown(e, () => void postConversation(), setConvText, () => setConvText(""))} data-testid="pr-conv-text" />
+                  <div className="row">
+                    <button className="btn small primary" disabled={convBusy || !convText.trim()} onClick={() => void postConversation()} data-testid="pr-conv-send">Comment</button>
+                    <span className="muted small">For line comments and approval use <b>Files</b> and <b>Finish review</b>.</span>
+                  </div>
+                </div>
+              </section>
+            </div>
             <aside className="pr-side">
               <section>
                 <h4>Checks {p.checks.length ? <span className={`ci-dot ${STATE_CLASS[p.ci ?? ""] ?? "none"}`} /> : null}</h4>
@@ -192,13 +250,21 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
         <div className="pr-body pr-files" data-testid="pr-files">
           <div className="muted small pad">
             Click a line to comment or ask the agent (drag or shift-click for several lines). Comments stay pending here until you
-            <b> Finish review</b>; replies to existing threads are posted at once.
+            <b> Finish review</b>; replies, resolving and Viewed go to GitHub at once.
             {review.drafts.length > 0 && <> · <b>{review.drafts.length} pending</b></>}
           </div>
+          <div className="pr-files-bar">
+            <span className="small" data-testid="pr-viewed-count"><b>{data.files.filter((f) => f.viewed === "VIEWED").length}</b> / {data.files.length} files viewed</span>
+            <span className="small muted">{review.threads.filter((t) => !t.resolved).length} unresolved thread(s)</span>
+            <select className="pr-jump" value="" onChange={(e) => { const el = document.querySelector(`[data-testid="pr-file"][data-file="${CSS.escape(e.target.value)}"]`); el?.scrollIntoView({ block: "start" }); }} aria-label="Jump to file" data-testid="pr-jump">
+              <option value="">Jump to file…</option>
+              {data.files.map((f) => <option key={f.path} value={f.path}>{f.viewed === "VIEWED" ? "✓ " : ""}{f.path}{threadsFor(f.path).length ? ` (${threadsFor(f.path).reduce((n, t) => n + t.comments.length, 0)})` : ""}</option>)}
+            </select>
+          </div>
           {data.files.map((f) => (
-            <PrFileDiff key={f.path} file={f} layout={layout} comments={commentsFor(f.path)} drafts={draftsFor(f.path)} apiBase={apiBase} canAsk={docReady}
-              collapsedDefault={f.unified.split("\n").length > FOLD_LINES && !commentsFor(f.path).length && !draftsFor(f.path).length}
-              onChanged={loadComments} onError={(m) => setError(m)}
+            <PrFileDiff key={f.path} file={f} layout={layout} threads={threadsFor(f.path)} drafts={draftsFor(f.path)} apiBase={apiBase} canAsk={docReady}
+              collapsedDefault={f.unified.split("\n").length > FOLD_LINES && !threadsFor(f.path).length && !draftsFor(f.path).length}
+              onChanged={loadComments} onError={(m) => setError(m)} onViewed={(v) => setViewed(f.path, v)}
               onAsk={(quote, label, question) => onSend({ quote, prefix: "", suffix: "", start: 0, end: 0, heading: null, target: { kind: "text", page: null, unit: "page", label } }, question, null)} />
           ))}
         </div>

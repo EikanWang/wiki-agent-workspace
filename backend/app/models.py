@@ -75,6 +75,7 @@ class GithubPrDraft(Base):
     repo: Mapped[str] = mapped_column(Text, nullable=False, index=True)  # owner/name, lower case
     number: Mapped[int] = mapped_column(Integer, nullable=False)
     path: Mapped[str] = mapped_column(Text, nullable=False)
+    subject: Mapped[str] = mapped_column(String(8), default="line", server_default="line")  # line | file (whole-file comment; line 0)
     side: Mapped[str] = mapped_column(String(5), nullable=False)  # LEFT (old) | RIGHT (new) — of the last line
     line: Mapped[int] = mapped_column(Integer, nullable=False)
     start_side: Mapped[str | None] = mapped_column(String(5), nullable=True)

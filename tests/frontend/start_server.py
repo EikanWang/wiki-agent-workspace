@@ -156,14 +156,57 @@ def add_fake_review_queue(app) -> None:
              pr(201, "intel/torch-xpu-ops", "Speed up GEMM tiling"),
              None]  # a PR in an organization that requires SAML SSO
 
+    posted: list = []  # what "GitHub" received (inspected by tests via /fake-github/posted)
+    state = {
+        "viewed": {},
+        "threads": [{"id": "PRRT_bob", "isResolved": False, "isOutdated": False, "path": "c10/xpu/stub.cpp", "line": 11, "originalLine": 11,
+                     "startLine": None, "diffSide": "RIGHT", "startDiffSide": None, "subjectType": "LINE", "resolvedBy": None,
+                     "comments": {"totalCount": 1, "nodes": [{"databaseId": 501, "author": {"login": "bob"}, "body": "Is `ok` ever false?",
+                                                               "createdAt": "2026-11-08T00:00:00Z", "url": "https://github.com/x/1", "diffHunk": "@@ -10,3 +10,4 @@\n+  if (ok)"}]}},
+                    {"id": "PRRT_file", "isResolved": False, "isOutdated": False, "path": "docs/xpu.md", "line": None, "originalLine": None,
+                     "startLine": None, "diffSide": "RIGHT", "startDiffSide": None, "subjectType": "FILE", "resolvedBy": None,
+                     "comments": {"totalCount": 1, "nodes": [{"databaseId": 502, "author": {"login": "carol"}, "body": "Move these notes to the wiki?",
+                                                               "createdAt": "2026-11-08T01:00:00Z", "url": None, "diffHunk": None}]}}],
+        "reviews": [{"databaseId": 701, "author": {"login": "bob"}, "state": "CHANGES_REQUESTED", "body": "Please add a test.",
+                     "submittedAt": "2026-11-08T02:00:00Z", "url": None, "comments": {"totalCount": 1}}],
+        "comments": [{"databaseId": 801, "author": {"login": "pytorch-bot"}, "body": "CI started", "createdAt": "2026-11-07T00:00:00Z", "url": None}],
+    }
+    keys = {"MarkViewed": "markFileAsViewed", "MarkUnviewed": "unmarkFileAsViewed", "Resolve": "resolveReviewThread", "Unresolve": "unresolveReviewThread",
+            "AddReview": "addPullRequestReview", "AddThread": "addPullRequestReviewThread", "Submit": "submitPullRequestReview", "DeleteReview": "deletePullRequestReview"}
+
     def graphql(query, variables):
-        if "pullRequest(number" in query:
+        q = query.lstrip()
+        if q.startswith("mutation"):
+            name = q.split()[1].split("(")[0]
+            posted.append({"mutation": name, "variables": variables})
+            if name in ("MarkViewed", "MarkUnviewed"):
+                state["viewed"][variables["path"]] = "VIEWED" if name == "MarkViewed" else "UNVIEWED"
+            if name in ("Resolve", "Unresolve"):
+                for t in state["threads"]:
+                    if t["id"] == variables["id"]:
+                        t["isResolved"] = name == "Resolve"
+                        t["resolvedBy"] = {"login": "e2e-user"} if name == "Resolve" else None
+            res = {"AddReview": {"pullRequestReview": {"id": "PRR_e2e"}},
+                   "Submit": {"pullRequestReview": {"url": "https://github.com/pytorch/pytorch/pull/101#pullrequestreview-9001"}},
+                   "Resolve": {"thread": {"id": variables.get("id"), "isResolved": True}},
+                   "Unresolve": {"thread": {"id": variables.get("id"), "isResolved": False}}}.get(name, {"clientMutationId": None, "thread": {"id": "T"}})
+            return {keys[name]: res}
+        if "query PrFiles" in query:
+            return {"repository": {"pullRequest": {"files": {"pageInfo": {"hasNextPage": False},
+                    "nodes": [{"path": p, "viewerViewedState": state["viewed"].get(p, "UNVIEWED")} for p in ("c10/xpu/stub.cpp", "docs/xpu.md")]}}}}
+        if "query PrThreads" in query:
+            return {"repository": {"pullRequest": {"reviewThreads": {"pageInfo": {"hasNextPage": False}, "nodes": state["threads"]}}}}
+        if "query PrConversation" in query:
+            return {"repository": {"pullRequest": {"reviews": {"totalCount": len(state["reviews"]), "nodes": state["reviews"]},
+                                                    "comments": {"totalCount": len(state["comments"]), "nodes": state["comments"]},
+                                                    "pending": {"nodes": []}}}}
+        if "query PrDetail" in query:
             n = int(variables["number"])
             src = next(x for x in nodes if x and x["number"] == n)
             return {"repository": {"nameWithOwner": src["repository"]["nameWithOwner"], "isPrivate": False, "pullRequest": {
-                **src, "body": "This PR **fixes** the lazy stub.\n\n- adds a check", "state": "OPEN", "mergeable": "MERGEABLE",
+                **src, "id": f"PR_e2e{n}", "body": "This PR **fixes** the lazy stub.\n\n- adds a check", "state": "OPEN", "mergeable": "MERGEABLE",
                 "baseRefName": "main", "headRefName": f"fix-{n}",
-                "latestReviews": {"nodes": [{"author": {"login": "bob"}, "state": "APPROVED", "submittedAt": "2026-11-08T00:00:00Z", "url": "u"}]},
+                "latestReviews": {"nodes": [{"author": {"login": "bob"}, "state": "CHANGES_REQUESTED", "submittedAt": "2026-11-08T00:00:00Z", "url": "u"}]},
                 "commits": {"nodes": [{"commit": {"oid": "abc", "statusCheckRollup": {"state": "FAILURE", "contexts": {"nodes": [
                     {"__typename": "CheckRun", "name": "xpu-test", "conclusion": "FAILURE", "status": "COMPLETED", "detailsUrl": None},
                     {"__typename": "CheckRun", "name": "lint", "conclusion": "SUCCESS", "status": "COMPLETED", "detailsUrl": None}]}}}}]}}}}
@@ -171,21 +214,20 @@ def add_fake_review_queue(app) -> None:
                 "_errors": [{"type": "FORBIDDEN", "message": "Resource protected by organization SAML enforcement."}]}
 
     ctx.extra["gh_graphql"] = graphql
-    posted: list = []  # what "GitHub" received (inspected by tests via /fake-github/posted)
-    comments = [{"id": 501, "path": "c10/xpu/stub.cpp", "line": 11, "side": "RIGHT", "body": "Is `ok` ever false?", "user": {"login": "bob"},
-                 "created_at": "2026-11-08T00:00:00Z", "html_url": "https://github.com/x/1"}]
 
     def rest(method, path, body=None):
-        if method == "GET" and path.endswith("/comments?per_page=100"):
-            return comments
         posted.append({"method": method, "path": path, "body": body})
-        if path.endswith("/reviews"):
-            return {"id": 9001, "html_url": "https://github.com/pytorch/pytorch/pull/101#pullrequestreview-9001"}
         if path.endswith("/replies"):
-            c = {"id": 600 + len(posted), "path": "c10/xpu/stub.cpp", "line": 11, "side": "RIGHT", "body": body["body"],
-                 "user": {"login": "e2e-user"}, "in_reply_to_id": int(path.split("/")[-2]), "created_at": "2026-11-09T00:00:00Z"}
-            comments.append(c)
-            return c
+            cid = int(path.split("/")[-2])
+            for t in state["threads"]:
+                if t["comments"]["nodes"][0]["databaseId"] == cid:
+                    t["comments"]["nodes"].append({"databaseId": 900 + len(posted), "author": {"login": "e2e-user"}, "body": body["body"],
+                                                   "createdAt": "2026-11-09T00:00:00Z", "url": None, "diffHunk": None})
+                    t["comments"]["totalCount"] += 1
+            return {"id": 900 + len(posted), "body": body["body"], "user": {"login": "e2e-user"}}
+        if path.endswith("/issues/101/comments"):
+            state["comments"].append({"databaseId": 950 + len(posted), "author": {"login": "e2e-user"}, "body": body["body"], "createdAt": "2026-11-09T01:00:00Z", "url": None})
+            return {"id": 950 + len(posted), "body": body["body"], "user": {"login": "e2e-user"}}
         raise AssertionError(path)
 
     ctx.extra["gh_rest"] = rest
@@ -200,7 +242,7 @@ def add_fake_review_queue(app) -> None:
     ctx.extra["gh_pr_files"] = lambda o, r, n: [
         {"filename": "c10/xpu/stub.cpp", "status": "modified", "additions": 2, "deletions": 1,
          "patch": "@@ -10,3 +10,4 @@ void init() {\n   load();\n-  call();\n+  if (ok)\n+    call();\n }"},
-        {"filename": "docs/xpu.md", "status": "added", "additions": 1, "deletions": 0, "patch": "@@ -0,0 +1 @@\n+XPU notes"}]
+        {"filename": "docs/xpu.md", "status": "modified", "additions": 2, "deletions": 1, "patch": "@@ -1,3 +1,4 @@\n # XPU\n----\n+XPU notes\n+++i counter\n end"}]
 
 
 def main() -> None:

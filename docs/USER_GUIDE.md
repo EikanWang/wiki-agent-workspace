@@ -101,16 +101,28 @@ can see, grouped by repository (most PRs first):
   updated*, *waiting longest* or *smallest first*; click a repository to fold it;
 - clicking a PR opens it as a **tab** next to your documents (remembered like them):
   - **Overview**: description, checks (failing first, linked), reviews and requested reviewers, labels;
-    **Open on GitHub**; ↻ reloads.
+    **Open on GitHub**; ↻ reloads. Below the description the **Conversation**: every reviewer's review
+    (approved / changes requested / commented, with its summary) and general comments, oldest first; the box at
+    the end posts a general comment on GitHub.
   - **Files**: the diff of every changed file, **Unified** or **Side by side** (remembered); long files start
-    folded. Existing GitHub review threads are shown at their lines (outdated ones above the file) — **Reply…**
-    posts a reply on GitHub at once.
+    folded. *n / N files viewed*, unresolved threads and **Jump to file…** at the top.
+  - **All reviewers' threads** at their lines; comments on a whole file at the top of it; threads on code that
+    changed since (outdated) above the file. **Reply…** and **Resolve conversation** / **Unresolve** act on GitHub
+    at once; resolved threads are folded. **Ask agent…** on a thread asks the agent about it (e.g. "is the
+    reviewer right?").
+  - **Viewed** per file, the same as on github.com: ticking folds the file; *changed since viewed* when new
+    commits touched it.
+  - **Comment on file** writes a pending comment on the whole file.
   - **Click a line** (drag or shift-click for several, either side) to open a box: **Add review comment** keeps
     it *pending* here (edit/delete it; it survives reloads), **Ask agent** asks the agent about exactly those
-    lines (answer in the discussions panel).
+    lines (answer in the discussions panel). **Suggest change** inserts the selected new lines as a GitHub
+    *suggested change* block to edit into the replacement.
   - **Finish review (n)**: an optional summary and *Comment* / *Approve* / *Request changes*, then **Submit**
     publishes everything to GitHub as one review, as the server's `gh` account (shown in the box). If GitHub
-    refuses (e.g. the PR changed and a line no longer exists), the pending comments are kept.
+    refuses (e.g. the PR changed and a line no longer exists), nothing is left half-published on GitHub and the
+    pending comments are kept. A pending review you started on github.com is submitted together with yours.
+  - The agent also reads what reviewers said (conversation and threads) when you ask about the PR.
+  - Line numbers are those of the old / new file, like on GitHub (also in the wiki diff).
   - **Ask about this PR** asks about the whole pull request. Answers and follow-ups are in the discussions
     panel, like for documents, and the PR appears in *Recent*.
   - The agent works in a **wiki of your choice per repository** (asked the first time you open one of its PRs;

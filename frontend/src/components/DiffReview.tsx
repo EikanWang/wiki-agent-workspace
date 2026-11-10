@@ -24,10 +24,14 @@ export function parseUnified(unified: string): { lines: Line[]; hunks: string[] 
   let hunkIndex = -1;
   let cur: string[] = [];
   for (const raw of unified.split("\n")) {
-    if (raw.startsWith("+++") || raw.startsWith("---")) {
+    // "--- a/x" / "+++ b/x" are file headers only before the first hunk: inside a hunk, "----" is a deleted
+    // "---" line (Markdown rule, front matter, "-- comment") and "+++" an added "++i" line
+    if (hunkIndex === -1 && (raw.startsWith("+++") || raw.startsWith("---"))) {
       lines.push({ kind: "file", text: raw, raw, oldNo: null, newNo: null, hunkIndex });
       continue;
     }
+    // "\ No newline at end of file" belongs to the line before it: not a line of either file
+    if (raw.startsWith("\\")) continue;
     const m = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(raw);
     if (m) {
       if (cur.length) hunks.push(cur.join("\n"));

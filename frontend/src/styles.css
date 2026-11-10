@@ -711,3 +711,25 @@ mark.waw-hl.review.needs_review { border-bottom: 2px dashed var(--warn); }
 .pr-submit-opt { display: flex; gap: 6px; align-items: flex-start; font-size: 13px; }
 .pr-outdated summary { cursor: pointer; }
 .pr-files .diff-file { margin: 10px 0; }
+/* PR review: conversation, resolved threads, file-level comments, suggestions, files bar */
+.pr-main-col { min-width: 0; }
+.pr-conversation { margin-top: 24px; border-top: 1px solid var(--border); padding-top: 12px; }
+.pr-conversation h3 { margin: 0 0 8px; font-size: 15px; }
+.pr-conv-item { border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; margin: 8px 0; background: var(--card); }
+.pr-conv-item.review.approved { border-left: 3px solid var(--green); }
+.pr-conv-item.review.changes_requested { border-left: 3px solid var(--red); }
+.pr-conv-item.review.commented { border-left: 3px solid var(--primary); }
+.pr-review-state { font-weight: 600; }
+.pr-review-state.approved { color: var(--green); }
+.pr-review-state.changes_requested { color: var(--red); }
+.pr-conv-new textarea { width: 100%; box-sizing: border-box; border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; background: var(--bg); color: var(--fg); font: inherit; }
+.gh-thread.resolved { opacity: 0.85; }
+.gh-resolved-head { text-align: left; color: var(--muted); }
+.gh-thread-actions { gap: 12px; }
+.pr-file-level { display: flex; flex-direction: column; gap: 6px; border-bottom: 1px solid var(--border); }
+.pr-files-bar { display: flex; align-items: center; gap: 12px; padding: 4px 0 8px; position: sticky; top: 0; z-index: 2; background: var(--bg); }
+.pr-jump { font: inherit; font-size: 12px; max-width: 360px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--fg); padding: 2px 4px; }
+.pr-file-head-actions { display: flex; gap: 6px; }
+/* GitHub "suggested change" blocks */
+.gh-comment-body pre:has(> code.language-suggestion) { border-left: 3px solid var(--green); }
+.gh-comment-body pre:has(> code.language-suggestion)::before { content: "Suggested change"; display: block; font-family: var(--sans, sans-serif); font-size: 11px; font-weight: 600; color: var(--green); margin-bottom: 4px; }

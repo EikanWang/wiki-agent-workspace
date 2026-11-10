@@ -163,3 +163,51 @@ async def test_viewed_checkbox_is_bound_to_the_reviewed_content(api: Api, worksp
     by = {f["path"]: f for f in (await api.get("/api/v1/diff", params={"path": "docs"})).json()["files"]}
     assert by["docs/guide.md"]["viewed"] is False and by["docs/guide.md"]["viewed_stale"] is False
     assert (await api.put("/api/v1/diff/viewed", json={"path": "docs/guide.md", "base": "--bad", "viewed": True})).status_code == 400
+
+
+def test_unified_diff_line_numbers_match_the_files():
+    """Each diff line, numbered from its hunk header, must be the line at that number in the old / new file —
+    also for files without a final newline, with form feeds or U+2028, and with lines starting with --- / +++."""
+    import re
+
+    from backend.app.diffs import DiffService
+
+    def parse(unified):  # the same rules as the frontend (DiffReview.parseUnified)
+        out, old, new, hunk = [], 0, 0, -1
+        for raw in unified.split("\n"):
+            if hunk == -1 and (raw.startswith("+++") or raw.startswith("---")):
+                continue
+            if raw.startswith("\\"):
+                continue
+            m = re.match(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@", raw)
+            if m:
+                old, new, hunk = int(m[1]), int(m[2]), hunk + 1
+                continue
+            if raw == "" and out:
+                continue
+            if raw.startswith("+"):
+                out.append((raw[1:], None, new)); new += 1
+            elif raw.startswith("-"):
+                out.append((raw[1:], old, None)); old += 1
+            else:
+                out.append((raw[1:], old, new)); old += 1; new += 1
+        return out
+
+    base = "".join(f"line {i}\n" for i in range(1, 30))
+    md = "---\ntitle: x\n---\n# Head\n\n---\n\nmore\n" + "".join(f"p{i}\n" for i in range(20))
+    cases = [
+        (base, base.replace("line 10\n", "line ten\n")),
+        (base.rstrip("\n"), base.rstrip("\n").replace("line 29", "line 29!")),  # no final newline
+        (base.replace("line 5", "a\x0cb").replace("line 7", "c\u2028d"), base.replace("line 5", "a\x0cb").replace("line 7", "c\u2028d").replace("line 20", "XX")),
+        (md, md.replace("---\n\nmore", "more")),  # deleted '---' inside a hunk
+        ("i;\n" * 3 + "".join(f"s{i};\n" for i in range(9)), "i;\n" * 3 + "".join(f"s{i};\n" for i in range(9)).replace("s3;\n", "s3;\n++i;\n")),
+    ]
+    svc = DiffService.__new__(DiffService)
+    for a, b in cases:
+        u = svc._unified(a, b, "f.md", "HEAD", "worktree")
+        oldl, newl = a.split("\n"), b.split("\n")
+        for text, o, n in parse(u):
+            if o is not None:
+                assert oldl[o - 1] == text, (o, text, oldl[o - 1])
+            if n is not None:
+                assert newl[n - 1] == text, (n, text, newl[n - 1])

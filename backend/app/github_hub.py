@@ -283,11 +283,11 @@ def reset_cache() -> None:
 # ---------------------------------------------------------------------- a pull request (tab)
 
 PR_QUERY = """
-query($owner: String!, $name: String!, $number: Int!) {
+query PrDetail($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
     nameWithOwner isPrivate
     pullRequest(number: $number) {
-      number title url body state isDraft createdAt updatedAt mergeable additions deletions changedFiles
+      id number title url body state isDraft createdAt updatedAt mergeable additions deletions changedFiles
       baseRefName headRefName reviewDecision
       author { login }
       labels(first: 20) { nodes { name color } }
@@ -303,6 +303,145 @@ query($owner: String!, $name: String!, $number: Int!) {
 }
 """
 NAME = re.compile(r"^[A-Za-z0-9_.-]{1,100}$")
+FILES_QUERY = """
+query PrFiles($owner: String!, $name: String!, $number: Int!, $after: String) {
+  repository(owner: $owner, name: $name) { pullRequest(number: $number) {
+    files(first: 100, after: $after) { pageInfo { hasNextPage endCursor } nodes { path viewerViewedState } }
+  } }
+}
+"""
+THREADS_QUERY = """
+query PrThreads($owner: String!, $name: String!, $number: Int!, $after: String) {
+  repository(owner: $owner, name: $name) { pullRequest(number: $number) {
+    reviewThreads(first: 50, after: $after) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        id isResolved isOutdated path line originalLine startLine originalStartLine diffSide startDiffSide subjectType
+        resolvedBy { login }
+        comments(first: 60) { totalCount nodes { databaseId author { login } body createdAt url diffHunk } }
+      }
+    }
+  } }
+}
+"""
+CONVERSATION_QUERY = """
+query PrConversation($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) { pullRequest(number: $number) {
+    reviews(last: 100) { totalCount nodes { databaseId author { login } state body submittedAt url comments { totalCount } } }
+    comments(last: 100) { totalCount nodes { databaseId author { login } body createdAt url } }
+    pending: reviews(states: PENDING, first: 5) { nodes { id comments { totalCount } } }
+  } }
+}
+"""
+M_VIEWED = "mutation MarkViewed($pr: ID!, $path: String!) { markFileAsViewed(input: {pullRequestId: $pr, path: $path}) { clientMutationId } }"
+M_UNVIEWED = "mutation MarkUnviewed($pr: ID!, $path: String!) { unmarkFileAsViewed(input: {pullRequestId: $pr, path: $path}) { clientMutationId } }"
+M_RESOLVE = "mutation Resolve($id: ID!) { resolveReviewThread(input: {threadId: $id}) { thread { id isResolved } } }"
+M_UNRESOLVE = "mutation Unresolve($id: ID!) { unresolveReviewThread(input: {threadId: $id}) { thread { id isResolved } } }"
+M_ADD_REVIEW = "mutation AddReview($pr: ID!, $commit: GitObjectID) { addPullRequestReview(input: {pullRequestId: $pr, commitOID: $commit}) { pullRequestReview { id } } }"
+M_ADD_THREAD = """mutation AddThread($review: ID!, $path: String!, $body: String!, $line: Int, $side: DiffSide, $startLine: Int,
+  $startSide: DiffSide, $subject: PullRequestReviewThreadSubjectType) {
+  addPullRequestReviewThread(input: {pullRequestReviewId: $review, path: $path, body: $body, line: $line, side: $side,
+    startLine: $startLine, startSide: $startSide, subjectType: $subject}) { thread { id } } }"""
+M_SUBMIT = "mutation Submit($review: ID!, $event: PullRequestReviewEvent!, $body: String) { submitPullRequestReview(input: {pullRequestReviewId: $review, event: $event, body: $body}) { pullRequestReview { url } } }"
+M_DELETE_REVIEW = "mutation DeleteReview($review: ID!) { deletePullRequestReview(input: {pullRequestReviewId: $review}) { clientMutationId } }"
+
+
+def _mutate(graphql: Callable[[str, dict], dict], q: str, v: dict[str, Any], key: str) -> dict[str, Any]:
+    """Run a mutation; GitHub reports failures as a null result plus errors."""
+    d = graphql(q, v)
+    res = d.get(key)
+    if not res:
+        msg = "; ".join(e.get("message", "") for e in d.get("_errors") or []) or "GitHub did not accept the change"
+        raise ApiError(502, "GH_ERROR", f"GitHub refused: {msg[:400]}")
+    return res
+
+
+def fetch_viewed(graphql: Callable[[str, dict], dict], owner: str, repo: str, number: int) -> dict[str, str]:
+    """path -> VIEWED | UNVIEWED | DISMISSED (viewed, but changed since) for the signed-in gh account."""
+    out: dict[str, str] = {}
+    after = None
+    for _ in range(40):
+        try:
+            d = graphql(FILES_QUERY, {"owner": owner, "name": repo, "number": number, "after": after})
+        except ApiError:
+            return out  # optional: the diff still works without it
+        f = (((d.get("repository") or {}).get("pullRequest") or {}).get("files")) or {}
+        for n in f.get("nodes") or []:
+            if n:
+                out[n["path"]] = n.get("viewerViewedState") or "UNVIEWED"
+        if not (f.get("pageInfo") or {}).get("hasNextPage"):
+            break
+        after = f["pageInfo"]["endCursor"]
+    return out
+
+
+def fetch_threads(graphql: Callable[[str, dict], dict], owner: str, repo: str, number: int) -> list[dict[str, Any]]:
+    threads: list[dict[str, Any]] = []
+    after = None
+    for _ in range(20):  # 1000 threads
+        d = graphql(THREADS_QUERY, {"owner": owner, "name": repo, "number": number, "after": after})
+        t = (((d.get("repository") or {}).get("pullRequest") or {}).get("reviewThreads")) or {}
+        for n in t.get("nodes") or []:
+            if not n:
+                continue
+            cs = (n.get("comments") or {}).get("nodes") or []
+            threads.append({
+                "id": n["id"], "resolved": bool(n.get("isResolved")), "outdated": bool(n.get("isOutdated")),
+                "resolved_by": (n.get("resolvedBy") or {}).get("login"), "path": n.get("path"),
+                "line": n.get("line"), "original_line": n.get("originalLine"), "start_line": n.get("startLine"),
+                "side": n.get("diffSide") or "RIGHT", "start_side": n.get("startDiffSide"),
+                "subject": (n.get("subjectType") or "LINE").upper(), "total": (n.get("comments") or {}).get("totalCount", len(cs)),
+                "diff_hunk": (cs[0].get("diffHunk") if cs else None),
+                "comments": [{"id": c.get("databaseId"), "author": (c.get("author") or {}).get("login"), "body": c.get("body") or "",
+                              "created_at": c.get("createdAt"), "url": c.get("url")} for c in cs if c],
+            })
+        if not (t.get("pageInfo") or {}).get("hasNextPage"):
+            break
+        after = t["pageInfo"]["endCursor"]
+    return threads
+
+
+def fetch_conversation(graphql: Callable[[str, dict], dict], owner: str, repo: str, number: int) -> dict[str, Any]:
+    d = graphql(CONVERSATION_QUERY, {"owner": owner, "name": repo, "number": number})
+    p = ((d.get("repository") or {}).get("pullRequest")) or {}
+    items: list[dict[str, Any]] = []
+    for r in (p.get("reviews") or {}).get("nodes") or []:
+        if not r or r.get("state") == "PENDING":
+            continue
+        items.append({"kind": "review", "id": r.get("databaseId"), "author": (r.get("author") or {}).get("login"), "state": r.get("state"),
+                      "body": r.get("body") or "", "created_at": r.get("submittedAt"), "url": r.get("url"),
+                      "line_comments": (r.get("comments") or {}).get("totalCount", 0)})
+    items.extend({"kind": "comment", "id": c.get("databaseId"), "author": (c.get("author") or {}).get("login"), "body": c.get("body") or "",
+                  "created_at": c.get("createdAt"), "url": c.get("url")} for c in (p.get("comments") or {}).get("nodes") or [] if c)
+    items.sort(key=lambda x: x.get("created_at") or "")
+    pend = [n for n in (p.get("pending") or {}).get("nodes") or [] if n]
+    return {"items": items, "pending_review_id": pend[0]["id"] if pend else None,
+            "pending_comments": (pend[0].get("comments") or {}).get("totalCount", 0) if pend else 0,
+            "older_hidden": max(0, (p.get("comments") or {}).get("totalCount", 0) - 100) + max(0, (p.get("reviews") or {}).get("totalCount", 0) - 100)}
+
+
+def discussion_markdown(threads: list[dict[str, Any]], conv: dict[str, Any], limit: int = 120_000) -> str:
+    """The review discussion as text for the agent (conversation, then threads by file)."""
+    out = ["## Review discussion on GitHub", ""]
+    for it in conv["items"]:
+        what = f"review: {it['state'].lower().replace('_', ' ')}" if it["kind"] == "review" else "comment"
+        if it["kind"] == "review" and not it["body"].strip():
+            out.append(f"- {it['author']} ({what}, {it.get('line_comments', 0)} line comments)")
+        else:
+            out.append(f"- {it['author']} ({what}): {it['body'].strip()[:3000]}")
+    out += ["", "### Review threads", ""]
+    for t in threads:
+        where = f"{t['path']}" + ("" if t["subject"] == "FILE" else f" line {t['line'] or t['original_line']} ({'old' if t['side'] == 'LEFT' else 'new'})")
+        flags = ", ".join(x for x in ("resolved" if t["resolved"] else "", "outdated" if t["outdated"] else "") if x)
+        out.append(f"#### {where}{f' [{flags}]' if flags else ''}")
+        if t.get("diff_hunk"):
+            out += ["```diff", "\n".join(t["diff_hunk"].splitlines()[-8:]), "```"]
+        out += [f"- {c['author']}: {c['body'].strip()[:2000]}" for c in t["comments"]]
+        out.append("")
+    text = "\n".join(out) + "\n"
+    return text if len(text) <= limit else text[:limit] + "\n(truncated)\n"
+
+
 MAX_PATCH_CHARS = 400_000  # per PR copy given to the agent / shown (GitHub omits patches of huge files anyway)
 PR_CACHE_SECONDS = 60
 
@@ -372,13 +511,14 @@ def fetch_pr(owner: str, repo: str, number: int, graphql: Callable[[str, dict], 
         "requested": [(n.get("requestedReviewer") or {}).get("login") or (n.get("requestedReviewer") or {}).get("slug")
                       for n in (p.get("reviewRequests") or {}).get("nodes") or [] if n],
         "head_sha": ((((p.get("commits") or {}).get("nodes") or [{}])[0] or {}).get("commit") or {}).get("oid"),
-        "ci": ci, "checks": checks,
+        "ci": ci, "checks": checks, "node_id": p.get("id"),
     }
     files = files_fn(owner, repo, number)
+    viewed = fetch_viewed(graphql, owner, repo, number)
     return {"pr": pr, "files": [
         {"path": f["filename"], "previous_path": f.get("previous_filename"), "status": f["status"], "additions": f.get("additions", 0),
          "deletions": f.get("deletions", 0), "unified": (f"--- a/{f.get('previous_filename') or f['filename']}\n+++ b/{f['filename']}\n{f['patch']}\n" if f.get("patch") else ""),
-         "binary_or_large": not f.get("patch")}
+         "binary_or_large": not f.get("patch"), "viewed": viewed.get(f["filename"], "UNVIEWED")}
         for f in files]}
 
 
@@ -529,28 +669,100 @@ def _comment_dict(c: dict[str, Any]) -> dict[str, Any]:
 
 
 def _draft_dict(d: Any) -> dict[str, Any]:
-    return {"id": d.id, "path": d.path, "side": d.side, "line": d.line, "start_side": d.start_side, "start_line": d.start_line,
+    return {"id": d.id, "path": d.path, "subject": d.subject or "line", "side": d.side, "line": d.line, "start_side": d.start_side, "start_line": d.start_line,
             "line_text": d.line_text, "body": d.body, "created_at": d.created_at.isoformat() if d.created_at else None}
 
 
 @router.get("/github/pr/{owner}/{repo}/{number}/comments")
 async def pr_comments(owner: str, repo: str, number: int, auth: tuple[AppContext, str] = Depends(require_owner)):
-    """Review comments on the PR's diff (GitHub) and your unpublished drafts."""
+    """Everything reviewers said: review threads (resolved/outdated, line or file), the conversation (review
+    summaries and general comments), your unpublished drafts, and your pending review started on github.com."""
     from .models import GithubPrDraft
 
     ctx, _ = auth
     _check_names(owner, repo)
-    raw = await asyncio.to_thread(_rest(ctx), "GET", f"repos/{owner}/{repo}/pulls/{number}/comments?per_page=100")
+    graphql = _hooks(ctx)[0]
+    threads, conv = await asyncio.gather(asyncio.to_thread(fetch_threads, graphql, owner, repo, number),
+                                         asyncio.to_thread(fetch_conversation, graphql, owner, repo, number))
     with ctx.db.read() as s:
         drafts = s.query(GithubPrDraft).filter_by(repo=f"{owner}/{repo}".lower(), number=number).order_by(GithubPrDraft.created_at).all()
         dd = [_draft_dict(d) for d in drafts]
-    return {"comments": [_comment_dict(c) for c in raw or []], "drafts": dd}
+    # the agent reads the review discussion next to the PR copy
+    snap = ctx.settings.snapshots_dir / "github" / owner.lower() / repo.lower()
+    snap.mkdir(parents=True, exist_ok=True)
+    (snap / f"{number}.discussion.md").write_text(discussion_markdown(threads, conv), encoding="utf-8")
+    return {"threads": threads, "conversation": conv["items"], "older_hidden": conv["older_hidden"], "drafts": dd,
+            "pending_on_github": conv["pending_comments"] if conv["pending_review_id"] else None}
+
+
+def _pr_node(ctx: AppContext, owner: str, repo: str, number: int) -> dict[str, Any]:
+    key = f"{owner}/{repo}#{number}".lower()
+    hit = _pr_cache.get(key)
+    if hit:
+        return hit[1]["pr"]
+    data = fetch_pr(owner, repo, number, _hooks(ctx)[0], ctx.extra.get("gh_pr_files", _gh_files))
+    _pr_cache[key] = (time.time(), data)
+    return data["pr"]
+
+
+class ViewedIn(BaseModel):
+    path: str
+    viewed: bool
+
+
+@router.put("/github/pr/{owner}/{repo}/{number}/viewed")
+async def set_viewed(owner: str, repo: str, number: int, body: ViewedIn, auth: tuple[AppContext, str] = Depends(require_owner_mutating)):
+    """Mark a file viewed / not viewed on GitHub (shared with github.com)."""
+    ctx, _ = auth
+    _check_names(owner, repo)
+    pr = await asyncio.to_thread(_pr_node, ctx, owner, repo, number)
+    graphql = _hooks(ctx)[0]
+    q, key = (M_VIEWED, "markFileAsViewed") if body.viewed else (M_UNVIEWED, "unmarkFileAsViewed")
+    await asyncio.to_thread(_mutate, graphql, q, {"pr": pr["node_id"], "path": body.path}, key)
+    hit = _pr_cache.get(f"{owner}/{repo}#{number}".lower())
+    if hit:
+        for f in hit[1]["files"]:
+            if f["path"] == body.path:
+                f["viewed"] = "VIEWED" if body.viewed else "UNVIEWED"
+    return {"path": body.path, "viewed": "VIEWED" if body.viewed else "UNVIEWED"}
+
+
+class ResolveIn(BaseModel):
+    resolved: bool
+
+
+@router.post("/github/pr/{owner}/{repo}/{number}/threads/{thread_id}/resolve")
+async def resolve_thread(owner: str, repo: str, number: int, thread_id: str, body: ResolveIn, auth: tuple[AppContext, str] = Depends(require_owner_mutating)):
+    ctx, _ = auth
+    _check_names(owner, repo)
+    if not re.fullmatch(r"[A-Za-z0-9_=-]{4,100}", thread_id):
+        raise ApiError(400, "INVALID_THREAD", "invalid thread id")
+    q, key = (M_RESOLVE, "resolveReviewThread") if body.resolved else (M_UNRESOLVE, "unresolveReviewThread")
+    res = await asyncio.to_thread(_mutate, _hooks(ctx)[0], q, {"id": thread_id}, key)
+    return {"id": thread_id, "resolved": bool(((res or {}).get("thread") or {}).get("isResolved", body.resolved))}
+
+
+class ConversationIn(BaseModel):
+    body: str
+
+
+@router.post("/github/pr/{owner}/{repo}/{number}/conversation", status_code=201)
+async def add_conversation_comment(owner: str, repo: str, number: int, body: ConversationIn, auth: tuple[AppContext, str] = Depends(require_owner_mutating)):
+    """A general comment on the pull request (posted immediately)."""
+    ctx, _ = auth
+    _check_names(owner, repo)
+    if not body.body.strip():
+        raise ApiError(400, "INVALID_COMMENT", "a comment needs text")
+    res = await asyncio.to_thread(_rest(ctx), "POST", f"repos/{owner}/{repo}/issues/{number}/comments", {"body": body.body.strip()})
+    return {"kind": "comment", "id": (res or {}).get("id"), "author": ((res or {}).get("user") or {}).get("login"),
+            "body": (res or {}).get("body", body.body.strip()), "created_at": (res or {}).get("created_at"), "url": (res or {}).get("html_url")}
 
 
 class DraftIn(BaseModel):
     path: str
-    side: str
-    line: int
+    subject: str = "line"  # line | file (a comment on the whole file)
+    side: str = "RIGHT"
+    line: int = 0
     start_side: str | None = None
     start_line: int | None = None
     line_text: str = ""
@@ -564,12 +776,18 @@ def add_draft(owner: str, repo: str, number: int, body: DraftIn, auth: tuple[App
 
     ctx, _ = auth
     _check_names(owner, repo)
-    if body.side not in ("LEFT", "RIGHT") or (body.start_side not in (None, "LEFT", "RIGHT")) or not body.body.strip() or body.line < 1:
+    if body.subject not in ("line", "file"):
+        raise ApiError(400, "INVALID_COMMENT", "subject must be line or file")
+    if body.subject == "file":
+        body.line, body.side, body.start_line, body.start_side = 0, "RIGHT", None, None
+        if not body.body.strip():
+            raise ApiError(400, "INVALID_COMMENT", "a comment needs text")
+    elif body.side not in ("LEFT", "RIGHT") or (body.start_side not in (None, "LEFT", "RIGHT")) or not body.body.strip() or body.line < 1:
         raise ApiError(400, "INVALID_COMMENT", "a comment needs text, a line and a side (LEFT/RIGHT)")
     if body.start_line is not None and (body.start_line < 1 or (body.start_side == body.side and body.start_line >= body.line)):
         body.start_line = body.start_side = None  # a "range" of one line
     with ctx.db.write() as s:
-        d = GithubPrDraft(id=new_id(), repo=f"{owner}/{repo}".lower(), number=number, path=body.path, side=body.side, line=body.line,
+        d = GithubPrDraft(id=new_id(), repo=f"{owner}/{repo}".lower(), number=number, path=body.path, subject=body.subject, side=body.side, line=body.line,
                           start_side=body.start_side if body.start_line else None, start_line=body.start_line,
                           line_text=body.line_text[:4000], body=body.body.strip())
         s.add(d)
@@ -616,7 +834,8 @@ class SubmitIn(BaseModel):
 
 @router.post("/github/pr/{owner}/{repo}/{number}/review")
 async def submit_review(owner: str, repo: str, number: int, body: SubmitIn, auth: tuple[AppContext, str] = Depends(require_owner_mutating)):
-    """Publish your drafts (and a summary) to GitHub as one review, as the server's gh account."""
+    """Publish your drafts (line and file comments) and a summary to GitHub as one review, as the server's gh account.
+    A pending review you started on github.com is reused, so its comments are submitted too."""
     from .models import GithubPrDraft
 
     ctx, owner_login = auth
@@ -626,28 +845,50 @@ async def submit_review(owner: str, repo: str, number: int, body: SubmitIn, auth
     with ctx.db.read() as s:
         drafts = s.query(GithubPrDraft).filter_by(repo=f"{owner}/{repo}".lower(), number=number).order_by(GithubPrDraft.created_at).all()
         dd = [_draft_dict(d) for d in drafts]
-    if not dd and not body.body.strip() and body.event != "APPROVE":
+    graphql = _hooks(ctx)[0]
+    conv = await asyncio.to_thread(fetch_conversation, graphql, owner, repo, number)
+    pending, pending_n = conv["pending_review_id"], conv["pending_comments"]
+    if not dd and not pending_n and not body.body.strip() and body.event != "APPROVE":
         raise ApiError(400, "EMPTY_REVIEW", "write a comment or a summary first")
-    if body.event == "REQUEST_CHANGES" and not body.body.strip() and not dd:
-        raise ApiError(400, "EMPTY_REVIEW", "requesting changes needs a comment")
-    key = f"{owner}/{repo}#{number}".lower()
-    hit = _pr_cache.get(key)
-    head = hit[1]["pr"].get("head_sha") if hit else None
-    payload: dict[str, Any] = {"event": body.event, "body": body.body.strip(), "comments": []}
-    if head:
-        payload["commit_id"] = head  # comments refer to the diff the user saw
-    for d in dd:
-        c: dict[str, Any] = {"path": d["path"], "line": d["line"], "side": d["side"], "body": d["body"]}
-        if d["start_line"]:
-            c["start_line"], c["start_side"] = d["start_line"], d["start_side"] or d["side"]
-        payload["comments"].append(c)
-    res = await asyncio.to_thread(_rest(ctx), "POST", f"repos/{owner}/{repo}/pulls/{number}/reviews", payload)
+    pr = await asyncio.to_thread(_pr_node, ctx, owner, repo, number)
+
+    def publish() -> str | None:
+        created = False
+        review = pending
+        if review is None:
+            review = _mutate(graphql, M_ADD_REVIEW, {"pr": pr["node_id"], "commit": pr.get("head_sha")}, "addPullRequestReview")["pullRequestReview"]["id"]
+            created = True
+        try:
+            for d in dd:
+                v: dict[str, Any] = {"review": review, "path": d["path"], "body": d["body"]}
+                if d["subject"] == "file":
+                    v["subject"] = "FILE"
+                else:
+                    v.update({"line": d["line"], "side": d["side"], "subject": "LINE"})
+                    if d["start_line"]:
+                        v.update({"startLine": d["start_line"], "startSide": d["start_side"] or d["side"]})
+                try:
+                    _mutate(graphql, M_ADD_THREAD, v, "addPullRequestReviewThread")
+                except ApiError as exc:
+                    where = d["path"] if d["subject"] == "file" else f"{d['path']} line {d['line']}"
+                    raise ApiError(exc.status, exc.code, f"{exc.message} (comment on {where})")
+            res = _mutate(graphql, M_SUBMIT, {"review": review, "event": body.event, "body": body.body.strip() or None}, "submitPullRequestReview")
+            return (res.get("pullRequestReview") or {}).get("url")
+        except ApiError:
+            if created:  # leave nothing half-done on GitHub; the drafts stay here
+                try:
+                    _mutate(graphql, M_DELETE_REVIEW, {"review": review}, "deletePullRequestReview")
+                except ApiError:
+                    log.warning("could not delete the unfinished review on %s/%s#%d", owner, repo, number)
+            raise
+
+    url = await asyncio.to_thread(publish)
     with ctx.db.write() as s:
         s.query(GithubPrDraft).filter(GithubPrDraft.id.in_([d["id"] for d in dd])).delete(synchronize_session=False)
-    _pr_cache.pop(key, None)
+    _pr_cache.pop(f"{owner}/{repo}#{number}".lower(), None)
     _cache.pop(owner_login, None)  # the review queue changes too
-    log.info("published review on %s/%s#%d (%s, %d comments)", owner, repo, number, body.event, len(dd))
-    return {"published": len(dd), "event": body.event, "url": (res or {}).get("html_url"), "id": (res or {}).get("id")}
+    log.info("published review on %s/%s#%d (%s, %d comments, %d from github.com)", owner, repo, number, body.event, len(dd), pending_n)
+    return {"published": len(dd), "from_github": pending_n, "event": body.event, "url": url}
 
 
 class ReplyIn(BaseModel):
