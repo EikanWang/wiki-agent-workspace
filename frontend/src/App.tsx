@@ -296,8 +296,33 @@ export default function App() {
     [openDocument],
   );
 
+  // What the window showed (PR tab, Terminal / Diff view) survives a reload or closing the browser; documents,
+  // their reading position and discussion are restored from the server, tabs from localStorage.
+  const uiKey = () => `waw.ui.${namedRef.current}`;
+  const savedUi = useRef<{ view?: View; diff?: { path: string; isDir: boolean; ws: string | null } | null; pr?: { repo: string; number: number } | null } | null>(null);
+  if (savedUi.current === null) {
+    try {
+      savedUi.current = JSON.parse(localStorage.getItem(uiKey()) || "{}");
+    } catch {
+      savedUi.current = {};
+    }
+  }
+  const [uiRestored, setUiRestored] = useState(false);
   useEffect(() => {
-    if (authed && !doc && activeWs) void restoreLast(activeWs);
+    if (!uiRestored) return; // do not overwrite the saved state before it was applied
+    localStorage.setItem(uiKey(), JSON.stringify({ view, diff: diffTarget ? { ...diffTarget, ws: getWorkspace() } : null, pr: prTab }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, diffTarget, prTab, uiRestored]);
+
+  useEffect(() => {
+    if (!(authed && activeWs && boot)) return;
+    void (async () => {
+      if (!doc) await restoreLast(activeWs);
+      const ui = savedUi.current ?? {};
+      if (ui.view === "terminal") setView("terminal");
+      else if (ui.view === "diff" && ui.diff && (!ui.diff.ws || ui.diff.ws === getWorkspace())) openDiff(ui.diff.path, ui.diff.isDir);
+      setUiRestored(true);
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authed, activeWs && boot ? "ready" : "wait"]);
 
@@ -397,6 +422,17 @@ export default function App() {
     [doc, activeWs, docTabs, activateDocTab, prTab],
   );
 
+  useEffect(() => {
+    const pr = savedUi.current?.pr;
+    if (!uiRestored || !pr || !hub?.available) return;
+    savedUi.current = { ...savedUi.current, pr: null };
+    if (docTabs.some((t) => t.ws === PR_TABS && t.path === `${pr.repo}#${pr.number}`)) {
+      const view0 = savedUi.current?.view;
+      openPr(pr.repo, pr.number);
+      if (view0 === "terminal") setView("terminal");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [uiRestored, hub?.available]);
   useEffect(() => {
     if (!authed || !boot) return;
     let timer: number | undefined;

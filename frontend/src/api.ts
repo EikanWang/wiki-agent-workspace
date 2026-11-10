@@ -34,7 +34,7 @@ export function getCsrf(): string | null {
 
 const BASE = "/api/v1";
 
-export async function api<T>(method: string, path: string, body?: unknown, opts: { idempotencyKey?: string; workspace?: string | null; timeoutMs?: number } = {}): Promise<T> {
+export async function api<T>(method: string, path: string, body?: unknown, opts: { idempotencyKey?: string; workspace?: string | null; timeoutMs?: number; keepalive?: boolean } = {}): Promise<T> {
   const headers: Record<string, string> = { Accept: "application/json" };
   const ws = opts.workspace !== undefined ? opts.workspace : workspaceId;
   if (ws) headers["X-Workspace"] = ws;
@@ -52,6 +52,7 @@ export async function api<T>(method: string, path: string, body?: unknown, opts:
       body: body === undefined ? undefined : JSON.stringify(body),
       credentials: "same-origin",
       signal: ctl?.signal,
+      keepalive: opts.keepalive, // still sent while the page closes / reloads
     });
     text = await resp.text();
   } catch (e) {
@@ -92,7 +93,7 @@ export const get = <T,>(path: string) => api<T>("GET", path);
 /** GET scoped to a specific root folder (e.g. the multi-root file tree loading a non-active root). */
 export const getIn = <T,>(workspace: string, path: string, opts: { timeoutMs?: number } = {}) => api<T>("GET", path, undefined, { workspace, ...opts });
 export const post = <T,>(path: string, body?: unknown, opts?: { idempotencyKey?: string; workspace?: string | null }) => api<T>("POST", path, body ?? {}, opts);
-export const put = <T,>(path: string, body?: unknown) => api<T>("PUT", path, body ?? {});
+export const put = <T,>(path: string, body?: unknown, opts?: { keepalive?: boolean }) => api<T>("PUT", path, body ?? {}, opts);
 export const patch = <T,>(path: string, body?: unknown) => api<T>("PATCH", path, body ?? {});
 export const del = <T,>(path: string, opts?: { workspace?: string | null }) => api<T>("DELETE", path, undefined, opts);
 

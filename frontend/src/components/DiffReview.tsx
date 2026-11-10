@@ -1,8 +1,9 @@
 import RefreshButton from "./RefreshButton";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { COMPOSER_HINT, composerKeyDown } from "./keys";
-import { AgentSession, ApiError, DiffComment, DiffFile, DiffResult, GitRefs, Review, ReviewComment, del, get, post, put } from "../api";
+import { AgentSession, ApiError, DiffComment, DiffFile, DiffResult, GitRefs, Review, ReviewComment, del, get, getWorkspace, post, put } from "../api";
 import { FileIcon } from "./FileIcon";
+import { useRestoredScroll } from "../persist";
 import CommitPanel from "./CommitPanel";
 import MarkdownView from "./MarkdownView";
 import { useJobStream } from "./DiscussionPanel";
@@ -128,6 +129,7 @@ export default function DiffReview({
   const [markdownOnly, setMarkdownOnly] = useState(false);
   const [layout, setLayout] = useState<"unified" | "split">(() => (localStorage.getItem("waw.diffLayout") as "unified" | "split") || "unified");
   const [result, setResult] = useState<DiffResult | null>(null);
+  const bodyScroll = useRestoredScroll(`diff.${getWorkspace() ?? ""}:${isDir ? "dir" : "file"}:${path}`, !!result);
   const [refs, setRefs] = useState<GitRefs | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -433,7 +435,7 @@ export default function DiffReview({
           {" · "}click a line to comment, drag or shift-click to select several lines
         </div>
       )}
-      <div className="diff-body" onPointerLeave={() => { if (dragging.current) { dragging.current = false; setRange((r) => { if (r) setComposer(r); return r; }); } }}>
+      <div className="diff-body" ref={bodyScroll} onPointerLeave={() => { if (dragging.current) { dragging.current = false; setRange((r) => { if (r) setComposer(r); return r; }); } }}>
         {loading && !result && <div className="muted pad">Loading…</div>}
         {result && result.files.length === 0 && <div className="muted pad">No differences between {base} and {target === "worktree" ? "the working tree" : target}{isDir ? ` under ${path || "the workspace"}` : ""}.</div>}
         {result?.files.map((f) => (

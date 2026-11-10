@@ -494,7 +494,7 @@ export default function Reader(props: ReaderProps) {
           break;
         }
       }
-      void put(`/documents/${doc.document_id}/reading-state`, { version_sha256: doc.sha256, heading, offset, scroll_fraction: Math.min(1, Math.max(0, frac)) }).catch(() => undefined);
+      void put(`/documents/${doc.document_id}/reading-state`, { version_sha256: doc.sha256, heading, offset, scroll_fraction: Math.min(1, Math.max(0, frac)) }, { keepalive: true }).catch(() => undefined);
     };
     const onScroll = () => {
       if (timer) window.clearTimeout(timer);

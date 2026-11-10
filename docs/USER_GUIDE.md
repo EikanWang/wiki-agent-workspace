@@ -212,6 +212,15 @@ can see, grouped by repository (most PRs first):
 - PRs in organizations that require **SAML single sign-on** are counted but hidden until you authorize the
   `gh` token for that organization (the note in the panel says how).
 
+## After a reload or closing the browser
+
+The window comes back as you left it: the folders and document tabs, the active document with its reading
+position and open discussion, the **Terminal** or **Diff** view (and which diff), an open **PR tab** with its
+*Overview* / *Files* sub-tab, and where long views were scrolled (PR overview and files, the diff, the file tree,
+Reviews). Text typed but not sent yet is kept too: replies in the discussions panel, *Ask about this document*,
+folder chats and the PR conversation box. This is stored in the browser (per browser and named workspace);
+discussions, reading positions and settings are on the server. A closed tab stays closed.
+
 ## Reading documents
 
 - **Tabs**: every document you open gets a tab above the reader (like the terminal tabs); opening one that is

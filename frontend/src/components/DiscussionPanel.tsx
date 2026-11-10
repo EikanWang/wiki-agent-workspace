@@ -3,6 +3,7 @@ import { COMPOSER_HINT, composerKeyDown } from "./keys";
 import { AgentSession, ApiError, JobEvent, Message, Thread, get, subscribeJob } from "../api";
 import DiffView from "./DiffView";
 import MarkdownView from "./MarkdownView";
+import { usePersistentState } from "../persist";
 
 /** An agent review's machine-readable comment list (```waw-review JSON) is for the app: its comments go to the
  * diff as suggestions. The server replaces it by a note once imported; until then it is hidden here too. */
@@ -148,8 +149,8 @@ export default function DiscussionPanel({
   docFormat?: string;
 }) {
   const [focusAsk, setFocusAsk] = useState(0); // bumped by "＋ New question": focus the box
-  const askBox = onAskDocument ? <AskDocument onAsk={onAskDocument} format={docFormat} focusKey={focusAsk} /> : null;
-  const [text, setText] = useState("");
+  const askBox = onAskDocument ? <AskDocument onAsk={onAskDocument} format={docFormat} focusKey={focusAsk} draftKey={`ask.${docId ?? ""}`} /> : null;
+  const [text, setText] = usePersistentState(`reply.${thread?.id ?? ""}`, ""); // an unsent reply survives a reload
   const [sessionChoice, setSessionChoice] = useState<string>("__last__");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -509,7 +510,7 @@ function FlatPanel({ threads, sessions, sessionsById, defaultSessionId, liveJob,
     else if (!threads.some((t) => t.id === targetId)) setTargetId(newest?.id ?? null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeThreadId, threads.length]);
-  const [text, setText] = useState("");
+  const [text, setText] = usePersistentState(`reply.${targetId ?? ""}`, "");
   const [sessionChoice, setSessionChoice] = useState<string>("__last__");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -627,8 +628,8 @@ function quoteLabel(t: { anchor_state: string; anchor: { quote: string }; target
 }
 
 /** "Ask about this document": a question box at the top of the panel, always about the whole open document. */
-function AskDocument({ onAsk, format, focusKey = 0 }: { onAsk: (q: string) => Promise<void>; format?: string; focusKey?: number }) {
-  const [q, setQ] = useState("");
+function AskDocument({ onAsk, format, focusKey = 0, draftKey = "ask" }: { onAsk: (q: string) => Promise<void>; format?: string; focusKey?: number; draftKey?: string }) {
+  const [q, setQ] = usePersistentState(draftKey, "");
   const box = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
     if (focusKey) box.current?.focus();

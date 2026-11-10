@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { ApiError, get, put } from "../api";
 import RefreshButton from "./RefreshButton";
 import { confirmAction } from "./Confirm";
+import { useRestoredScroll } from "../persist";
 
 export interface ReviewPR {
   repo: string;
@@ -123,6 +124,7 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
   }, []);
 
   const [settings, setSettings] = useState(false);
+  const listScroll = useRestoredScroll("reviews.list", !!queue);
   const [busy, setBusy] = useState<string | null>(null);
   const prefs = queue?.prefs;
   const { groups, priority, watchedGroups } = useMemo(() => {
@@ -240,7 +242,7 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
           </select>
         </div>
       </div>
-      <div className="tree-body" data-testid="reviews-list">
+      <div className="tree-body" data-testid="reviews-list" ref={listScroll}>
         {!queue && loading && <div className="tree-loading">Loading your review requests from GitHub… (the first load can take ~30 s)</div>}
         {error && <div className="tree-error" role="alert" data-testid="reviews-error">{error}</div>}
         {queue?.refresh_error && <div className="tree-error stale">Could not refresh ({queue.refresh_error.message}); showing the earlier list.</div>}

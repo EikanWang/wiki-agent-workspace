@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { AgentSession, ApiError, OpenDocument, Thread, del } from "../api";
 import { LiveJob, MessageView } from "./DiscussionPanel";
 import { confirmAction } from "./Confirm";
+import { usePersistentState } from "../persist";
 import { COMPOSER_HINT, composerKeyDown } from "./keys";
 
 export const CHAT_PREFIX = ".waw-chat/";
@@ -33,7 +34,7 @@ export default function ChatView({ doc, folderName, threads, sessions, liveJob, 
 }) {
   const thread = threads[0] ?? null; // a chat is one conversation
   const title = (doc.text.split("\n", 1)[0] || "Chat").replace(/^#\s*/, "");
-  const [text, setText] = useState("");
+  const [text, setText] = usePersistentState(`chat.${doc.document_id}`, ""); // an unsent message survives a reload
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [action, setAction] = useState<Action | null>(null);

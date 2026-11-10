@@ -2350,3 +2350,38 @@ test("folder chat: talk with the agent about the folder, then distill the conver
     fs.rmSync(path.join(workspaceDir(), "chat-notes"), { recursive: true, force: true });
   }
 });
+
+test("a reload (or closing the browser) brings back what was shown: view, PR tab and its sub-tab, unsent text", async ({ page }) => {
+  await login(page);
+  await page.getByTestId("tree-root").first().waitFor();
+  // the Terminal view, then the Diff view, survive a reload
+  await page.getByTestId("view-terminal").click();
+  await page.reload();
+  await expect(page.getByTestId("view-terminal")).toHaveClass(/active/, { timeout: 15000 });
+  await page.getByTestId("tree-diff-root").click();
+  await expect(page.getByTestId("diff-review")).toBeVisible();
+  await page.reload();
+  await expect(page.getByTestId("diff-review")).toBeVisible({ timeout: 15000 });
+  await page.getByTestId("view-document").click();
+  // a PR tab, its Files sub-tab and a half-written conversation comment
+  await signOut(page);
+  await expect(page.getByTestId("login-github")).toBeVisible({ timeout: 15000 });
+  await ensureGithubSignIn(page);
+  await page.goto("/");
+  await page.getByTestId("login-github").click();
+  await page.getByTestId("activity-reviews").click();
+  await page.locator('[data-testid="review-pr"][data-number="101"]').click();
+  await page.getByTestId("pr-conv-text").fill("half-written thought");
+  await page.getByTestId("pr-tab-files").click();
+  await expect(page.getByTestId("pr-files")).toBeVisible();
+  await page.reload();
+  await expect(page.getByTestId("pr-view")).toBeVisible({ timeout: 20000 });
+  await expect(page.getByTestId("pr-tab-files")).toHaveAttribute("aria-selected", "true");
+  await page.getByTestId("pr-tab-overview").click();
+  await expect(page.getByTestId("pr-conv-text")).toHaveValue("half-written thought");
+  await page.getByTestId("pr-conv-text").fill("");
+  await page.locator('[data-testid="doc-tab"][data-ws="github"]').getByTestId("doc-tab-close").click();
+  await page.reload();
+  await expect(page.getByTestId("pr-view")).toHaveCount(0); // closed stays closed
+  await signOut(page);
+});

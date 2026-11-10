@@ -1,5 +1,6 @@
 import RefreshButton from "./RefreshButton";
 import ContextFolders from "./ContextFolders";
+import { useRestoredScroll } from "../persist";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, FileItem, GitSummary, WorkspaceInfo, getIn, post } from "../api";
 import { ChatIcon } from "./Icons";
@@ -76,6 +77,7 @@ export default function FileTree({
   const [dirs, setDirs] = useState<Record<string, DirState>>({});
   const dirsRef = useRef(dirs); // read synchronously by the refresh loop
   const [refsFor, setRefsFor] = useState<WorkspaceInfo | null>(null);
+  const treeScroll = useRestoredScroll("files.tree", workspaces.length > 0);
   const [chatsFor, setChatsFor] = useState<WorkspaceInfo | null>(null);
   const [expanded, setExpandedState] = useState<Set<string>>(() => {
     try {
@@ -485,7 +487,7 @@ export default function FileTree({
         {onAddFolder && <button className="icon-btn" onClick={onAddFolder} title="Add a folder (another wiki) to this window" data-testid="tree-add-folder"><PlusIcon size={15} /></button>}
         <RefreshButton onRefresh={refreshNow} title="Refresh file tree" testId="tree-refresh" />
       </div>
-      <div className="tree-body">
+      <div className="tree-body" ref={treeScroll}>
         {workspaces.map((ws, i) => {
           const open = expanded.has(key(ws.id, ""));
           const active = ws.id === activeWorkspace;

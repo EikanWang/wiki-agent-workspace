@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AgentSession, ApiError, WorkspaceInfo, get, post, put } from "../api";
 import { renderGithubMarkdown } from "../markdown";
+import { usePersistentState, useRestoredScroll } from "../persist";
 import { SelectionAnchor, wholeDocument } from "../textmodel";
 import { GhDraft, GhThread, PrFile, PrFileDiff, SubmitReview } from "./PrDiff";
 import { COMPOSER_HINT, composerKeyDown } from "./keys";
@@ -94,21 +95,23 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
 }) {
   const [data, setData] = useState<PrData | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<"overview" | "files">("overview");
+  const [tab, setTab] = usePersistentState<"overview" | "files">(`pr.tab.${repo}#${number}`, "overview");
   const [sheet, setSheet] = useState<(SelectionAnchor & { pr_review?: boolean }) | null>(null);
   const [pick, setPick] = useState("");
   const [layout, setLayout] = useState<"unified" | "split">(() => (localStorage.getItem("waw.prDiffLayout") as "unified" | "split") || "unified");
   useEffect(() => localStorage.setItem("waw.prDiffLayout", layout), [layout]);
   const [review, setReview] = useState<Review>({ threads: [], conversation: [], drafts: [], pending_on_github: null, older_hidden: 0 });
-  const [convText, setConvText] = useState("");
+  const [convText, setConvText] = usePersistentState(`pr.conv.${repo}#${number}`, ""); // unsent text survives a reload
   const [convBusy, setConvBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [refs, setRefs] = useState(false);
   const [owner, name] = repo.split("/");
   const apiBase = `/github/pr/${owner}/${name}/${number}`;
+  const [loadedComments, setLoadedComments] = useState(false);
   const loadComments = async () => {
     try {
       setReview(await get<Review>(`${apiBase}/comments`));
+      setLoadedComments(true);
     } catch (e) {
       setError((e as ApiError).message);
     }
@@ -127,7 +130,6 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
   };
   useEffect(() => {
     setData(null);
-    setTab("overview");
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [repo, number]);
@@ -147,6 +149,8 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
   };
 
   const md = (s: string) => renderGithubMarkdown(s, repo);
+  const overviewScroll = useRestoredScroll(`pr.overview.${repo}#${number}`, !!data && tab === "overview" && loadedComments);
+  const filesScroll = useRestoredScroll(`pr.files.${repo}#${number}`, !!data && tab === "files" && loadedComments);
   const reviewing = (review.agent_reviews ?? []).some((r) => r.state === "running");
   useEffect(() => {
     if (!reviewing) return;
@@ -283,7 +287,7 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
       {reviewing && <div className="banner small" data-testid="pr-agent-reviewing">The agent is reviewing this PR (follow it in the discussion panel); its comments appear in Files when it is done.</div>}
       {notice && <div className="banner" data-testid="pr-notice">{notice} <a href={`${p.url}/files`} target="_blank" rel="noreferrer">See it on GitHub</a> <button className="icon-btn" onClick={() => setNotice(null)} aria-label="Dismiss">×</button></div>}
       {tab === "overview" ? (
-        <div className="pr-body" data-testid="pr-overview">
+        <div className="pr-body" data-testid="pr-overview" ref={overviewScroll}>
           <div className="pr-overview-grid">
             <div className="pr-main-col">
               <article className="markdown-body pr-description" dangerouslySetInnerHTML={{ __html: body }} data-testid="pr-description" />
@@ -366,7 +370,7 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
           </div>
         </div>
       ) : (
-        <div className="pr-body pr-files" data-testid="pr-files">
+        <div className="pr-body pr-files" data-testid="pr-files" ref={filesScroll}>
           <div className="muted small pad">
             Click a line to comment or ask the agent (drag or shift-click for several lines). Comments stay pending here until you
             <b> Finish review</b>; replies, resolving and Viewed go to GitHub at once.
