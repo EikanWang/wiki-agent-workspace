@@ -102,9 +102,17 @@ can see, grouped by repository (most PRs first):
 - clicking a PR opens it as a **tab** next to your documents (remembered like them):
   - **Overview**: description, checks (failing first, linked), reviews and requested reviewers, labels;
     **Open on GitHub**; ↻ reloads.
-  - **Files**: the diff of every changed file (long ones folded; click a file header to fold/unfold).
-  - **Ask about this PR**, or select lines in a diff → **Ask about selection**. Answers and follow-ups are in the
-    discussions panel, like for documents, and the PR appears in *Recent*.
+  - **Files**: the diff of every changed file, **Unified** or **Side by side** (remembered); long files start
+    folded. Existing GitHub review threads are shown at their lines (outdated ones above the file) — **Reply…**
+    posts a reply on GitHub at once.
+  - **Click a line** (drag or shift-click for several, either side) to open a box: **Add review comment** keeps
+    it *pending* here (edit/delete it; it survives reloads), **Ask agent** asks the agent about exactly those
+    lines (answer in the discussions panel).
+  - **Finish review (n)**: an optional summary and *Comment* / *Approve* / *Request changes*, then **Submit**
+    publishes everything to GitHub as one review, as the server's `gh` account (shown in the box). If GitHub
+    refuses (e.g. the PR changed and a line no longer exists), the pending comments are kept.
+  - **Ask about this PR** asks about the whole pull request. Answers and follow-ups are in the discussions
+    panel, like for documents, and the PR appears in *Recent*.
   - The agent works in a **wiki of your choice per repository** (asked the first time you open one of its PRs;
     change it with *Agent wiki* in the PR tab), so it can use your notes; it gets the PR's description and diff
     and is told never to comment on, approve or push to the PR.

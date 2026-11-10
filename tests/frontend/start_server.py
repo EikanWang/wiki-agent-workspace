@@ -171,6 +171,32 @@ def add_fake_review_queue(app) -> None:
                 "_errors": [{"type": "FORBIDDEN", "message": "Resource protected by organization SAML enforcement."}]}
 
     ctx.extra["gh_graphql"] = graphql
+    posted: list = []  # what "GitHub" received (inspected by tests via /fake-github/posted)
+    comments = [{"id": 501, "path": "c10/xpu/stub.cpp", "line": 11, "side": "RIGHT", "body": "Is `ok` ever false?", "user": {"login": "bob"},
+                 "created_at": "2026-11-08T00:00:00Z", "html_url": "https://github.com/x/1"}]
+
+    def rest(method, path, body=None):
+        if method == "GET" and path.endswith("/comments?per_page=100"):
+            return comments
+        posted.append({"method": method, "path": path, "body": body})
+        if path.endswith("/reviews"):
+            return {"id": 9001, "html_url": "https://github.com/pytorch/pytorch/pull/101#pullrequestreview-9001"}
+        if path.endswith("/replies"):
+            c = {"id": 600 + len(posted), "path": "c10/xpu/stub.cpp", "line": 11, "side": "RIGHT", "body": body["body"],
+                 "user": {"login": "e2e-user"}, "in_reply_to_id": int(path.split("/")[-2]), "created_at": "2026-11-09T00:00:00Z"}
+            comments.append(c)
+            return c
+        raise AssertionError(path)
+
+    ctx.extra["gh_rest"] = rest
+
+    from fastapi.responses import JSONResponse as _J
+    from starlette.routing import Route as _R
+
+    async def show_posted(request):
+        return _J(posted)
+
+    app.router.routes.insert(0, _R("/fake-github/posted", show_posted))
     ctx.extra["gh_pr_files"] = lambda o, r, n: [
         {"filename": "c10/xpu/stub.cpp", "status": "modified", "additions": 2, "deletions": 1,
          "patch": "@@ -10,3 +10,4 @@ void init() {\n   load();\n-  call();\n+  if (ok)\n+    call();\n }"},

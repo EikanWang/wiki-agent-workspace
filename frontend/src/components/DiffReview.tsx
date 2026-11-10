@@ -7,7 +7,7 @@ import CommitPanel from "./CommitPanel";
 import MarkdownView from "./MarkdownView";
 import { useJobStream } from "./DiscussionPanel";
 
-interface Line {
+export interface Line {
   kind: "add" | "del" | "ctx" | "hunk" | "file";
   text: string; // without the +/-/space marker
   raw: string;
@@ -16,7 +16,7 @@ interface Line {
   hunkIndex: number;
 }
 
-function parseUnified(unified: string): { lines: Line[]; hunks: string[] } {
+export function parseUnified(unified: string): { lines: Line[]; hunks: string[] } {
   const lines: Line[] = [];
   const hunks: string[] = [];
   let oldNo = 0;
@@ -51,13 +51,13 @@ function parseUnified(unified: string): { lines: Line[]; hunks: string[] } {
 /** Side-by-side rows: context lines share a row; a run of deletions is paired with the following run of
  *  additions (GitHub-style), unpaired lines get an empty cell on the other side. Each cell keeps its index into
  *  the unified `lines` array so range selection and comments stay identical between the two views. */
-interface SplitRow {
+export interface SplitRow {
   left: number | null; // index into lines (del or ctx)
   right: number | null; // index into lines (add or ctx)
   hunk?: number; // index into lines for a hunk header row
 }
 
-function buildSplitRows(lines: Line[]): SplitRow[] {
+export function buildSplitRows(lines: Line[]): SplitRow[] {
   const rows: SplitRow[] = [];
   let i = 0;
   while (i < lines.length) {

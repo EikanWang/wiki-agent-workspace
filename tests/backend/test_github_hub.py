@@ -210,3 +210,75 @@ async def test_pull_request_tab_wiki_mapping_and_discussion(running_app, workspa
     assert (await api.put("/api/v1/github/repo-wiki", json={"repo": "pytorch/pytorch", "workspace_id": ws})).status_code == 403
     assert (await api.get("/api/v1/github/pr/pytorch/pytorch/7")).status_code == 403
     assert (await api.get("/api/v1/github/pr/..%2Fx/y/1")).status_code in (400, 403, 404)
+
+
+async def test_pr_review_comments_drafts_publish_and_reply(running_app):
+    github_hub.reset_cache()
+    calls: list = []
+    sent: list = []
+    h = await running_app()
+    as_github(h, "EikanWang")
+    h.ctx.extra["gh_owner"] = lambda: "EikanWang"
+    h.ctx.extra["gh_graphql"] = fake_pr_detail(calls)
+    h.ctx.extra["gh_pr_files"] = lambda o, r, n: [{"filename": "a.cpp", "status": "modified", "additions": 1, "deletions": 1, "patch": "@@ -1 +1 @@\n-x\n+y"}]
+
+    def rest(method, path, body=None):
+        sent.append((method, path, body))
+        if method == "GET":
+            return [{"id": 11, "path": "a.cpp", "line": 1, "side": "RIGHT", "body": "why?", "user": {"login": "bob"}, "html_url": "u1"},
+                    {"id": 12, "path": "a.cpp", "line": 1, "side": "RIGHT", "body": "because", "user": {"login": "alice"}, "in_reply_to_id": 11},
+                    {"id": 13, "path": "a.cpp", "line": None, "original_line": 5, "side": "RIGHT", "body": "old", "user": {"login": "bob"}}]
+        if path.endswith("/reviews"):
+            return {"id": 99, "html_url": "https://github.com/pytorch/pytorch/pull/7#pullrequestreview-99"}
+        if path.endswith("/replies"):
+            return {"id": 14, "path": "a.cpp", "line": 1, "side": "RIGHT", "body": body["body"], "user": {"login": "EikanWang"}, "in_reply_to_id": 11}
+        raise AssertionError(path)
+
+    h.ctx.extra["gh_rest"] = rest
+    api = h.api
+    base = "/api/v1/github/pr/pytorch/pytorch/7"
+    head = (await api.get(base)).json()["pr"]["head_sha"]
+    c = (await api.get(f"{base}/comments")).json()
+    assert [x["id"] for x in c["comments"]] == [11, 12, 13] and c["comments"][1]["in_reply_to_id"] == 11 and c["comments"][2]["outdated"] is True
+    assert c["drafts"] == []
+    # drafts: a one-line comment on the new side, a range starting on the old side
+    d1 = (await api.post(f"{base}/drafts", json={"path": "a.cpp", "side": "RIGHT", "line": 1, "line_text": "y", "body": "nit: name"})).json()
+    d2 = (await api.post(f"{base}/drafts", json={"path": "a.cpp", "side": "RIGHT", "line": 1, "start_side": "LEFT", "start_line": 1, "body": "range"})).json()
+    assert d2["start_line"] == 1 and d2["start_side"] == "LEFT"
+    assert (await api.post(f"{base}/drafts", json={"path": "a.cpp", "side": "MIDDLE", "line": 1, "body": "x"})).status_code == 400
+    assert (await api.patch(f"{base}/drafts/{d1['id']}", json={"body": "nit: rename"})).json()["body"] == "nit: rename"
+    d3 = (await api.post(f"{base}/drafts", json={"path": "a.cpp", "side": "LEFT", "line": 1, "body": "drop me"})).json()
+    assert (await api.delete(f"{base}/drafts/{d3['id']}")).status_code == 200
+    assert len((await api.get(f"{base}/comments")).json()["drafts"]) == 2
+    # nothing to publish is refused; publish both as one review
+    assert (await api.post(f"{base}/review", json={"event": "WHATEVER"})).status_code == 400
+    r = (await api.post(f"{base}/review", json={"event": "REQUEST_CHANGES", "body": "Please fix"})).json()
+    assert r["published"] == 2 and r["url"].endswith("pullrequestreview-99")
+    method, path, payload = sent[-1]
+    assert (method, path) == ("POST", "repos/pytorch/pytorch/pulls/7/reviews")
+    assert payload["event"] == "REQUEST_CHANGES" and payload["body"] == "Please fix" and payload["commit_id"] == head
+    assert payload["comments"] == [{"path": "a.cpp", "line": 1, "side": "RIGHT", "body": "nit: rename"},
+                                   {"path": "a.cpp", "line": 1, "side": "RIGHT", "body": "range", "start_line": 1, "start_side": "LEFT"}]
+    assert (await api.get(f"{base}/comments")).json()["drafts"] == []  # published drafts are gone
+    # reply to a thread (immediate)
+    rp = (await api.post(f"{base}/comments/11/reply", json={"body": "agreed"})).json()
+    assert rp["in_reply_to_id"] == 11 and sent[-1][1] == "repos/pytorch/pytorch/pulls/7/comments/11/replies"
+    # GitHub refusing keeps the drafts
+    await api.post(f"{base}/drafts", json={"path": "a.cpp", "side": "RIGHT", "line": 1, "body": "again"})
+
+    def refuse(method, path, body=None):
+        raise ApiError(502, "GH_ERROR", "GitHub refused: Unprocessable Entity: Line could not be resolved")
+
+    h.ctx.extra["gh_rest"] = refuse
+    r = await api.post(f"{base}/review", json={"event": "COMMENT"})
+    assert r.status_code == 502 and "could not be resolved" in r.json()["error"]["message"]
+    h.ctx.extra["gh_rest"] = rest
+    assert len((await api.get(f"{base}/comments")).json()["drafts"]) == 1
+    # owner only
+    from backend.app.models import LoginSession
+
+    with h.ctx.db.write() as s:
+        for row in s.query(LoginSession).all():
+            row.identity = "token"
+    assert (await api.get(f"{base}/comments")).status_code == 403
+    assert (await api.post(f"{base}/review", json={"event": "APPROVE"})).status_code == 403

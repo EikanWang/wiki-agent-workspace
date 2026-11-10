@@ -67,6 +67,23 @@ class GithubRepoWiki(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 
 
+class GithubPrDraft(Base):
+    """A review comment written in the PR tab, not yet published to GitHub (sent together as one review)."""
+
+    __tablename__ = "github_pr_drafts"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    repo: Mapped[str] = mapped_column(Text, nullable=False, index=True)  # owner/name, lower case
+    number: Mapped[int] = mapped_column(Integer, nullable=False)
+    path: Mapped[str] = mapped_column(Text, nullable=False)
+    side: Mapped[str] = mapped_column(String(5), nullable=False)  # LEFT (old) | RIGHT (new) — of the last line
+    line: Mapped[int] = mapped_column(Integer, nullable=False)
+    start_side: Mapped[str | None] = mapped_column(String(5), nullable=True)
+    start_line: Mapped[int | None] = mapped_column(Integer, nullable=True)  # multi-line comments
+    line_text: Mapped[str] = mapped_column(Text, default="")  # the commented lines, for display
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
 class Document(Base):
     __tablename__ = "documents"
     __table_args__ = (UniqueConstraint("workspace_id", "path", name="uq_documents_workspace_path"),)

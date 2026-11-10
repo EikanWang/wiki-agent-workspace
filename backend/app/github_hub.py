@@ -460,3 +460,206 @@ def list_repo_wikis(auth: tuple[AppContext, str] = Depends(require_owner)):
     ctx, _ = auth
     with ctx.db.read() as s:
         return {"repos": [{"repo": r.repo, "workspace_id": r.workspace_id} for r in s.query(GithubRepoWiki).order_by(GithubRepoWiki.repo).all()]}
+
+
+# ---------------------------------------------------------------------- review comments: read, draft, publish
+
+def gh_rest(method: str, path: str, body: dict[str, Any] | None = None) -> Any:
+    """`gh api` REST call; JSON body on stdin. Lists are fetched with --paginate."""
+    gh = shutil.which("gh")
+    if not gh:
+        raise ApiError(503, "GH_UNAVAILABLE", "the GitHub CLI (gh) is not installed on the server")
+    args = [gh, "api", "-X", method, path]
+    if method == "GET":
+        args.insert(2, "--paginate")
+    if body is not None:
+        args += ["--input", "-"]
+    try:
+        p = subprocess.run(args, input=json.dumps(body) if body is not None else None, capture_output=True, text=True, timeout=90, check=False)
+    except subprocess.TimeoutExpired:
+        raise ApiError(504, "GH_TIMEOUT", "GitHub did not answer in time")
+    if p.returncode != 0:
+        out = (p.stdout or "").strip()
+        msg = (p.stderr or out).strip()
+        try:  # GitHub's JSON error: {"message": ..., "errors": [...]}
+            j = json.loads(out)
+            detail = "; ".join(str(e.get("message", e)) if isinstance(e, dict) else str(e) for e in j.get("errors") or [])
+            msg = j.get("message", msg) + (f": {detail}" if detail else "")
+        except (ValueError, AttributeError):
+            pass
+        if "rate limit" in msg.lower():
+            raise ApiError(429, "GH_RATE_LIMITED", "GitHub's rate limit is reached; try again in a minute")
+        raise ApiError(502, "GH_ERROR", f"GitHub refused: {msg[-400:]}")
+    out = p.stdout.strip()
+    if not out:
+        return None
+    if method == "GET":
+        # --paginate prints one JSON document per page: [..][..] — decode them all and join lists
+        dec = json.JSONDecoder()
+        docs: list[Any] = []
+        i = 0
+        while i < len(out):
+            obj, i = dec.raw_decode(out, i)
+            docs.append(obj)
+            while i < len(out) and out[i].isspace():
+                i += 1
+        if all(isinstance(d, list) for d in docs):
+            return [x for d in docs for x in d]
+        return docs[0] if len(docs) == 1 else docs
+    return json.loads(out)
+
+
+def _rest(ctx: AppContext) -> Callable[..., Any]:
+    return ctx.extra.get("gh_rest", gh_rest)
+
+
+async def require_owner_mutating(request: Request, ctx: AppContext = Depends(require_auth_mutating)) -> tuple[AppContext, str]:
+    st = await hub_status(ctx, request)
+    if not st["available"]:
+        raise ApiError(403, "NOT_GITHUB_OWNER", "only the server's owner signed in with GitHub can do this")
+    return ctx, st["owner"]
+
+
+def _comment_dict(c: dict[str, Any]) -> dict[str, Any]:
+    return {"id": c["id"], "path": c.get("path"), "line": c.get("line"), "side": c.get("side") or "RIGHT",
+            "start_line": c.get("start_line"), "start_side": c.get("start_side"), "original_line": c.get("original_line"),
+            "outdated": c.get("line") is None, "body": c.get("body") or "", "author": (c.get("user") or {}).get("login"),
+            "created_at": c.get("created_at"), "in_reply_to_id": c.get("in_reply_to_id"), "url": c.get("html_url"),
+            "diff_hunk": c.get("diff_hunk")}
+
+
+def _draft_dict(d: Any) -> dict[str, Any]:
+    return {"id": d.id, "path": d.path, "side": d.side, "line": d.line, "start_side": d.start_side, "start_line": d.start_line,
+            "line_text": d.line_text, "body": d.body, "created_at": d.created_at.isoformat() if d.created_at else None}
+
+
+@router.get("/github/pr/{owner}/{repo}/{number}/comments")
+async def pr_comments(owner: str, repo: str, number: int, auth: tuple[AppContext, str] = Depends(require_owner)):
+    """Review comments on the PR's diff (GitHub) and your unpublished drafts."""
+    from .models import GithubPrDraft
+
+    ctx, _ = auth
+    _check_names(owner, repo)
+    raw = await asyncio.to_thread(_rest(ctx), "GET", f"repos/{owner}/{repo}/pulls/{number}/comments?per_page=100")
+    with ctx.db.read() as s:
+        drafts = s.query(GithubPrDraft).filter_by(repo=f"{owner}/{repo}".lower(), number=number).order_by(GithubPrDraft.created_at).all()
+        dd = [_draft_dict(d) for d in drafts]
+    return {"comments": [_comment_dict(c) for c in raw or []], "drafts": dd}
+
+
+class DraftIn(BaseModel):
+    path: str
+    side: str
+    line: int
+    start_side: str | None = None
+    start_line: int | None = None
+    line_text: str = ""
+    body: str
+
+
+@router.post("/github/pr/{owner}/{repo}/{number}/drafts", status_code=201)
+def add_draft(owner: str, repo: str, number: int, body: DraftIn, auth: tuple[AppContext, str] = Depends(require_owner_mutating)):
+    from .db import new_id
+    from .models import GithubPrDraft
+
+    ctx, _ = auth
+    _check_names(owner, repo)
+    if body.side not in ("LEFT", "RIGHT") or (body.start_side not in (None, "LEFT", "RIGHT")) or not body.body.strip() or body.line < 1:
+        raise ApiError(400, "INVALID_COMMENT", "a comment needs text, a line and a side (LEFT/RIGHT)")
+    if body.start_line is not None and (body.start_line < 1 or (body.start_side == body.side and body.start_line >= body.line)):
+        body.start_line = body.start_side = None  # a "range" of one line
+    with ctx.db.write() as s:
+        d = GithubPrDraft(id=new_id(), repo=f"{owner}/{repo}".lower(), number=number, path=body.path, side=body.side, line=body.line,
+                          start_side=body.start_side if body.start_line else None, start_line=body.start_line,
+                          line_text=body.line_text[:4000], body=body.body.strip())
+        s.add(d)
+        s.flush()
+        return _draft_dict(d)
+
+
+class DraftEditIn(BaseModel):
+    body: str
+
+
+@router.patch("/github/pr/{owner}/{repo}/{number}/drafts/{draft_id}")
+def edit_draft(owner: str, repo: str, number: int, draft_id: str, body: DraftEditIn, auth: tuple[AppContext, str] = Depends(require_owner_mutating)):
+    from .models import GithubPrDraft
+
+    ctx, _ = auth
+    with ctx.db.write() as s:
+        d = s.get(GithubPrDraft, draft_id)
+        if d is None or d.repo != f"{owner}/{repo}".lower() or d.number != number:
+            raise ApiError(404, "DRAFT_NOT_FOUND", "draft comment not found")
+        if not body.body.strip():
+            raise ApiError(400, "INVALID_COMMENT", "a comment needs text")
+        d.body = body.body.strip()
+        return _draft_dict(d)
+
+
+@router.delete("/github/pr/{owner}/{repo}/{number}/drafts/{draft_id}")
+def delete_draft(owner: str, repo: str, number: int, draft_id: str, auth: tuple[AppContext, str] = Depends(require_owner_mutating)):
+    from .models import GithubPrDraft
+
+    ctx, _ = auth
+    with ctx.db.write() as s:
+        d = s.get(GithubPrDraft, draft_id)
+        if d is None or d.repo != f"{owner}/{repo}".lower() or d.number != number:
+            raise ApiError(404, "DRAFT_NOT_FOUND", "draft comment not found")
+        s.delete(d)
+    return {"deleted": draft_id}
+
+
+class SubmitIn(BaseModel):
+    event: str = "COMMENT"  # COMMENT | APPROVE | REQUEST_CHANGES
+    body: str = ""
+
+
+@router.post("/github/pr/{owner}/{repo}/{number}/review")
+async def submit_review(owner: str, repo: str, number: int, body: SubmitIn, auth: tuple[AppContext, str] = Depends(require_owner_mutating)):
+    """Publish your drafts (and a summary) to GitHub as one review, as the server's gh account."""
+    from .models import GithubPrDraft
+
+    ctx, owner_login = auth
+    _check_names(owner, repo)
+    if body.event not in ("COMMENT", "APPROVE", "REQUEST_CHANGES"):
+        raise ApiError(400, "INVALID_EVENT", "event must be COMMENT, APPROVE or REQUEST_CHANGES")
+    with ctx.db.read() as s:
+        drafts = s.query(GithubPrDraft).filter_by(repo=f"{owner}/{repo}".lower(), number=number).order_by(GithubPrDraft.created_at).all()
+        dd = [_draft_dict(d) for d in drafts]
+    if not dd and not body.body.strip() and body.event != "APPROVE":
+        raise ApiError(400, "EMPTY_REVIEW", "write a comment or a summary first")
+    if body.event == "REQUEST_CHANGES" and not body.body.strip() and not dd:
+        raise ApiError(400, "EMPTY_REVIEW", "requesting changes needs a comment")
+    key = f"{owner}/{repo}#{number}".lower()
+    hit = _pr_cache.get(key)
+    head = hit[1]["pr"].get("head_sha") if hit else None
+    payload: dict[str, Any] = {"event": body.event, "body": body.body.strip(), "comments": []}
+    if head:
+        payload["commit_id"] = head  # comments refer to the diff the user saw
+    for d in dd:
+        c: dict[str, Any] = {"path": d["path"], "line": d["line"], "side": d["side"], "body": d["body"]}
+        if d["start_line"]:
+            c["start_line"], c["start_side"] = d["start_line"], d["start_side"] or d["side"]
+        payload["comments"].append(c)
+    res = await asyncio.to_thread(_rest(ctx), "POST", f"repos/{owner}/{repo}/pulls/{number}/reviews", payload)
+    with ctx.db.write() as s:
+        s.query(GithubPrDraft).filter(GithubPrDraft.id.in_([d["id"] for d in dd])).delete(synchronize_session=False)
+    _pr_cache.pop(key, None)
+    _cache.pop(owner_login, None)  # the review queue changes too
+    log.info("published review on %s/%s#%d (%s, %d comments)", owner, repo, number, body.event, len(dd))
+    return {"published": len(dd), "event": body.event, "url": (res or {}).get("html_url"), "id": (res or {}).get("id")}
+
+
+class ReplyIn(BaseModel):
+    body: str
+
+
+@router.post("/github/pr/{owner}/{repo}/{number}/comments/{comment_id}/reply", status_code=201)
+async def reply_comment(owner: str, repo: str, number: int, comment_id: int, body: ReplyIn, auth: tuple[AppContext, str] = Depends(require_owner_mutating)):
+    """Reply to an existing review thread on GitHub (published immediately)."""
+    ctx, _ = auth
+    _check_names(owner, repo)
+    if not body.body.strip():
+        raise ApiError(400, "INVALID_COMMENT", "a reply needs text")
+    res = await asyncio.to_thread(_rest(ctx), "POST", f"repos/{owner}/{repo}/pulls/{number}/comments/{comment_id}/replies", {"body": body.body.strip()})
+    return _comment_dict(res or {"id": 0})

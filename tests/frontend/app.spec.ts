@@ -1859,29 +1859,68 @@ test("GitHub PR tab: overview, files, choose the wiki once, ask about the PR and
   await page.getByTestId("selection-send").click();
   await expect(page.locator('[data-testid="message-agent"][data-status="completed"]').last()).toContainText("Is the null check enough?", { timeout: 20000 });
   await expect(page.getByTestId("thread-whole-document")).toBeVisible();
-  // files: select diff lines and ask about them
+  // files: GitHub-style diff with the existing thread at its line
   await page.getByTestId("pr-tab-files").click();
   await expect(page.getByTestId("pr-file")).toHaveCount(2);
-  const lines = page.locator('[data-file="c10/xpu/stub.cpp"] .diff-line.add');
-  await expect(lines).toHaveCount(2);
-  await lines.first().evaluate((first) => {
-    const last = first.nextElementSibling!;
-    const r = document.createRange();
-    r.setStartBefore(first);
-    r.setEndAfter(last);
-    const s = window.getSelection()!;
-    s.removeAllRanges();
-    s.addRange(r);
-  });
-  const b = (await lines.first().boundingBox())!;
-  await lines.first().dispatchEvent("mouseup", { bubbles: true, clientX: b.x + 20, clientY: b.y + 5 });
-  await page.getByTestId("pr-ask-selection").click();
-  await expect(page.locator(".sel-head")).toContainText("Ask about the selected lines (c10/xpu/stub.cpp)");
-  await expect(page.getByTestId("selection-quote")).toContainText("+  if (ok)");
-  await page.getByTestId("selection-question").fill("Why guard call()?");
-  await page.getByTestId("selection-send").click();
+  const stub = page.locator('[data-testid="pr-file"][data-file="c10/xpu/stub.cpp"]');
+  await expect(stub.getByTestId("gh-thread")).toContainText("Is ok ever false?");
+  // reply to it (posted at once)
+  await stub.getByTestId("gh-reply").click();
+  await stub.getByTestId("gh-reply-text").fill("Yes, on old drivers.");
+  await stub.getByTestId("gh-reply-send").click();
+  await expect(stub.getByTestId("gh-thread")).toContainText("Yes, on old drivers.");
+  // select two added lines (drag) → ask the agent about them
+  const added = stub.locator('[data-testid="pr-diff-row"].add');
+  await expect(added).toHaveCount(2);
+  const a1 = (await added.nth(0).boundingBox())!, a2 = (await added.nth(1).boundingBox())!;
+  await page.mouse.move(a1.x + 60, a1.y + a1.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(a2.x + 60, a2.y + a2.height / 2, { steps: 4 });
+  await page.mouse.up();
+  await expect(page.getByTestId("pr-composer")).toContainText("Lines R11–R12");
+  await page.getByTestId("pr-composer-text").fill("Why guard call()?");
+  await page.getByTestId("pr-ask-lines").click();
   await expect(page.locator('[data-testid="message-agent"][data-status="completed"]').last()).toContainText("Why guard call()?", { timeout: 20000 });
-  await expect(page.getByTestId("thread-target")).toContainText("c10/xpu/stub.cpp");
+  await expect(page.getByTestId("thread-target")).toContainText("c10/xpu/stub.cpp R11–R12");
+  await expect(page.getByTestId("thread-quote")).toContainText("+  if (ok)");
+  // side by side; comment on a deleted line (left side) → pending
+  await page.getByTestId("pr-layout-split").click();
+  await expect(stub.getByTestId("pr-diff-split")).toBeVisible();
+  await stub.locator('td.code.left.del').first().click();
+  await expect(page.getByTestId("pr-composer")).toContainText("Line L11");
+  await page.getByTestId("pr-composer-text").fill("Keep the unconditional call for the stub?");
+  await page.getByTestId("pr-add-comment").click();
+  await expect(stub.getByTestId("pr-draft")).toContainText("Keep the unconditional call");
+  await expect(page.getByTestId("pr-finish-review")).toContainText("Finish review (1)");
+  // a second one, then delete it
+  await stub.locator('td.code.right.add').first().click();
+  await page.getByTestId("pr-composer-text").fill("throwaway");
+  await page.getByTestId("pr-add-comment").click();
+  await expect(stub.getByTestId("pr-draft")).toHaveCount(2);
+  await stub.getByTestId("pr-draft").filter({ hasText: "throwaway" }).getByTestId("pr-draft-delete").click();
+  await expect(stub.getByTestId("pr-draft")).toHaveCount(1);
+  // pending comments survive a reload
+  await page.reload();
+  await page.locator('[data-testid="doc-tab"][data-ws="github"]').click();
+  await page.getByTestId("pr-tab-files").click();
+  await expect(page.getByTestId("pr-draft")).toHaveCount(1);
+  await expect(page.getByTestId("pr-layout-split")).toHaveAttribute("aria-selected", "true"); // layout remembered
+  // finish the review: request changes with a summary → one review on GitHub
+  await page.getByTestId("pr-finish-review").click();
+  await expect(page.getByTestId("pr-submit")).toContainText("posted on GitHub as e2e-user");
+  await page.getByTestId("pr-submit-body").fill("Nice, one question.");
+  await page.getByTestId("pr-event-request_changes").check();
+  await page.getByTestId("pr-submit-send").click();
+  await expect(page.getByTestId("pr-notice")).toContainText("Review published on GitHub");
+  await expect(page.getByTestId("pr-draft")).toHaveCount(0);
+  const posted = await (await page.request.get("/fake-github/posted")).json();
+  const rev = posted.find((x: any) => x.path.endsWith("/reviews"));
+  expect(rev.path).toBe("repos/pytorch/pytorch/pulls/101/reviews");
+  expect(rev.body.event).toBe("REQUEST_CHANGES");
+  expect(rev.body.body).toBe("Nice, one question.");
+  expect(rev.body.comments).toEqual([{ path: "c10/xpu/stub.cpp", line: 11, side: "LEFT", body: "Keep the unconditional call for the stub?" }]);
+  expect(posted.find((x: any) => x.path.endsWith("/replies")).body).toEqual({ body: "Yes, on old drivers." });
+  await page.getByTestId("pr-layout-unified").click();
   // the tab is remembered across reloads, and the wiki choice too
   await page.reload();
   await expect(page.locator('[data-testid="doc-tab"][data-ws="github"]')).toContainText("#101");

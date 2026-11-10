@@ -35,7 +35,9 @@ backend/app/
                    a PR (/github/pr/{owner}/{repo}/{n}: GraphQL details + REST files, 60 s cache) is written as
                    a Markdown copy to snapshots/github/ and discussed as the hidden read-only document
                    .waw-github/<owner>/<repo>/<n>.md of the repo's wiki (github_repo_wikis); deps.py refuses
-                   every PR document/discussion to anyone but the owner's GitHub sign-in
+                   every PR document/discussion to anyone but the owner's GitHub sign-in; review comments:
+                   GET pulls/{n}/comments, drafts in github_pr_drafts, one POST pulls/{n}/reviews (with
+                   commit_id of the diff shown) on Finish review, replies via comments/{id}/replies
   office.py        OfficeRenderer: Layout view, LibreOffice headless → PDF, content-addressed cache, parallel
                    limit, timeout, private profiles; routes /office/render (status, starts work), /office/pdf
   anchors.py       anchor resolution algorithm (attached/moved/ambiguous/orphaned) + offset validation

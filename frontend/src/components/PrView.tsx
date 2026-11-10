@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AgentSession, ApiError, WorkspaceInfo, get, put } from "../api";
 import { renderMarkdown, sanitizeHtml } from "../markdown";
 import { SelectionAnchor, wholeDocument } from "../textmodel";
-import DiffView from "./DiffView";
+import { GhComment, GhDraft, PrFileDiff, SubmitReview } from "./PrDiff";
 import { SelectionPopover } from "./Reader";
 import RefreshButton from "./RefreshButton";
 
@@ -29,8 +29,10 @@ const REVIEW_LABEL: Record<string, string> = { APPROVED: "approved", CHANGES_REQ
  * A pull request as a tab: Overview (description, checks, reviews) and Files (diff). Questions go to the agent in
  * the repository's wiki (chosen once per repository): about the whole PR, or about lines selected in the diff.
  */
-export default function PrView({ repo, number, workspaces, docReady, onReady, onSend, sessions, defaultSessionId, defaultProvider }: {
+export default function PrView({ repo, number, workspaces, docReady, onReady, onSend, sessions, defaultSessionId, defaultProvider, githubLogin = null }: {
   repo: string;
+  /** the GitHub account reviews are published as (the server's gh login) */
+  githubLogin?: string | null;
   number: number;
   workspaces: WorkspaceInfo[];
   /** the PR's discussion document is open (questions can be sent) */
@@ -45,19 +47,28 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
   const [data, setData] = useState<PrData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<"overview" | "files">("overview");
-  const [folded, setFolded] = useState<Set<string>>(new Set());
   const [sheet, setSheet] = useState<SelectionAnchor | null>(null);
-  const [chip, setChip] = useState<{ x: number; y: number; quote: string; path: string } | null>(null);
   const [pick, setPick] = useState("");
-  const filesBox = useRef<HTMLDivElement>(null);
+  const [layout, setLayout] = useState<"unified" | "split">(() => (localStorage.getItem("waw.prDiffLayout") as "unified" | "split") || "unified");
+  useEffect(() => localStorage.setItem("waw.prDiffLayout", layout), [layout]);
+  const [review, setReview] = useState<{ comments: GhComment[]; drafts: GhDraft[] }>({ comments: [], drafts: [] });
+  const [notice, setNotice] = useState<string | null>(null);
   const [owner, name] = repo.split("/");
+  const apiBase = `/github/pr/${owner}/${name}/${number}`;
+  const loadComments = async () => {
+    try {
+      setReview(await get<{ comments: GhComment[]; drafts: GhDraft[] }>(`${apiBase}/comments`));
+    } catch (e) {
+      setError((e as ApiError).message);
+    }
+  };
 
   const load = async (refresh = false) => {
     try {
       const d = await get<PrData>(`/github/pr/${owner}/${name}/${number}${refresh ? "?refresh=true" : ""}`);
       setData(d);
       setError(null);
-      setFolded(new Set(d.files.filter((f) => f.unified.split("\n").length > FOLD_LINES).map((f) => f.path)));
+      void loadComments();
       if (d.wiki_workspace_id) onReady(d.wiki_workspace_id, d.doc_path, `#${d.pr.number} ${d.pr.title}`);
     } catch (e) {
       setError((e as ApiError).message);
@@ -86,18 +97,8 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
 
   const body = useMemo(() => (data ? sanitizeHtml(renderMarkdown(data.pr.body || "_No description._", ""), "") : ""), [data]);
 
-  // lines selected in a file's diff → "Ask about selection"
-  const onDiffMouseUp = (e: React.MouseEvent) => {
-    window.setTimeout(() => {
-      const sel = window.getSelection();
-      const text = sel?.toString() ?? "";
-      const node = sel?.anchorNode ? (sel.anchorNode.nodeType === 1 ? (sel.anchorNode as Element) : sel.anchorNode.parentElement) : null;
-      const file = node?.closest<HTMLElement>("[data-file]");
-      if (!text.trim() || !file || !filesBox.current) return setChip(null);
-      const r = filesBox.current.getBoundingClientRect();
-      setChip({ x: e.clientX - r.left + filesBox.current.scrollLeft, y: e.clientY - r.top + filesBox.current.scrollTop + 12, quote: text.replace(/\n+$/, ""), path: file.dataset.file! });
-    }, 10);
-  };
+  const commentsFor = (path: string) => review.comments.filter((c) => c.path === path);
+  const draftsFor = (path: string) => review.drafts.filter((d) => d.path === path);
 
   if (error && !data) return <div className="pr-view"><div className="banner warn" data-testid="pr-error">{error} <button className="btn small" onClick={() => void load(true)}>Retry</button></div></div>;
   if (!data) return <div className="pr-view"><div className="muted pad">Loading {repo}#{number} from GitHub…</div></div>;
@@ -120,6 +121,15 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
             <button role="tab" aria-selected={tab === "overview"} className={tab === "overview" ? "active" : ""} onClick={() => setTab("overview")} data-testid="pr-tab-overview">Overview</button>
             <button role="tab" aria-selected={tab === "files"} className={tab === "files" ? "active" : ""} onClick={() => setTab("files")} data-testid="pr-tab-files">Files ({data.files.length})</button>
           </span>
+          {tab === "files" && (
+            <span className="mode-switch" role="tablist" aria-label="Diff layout">
+              <button role="tab" aria-selected={layout === "unified"} className={layout === "unified" ? "active" : ""} onClick={() => setLayout("unified")} data-testid="pr-layout-unified">Unified</button>
+              <button role="tab" aria-selected={layout === "split"} className={layout === "split" ? "active" : ""} onClick={() => setLayout("split")} data-testid="pr-layout-split">Side by side</button>
+            </span>
+          )}
+          <SubmitReview apiBase={apiBase} drafts={review.drafts.length} owner={githubLogin}
+            onDone={async (url) => { setNotice(url ? `Review published on GitHub.` : "Review published."); await loadComments(); await load(true); }}
+            onError={(m) => setError(m)} />
           <span className="spacer" />
           {data.wiki_workspace_id && (
             <span className="muted small" title="The agent works in this wiki for this repository's pull requests">
@@ -143,7 +153,8 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
           <button className="btn small primary" onClick={() => void chooseWiki()} disabled={!pick} data-testid="pr-wiki-use">Use this wiki</button>
         </div>
       )}
-      {error && <div className="banner warn">{error}</div>}
+      {error && <div className="banner warn" data-testid="pr-banner-error">{error} <button className="icon-btn" onClick={() => setError(null)} aria-label="Dismiss">×</button></div>}
+      {notice && <div className="banner" data-testid="pr-notice">{notice} <a href={`${p.url}/files`} target="_blank" rel="noreferrer">See it on GitHub</a> <button className="icon-btn" onClick={() => setNotice(null)} aria-label="Dismiss">×</button></div>}
       {tab === "overview" ? (
         <div className="pr-body" data-testid="pr-overview">
           <div className="pr-overview-grid">
@@ -178,30 +189,18 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
           </div>
         </div>
       ) : (
-        <div className="pr-body pr-files" ref={filesBox} onMouseUp={onDiffMouseUp} data-testid="pr-files">
-          <div className="muted small pad">Select lines in a diff to ask the agent about them.</div>
-          {data.files.map((f) => {
-            const isFolded = folded.has(f.path);
-            return (
-              <section key={f.path} className="pr-file" data-file={f.path} data-testid="pr-file">
-                <button className="pr-file-head" onClick={() => setFolded((s) => { const n = new Set(s); if (n.has(f.path)) n.delete(f.path); else n.add(f.path); return n; })} aria-expanded={!isFolded}>
-                  <span className="chev">{isFolded ? "›" : "⌄"}</span>
-                  <span className="pr-file-path">{f.previous_path && f.previous_path !== f.path ? `${f.previous_path} → ` : ""}{f.path}</span>
-                  <span className="muted small">{f.status}</span>
-                  <span className="spacer" />
-                  <span className="small"><span className="add">+{f.additions}</span> <span className="del">−{f.deletions}</span></span>
-                </button>
-                {!isFolded && (f.binary_or_large ? <div className="muted small pad">No textual diff (binary or too large) — see it on GitHub.</div> : <DiffView unified={f.unified} />)}
-              </section>
-            );
-          })}
-          {chip && (
-            <button className="btn small primary pdfjs-chip" style={{ left: chip.x, top: chip.y }} onMouseDown={(e) => e.preventDefault()} disabled={!docReady}
-              onClick={() => { setSheet({ quote: chip.quote, prefix: "", suffix: "", start: 0, end: 0, heading: null, target: { kind: "text", page: null, unit: "page", label: chip.path } }); setChip(null); }}
-              data-testid="pr-ask-selection">
-              Ask about selection
-            </button>
-          )}
+        <div className="pr-body pr-files" data-testid="pr-files">
+          <div className="muted small pad">
+            Click a line to comment or ask the agent (drag or shift-click for several lines). Comments stay pending here until you
+            <b> Finish review</b>; replies to existing threads are posted at once.
+            {review.drafts.length > 0 && <> · <b>{review.drafts.length} pending</b></>}
+          </div>
+          {data.files.map((f) => (
+            <PrFileDiff key={f.path} file={f} layout={layout} comments={commentsFor(f.path)} drafts={draftsFor(f.path)} apiBase={apiBase} canAsk={docReady}
+              collapsedDefault={f.unified.split("\n").length > FOLD_LINES && !commentsFor(f.path).length && !draftsFor(f.path).length}
+              onChanged={loadComments} onError={(m) => setError(m)}
+              onAsk={(quote, label, question) => onSend({ quote, prefix: "", suffix: "", start: 0, end: 0, heading: null, target: { kind: "text", page: null, unit: "page", label } }, question, null)} />
+          ))}
         </div>
       )}
       {sheet && (

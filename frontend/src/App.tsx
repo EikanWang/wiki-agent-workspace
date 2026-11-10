@@ -815,6 +815,7 @@ export default function App() {
               sessions={sessions}
               defaultSessionId={doc?.default_session_id ?? null}
               defaultProvider={boot.default_provider}
+              githubLogin={hub?.owner ?? null}
             />
           ) : doc ? (
             <Reader

@@ -698,3 +698,16 @@ mark.waw-hl.review.needs_review { border-bottom: 2px dashed var(--warn); }
 .pr-file-path { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .pr-file .diff { margin: 0; border-radius: 0; border: none; border-top: 1px solid var(--border); }
 .pr-foot { padding: 4px 16px; border-top: 1px solid var(--border); }
+/* PR review comments (GitHub threads, pending drafts) */
+.gh-thread { border: 1px solid var(--border); border-radius: 8px; background: var(--card); padding: 6px 10px; margin: 2px 0; font-family: var(--sans, inherit); white-space: normal; }
+.gh-thread.draft { border-color: #e0a800; background: color-mix(in srgb, #ffb000 7%, var(--card)); }
+.gh-comment + .gh-comment { border-top: 1px solid var(--border); margin-top: 6px; padding-top: 6px; }
+.gh-comment-body { font-size: 13px; max-width: none; padding: 2px 0; }
+.gh-comment-body p { margin: 4px 0; }
+.gh-reply-box textarea, .gh-thread textarea { width: 100%; box-sizing: border-box; border: 1px solid var(--border); border-radius: 6px; padding: 6px; background: var(--bg); color: var(--fg); font: inherit; }
+.link-btn.danger { color: var(--red); }
+.pr-submit { left: auto; right: 0; width: 360px; padding: 10px; display: flex; flex-direction: column; gap: 6px; }
+.pr-submit textarea { width: 100%; box-sizing: border-box; border: 1px solid var(--border); border-radius: 6px; padding: 6px; background: var(--bg); color: var(--fg); font: inherit; }
+.pr-submit-opt { display: flex; gap: 6px; align-items: flex-start; font-size: 13px; }
+.pr-outdated summary { cursor: pointer; }
+.pr-files .diff-file { margin: 10px 0; }

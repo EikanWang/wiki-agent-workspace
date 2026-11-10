@@ -71,6 +71,22 @@ Discussions about a PR are attached to a hidden, read-only document of that wiki
 | `workspace_id` | UUID, FK → `workspaces.id` | Wiki folder the agent works in for this repository's PRs. |
 | `updated_at` | DATETIME | Last change. |
 
+## `github_pr_drafts` — pending review comments on a pull request
+
+Comments written in a PR tab's Files view; published to GitHub together as one review (*Finish review*), then
+deleted. Kept when GitHub refuses the review.
+
+| Column | Type | Meaning |
+| --- | --- | --- |
+| `id` | UUID, PK | Draft id. |
+| `repo`, `number` | TEXT (owner/name, lower case), INTEGER | The pull request. |
+| `path` | TEXT | File in the PR. |
+| `side`, `line` | `LEFT` (old) \| `RIGHT` (new), INTEGER | Line the comment is on (the last line of a range). |
+| `start_side`, `start_line` | nullable | First line of a multi-line comment. |
+| `line_text` | TEXT | The commented diff lines, for display. |
+| `body` | TEXT | Comment (Markdown). |
+| `created_at` | DATETIME | Written. |
+
 ## `named_workspaces` — named sets of folders (VS Code-style workspaces)
 
 Which folders the window shows, in order. Exactly one row is `current`. "Default" (`is_default`) is created on the
