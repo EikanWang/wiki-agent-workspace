@@ -257,7 +257,8 @@ async def test_pr_review_threads_conversation_viewed_drafts_and_publish(running_
               {"id": "PRRT_t3", "isResolved": False, "isOutdated": False, "path": "b.md", "line": None, "originalLine": None, "startLine": None,
                "diffSide": "RIGHT", "startDiffSide": None, "subjectType": "FILE", "resolvedBy": None,
                "comments": {"totalCount": 1, "nodes": [{"databaseId": 14, "author": {"login": "carol"}, "body": "rename this file", "createdAt": "2026-11-08T00:00:00Z", "url": "u4", "diffHunk": None}]}}],
-          "conversation": {"reviews": [{"databaseId": 21, "author": {"login": "bob"}, "state": "CHANGES_REQUESTED", "body": "Needs tests", "submittedAt": "2026-11-07T02:00:00Z", "url": "r", "comments": {"totalCount": 1}}],
+          "conversation": {"reviews": [{"databaseId": 21, "author": {"login": "bob"}, "state": "CHANGES_REQUESTED", "body": "Needs tests", "submittedAt": "2026-11-07T02:00:00Z", "url": "r",
+                                        "comments": {"totalCount": 1, "nodes": [{"databaseId": 11, "path": "a.cpp", "line": 1, "originalLine": 1, "body": "why?", "diffHunk": "@@ -1 +1 @@\n-x\n+y", "outdated": False, "url": "u", "replyTo": None}]}}],
                            "comments": [{"databaseId": 31, "author": {"login": "pytorch-bot"}, "body": "CI started", "createdAt": "2026-11-06T00:00:00Z", "url": "c"}],
                            "pending": []}}
     sent: list = []
@@ -287,6 +288,9 @@ async def test_pr_review_threads_conversation_viewed_drafts_and_publish(running_
     assert t["PRRT_t2"]["resolved"] is True and t["PRRT_t2"]["outdated"] is True and t["PRRT_t2"]["resolved_by"] == "bob"
     assert t["PRRT_t3"]["subject"] == "FILE" and t["PRRT_t3"]["path"] == "b.md"
     assert [x["kind"] for x in c["conversation"]] == ["comment", "review"] and c["conversation"][1]["state"] == "CHANGES_REQUESTED"
+    # a review's line comments are part of it in the conversation (like GitHub), with their code
+    lc = c["conversation"][1]["comments"]
+    assert lc == [{"id": 11, "path": "a.cpp", "line": 1, "outdated": False, "body": "why?", "url": "u", "reply": False, "reply_to": None, "author": "bob", "created_at": "2026-11-07T02:00:00Z", "hunk": "@@ -1 +1 @@\n-x\n+y"}]
     assert c["pending_on_github"] is None and c["drafts"] == []
     # the agent gets the discussion with the PR
     disc = (settings.snapshots_dir / "github" / "pytorch" / "pytorch" / "7.discussion.md").read_text()
@@ -343,3 +347,211 @@ async def test_pr_review_threads_conversation_viewed_drafts_and_publish(running_
     assert (await api.get(f"{base}/comments")).status_code == 403
     assert (await api.put(f"{base}/viewed", json={"path": "a.cpp", "viewed": True})).status_code == 403
     assert (await api.post(f"{base}/review", json={"event": "APPROVE"})).status_code == 403
+
+
+def requested_by(p, login, *, company=None, email=None, owner="EikanWang"):
+    p["timelineItems"] = {"nodes": [{"actor": {"login": login, "company": company, "email": email},
+                                     "requestedReviewer": {"__typename": "User", "login": owner}}]}
+    return p
+
+
+async def test_review_prefs_priority_hidden_and_watched_repos(running_app):
+    import asyncio
+
+    github_hub.reset_cache()
+    calls: list = []
+    h = await running_app()
+    as_github(h, "EikanWang")
+    h.ctx.extra["gh_owner"] = lambda: "EikanWang"
+    closed = pr(5)
+    closed["state"] = "MERGED"
+    queue = [requested_by(pr(1), "metaguy", company="@Meta"), requested_by(pr(2), "fbdev", email="x@fb.com"),
+             requested_by(pr(3), "chosen"), requested_by(pr(4, "intel/torch-xpu-ops"), "other", company="Intel"), closed]
+    watched = [pr(1), pr(9, "intel/torch-xpu-ops", user=None)]  # #1 is already in the queue: not repeated
+
+    def graphql(q, v):
+        calls.append(v["q"])
+        nodes = watched if "repo:" in v["q"] else queue
+        return {"search": {"issueCount": len(nodes), "pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": nodes}}
+
+    h.ctx.extra["gh_graphql"] = graphql
+    api = h.api
+    r = (await api.get("/api/v1/github/reviews")).json()
+    by = {i["number"]: i for i in r["items"]}
+    assert 5 not in by  # closed / merged meanwhile: dropped
+    assert by[1]["priority"] and by[2]["priority"] and not by[3]["priority"] and not by[4]["priority"]
+    assert by[1]["requested_by"] == "metaguy" and by[1]["requested_by_company"] == "@Meta"
+    assert r["prefs"] == {"hidden_repos": [], "watched_repos": [], "priority_requesters": [], "priority_meta": True} and r["watched"] == []
+    # priority people, no Meta rule; hide a repository; watch one
+    assert (await api.put("/api/v1/github/prefs", json={"priority_requesters": ["chosen"], "priority_meta": False})).status_code == 200
+    r = (await api.get("/api/v1/github/reviews")).json()
+    assert [i["number"] for i in r["items"] if i["priority"]] == [3]
+    assert (await api.put("/api/v1/github/prefs", json={"hidden_repos": ["Intel/Torch-XPU-Ops"]})).status_code == 200
+    r = (await api.get("/api/v1/github/reviews")).json()
+    assert sorted(i["number"] for i in r["items"]) == [1, 2, 3] and r["hidden_count"] == 1
+    assert (await api.put("/api/v1/github/prefs", json={"hidden_repos": [], "watched_repos": ["intel/torch-xpu-ops", "pytorch/pytorch"]})).status_code == 200
+    await asyncio.wait_for(github_hub._tasks["EikanWang"], 5)
+    r = (await api.get("/api/v1/github/reviews")).json()
+    assert [(i["number"], i["requested"], i["watched"]) for i in r["watched"]] == [(9, None, True)]
+    assert any("repo:intel/torch-xpu-ops" in q for q in calls) and any("repo:pytorch/pytorch" in q for q in calls)
+    # stored in the database (kv_settings), validated
+    assert (await api.put("/api/v1/github/prefs", json={"watched_repos": ["no-slash"]})).json()["error"]["code"] == "INVALID_REPO"
+    assert (await api.put("/api/v1/github/prefs", json={"priority_requesters": ["bad login!"]})).json()["error"]["code"] == "INVALID_LOGIN"
+    github_hub.reset_cache()
+    assert (await api.get("/api/v1/github/reviews")).json()["prefs"]["watched_repos"] == ["intel/torch-xpu-ops", "pytorch/pytorch"]
+    # only the owner
+    with h.ctx.db.write() as s:
+        for row in s.query(LoginSession).all():
+            row.identity = "token"
+    assert (await api.put("/api/v1/github/prefs", json={"hidden_repos": []})).status_code == 403
+
+
+async def test_extra_context_folders_reach_the_agent_prompt(running_app, workspace, tmp_path):
+    h = await running_app()
+    api = h.api
+    ws = (await api.get("/api/v1/workspaces")).json()["workspaces"][0]["id"]
+    ref = tmp_path / "refs"
+    ref.mkdir()
+    assert (await api.get(f"/api/v1/agent-context?scope=ws:{ws}")).json() == {"scope": f"ws:{ws}", "dirs": []}
+    r = await api.put(f"/api/v1/agent-context?scope=ws:{ws}", json={"dirs": [str(ref), str(ref)]})
+    assert r.status_code == 200 and r.json()["dirs"] == [str(ref.resolve())]
+    assert (await api.put(f"/api/v1/agent-context?scope=ws:{ws}", json={"dirs": ["relative/x"]})).json()["error"]["code"] == "INVALID_PATH"
+    assert (await api.put(f"/api/v1/agent-context?scope=ws:{ws}", json={"dirs": [str(tmp_path / "nope")]})).json()["error"]["code"] == "FOLDER_NOT_FOUND"
+    assert (await api.get("/api/v1/agent-context?scope=bad")).json()["error"]["code"] == "INVALID_SCOPE"
+    # a repository's folders: only the GitHub owner may set them
+    github_hub.reset_cache()
+    h.ctx.extra["gh_owner"] = lambda: "EikanWang"
+    assert (await api.put("/api/v1/agent-context?scope=repo:pytorch/pytorch", json={"dirs": [str(ref)]})).status_code == 403
+    # a question about a document names the folders
+    (workspace / "ctx.md").write_text("# Ctx\n\nSome text here.\n")
+    d = (await api.get("/api/v1/documents/open?path=ctx.md")).json()
+    r = await api.post(f"/api/v1/documents/{d['document_id']}/threads", json={"whole_document": True, "version_sha256": d["sha256"], "question": "Q?"})
+    assert r.status_code == 201, r.text
+    await api.wait_job(r.json()["job_id"])
+    from backend.app.models import Job
+
+    with h.ctx.db.read() as s:
+        prompt = s.query(Job).order_by(Job.created_at.desc()).first().prompt
+    assert "Additional reference folders the user added for more accurate answers" in prompt and str(ref.resolve()) in prompt
+
+
+def test_rate_guard_waits_or_refuses_near_the_limit(monkeypatch):
+    import time as _t
+
+    g = github_hub.RateGuard()
+    slept: list = []
+    monkeypatch.setattr(github_hub.time, "sleep", lambda s: slept.append(s))
+    monkeypatch.setattr(g, "_refresh", lambda: setattr(g, "checked", _t.time()))
+    g.checked = _t.time()
+    g.limits = {"graphql": {"remaining": 5000, "reset": int(_t.time()) + 3000, "limit": 5000}}
+    g.before("graphql")
+    assert slept == [] and g.limits["graphql"]["remaining"] == 4999
+    g.limits["graphql"] = {"remaining": 50, "reset": int(_t.time()) + 30, "limit": 5000}
+    g.before("graphql")  # reset is near: wait for it
+    assert slept and 25 < slept[0] <= 33
+    g.limits["graphql"] = {"remaining": 50, "reset": int(_t.time()) + 1800, "limit": 5000}
+    try:
+        g.before("graphql")
+    except ApiError as e:
+        assert e.status == 429 and e.code == "GH_RATE_LIMITED"
+    else:
+        raise AssertionError("not refused")
+    slept.clear()
+    g.limits = {}
+    g.before("core", mutation=True)
+    g.before("core", mutation=True)  # mutations are spaced out
+    assert slept and slept[-1] > 0.5
+
+
+async def test_pr_contributors_roles_affiliation_and_details(running_app):
+    github_hub.reset_cache()
+    h = await running_app()
+    as_github(h, "EikanWang")
+    h.ctx.extra["gh_owner"] = lambda: "EikanWang"
+    meta = {"login": "mdev", "name": "M Dev", "company": None, "location": None, "bio": None, "websiteUrl": None, "twitterUsername": None,
+            "url": "https://github.com/mdev", "avatarUrl": None, "createdAt": None, "organizations": {"nodes": [{"login": "meta-pytorch", "name": None}]},
+            "followers": {"totalCount": 1}}
+    calls: list = []
+
+    def graphql(q, v):
+        calls.append(q)
+        assert "email" not in q.split("authors")[0].split("author")[1].split("}")[0]  # needs a token scope gh lacks
+        return {"repository": {"pullRequest": {"author": meta, "commits": {"totalCount": 3, "nodes": [
+            {"commit": {"authors": {"nodes": [{"name": "M Dev", "email": "m@fb.com", "user": meta}, {"name": "X", "email": "x@intel.com", "user": None}]}}},
+            {"commit": {"authors": {"nodes": [{"name": "M Dev", "email": "123+mdev@users.noreply.github.com", "user": meta}]}}},
+            {"commit": {"authors": {"nodes": [{"name": "Other", "email": "o@nvidia.com", "user": None}]}}}]}}}}
+
+    rest_calls: list = []
+    h.ctx.extra["gh_graphql"] = graphql
+    h.ctx.extra["gh_rest"] = lambda m, p, b=None: rest_calls.append(p) or {"email": "public@meta.com", "blog": "m.dev", "hireable": True}
+    r = (await h.api.get("/api/v1/github/pr/pytorch/pytorch/5/contributors")).json()
+    by = {(c["login"] or c["name"]): c for c in r["contributors"]}
+    assert list(by) == ["mdev", "Other", "X"] and r["commits_total"] == 3
+    assert by["mdev"]["roles"] == ["author", "commit author"] and by["mdev"]["commits"] == 2
+    assert by["mdev"]["commit_emails"] == ["m@fb.com"] and by["mdev"]["affiliation"] == ["Meta"]  # noreply hidden
+    assert by["X"]["roles"] == ["co-author"] and by["X"]["affiliation"] == ["Intel"] and by["Other"]["affiliation"] == ["NVIDIA"]
+    assert rest_calls == [] and by["mdev"]["public_email"] is None
+    r = (await h.api.get("/api/v1/github/pr/pytorch/pytorch/5/contributors?details=true")).json()
+    mdev = r["contributors"][0]
+    assert mdev["public_email"] == "public@meta.com" and mdev["website"] == "m.dev" and rest_calls == ["users/mdev"] and len(calls) == 1  # cached
+
+
+async def test_agent_review_suggestions_apply_discard_and_publish(running_app, workspace, fake_env):
+    github_hub.reset_cache()
+    calls: list = []
+    gh: dict = {}
+    h = await running_app()
+    as_github(h, "EikanWang")
+    h.ctx.extra["gh_owner"] = lambda: "EikanWang"
+    h.ctx.extra["gh_graphql"] = fake_pr_detail(calls, gh)
+    h.ctx.extra["gh_pr_files"] = lambda o, r, n: [
+        {"filename": "aten/gemm.cpp", "status": "modified", "additions": 3, "deletions": 1, "patch": "@@ -1,2 +1,4 @@\n-old\n+fast\n+tiled\n+done"}]
+    api = h.api
+    assert (await api.get("/api/v1/github/pr/pytorch/pytorch/7")).status_code == 200
+    ws = (await api.get("/api/v1/workspaces")).json()["workspaces"][0]["id"]
+    await api.put("/api/v1/github/repo-wiki", json={"repo": "pytorch/pytorch", "workspace_id": ws})
+    d = (await api.get("/api/v1/documents/open?path=.waw-github/pytorch/pytorch/7.md")).json()
+    r = await api.post(f"/api/v1/documents/{d['document_id']}/threads", json={"whole_document": True, "version_sha256": d["sha256"],
+                       "question": "Review this pull request.", "pr_review": True})
+    assert r.status_code == 201, r.text
+    thread_id = r.json()["thread_id"]
+    await api.wait_job(r.json()["job_id"])
+    from backend.app.models import Job, Message
+
+    with h.ctx.db.read() as s:
+        prompt = s.query(Job).order_by(Job.created_at.desc()).first().prompt
+    assert "fenced block tagged waw-review" in prompt and "          1 |+fast" in prompt and "    1       |-old" in prompt
+    base = "/api/v1/github/pr/pytorch/pytorch/7"
+    c = (await api.get(f"{base}/comments")).json()
+    assert c["agent_reviews"][0]["state"] == "done" and c["agent_reviews"][0]["added"] == 2 and "not/in/pr.cpp" in c["agent_reviews"][0]["problem"]
+    ds = {x["subject"]: x for x in c["drafts"]}
+    line, filec = ds["line"], ds["file"]
+    assert line["origin"] == "agent" and line["decision"] == "proposed" and line["thread_id"] == thread_id
+    assert (line["path"], line["side"], line["line"], line["line_text"]) == ("aten/gemm.cpp", "RIGHT", 1, "+fast")
+    assert filec["body"] == "Line 9999: Agent: consider a test."
+    # imported once; the discussion shows a note instead of the JSON
+    assert len((await api.get(f"{base}/comments")).json()["drafts"]) == 2
+    with h.ctx.db.read() as s:
+        msg = s.query(Message).filter_by(thread_id=thread_id, role="agent").one().content
+    assert "waw-review" not in msg and "2 suggested comment(s) were added to the diff" in msg
+    # nothing undecided is published: apply one, discard the other
+    assert (await api.patch(f"{base}/drafts/{line['id']}", json={"decision": "maybe"})).status_code == 400
+    assert (await api.patch(f"{base}/drafts/{line['id']}", json={"decision": "accepted"})).json()["decision"] == "accepted"
+    assert (await api.patch(f"{base}/drafts/{filec['id']}", json={"decision": "discarded"})).json()["decision"] == "discarded"
+    r = (await api.post(f"{base}/review", json={"event": "COMMENT"})).json()
+    assert r["published"] == 1 and r["undecided"] == 0
+    threads = [v for n, v in gh["mutations"] if n == "AddThread"]
+    assert len(threads) == 1 and threads[0]["body"] == "Agent: is this guard needed?" and threads[0]["line"] == 1
+    assert (await api.get(f"{base}/comments")).json()["drafts"] == []
+
+
+def test_review_block_parsing_and_diff_lines():
+    items, problem = github_hub.parse_review_block("x\n```waw-review\n[{\"path\": \"a\", \"line\": 2, \"body\": \"b\"}]\n```")
+    assert problem is None and items[0]["path"] == "a"
+    assert github_hub.parse_review_block("no block")[1] and github_hub.parse_review_block("```waw-review\nnot json\n```")[1]
+    m = github_hub.diff_line_map("@@ -3,3 +3,3 @@\n ctx\n-gone\n+new\n tail")
+    assert m == {("RIGHT", 3): " ctx", ("LEFT", 3): " ctx", ("LEFT", 4): "-gone", ("RIGHT", 4): "+new", ("RIGHT", 5): " tail", ("LEFT", 5): " tail"}
+    drafts, bad = github_hub.agent_drafts([{"path": "f", "side": "RIGHT", "line": 5, "start_line": 3, "body": "range"},
+                                           {"path": "f", "side": "LEFT", "line": 4, "start_line": 9, "body": "bad start"}],
+                                          [{"path": "f", "unified": "@@ -3,3 +3,3 @@\n ctx\n-gone\n+new\n tail"}])
+    assert drafts[0]["start_line"] == 3 and drafts[0]["line_text"] == " ctx\n+new\n tail" and drafts[1]["start_line"] is None and not bad

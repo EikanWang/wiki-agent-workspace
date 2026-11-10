@@ -85,6 +85,19 @@ class GithubPrDraft(Base):
     line_text: Mapped[str] = mapped_column(Text, default="")  # the commented lines, for display
     body: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    origin: Mapped[str] = mapped_column(String(8), default="user", server_default="user")  # user | agent (from an agent review)
+    # accepted: published with the review · proposed: an agent suggestion awaiting your decision · discarded: not published
+    decision: Mapped[str] = mapped_column(String(10), default="accepted", server_default="accepted")
+    thread_id: Mapped[str | None] = mapped_column(String(36), nullable=True)  # the agent review's discussion
+
+
+class KvSetting(Base):
+    """Small server-side settings stored as JSON: review hub preferences, extra agent context folders."""
+
+    __tablename__ = "kv_settings"
+    key: Mapped[str] = mapped_column(Text, primary_key=True)
+    value: Mapped[str] = mapped_column(Text, nullable=False, default="null")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 
 
 class Document(Base):

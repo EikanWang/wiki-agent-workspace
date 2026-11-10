@@ -86,6 +86,9 @@ deleted. Kept when GitHub refuses the review.
 | `start_side`, `start_line` | nullable | First line of a multi-line comment. |
 | `line_text` | TEXT | The commented diff lines, for display. |
 | `body` | TEXT | Comment (Markdown). |
+| `origin` | `user` \| `agent` | `agent`: suggested by an agent review (*Agent review* in the PR tab). |
+| `decision` | `accepted` \| `proposed` \| `discarded` | Only `accepted` comments are published by *Finish review*. Agent suggestions start `proposed` until you choose *Apply* or *Discard*; discarded ones are deleted when the review is published. |
+| `thread_id` | UUID, nullable | The agent review's discussion (`threads.id`), where the suggestion can be discussed. |
 | `created_at` | DATETIME | Written. |
 
 ## `named_workspaces` — named sets of folders (VS Code-style workspaces)
@@ -103,6 +106,19 @@ cannot be deleted. Folder data belongs to `workspaces`, so a folder in two named
 | `is_default` | BOOLEAN | The Default workspace. |
 | `current` | BOOLEAN | The workspace the window shows now. |
 | `created_at`, `last_opened_at` | DATETIME | Lifecycle. |
+
+## `kv_settings` — small server-side settings
+
+JSON values by key. `github_hub_prefs`: Reviews panel preferences (hidden and watched repositories, priority
+requesters, whether PyTorch Meta maintainers count as priority). `context:repo:<owner>/<name>` and
+`context:ws:<folder id>`: extra reference folders (JSON array of absolute server paths) named in the agent's prompt
+for that repository's PR tabs or that wiki folder's documents.
+
+| Column | Type | Meaning |
+| --- | --- | --- |
+| `key` | TEXT, PK | Setting name (see above). |
+| `value` | TEXT (JSON) | Setting value. |
+| `updated_at` | DATETIME | Last change. |
 
 ## `documents` — identity of a Markdown file
 

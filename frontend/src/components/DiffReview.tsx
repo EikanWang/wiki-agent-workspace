@@ -61,6 +61,16 @@ export interface SplitRow {
   hunk?: number; // index into lines for a hunk header row
 }
 
+/** Width of the line-number columns, as on GitHub: at least 50px, wider for long files (numbers never wrap). */
+export function numColStyle(lines: Line[]): React.CSSProperties {
+  let max = 0;
+  for (const l of lines) max = Math.max(max, l.oldNo ?? 0, l.newNo ?? 0);
+  return { ["--no-w" as string]: `max(50px, calc(${String(max).length}ch + 20px))` } as React.CSSProperties;
+}
+
+export const UnifiedCols = () => <colgroup><col className="no-col" /><col className="no-col" /><col /></colgroup>;
+export const SplitCols = () => <colgroup><col className="no-col" /><col /><col className="no-col" /><col /></colgroup>;
+
 export function buildSplitRows(lines: Line[]): SplitRow[] {
   const rows: SplitRow[] = [];
   let i = 0;
@@ -553,7 +563,8 @@ function FileDiff({ file, lines, comments, pending, lastReview, collapsed, layou
         </label>
       </header>
       {!collapsed && layout === "unified" && (
-        <table className="diff-table" data-testid="diff-table-unified">
+        <table className="diff-table" data-testid="diff-table-unified" style={numColStyle(lines)}>
+          <UnifiedCols />
           <tbody>
             {lines.map((ln, i) => {
               if (ln.kind === "file") return null;
@@ -573,7 +584,7 @@ function FileDiff({ file, lines, comments, pending, lastReview, collapsed, layou
                     <td className="no">{ln.oldNo ?? ""}</td>
                     <td className="no">{ln.newNo ?? ""}</td>
                     <td className="code">
-                      <span className="marker">{ln.kind === "add" ? "+" : ln.kind === "del" ? "−" : " "}</span>
+                      <span className="marker">{ln.kind === "add" ? "+" : ln.kind === "del" ? "-" : " "}</span>
                       {ln.text || " "}
                     </td>
                   </tr>
@@ -590,13 +601,15 @@ function FileDiff({ file, lines, comments, pending, lastReview, collapsed, layou
         </table>
       )}
       {!collapsed && layout === "split" && (
-        <table className="diff-table split" data-testid="diff-table-split">
+        <table className="diff-table split" data-testid="diff-table-split" style={numColStyle(lines)}>
+          <SplitCols />
           <tbody>
             {splitRows.map((row, ri) => {
               if (row.hunk !== undefined) {
                 return (
                   <tr key={ri} className="diff-line hunk">
-                    <td className="code" colSpan={4}>{lines[row.hunk].raw}</td>
+                    <td className="no" />
+                    <td className="code" colSpan={3}>{lines[row.hunk].raw}</td>
                   </tr>
                 );
               }
@@ -608,11 +621,11 @@ function FileDiff({ file, lines, comments, pending, lastReview, collapsed, layou
               return (
                 <Fragment key={ri}>
                   <tr className="diff-line split-row" data-testid="diff-row">
-                    <td className={`no ${L && inRange(row.left!) ? "selected" : ""}`}>{L?.oldNo ?? ""}</td>
+                    <td className={`no ${L ? L.kind : "empty"} ${L && inRange(row.left!) ? "selected" : ""}`}>{L?.oldNo ?? ""}</td>
                     <td className={`code left ${L ? L.kind : "empty"} ${L && inRange(row.left!) ? "selected" : ""}`} {...(L ? cellProps(row.left!) : {})} data-selected={L && inRange(row.left!) ? "1" : "0"}>
-                      {L ? <><span className="marker">{L.kind === "del" ? "−" : " "}</span>{L.text || " "}</> : ""}
+                      {L ? <><span className="marker">{L.kind === "del" ? "-" : " "}</span>{L.text || " "}</> : ""}
                     </td>
-                    <td className={`no ${R && inRange(row.right!) ? "selected" : ""}`}>{R?.newNo ?? ""}</td>
+                    <td className={`no ${R ? R.kind : "empty"} ${R && inRange(row.right!) ? "selected" : ""}`}>{R?.newNo ?? ""}</td>
                     <td className={`code right ${R ? R.kind : "empty"} ${R && inRange(row.right!) ? "selected" : ""}`} {...(R ? cellProps(row.right!) : {})} data-selected={R && inRange(row.right!) ? "1" : "0"}>
                       {R ? <><span className="marker">{R.kind === "add" ? "+" : " "}</span>{R.text || " "}</> : ""}
                     </td>

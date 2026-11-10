@@ -30,6 +30,63 @@ md.renderer.rules.heading_open = (tokens, idx, options, env, self) => {
 // Relative links stay inside the workspace; absolute http(s)/mailto links open externally.
 const SAFE_PROTOCOLS = /^(https?:|mailto:|#|\/|\.{0,2}\/|[^:]*$)/i;
 
+// GitHub text (PR descriptions, reviews, comments): GitHub renders raw HTML (<details>, <img>, <!-- … -->) and
+// links bare URLs. Allowed here and sanitized like everything else; wiki pages keep the stricter `md` above.
+const ghMd: MarkdownIt = new MarkdownIt("default", { html: true, linkify: true, typographer: false, breaks: true });
+
+/** Markdown from GitHub, rendered the way GitHub shows it, then sanitized. */
+export function renderGithubMarkdown(src: string, repo?: string): string {
+  const html = sanitizeHtml(ghMd.render(src || ""), "");
+  return linkGithubRefs(html, repo);
+}
+
+const PR_URL = /^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:pull|issues)\/(\d+)(?:\/(?:files|commits)?)?\/?(?:[?#].*)?$/;
+const REF = /(^|[^\w/#&.-])((?:([\w.-]+)\/([\w.-]+))?#(\d+))(?![\w-])/g;
+
+/**
+ * As on GitHub: `#123` and `owner/repo#123` become links, and links to pull requests are marked (`data-pr`) so the
+ * app can open them as PR tabs. `#N` may be an issue: GitHub redirects /issues/N to the PR when it is one.
+ */
+export function linkGithubRefs(html: string, repo?: string): string {
+  const tpl = document.createElement("template");
+  tpl.innerHTML = html;
+  tpl.content.querySelectorAll("a[href]").forEach((a) => {
+    const m = (a.getAttribute("href") || "").match(PR_URL);
+    if (m) a.setAttribute("data-pr", `${m[1]}/${m[2]}/${m[3]}`);
+  });
+  const walker = document.createTreeWalker(tpl.content, NodeFilter.SHOW_TEXT);
+  const texts: Text[] = [];
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    const t = n as Text;
+    if (!t.parentElement?.closest("a, code, pre") && /#\d/.test(t.data)) texts.push(t);
+  }
+  for (const t of texts) {
+    const frag = document.createDocumentFragment();
+    let last = 0;
+    let hit = false;
+    for (const m of t.data.matchAll(REF)) {
+      const target = m[3] ? `${m[3]}/${m[4]}` : repo;
+      if (!target) continue;
+      const start = (m.index ?? 0) + m[1].length;
+      frag.append(t.data.slice(last, start));
+      const a = document.createElement("a");
+      a.href = `https://github.com/${target}/issues/${m[5]}`;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      a.textContent = m[2];
+      a.setAttribute("data-pr", `${target}/${m[5]}`);
+      a.setAttribute("data-external", "1");
+      frag.append(a);
+      last = start + m[2].length;
+      hit = true;
+    }
+    if (!hit) continue;
+    frag.append(t.data.slice(last));
+    t.replaceWith(frag);
+  }
+  return tpl.innerHTML;
+}
+
 export function renderMarkdown(src: string, docPath: string): string {
   const html = md.render(src, {});
   const clean = DOMPurify.sanitize(html, {

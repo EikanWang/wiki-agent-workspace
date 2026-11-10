@@ -155,6 +155,11 @@ def add_fake_review_queue(app) -> None:
              pr(103, "pytorch/pytorch", "Add XPU event timing", ci="FAILURE", adds=500),
              pr(201, "intel/torch-xpu-ops", "Speed up GEMM tiling"),
              None]  # a PR in an organization that requires SAML SSO
+    meta = pr(104, "pytorch/pytorch", "[inductor] XPU codegen fix", updated="2026-11-07T00:00:00Z")
+    meta["timelineItems"] = {"nodes": [{"actor": {"login": "metadev", "company": "Meta", "email": ""},
+                                        "requestedReviewer": {"__typename": "User", "login": "e2e-user"}}]}  # a priority request
+    nodes.insert(3, meta)
+    watched = [pr(301, "pytorch/ao", "int4 weight-only quant on XPU")]  # open PRs of a watched repository
 
     posted: list = []  # what "GitHub" received (inspected by tests via /fake-github/posted)
     state = {
@@ -168,8 +173,15 @@ def add_fake_review_queue(app) -> None:
                      "comments": {"totalCount": 1, "nodes": [{"databaseId": 502, "author": {"login": "carol"}, "body": "Move these notes to the wiki?",
                                                                "createdAt": "2026-11-08T01:00:00Z", "url": None, "diffHunk": None}]}}],
         "reviews": [{"databaseId": 701, "author": {"login": "bob"}, "state": "CHANGES_REQUESTED", "body": "Please add a test.",
-                     "submittedAt": "2026-11-08T02:00:00Z", "url": None, "comments": {"totalCount": 1}}],
-        "comments": [{"databaseId": 801, "author": {"login": "pytorch-bot"}, "body": "CI started", "createdAt": "2026-11-07T00:00:00Z", "url": None}],
+                     "submittedAt": "2026-11-08T02:00:00Z", "url": None, "comments": {"totalCount": 1, "nodes": [
+                         {"databaseId": 501, "path": "c10/xpu/stub.cpp", "line": 11, "originalLine": 11, "body": "Is `ok` ever false?",
+                          "diffHunk": "@@ -10,3 +10,4 @@\n+  if (ok)", "outdated": False, "url": None, "replyTo": None}]}},
+                    # a reply to bob's line comment: GitHub makes it a review of its own; shown inside bob's thread
+                    {"databaseId": 702, "author": {"login": "alice"}, "state": "COMMENTED", "body": "", "submittedAt": "2026-11-08T03:00:00Z", "url": None,
+                     "comments": {"totalCount": 1, "nodes": [{"databaseId": 503, "author": {"login": "alice"}, "createdAt": "2026-11-08T03:00:00Z",
+                                                              "path": "c10/xpu/stub.cpp", "line": 11, "originalLine": 11, "body": "Only without a driver.",
+                                                              "diffHunk": "@@ -10,3 +10,4 @@\n+  if (ok)", "outdated": False, "url": None, "replyTo": {"databaseId": 501}}]}}],
+        "comments": [{"databaseId": 801, "author": {"login": "pytorch-bot"}, "body": "<!-- drci -->\n<details><summary>CI started</summary>2 jobs</details>", "createdAt": "2026-11-07T00:00:00Z", "url": None}],
     }
     keys = {"MarkViewed": "markFileAsViewed", "MarkUnviewed": "unmarkFileAsViewed", "Resolve": "resolveReviewThread", "Unresolve": "unresolveReviewThread",
             "AddReview": "addPullRequestReview", "AddThread": "addPullRequestReviewThread", "Submit": "submitPullRequestReview", "DeleteReview": "deletePullRequestReview"}
@@ -200,22 +212,34 @@ def add_fake_review_queue(app) -> None:
             return {"repository": {"pullRequest": {"reviews": {"totalCount": len(state["reviews"]), "nodes": state["reviews"]},
                                                     "comments": {"totalCount": len(state["comments"]), "nodes": state["comments"]},
                                                     "pending": {"nodes": []}}}}
+        if "query PrPeople" in query:
+            alice = {"login": "alice", "name": "Alice A.", "company": "@intel", "location": "Shanghai", "bio": None, "websiteUrl": None,
+                     "twitterUsername": None, "url": "https://github.com/alice", "avatarUrl": None, "createdAt": "2015-01-01T00:00:00Z",
+                     "organizations": {"nodes": [{"login": "intel", "name": "Intel"}]}, "followers": {"totalCount": 7}}
+            return {"repository": {"pullRequest": {"author": alice, "commits": {"totalCount": 2, "nodes": [
+                {"commit": {"authors": {"nodes": [{"name": "Alice A.", "email": "alice@intel.com", "user": alice},
+                                                  {"name": "Dan Helper", "email": "dan@example.org", "user": None}]}}},
+                {"commit": {"authors": {"nodes": [{"name": "Alice A.", "email": "alice@intel.com", "user": alice}]}}}]}}}}
         if "query PrDetail" in query:
             n = int(variables["number"])
             src = next(x for x in nodes if x and x["number"] == n)
             return {"repository": {"nameWithOwner": src["repository"]["nameWithOwner"], "isPrivate": False, "pullRequest": {
-                **src, "id": f"PR_e2e{n}", "body": "This PR **fixes** the lazy stub.\n\n- adds a check", "state": "OPEN", "mergeable": "MERGEABLE",
+                **src, "id": f"PR_e2e{n}", "body": "This PR **fixes** the lazy stub.\n\n- adds a check\n\nFollows #103 (see `#999` in code).", "state": "OPEN", "mergeable": "MERGEABLE",
                 "baseRefName": "main", "headRefName": f"fix-{n}",
                 "latestReviews": {"nodes": [{"author": {"login": "bob"}, "state": "CHANGES_REQUESTED", "submittedAt": "2026-11-08T00:00:00Z", "url": "u"}]},
                 "commits": {"nodes": [{"commit": {"oid": "abc", "statusCheckRollup": {"state": "FAILURE", "contexts": {"nodes": [
                     {"__typename": "CheckRun", "name": "xpu-test", "conclusion": "FAILURE", "status": "COMPLETED", "detailsUrl": None},
                     {"__typename": "CheckRun", "name": "lint", "conclusion": "SUCCESS", "status": "COMPLETED", "detailsUrl": None}]}}}}]}}}}
+        if "repo:" in variables.get("q", ""):
+            return {"search": {"issueCount": 1, "pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": watched if "repo:pytorch/ao" in variables["q"] else []}}
         return {"rateLimit": {"remaining": 4999}, "search": {"issueCount": len(nodes), "pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": nodes},
                 "_errors": [{"type": "FORBIDDEN", "message": "Resource protected by organization SAML enforcement."}]}
 
     ctx.extra["gh_graphql"] = graphql
 
     def rest(method, path, body=None):
+        if method == "GET" and path.startswith("users/"):  # a contributor's public profile (not a change: not recorded)
+            return {"email": "alice@example.com", "blog": "alice.dev", "hireable": None, "twitter_username": None, "public_repos": 3, "type": "User"}
         posted.append({"method": method, "path": path, "body": body})
         if path.endswith("/replies"):
             cid = int(path.split("/")[-2])

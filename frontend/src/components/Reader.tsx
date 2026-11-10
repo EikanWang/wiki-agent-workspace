@@ -787,8 +787,10 @@ function resolveLocal(model: TextModel, t: Thread, sha: string) {
   return resolveAnchor(model, t.anchor, sha);
 }
 
-export function SelectionPopover({ anchor, style, sessions, defaultSessionId, defaultProvider, className, onSend, onMark, onReanchor, onClose }: {
+export function SelectionPopover({ anchor, style, sessions, defaultSessionId, defaultProvider, className, onSend, onMark, onReanchor, onClose, initialQuestion }: {
   anchor: SelectionAnchor;
+  /** prefilled question (editable), e.g. for an agent review */
+  initialQuestion?: string;
   style: React.CSSProperties;
   sessions: AgentSession[];
   defaultSessionId: string | null;
@@ -799,7 +801,7 @@ export function SelectionPopover({ anchor, style, sessions, defaultSessionId, de
   onReanchor: (() => void) | null;
   onClose: () => void;
 }) {
-  const [question, setQuestion] = useState("");
+  const [question, setQuestion] = useState(initialQuestion ?? "");
   const [session, setSession] = useState<string>(defaultSessionId ?? "__default__");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);

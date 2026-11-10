@@ -3,6 +3,12 @@ import { COMPOSER_HINT, composerKeyDown } from "./keys";
 import { AgentSession, ApiError, JobEvent, Message, Thread, get, subscribeJob } from "../api";
 import DiffView from "./DiffView";
 import MarkdownView from "./MarkdownView";
+
+/** An agent review's machine-readable comment list (```waw-review JSON) is for the app: its comments go to the
+ * diff as suggestions. The server replaces it by a note once imported; until then it is hidden here too. */
+export function hideReviewBlock(text: string): string {
+  return text.replace(/```waw-review[ \t]*\n[\s\S]*?(\n```|$)/g, "*Suggested comments → added to the diff (Files) as suggestions to apply or discard.*");
+}
 import ModelPicker from "./ModelPicker";
 import { PlusIcon } from "./Icons";
 
@@ -388,7 +394,7 @@ function AnchorBadge({ state }: { state: string }) {
 function MessageView({ m, session, live, onRetry, onCancel, onPermission, sessions }: { m: Message; session: AgentSession | undefined; live: LiveJob | null; onRetry: (sid: string | null) => Promise<void>; onCancel: (jobId: string) => Promise<void>; onPermission: (jobId: string, requestId: string, decision: string) => Promise<void>; sessions: AgentSession[] }) {
   const [retrySession, setRetrySession] = useState<string>("__same__");
   const status = live ? live.status : m.status;
-  const content = stripAnsi(live && live.text ? live.text : m.content);
+  const content = hideReviewBlock(stripAnsi(live && live.text ? live.text : m.content));
   const isAgent = m.role === "agent";
   const failed = status === "failed" || status === "cancelled" || status === "interrupted";
   return (

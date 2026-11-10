@@ -17,6 +17,7 @@ import logging
 import shutil
 import subprocess
 import time
+from pathlib import Path
 from typing import Any, Callable
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -24,6 +25,7 @@ from pydantic import BaseModel
 
 from .deps import AppContext, require_auth, require_auth_mutating
 from .errors import ApiError
+from .kv import kv_get, kv_put
 
 log = logging.getLogger("waw.github")
 
@@ -42,8 +44,10 @@ query($q: String!, $after: String, $n: Int!) {
     pageInfo { hasNextPage endCursor }
     nodes {
       ... on PullRequest {
-        number title url isDraft createdAt updatedAt additions deletions changedFiles reviewDecision
+        number title url state isDraft createdAt updatedAt additions deletions changedFiles reviewDecision
         author { login }
+        timelineItems(itemTypes: [REVIEW_REQUESTED_EVENT], last: 8) { nodes { ... on ReviewRequestedEvent {
+          actor { login ... on User { company } } requestedReviewer { __typename ... on User { login } ... on Team { slug } } } } }
         repository { nameWithOwner isPrivate }
         labels(first: 6) { nodes { name color } }
         reviewRequests(first: 20) { nodes { requestedReviewer { __typename ... on User { login } ... on Team { slug name } } } }
@@ -56,6 +60,67 @@ query($q: String!, $after: String, $n: Int!) {
 
 
 # ---------------------------------------------------------------------- gh access (replaceable in tests)
+
+class RateGuard:
+    """Stay below GitHub's API limits (after ai_tools/github_item.py secure_github_actions): the remaining quota is
+    read from `gh api rate_limit` (free) every minute; at <= LOW_WATER requests left, calls wait for the reset when it
+    is near, otherwise fail with a clear message instead of being blocked by GitHub. Mutations are spaced >= 1 s
+    apart (GitHub's guidance against secondary rate limits)."""
+
+    LOW_WATER = 100
+    REFRESH_SECONDS = 60
+    MAX_WAIT = 90
+    MUTATION_GAP = 1.0
+
+    def __init__(self) -> None:
+        import threading
+
+        self.lock = threading.Lock()
+        self.limits: dict[str, dict[str, int]] = {}
+        self.checked = 0.0
+        self.last_mutation = 0.0
+
+    def _refresh(self) -> None:
+        gh = shutil.which("gh")
+        if not gh:
+            return
+        try:
+            p = subprocess.run([gh, "api", "rate_limit"], capture_output=True, text=True, timeout=20, check=False)
+            res = json.loads(p.stdout).get("resources", {}) if p.returncode == 0 else {}
+        except (OSError, ValueError, subprocess.SubprocessError):
+            res = {}
+        self.limits = {k: {"remaining": int(v.get("remaining", 0)), "reset": int(v.get("reset", 0)), "limit": int(v.get("limit", 0))}
+                       for k, v in res.items() if isinstance(v, dict)}
+        self.checked = time.time()
+
+    def before(self, resource: str, mutation: bool = False) -> None:
+        with self.lock:
+            if time.time() - self.checked > self.REFRESH_SECONDS:
+                self._refresh()
+            lim = self.limits.get(resource)
+            if lim and lim["remaining"] <= self.LOW_WATER:
+                wait = lim["reset"] - time.time() + 2
+                if 0 < wait <= self.MAX_WAIT:
+                    log.warning("GitHub %s quota low (%d left): waiting %.0f s for the reset", resource, lim["remaining"], wait)
+                    time.sleep(wait)
+                    self._refresh()
+                elif wait > self.MAX_WAIT:
+                    at = time.strftime("%H:%M", time.localtime(lim["reset"]))
+                    raise ApiError(429, "GH_RATE_LIMITED", f"GitHub API quota almost used up ({lim['remaining']} of {lim['limit']} left); it resets at {at}")
+            if lim:
+                lim["remaining"] -= 1
+            if mutation:
+                gap = self.MUTATION_GAP - (time.time() - self.last_mutation)
+                if gap > 0:
+                    time.sleep(gap)
+                self.last_mutation = time.time()
+
+    def status(self) -> dict[str, Any]:
+        return {k: v for k, v in self.limits.items() if k in ("core", "graphql", "search")}
+
+
+RATE = RateGuard()
+
 
 def _run_gh(args: list[str], timeout: float = 60, *, partial_json: bool = False) -> str:
     """Run gh. partial_json: GraphQL answers with data *and* errors make gh exit 1; return that JSON anyway."""
@@ -84,6 +149,7 @@ def _run_gh(args: list[str], timeout: float = 60, *, partial_json: bool = False)
 
 
 def gh_graphql(query: str, variables: dict[str, Any]) -> dict[str, Any]:
+    RATE.before("graphql", mutation=query.lstrip().startswith("mutation"))
     args = ["api", "graphql", "-f", f"query={query}"]
     for k, v in variables.items():
         if v is None:
@@ -168,7 +234,26 @@ def normalize(pr: dict[str, Any], owner: str) -> dict[str, Any]:
         "review_decision": pr.get("reviewDecision"), "ci": _ci(pr),
         "labels": [{"name": lb["name"], "color": lb.get("color")} for lb in (pr.get("labels") or {}).get("nodes") or []],
         "requested": "you" if requested_user else ("team" if teams else "you"), "teams": teams,
+        "state": pr.get("state") or "OPEN", **_requester(pr, owner),
     }
+
+
+# Who counts as a "PyTorch Meta maintainer" for prioritising review requests (after ai_tools HARDWARE_VENDORS META)
+META_COMPANY = ("meta", "facebook")
+META_EMAIL = ("@meta.com", "@fb.com")
+
+
+def _requester(pr: dict[str, Any], owner: str) -> dict[str, Any]:
+    """Who asked the owner for this review (latest request), and whether it is a priority requester."""
+    by, company, meta = None, None, False
+    for n in (pr.get("timelineItems") or {}).get("nodes") or []:
+        rv = (n or {}).get("requestedReviewer") or {}
+        if rv.get("__typename") == "User" and (rv.get("login") or "").lower() == owner.lower():
+            a = n.get("actor") or {}
+            by, company = a.get("login") or by, a.get("company") or None
+            email = (a.get("email") or "").lower()
+            meta = any(m in (company or "").lower() for m in META_COMPANY) or email.endswith(META_EMAIL)
+    return {"requested_by": by, "requested_by_company": company, "requested_by_meta": meta}
 
 
 def fetch_queue(graphql: Callable[[str, dict], dict], owner: str) -> dict[str, Any]:
@@ -190,7 +275,8 @@ def fetch_queue(graphql: Callable[[str, dict], dict], owner: str) -> dict[str, A
         s = d["search"]
         total = s["issueCount"]
         rate = d.get("rateLimit")
-        items += [normalize(n, owner) for n in s["nodes"] if n and n.get("number")]
+        items += [x for x in (normalize(n, owner) for n in s["nodes"] if n and n.get("number"))
+                  if x["state"] == "OPEN"]  # the search index lags: drop PRs closed / merged meanwhile
         hidden += sum(1 for n in s["nodes"] if not n or not n.get("number"))
         for e in d.get("_errors") or []:
             if e not in problems:
@@ -214,8 +300,39 @@ _tasks: dict[str, asyncio.Task] = {}
 _errors: dict[str, dict[str, Any]] = {}
 
 
+WATCH_PRS = 40  # newest open PRs fetched per watched repository
+
+
+def fetch_watched(graphql: Callable[[str, dict], dict], owner: str, repos: list[str], skip: set[str]) -> tuple[list[dict[str, Any]], list[str]]:
+    """Open PRs of the repositories the owner added to Reviews (beyond those requesting their review)."""
+    items: list[dict[str, Any]] = []
+    problems: list[str] = []
+    for repo in repos:
+        try:
+            d = graphql(REVIEW_QUERY, {"q": f"is:pr is:open archived:false repo:{repo} sort:updated-desc", "after": None, "n": WATCH_PRS})
+        except ApiError as exc:
+            problems.append(f"{repo}: {exc.message}")
+            continue
+        for n in d["search"]["nodes"]:
+            if n and n.get("number"):
+                x = normalize(n, owner)
+                key = f"{x['repo']}#{x['number']}".lower()
+                if x["state"] == "OPEN" and key not in skip:
+                    skip.add(key)
+                    x["requested"] = None  # nobody asked the owner: shown because the repository is watched
+                    items.append(x)
+    return items, problems
+
+
+_watched: dict[str, list[str]] = {}  # owner -> watched repositories (latest prefs, read by a running refresh)
+
+
 async def _fetch(graphql: Callable[[str, dict], dict], owner: str) -> dict[str, Any]:
     data = await asyncio.to_thread(fetch_queue, graphql, owner)
+    watched = _watched.get(owner) or []
+    if watched:
+        skip = {f"{p['repo']}#{p['number']}".lower() for p in data["items"]}
+        data["watched"], data["watch_problems"] = await asyncio.to_thread(fetch_watched, graphql, owner, watched, skip)
     data["fetched_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     data["owner"] = owner
     _cache[owner] = (time.time(), data)
@@ -224,8 +341,10 @@ async def _fetch(graphql: Callable[[str, dict], dict], owner: str) -> dict[str, 
     return data
 
 
-def _start_refresh(graphql: Callable[[str, dict], dict], owner: str) -> asyncio.Task:
+def _start_refresh(graphql: Callable[[str, dict], dict], owner: str, watched: list[str] | None = None) -> asyncio.Task:
     """One background fetch per owner at a time (a full queue takes ~10 s per 40 PRs)."""
+    if watched is not None:
+        _watched[owner] = list(watched)
     t = _tasks.get(owner)
     if t is None or t.done():
         async def run() -> None:
@@ -246,7 +365,7 @@ async def github_hub(request: Request, ctx: AppContext = Depends(require_auth)):
     """For the UI: is the Reviews area available to this browser? For the owner it also warms the queue."""
     st = await hub_status(ctx, request)
     if st["available"] and st["owner"] not in _cache:
-        _start_refresh(_hooks(ctx)[0], st["owner"])
+        _start_refresh(_hooks(ctx)[0], st["owner"], load_prefs(ctx)["watched_repos"])
     return st
 
 
@@ -256,9 +375,10 @@ async def review_queue(refresh: bool = Query(False), auth: tuple[AppContext, str
     refresh=true) is returned at once with `refreshing: true` while a new fetch runs; poll until it is false."""
     ctx, owner = auth
     graphql, _ = _hooks(ctx)
+    prefs = load_prefs(ctx)
     hit = _cache.get(owner)
     if hit is None:
-        task = _start_refresh(graphql, owner)
+        task = _start_refresh(graphql, owner, prefs["watched_repos"])
         await asyncio.shield(task)  # first load: wait for it
         hit = _cache.get(owner)
         if hit is None:
@@ -268,9 +388,11 @@ async def review_queue(refresh: bool = Query(False), auth: tuple[AppContext, str
     age = time.time() - hit[0]
     running = owner in _tasks and not _tasks[owner].done()
     if (refresh and age >= 10) or age >= CACHE_SECONDS:  # < 10 s: rapid ↻ clicks do not burn the search quota
-        _start_refresh(graphql, owner)
+        _start_refresh(graphql, owner, prefs["watched_repos"])
         running = True
-    return {**hit[1], "cached": True, "age_seconds": round(age), "refreshing": running, "refresh_error": _errors.get(owner)}
+    data = apply_prefs(hit[1], prefs)
+    return {**data, "cached": True, "age_seconds": round(age), "refreshing": running, "refresh_error": _errors.get(owner),
+            "prefs": prefs, "rate": RATE.status()}
 
 
 def reset_cache() -> None:
@@ -278,6 +400,8 @@ def reset_cache() -> None:
     _errors.clear()
     _tasks.clear()
     _pr_cache.clear()
+    _people_cache.clear()
+    _user_cache.clear()
 
 
 # ---------------------------------------------------------------------- a pull request (tab)
@@ -327,7 +451,8 @@ query PrThreads($owner: String!, $name: String!, $number: Int!, $after: String) 
 CONVERSATION_QUERY = """
 query PrConversation($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) { pullRequest(number: $number) {
-    reviews(last: 100) { totalCount nodes { databaseId author { login } state body submittedAt url comments { totalCount } } }
+    reviews(last: 100) { totalCount nodes { databaseId author { login } state body submittedAt url
+      comments(first: 30) { totalCount nodes { databaseId author { login } createdAt path line originalLine body diffHunk outdated url replyTo { databaseId } } } } }
     comments(last: 100) { totalCount nodes { databaseId author { login } body createdAt url } }
     pending: reviews(states: PENDING, first: 5) { nodes { id comments { totalCount } } }
   } }
@@ -408,9 +533,17 @@ def fetch_conversation(graphql: Callable[[str, dict], dict], owner: str, repo: s
     for r in (p.get("reviews") or {}).get("nodes") or []:
         if not r or r.get("state") == "PENDING":
             continue
+        rc = (r.get("comments") or {}).get("nodes") or []
+        r_author = (r.get("author") or {}).get("login")
         items.append({"kind": "review", "id": r.get("databaseId"), "author": (r.get("author") or {}).get("login"), "state": r.get("state"),
                       "body": r.get("body") or "", "created_at": r.get("submittedAt"), "url": r.get("url"),
-                      "line_comments": (r.get("comments") or {}).get("totalCount", 0)})
+                      "line_comments": (r.get("comments") or {}).get("totalCount", 0),
+                      # shown inline under the review, with the code they are about — as on GitHub's Conversation tab
+                      "comments": [{"id": c.get("databaseId"), "path": c.get("path"), "line": c.get("line") or c.get("originalLine"),
+                                    "outdated": bool(c.get("outdated")), "body": c.get("body") or "", "url": c.get("url"),
+                                    "reply": bool(c.get("replyTo")), "reply_to": (c.get("replyTo") or {}).get("databaseId"),
+                                    "author": (c.get("author") or {}).get("login") or r_author, "created_at": c.get("createdAt") or r.get("submittedAt"), "hunk": "\n".join((c.get("diffHunk") or "").splitlines()[-6:])}
+                                   for c in rc if c]})
     items.extend({"kind": "comment", "id": c.get("databaseId"), "author": (c.get("author") or {}).get("login"), "body": c.get("body") or "",
                   "created_at": c.get("createdAt"), "url": c.get("url")} for c in (p.get("comments") or {}).get("nodes") or [] if c)
     items.sort(key=lambda x: x.get("created_at") or "")
@@ -497,7 +630,7 @@ def fetch_pr(owner: str, repo: str, number: int, graphql: Callable[[str, dict], 
     r = d.get("repository") or {}
     p = r.get("pullRequest")
     if not p:
-        raise ApiError(404, "PR_NOT_FOUND", f"{owner}/{repo}#{number} not found (or not visible to the server's gh account)")
+        raise ApiError(404, "PR_NOT_FOUND", f"{owner}/{repo}#{number} is not a pull request visible to the server's gh account (it may be an issue)")
     ci, checks = _checks(p)
     pr = {
         "repo": r["nameWithOwner"], "private": bool(r.get("isPrivate")), "number": p["number"], "title": p["title"], "url": p["url"],
@@ -609,6 +742,7 @@ def gh_rest(method: str, path: str, body: dict[str, Any] | None = None) -> Any:
     gh = shutil.which("gh")
     if not gh:
         raise ApiError(503, "GH_UNAVAILABLE", "the GitHub CLI (gh) is not installed on the server")
+    RATE.before("core", mutation=method != "GET")
     args = [gh, "api", "-X", method, path]
     if method == "GET":
         args.insert(2, "--paginate")
@@ -670,7 +804,8 @@ def _comment_dict(c: dict[str, Any]) -> dict[str, Any]:
 
 def _draft_dict(d: Any) -> dict[str, Any]:
     return {"id": d.id, "path": d.path, "subject": d.subject or "line", "side": d.side, "line": d.line, "start_side": d.start_side, "start_line": d.start_line,
-            "line_text": d.line_text, "body": d.body, "created_at": d.created_at.isoformat() if d.created_at else None}
+            "line_text": d.line_text, "body": d.body, "created_at": d.created_at.isoformat() if d.created_at else None,
+            "origin": d.origin or "user", "decision": d.decision or "accepted", "thread_id": d.thread_id}
 
 
 @router.get("/github/pr/{owner}/{repo}/{number}/comments")
@@ -682,6 +817,7 @@ async def pr_comments(owner: str, repo: str, number: int, auth: tuple[AppContext
     ctx, _ = auth
     _check_names(owner, repo)
     graphql = _hooks(ctx)[0]
+    agent_reviews = await asyncio.to_thread(import_agent_reviews, ctx, owner, repo, number)
     threads, conv = await asyncio.gather(asyncio.to_thread(fetch_threads, graphql, owner, repo, number),
                                          asyncio.to_thread(fetch_conversation, graphql, owner, repo, number))
     with ctx.db.read() as s:
@@ -692,7 +828,7 @@ async def pr_comments(owner: str, repo: str, number: int, auth: tuple[AppContext
     snap.mkdir(parents=True, exist_ok=True)
     (snap / f"{number}.discussion.md").write_text(discussion_markdown(threads, conv), encoding="utf-8")
     return {"threads": threads, "conversation": conv["items"], "older_hidden": conv["older_hidden"], "drafts": dd,
-            "pending_on_github": conv["pending_comments"] if conv["pending_review_id"] else None}
+            "pending_on_github": conv["pending_comments"] if conv["pending_review_id"] else None, "agent_reviews": agent_reviews}
 
 
 def _pr_node(ctx: AppContext, owner: str, repo: str, number: int) -> dict[str, Any]:
@@ -796,7 +932,8 @@ def add_draft(owner: str, repo: str, number: int, body: DraftIn, auth: tuple[App
 
 
 class DraftEditIn(BaseModel):
-    body: str
+    body: str | None = None
+    decision: str | None = None  # accepted (apply) | proposed | discarded — for agent suggestions
 
 
 @router.patch("/github/pr/{owner}/{repo}/{number}/drafts/{draft_id}")
@@ -808,9 +945,14 @@ def edit_draft(owner: str, repo: str, number: int, draft_id: str, body: DraftEdi
         d = s.get(GithubPrDraft, draft_id)
         if d is None or d.repo != f"{owner}/{repo}".lower() or d.number != number:
             raise ApiError(404, "DRAFT_NOT_FOUND", "draft comment not found")
-        if not body.body.strip():
-            raise ApiError(400, "INVALID_COMMENT", "a comment needs text")
-        d.body = body.body.strip()
+        if body.body is not None:
+            if not body.body.strip():
+                raise ApiError(400, "INVALID_COMMENT", "a comment needs text")
+            d.body = body.body.strip()
+        if body.decision is not None:
+            if body.decision not in ("accepted", "proposed", "discarded"):
+                raise ApiError(400, "INVALID_DECISION", "decision must be accepted, proposed or discarded")
+            d.decision = body.decision
         return _draft_dict(d)
 
 
@@ -844,7 +986,10 @@ async def submit_review(owner: str, repo: str, number: int, body: SubmitIn, auth
         raise ApiError(400, "INVALID_EVENT", "event must be COMMENT, APPROVE or REQUEST_CHANGES")
     with ctx.db.read() as s:
         drafts = s.query(GithubPrDraft).filter_by(repo=f"{owner}/{repo}".lower(), number=number).order_by(GithubPrDraft.created_at).all()
-        dd = [_draft_dict(d) for d in drafts]
+        everything = [_draft_dict(d) for d in drafts]
+    dd = [d for d in everything if d["decision"] == "accepted"]  # agent suggestions only once you chose Apply
+    discarded = [d["id"] for d in everything if d["decision"] == "discarded"]
+    undecided = sum(1 for d in everything if d["decision"] == "proposed")
     graphql = _hooks(ctx)[0]
     conv = await asyncio.to_thread(fetch_conversation, graphql, owner, repo, number)
     pending, pending_n = conv["pending_review_id"], conv["pending_comments"]
@@ -884,11 +1029,11 @@ async def submit_review(owner: str, repo: str, number: int, body: SubmitIn, auth
 
     url = await asyncio.to_thread(publish)
     with ctx.db.write() as s:
-        s.query(GithubPrDraft).filter(GithubPrDraft.id.in_([d["id"] for d in dd])).delete(synchronize_session=False)
+        s.query(GithubPrDraft).filter(GithubPrDraft.id.in_([d["id"] for d in dd] + discarded)).delete(synchronize_session=False)
     _pr_cache.pop(f"{owner}/{repo}#{number}".lower(), None)
     _cache.pop(owner_login, None)  # the review queue changes too
     log.info("published review on %s/%s#%d (%s, %d comments, %d from github.com)", owner, repo, number, body.event, len(dd), pending_n)
-    return {"published": len(dd), "from_github": pending_n, "event": body.event, "url": url}
+    return {"published": len(dd), "from_github": pending_n, "event": body.event, "url": url, "undecided": undecided}
 
 
 class ReplyIn(BaseModel):
@@ -904,3 +1049,432 @@ async def reply_comment(owner: str, repo: str, number: int, comment_id: int, bod
         raise ApiError(400, "INVALID_COMMENT", "a reply needs text")
     res = await asyncio.to_thread(_rest(ctx), "POST", f"repos/{owner}/{repo}/pulls/{number}/comments/{comment_id}/replies", {"body": body.body.strip()})
     return _comment_dict(res or {"id": 0})
+
+
+# ---------------------------------------------------------------------- hub preferences (kv_settings)
+
+
+DEFAULT_PREFS: dict[str, Any] = {"hidden_repos": [], "watched_repos": [], "priority_requesters": [], "priority_meta": True}
+
+
+def load_prefs(ctx: AppContext) -> dict[str, Any]:
+    return {**DEFAULT_PREFS, **kv_get(ctx, "github_hub_prefs", {})}
+
+
+def is_priority(p: dict[str, Any], prefs: dict[str, Any]) -> bool:
+    by = (p.get("requested_by") or "").lower()
+    if by and by in {x.lower() for x in prefs.get("priority_requesters") or []}:
+        return True
+    return bool(prefs.get("priority_meta", True) and p.get("requested_by_meta"))
+
+
+def apply_prefs(data: dict[str, Any], prefs: dict[str, Any]) -> dict[str, Any]:
+    """Hide removed repositories and mark priority requests (PyTorch Meta maintainers / chosen people)."""
+    hidden = {r.lower() for r in prefs.get("hidden_repos") or []}
+    items = [{**p, "priority": is_priority(p, prefs)} for p in data.get("items", []) if p["repo"].lower() not in hidden]
+    watching = {r.lower() for r in prefs.get("watched_repos") or []}  # a repository just unwatched disappears at once
+    watched = [{**p, "priority": False, "watched": True} for p in data.get("watched", [])
+               if p["repo"].lower() not in hidden and p["repo"].lower() in watching]
+    return {**data, "items": items, "watched": watched, "hidden_count": len(data.get("items", [])) - len(items)}
+
+
+class PrefsIn(BaseModel):
+    hidden_repos: list[str] | None = None
+    watched_repos: list[str] | None = None
+    priority_requesters: list[str] | None = None
+    priority_meta: bool | None = None
+
+
+@router.put("/github/prefs")
+async def put_prefs(body: PrefsIn, auth: tuple[AppContext, str] = Depends(require_owner_mutating)):
+    """Repositories shown / hidden / watched in Reviews, and who counts as a priority requester."""
+    ctx, owner = auth
+    prefs = load_prefs(ctx)
+    for k in ("hidden_repos", "watched_repos", "priority_requesters"):
+        v = getattr(body, k)
+        if v is not None:
+            clean = []
+            for x in v:
+                x = x.strip()
+                if k != "priority_requesters":
+                    parts = x.split("/")
+                    if len(parts) != 2:
+                        raise ApiError(400, "INVALID_REPO", f"{x!r}: use owner/name")
+                    _check_names(*parts)
+                elif not NAME.match(x):
+                    raise ApiError(400, "INVALID_LOGIN", f"{x!r} is not a GitHub login")
+                if x.lower() not in {c.lower() for c in clean}:
+                    clean.append(x)
+            prefs[k] = clean
+    if body.priority_meta is not None:
+        prefs["priority_meta"] = body.priority_meta
+    kv_put(ctx, "github_hub_prefs", prefs)
+    if body.watched_repos is not None:  # watched PRs are fetched with the queue: refresh it in the background
+        _start_refresh(_hooks(ctx)[0], owner, prefs["watched_repos"])
+    return prefs
+
+
+# ---------------------------------------------------------------------- extra context folders for the agent
+
+@router.get("/agent-context")
+def get_agent_context(scope: str = Query(..., max_length=300), ctx: AppContext = Depends(require_auth)):
+    """Extra folders the agent should read for a repository's PRs (scope repo:owner/name) or a wiki folder (ws:<id>)."""
+    scope = _check_scope(ctx, scope)
+    return {"scope": scope, "dirs": kv_get(ctx, f"context:{scope}", [])}
+
+
+class ContextIn(BaseModel):
+    dirs: list[str]
+
+
+def _check_scope(ctx: AppContext, scope: str) -> str:
+    kind, _, val = scope.strip().partition(":")
+    if kind == "repo" and len(val.split("/")) == 2:
+        _check_names(*val.split("/"))
+        return f"repo:{val.lower()}"
+    if kind == "ws" and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", val):
+        return f"ws:{val}"
+    raise ApiError(400, "INVALID_SCOPE", "scope must be repo:owner/name or ws:<folder id>")
+
+
+@router.put("/agent-context")
+async def put_agent_context(body: ContextIn, request: Request, scope: str = Query(..., max_length=300),
+                            ctx: AppContext = Depends(require_auth_mutating)):
+    scope = _check_scope(ctx, scope)
+    if scope.startswith("repo:") and not (await hub_status(ctx, request))["available"]:
+        raise ApiError(403, "NOT_GITHUB_OWNER", "only the server's owner signed in with GitHub can change this")
+    clean: list[str] = []
+    for d in body.dirs[:30]:
+        p = Path(d.strip()).expanduser()
+        if not p.is_absolute():
+            raise ApiError(400, "INVALID_PATH", f"{d!r}: give an absolute path on the server")
+        if not p.is_dir():
+            raise ApiError(404, "FOLDER_NOT_FOUND", f"{p} is not a directory on the server")
+        if str(p.resolve()) not in clean:
+            clean.append(str(p.resolve()))
+    kv_put(ctx, f"context:{scope}", clean)
+    return {"scope": scope, "dirs": clean}
+
+
+
+# ---------------------------------------------------------------------- PR contributors
+
+# `email` would need the user:email scope (gh's token lacks it): the public email comes from REST /users/{login}
+USER_FIELDS = """login name company location bio websiteUrl twitterUsername url avatarUrl createdAt
+  organizations(first: 20) { nodes { login name } } followers { totalCount }"""
+
+PEOPLE_QUERY = f"""
+query PrPeople($owner: String!, $name: String!, $number: Int!) {{
+  repository(owner: $owner, name: $name) {{ pullRequest(number: $number) {{
+    author {{ login ... on User {{ {USER_FIELDS} }} }}
+    commits(first: 100) {{ totalCount nodes {{ commit {{ authors(first: 6) {{ nodes {{ name email user {{ {USER_FIELDS} }} }} }} }} }} }}
+  }} }}
+}}"""
+
+# affiliation guessed from public profile data and commit emails (after ai_tools/github_item.py HARDWARE_VENDORS)
+VENDORS: dict[str, dict[str, tuple[str, ...]]] = {
+    "Intel": {"email": ("@intel.com", "@habana.ai"), "company": ("intel",), "org": ("intel",)},
+    "Meta": {"email": ("@meta.com", "@fb.com"), "company": ("meta", "facebook"), "org": ("facebook", "meta", "facebookresearch", "meta-pytorch")},
+    "NVIDIA": {"email": ("@nvidia.com",), "company": ("nvidia",), "org": ("nvidia",)},
+    "AMD": {"email": ("@amd.com",), "company": ("amd",), "org": ("rocm", "amd")},
+    "Google": {"email": ("@google.com",), "company": ("google",), "org": ("google",)},
+    "Microsoft": {"email": ("@microsoft.com",), "company": ("microsoft",), "org": ("microsoft",)},
+}
+
+
+def affiliation(emails: list[str], company: str | None, orgs: list[str]) -> list[str]:
+    out: list[str] = []
+    comp = (company or "").lower()
+    lorgs = {o.lower() for o in orgs}
+    for v, pat in VENDORS.items():
+        if (any(e.lower().endswith(pat["email"]) for e in emails if e) or any(p in comp for p in pat["company"])
+                or any(o in lorgs for o in pat["org"])):
+            out.append(v)
+    return out
+
+
+def fetch_people(graphql: Callable[[str, dict], dict], owner: str, repo: str, number: int) -> dict[str, Any]:
+    d = graphql(PEOPLE_QUERY, {"owner": owner, "name": repo, "number": number})
+    p = ((d.get("repository") or {}).get("pullRequest")) or {}
+    people: dict[str, dict[str, Any]] = {}
+
+    def person(u: dict[str, Any] | None, name: str | None = None, email: str | None = None) -> dict[str, Any]:
+        login = (u or {}).get("login")
+        key = (login or f"~{email or name}").lower()
+        x = people.get(key)
+        if x is None:
+            u = u or {}
+            x = people[key] = {
+                "login": login, "name": u.get("name") or name, "url": u.get("url"), "avatar": u.get("avatarUrl"),
+                "public_email": u.get("email") or None, "company": u.get("company"), "location": u.get("location"), "bio": u.get("bio"),
+                "website": u.get("websiteUrl"), "twitter": u.get("twitterUsername"), "joined": u.get("createdAt"),
+                "followers": (u.get("followers") or {}).get("totalCount"),
+                "orgs": [{"login": o["login"], "name": o.get("name")} for o in (u.get("organizations") or {}).get("nodes") or [] if o],
+                "roles": [], "commits": 0, "commit_emails": [], "commit_names": [],
+            }
+        if email and email not in x["commit_emails"] and not email.endswith("@users.noreply.github.com"):
+            x["commit_emails"].append(email)
+        if name and name not in x["commit_names"]:
+            x["commit_names"].append(name)
+        return x
+
+    if p.get("author"):
+        person(p["author"])["roles"].append("author")
+    for n in (p.get("commits") or {}).get("nodes") or []:
+        authors = (((n or {}).get("commit") or {}).get("authors") or {}).get("nodes") or []
+        for i, a in enumerate(a for a in authors if a):
+            x = person(a.get("user"), a.get("name"), a.get("email"))
+            role = "commit author" if i == 0 else "co-author"
+            if role not in x["roles"]:
+                x["roles"].append(role)
+            if i == 0:
+                x["commits"] += 1
+    for x in people.values():
+        x["affiliation"] = affiliation([x["public_email"] or "", *x["commit_emails"]], x["company"], [o["login"] for o in x["orgs"]])
+    order = sorted(people.values(), key=lambda x: ("author" not in x["roles"], -x["commits"], (x["login"] or x["name"] or "").lower()))
+    return {"contributors": order, "commits_total": (p.get("commits") or {}).get("totalCount", 0),
+            "commits_listed": min(100, (p.get("commits") or {}).get("totalCount", 0))}
+
+
+_people_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_user_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+MAX_DETAILS = 30
+
+
+def user_details(rest: Callable[..., Any], login: str) -> dict[str, Any]:
+    """Public profile fields only REST returns without extra token scopes (public email, blog, hireable, …)."""
+    hit = _user_cache.get(login.lower())
+    if hit and time.time() - hit[0] < 3600:
+        return hit[1]
+    try:
+        u = rest("GET", f"users/{login}") or {}
+        if isinstance(u, list):
+            u = u[0] if u else {}
+    except ApiError as exc:
+        return {"error": exc.message}
+    d = {"public_email": u.get("email"), "website": u.get("blog") or None, "hireable": u.get("hireable"), "twitter": u.get("twitter_username"),
+         "public_repos": u.get("public_repos"), "type": u.get("type")}
+    _user_cache[login.lower()] = (time.time(), d)
+    return d
+
+
+@router.get("/github/pr/{owner}/{repo}/{number}/contributors")
+async def pr_contributors(owner: str, repo: str, number: int, refresh: bool = Query(False), details: bool = Query(False),
+                          auth: tuple[AppContext, str] = Depends(require_owner)):
+    """Who contributed to the PR (author, commit authors, co-authors) with their public GitHub profile: name, commit
+    emails, company, organizations, location, … and a guessed affiliation. details=true adds the public email and
+    other REST-only profile fields (one request per person, cached)."""
+    ctx, _ = auth
+    _check_names(owner, repo)
+    key = f"{owner}/{repo}#{number}".lower()
+    hit = _people_cache.get(key)
+    if hit and not refresh and time.time() - hit[0] < 600:
+        data = hit[1]
+    else:
+        data = await asyncio.to_thread(fetch_people, _hooks(ctx)[0], owner, repo, number)
+        _people_cache[key] = (time.time(), data)
+    if details:
+        rest = _rest(ctx)
+        people = [dict(x) for x in data["contributors"]]
+        for x in people[:MAX_DETAILS]:
+            if x["login"]:
+                extra = await asyncio.to_thread(user_details, rest, x["login"])
+                x.update({k: v for k, v in extra.items() if v is not None or k not in x})
+                x["affiliation"] = affiliation([x.get("public_email") or "", *x["commit_emails"]], x["company"], [o["login"] for o in x["orgs"]])
+        data = {**data, "contributors": people, "details": True}
+    return data
+
+
+
+# ---------------------------------------------------------------------- agent review → suggested pending comments
+
+REVIEW_BLOCK = "waw-review"
+_BLOCK_RE = re.compile(r"```" + REVIEW_BLOCK + r"[ \t]*\n(.*?)\n```", re.S)
+
+
+def review_instructions() -> str:
+    return (
+        "This is a code review request. In the pull request above each diff line starts with its line numbers: old file, "
+        "new file, then `|` and the diff line (deleted lines have only an old number, added lines only a new one). "
+        "Review the pull request as a careful reviewer and write your line comments in a "
+        f"fenced block tagged {REVIEW_BLOCK} at the end of your answer: a JSON array of objects "
+        '{"path": "<file in the PR>", "side": "RIGHT" (new code; "LEFT" for a deleted line), "line": <the line number of that side '
+        '(the numbers in front of the diff line)>, "start_line": <optional first line of a range>, "body": "<the comment, Markdown; a ```suggestion block may propose replacement code>"}. '
+        "Only comment on lines that appear in the diff; be specific, one point per comment, and skip nitpicks unless asked. "
+        "Before the block, give a short overall summary. The comments are shown to the user as suggestions in the diff; "
+        "nothing is posted to GitHub unless the user applies them.\n"
+        f"Example:\n```{REVIEW_BLOCK}\n" '[{"path": "src/a.cpp", "side": "RIGHT", "line": 42, "body": "This can overflow for n > 2^31."}]' "\n```"
+    )
+
+
+def numbered_diffs(copy_text: str) -> str:
+    """The PR copy with old/new line numbers in front of every diff line (```diff blocks), so the agent's comments
+    point at the right lines: `  OLD   NEW |<diff line>`."""
+    out: list[str] = []
+    in_diff = False
+    old = new = 0
+    for ln in copy_text.split("\n"):
+        if ln.startswith("```diff"):
+            in_diff, old, new = True, 0, 0
+            out.append(ln)
+            continue
+        if in_diff and ln.startswith("```"):
+            in_diff = False
+            out.append(ln)
+            continue
+        if not in_diff:
+            out.append(ln)
+            continue
+        m = re.match(r"@@ -(\d+)(?:,\d+)? \+(\d+)", ln)
+        if m:
+            old, new = int(m.group(1)), int(m.group(2))
+            out.append(f"{'':>5} {'':>5} |{ln}")
+        elif ln.startswith(("--- ", "+++ ")) or (not old and not new):
+            out.append(f"{'':>5} {'':>5} |{ln}")
+        elif ln.startswith("+"):
+            out.append(f"{'':>5} {new:>5} |{ln}")
+            new += 1
+        elif ln.startswith("-"):
+            out.append(f"{old:>5} {'':>5} |{ln}")
+            old += 1
+        else:
+            out.append(f"{old:>5} {new:>5} |{ln}")
+            old += 1
+            new += 1
+    return "\n".join(out)
+
+
+def parse_review_block(text: str) -> tuple[list[dict[str, Any]], str | None]:
+    """The agent's comments, or ([], problem)."""
+    blocks = _BLOCK_RE.findall(text or "")
+    if not blocks:
+        return [], f"the answer has no {REVIEW_BLOCK} block"
+    try:
+        items = json.loads(blocks[-1])
+    except ValueError as exc:
+        return [], f"the {REVIEW_BLOCK} block is not valid JSON ({exc})"
+    if isinstance(items, dict):
+        items = items.get("comments") or []
+    if not isinstance(items, list):
+        return [], f"the {REVIEW_BLOCK} block is not a list"
+    return [x for x in items if isinstance(x, dict)], None
+
+
+def diff_line_map(unified: str) -> dict[tuple[str, int], str]:
+    """(side, line) → text, for every line of a unified diff that GitHub accepts a comment on."""
+    out: dict[tuple[str, int], str] = {}
+    old = new = 0
+    for ln in (unified or "").split("\n"):
+        if ln.startswith("@@"):
+            m = re.match(r"@@ -(\d+)(?:,\d+)? \+(\d+)", ln)
+            if m:
+                old, new = int(m.group(1)), int(m.group(2))
+            continue
+        if ln.startswith(("--- ", "+++ ")) or (not old and not new):
+            continue
+        if ln.startswith("+"):
+            out[("RIGHT", new)] = ln
+            new += 1
+        elif ln.startswith("-"):
+            out[("LEFT", old)] = ln
+            old += 1
+        elif ln.startswith(" ") or ln == "":
+            out[("RIGHT", new)] = ln
+            out[("LEFT", old)] = ln
+            old += 1
+            new += 1
+    return out
+
+
+def agent_drafts(items: list[dict[str, Any]], files: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
+    """Validated drafts for the agent's comments: on a diff line when possible, else on the file (line in the text)."""
+    by_path = {f["path"]: f for f in files}
+    out: list[dict[str, Any]] = []
+    problems: list[str] = []
+    for x in items[:100]:
+        path = str(x.get("path") or "").strip().lstrip("./")
+        body = str(x.get("body") or "").strip()
+        if not body:
+            continue
+        f = by_path.get(path)
+        if f is None:
+            problems.append(f"{path or '?'}: not a file of this PR")
+            continue
+        side = "LEFT" if str(x.get("side") or "").upper() == "LEFT" else "RIGHT"
+        try:
+            line = int(x.get("line") or 0)
+            start = int(x["start_line"]) if x.get("start_line") not in (None, "", 0) else None
+        except (TypeError, ValueError):
+            line, start = 0, None
+        lines = diff_line_map(f.get("unified") or "")
+        if line and (side, line) in lines:
+            if start is not None and (start >= line or any((side, n) not in lines for n in range(start, line))):
+                start = None
+            text = "\n".join(lines[(side, n)] for n in range(start or line, line + 1))
+            out.append({"path": path, "subject": "line", "side": side, "line": line, "start_side": side if start else None,
+                        "start_line": start, "line_text": text, "body": body})
+        else:
+            where = f"Line {line}: " if line else ""
+            out.append({"path": path, "subject": "file", "side": "RIGHT", "line": 0, "start_side": None, "start_line": None,
+                        "line_text": "", "body": where + body})
+    return out, problems
+
+
+def _review_key(owner: str, repo: str, number: int) -> str:
+    return f"agent_review:{owner}/{repo}#{number}".lower()
+
+
+def register_agent_review(ctx: AppContext, doc_path: str, job_id: str, thread_id: str, message_id: str) -> None:
+    """Called when an agent review starts (from the PR tab's discussion document .waw-github/<owner>/<repo>/<n>.md)."""
+    parts = doc_path.split("/")
+    owner, repo, number = parts[1], parts[2], int(parts[3].removesuffix(".md"))
+    key = _review_key(owner, repo, number)
+    runs = kv_get(ctx, key, [])
+    runs.append({"job_id": job_id, "thread_id": thread_id, "message_id": message_id, "state": "running", "added": 0, "problem": None,
+                 "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
+    kv_put(ctx, key, runs[-10:])
+
+
+def import_agent_reviews(ctx: AppContext, owner: str, repo: str, number: int) -> list[dict[str, Any]]:
+    """Turn finished agent reviews into proposed pending comments (once), and report their state."""
+    from .db import new_id
+    from .models import GithubPrDraft, Message
+
+    key = _review_key(owner, repo, number)
+    runs = kv_get(ctx, key, [])
+    changed = False
+    for r in runs:
+        if r["state"] != "running":
+            continue
+        with ctx.db.read() as s:
+            m = s.get(Message, r["message_id"])
+            status, content = (m.status, m.content or "") if m else ("failed", "")
+        if status in ("queued", "running", "streaming"):
+            continue
+        changed = True
+        if status != "completed":
+            r.update(state="failed", problem=f"the agent's turn ended: {status}")
+            continue
+        items, problem = parse_review_block(content)
+        files: list[dict[str, Any]] = []
+        if items:
+            try:
+                hit = _pr_cache.get(f"{owner}/{repo}#{number}".lower())
+                data = hit[1] if hit else fetch_pr(owner, repo, number, _hooks(ctx)[0], ctx.extra.get("gh_pr_files", _gh_files))
+                files = data["files"]
+            except ApiError as exc:
+                r.update(state="failed", problem=exc.message)
+                continue
+        drafts, bad = agent_drafts(items, files)
+        with ctx.db.write() as s:
+            for d in drafts:
+                s.add(GithubPrDraft(id=new_id(), repo=f"{owner}/{repo}".lower(), number=number, origin="agent", decision="proposed",
+                                    thread_id=r["thread_id"], **{**d, "line_text": d["line_text"][:4000]}))
+            m = s.get(Message, r["message_id"])
+            if m is not None and drafts:  # the JSON is for the app: the discussion shows what became of it
+                note = f"*{len(drafts)} suggested comment(s) were added to the diff (Files) — choose Apply or Discard for each.*"
+                m.content = _BLOCK_RE.sub(note, m.content or "")
+        r.update(state="done", added=len(drafts), problem=problem or ("; ".join(bad[:5]) if bad else None))
+    if changed:
+        kv_put(ctx, key, runs)
+    return runs

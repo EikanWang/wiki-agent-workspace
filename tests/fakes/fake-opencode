@@ -135,6 +135,26 @@ def main(argv):
         emit({"type": "text", "sessionID": session, "part": {"id": "prt_1", "type": "text", "text": text}})
         emit({"type": "step_finish", "sessionID": session, "part": {"type": "step-finish", "reason": "stop"}})
         return 0
+    if "fenced block tagged waw-review" in prompt:
+        # an agent PR review: comment on the first added line of the diff in the prompt, plus a line outside the diff
+        # (becomes a file comment) and a file that is not in the PR (dropped)
+        import re as _re
+        path, line = None, None
+        for ln in prompt.split("\n"):
+            h = _re.match(r"### (\S+) \(", ln)
+            if h and path is None:
+                path = h.group(1)
+            m = _re.match(r"^\s*(\d*)\s+(\d+) \|\+", ln)
+            if m and path and line is None:
+                line = int(m.group(2))
+        items = [{"path": path, "side": "RIGHT", "line": line, "body": "Agent: is this guard needed?"},
+                 {"path": path, "side": "RIGHT", "line": 9999, "body": "Agent: consider a test."},
+                 {"path": "not/in/pr.cpp", "side": "RIGHT", "line": 1, "body": "x"}]
+        text = "Overall the change looks fine.\n\n```waw-review\n" + json.dumps(items) + "\n```"
+        emit({"type": "step_start", "sessionID": session, "part": {"type": "step-start"}})
+        emit({"type": "text", "sessionID": session, "part": {"id": "prt_1", "type": "text", "text": text}})
+        emit({"type": "step_finish", "sessionID": session, "part": {"type": "step-finish", "reason": "stop"}})
+        return 0
     emit({"type": "step_start", "sessionID": session, "part": {"type": "step-start"}})
     if "[[permission]]" in user_msg:
         emit({"type": "permission", "sessionID": session, "id": "per_fake1", "title": "fake wants to run `rm`"})

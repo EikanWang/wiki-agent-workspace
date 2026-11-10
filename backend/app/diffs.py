@@ -19,6 +19,7 @@ from .annotations import ThreadService, build_prompt
 from .db import new_id
 from .deps import AppContext, require_auth, require_auth_mutating
 from .documents import MARKDOWN_SUFFIXES, DocumentService, sha256_bytes
+from .kv import extra_context
 from .errors import ApiError, bad_request, not_found
 from .gitinfo import git_info, git_run, valid_ref
 from .models import Document, FileReview, Message, Thread
@@ -325,7 +326,7 @@ class DiffService:
             s.add(Message(id=user_msg_id, thread_id=thread_id, session_id=sess.id, role="user", content=question, status="completed"))
             s.add(Message(id=agent_msg_id, thread_id=thread_id, session_id=sess.id, role="agent", content="", status="queued"))
         prompt = build_prompt(question=prompt_question, quote=quote, document_path=rel, sha256=sha, heading=heading, prior=None,
-                              versions=self.docs.list_versions(doc.id))
+                              versions=self.docs.list_versions(doc.id), extra=extra_context(self.ctx, rel, self.docs.workspace_id))
         assert self.ctx.jobs
         job_id = self.ctx.jobs.enqueue_turn(session_id=sess.id, thread_id=thread_id, prompt=prompt,
                                             context={"document_id": doc.id, "document_path": rel, "sha256": sha, "quote": quote, "diff": diff_ctx},

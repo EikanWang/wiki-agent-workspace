@@ -100,13 +100,26 @@ queue can include private repositories.
 can see, grouped by repository (most PRs first):
 - each PR shows a CI dot (green passed, red failing, amber running), title, #number, author, last update,
   size (+/−), draft flag and labels; hover for details;
-- **filter** by repository, title, author or label; **drafts** shows or hides draft PRs; sort by *recently
-  updated*, *waiting longest* or *smallest first*; click a repository to fold it;
+- **filter** by repository, title, author, requester or label; **drafts** shows or hides draft PRs; sort by
+  *recently updated*, *waiting longest* or *smallest first*; click a repository to fold it; closed or merged PRs
+  are dropped even while GitHub's search still lists them;
+- **★ Priority** at the top: requests from PyTorch Meta maintainers (the requester's GitHub profile company says
+  Meta / Facebook) and from people you name; each PR shows who *asked* you. Change it under **⚙**;
+- **⚙** (repositories and priority): **watch** a repository (`owner/name`) to also list all its open PRs (newest 40,
+  in a *Watched repositories* section), stop watching it, choose the priority people, and **show again** a
+  hidden repository. Hover a repository and click **×** to **hide** it. Kept on the server (`kv_settings`);
 - clicking a PR opens it as a **tab** next to your documents (remembered like them):
   - **Overview**: description, checks (failing first, linked), reviews and requested reviewers, labels;
     **Open on GitHub**; ↻ reloads. Below the description the **Conversation**: every reviewer's review
-    (approved / changes requested / commented, with its summary) and general comments, oldest first; the box at
-    the end posts a general comment on GitHub.
+    (approved / changes requested / commented, with its summary and line comments with their code) and general
+    comments, oldest first; replies are shown in the thread of the comment they answer, as on GitHub. The box at
+    the end posts a general comment on GitHub. `#123`, `owner/repo#123` and links to pull requests in the
+    description and comments **open as PR tabs here** (Ctrl/⌘-click: on GitHub; an issue number shows a note
+    with a link to GitHub).
+  - **Contributors** (Overview, right): the author, commit authors and co-authors with their commit count and a
+    guessed affiliation (Intel, Meta, NVIDIA, … from company, emails and organizations). Click a person for
+    details: commit emails, company, organizations, location, website, bio, joined; tick **details** to also load
+    each public email (one GitHub request per person).
   - **Files**: the diff of every changed file, **Unified** or **Side by side** (remembered); long files start
     folded. *n / N files viewed*, unresolved threads and **Jump to file…** at the top.
   - **All reviewers' threads** at their lines; comments on a whole file at the top of it; threads on code that
@@ -120,17 +133,26 @@ can see, grouped by repository (most PRs first):
     it *pending* here (edit/delete it; it survives reloads), **Ask agent** asks the agent about exactly those
     lines (answer in the discussions panel). **Suggest change** inserts the selected new lines as a GitHub
     *suggested change* block to edit into the replacement.
-  - **Finish review (n)**: an optional summary and *Comment* / *Approve* / *Request changes*, then **Submit**
+  - **Agent review**: the agent reviews the whole PR (the question is prefilled; edit it to focus the review).
+    Its line comments appear in **Files** at their lines as **Agent suggestions** — nothing goes to GitHub. For
+    each choose **Apply** (published with your review), **Undecided** or **Discard** (not published, dropped when
+    the review is submitted), edit it, or **Discuss with agent…** to ask about it first. Comments on lines outside
+    the diff become comments on the file. The diff in the agent's prompt carries line numbers so its comments
+    land on the right lines.
+  - **Finish review (n)** (n = your pending comments plus applied suggestions): an optional summary and *Comment* / *Approve* / *Request changes*, then **Submit**
     publishes everything to GitHub as one review, as the server's `gh` account (shown in the box). If GitHub
     refuses (e.g. the PR changed and a line no longer exists), nothing is left half-published on GitHub and the
     pending comments are kept. A pending review you started on github.com is submitted together with yours.
   - The agent also reads what reviewers said (conversation and threads) when you ask about the PR.
-  - Line numbers are those of the old / new file, like on GitHub (also in the wiki diff).
+  - Line numbers are those of the old / new file, like on GitHub (also in the wiki diff), in fixed columns that
+    never wrap; code lines are 20 px like on GitHub. Side by side, a comment sits under its own half.
   - **Ask about this PR** asks about the whole pull request. Answers and follow-ups are in the discussions
     panel, like for documents, and the PR appears in *Recent*.
   - The agent works in a **wiki of your choice per repository** (asked the first time you open one of its PRs;
     change it with *Agent wiki* in the PR tab), so it can use your notes; it gets the PR's description and diff
-    and is told never to comment on, approve or push to the PR.
+    and is told never to comment on, approve or push to the PR. **+ folders** next to it adds **reference
+    folders** for that repository's PRs (e.g. a checkout of the repository): absolute server paths the agent is
+    told to read. A wiki folder has its own (**⧉** on the folder in the file tree), used for its documents.
 - **↻** reloads from GitHub. The list is kept for 2 minutes and refreshed in the background, so it opens at once;
   a full fetch of ~80 PRs takes about 30 s.
 - PRs in organizations that require **SAML single sign-on** are counted but hidden until you authorize the

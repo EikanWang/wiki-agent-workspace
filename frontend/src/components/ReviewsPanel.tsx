@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
-import { ApiError, get } from "../api";
+import { ApiError, get, put } from "../api";
 import RefreshButton from "./RefreshButton";
 
 export interface ReviewPR {
@@ -18,8 +18,18 @@ export interface ReviewPR {
   review_decision: string | null;
   ci: "SUCCESS" | "FAILURE" | "ERROR" | "PENDING" | "EXPECTED" | null;
   labels: { name: string; color: string | null }[];
-  requested: "you" | "team";
+  requested: "you" | "team" | null; // null: not requested — shown because its repository is watched
   teams: string[];
+  requested_by?: string | null;
+  requested_by_company?: string | null;
+  priority?: boolean;
+  watched?: boolean;
+}
+export interface HubPrefs {
+  hidden_repos: string[];
+  watched_repos: string[];
+  priority_requesters: string[];
+  priority_meta: boolean;
 }
 interface Queue {
   items: ReviewPR[];
@@ -31,6 +41,10 @@ interface Queue {
   age_seconds: number;
   refreshing: boolean;
   refresh_error: { code: string; message: string } | null;
+  watched?: ReviewPR[];
+  watch_problems?: string[];
+  hidden_count?: number;
+  prefs?: HubPrefs;
 }
 
 // ---- one shared copy of the queue (the activity-bar badge and the panel use the same data)
@@ -53,6 +67,12 @@ export async function loadReviews(refresh = false): Promise<void> {
   } catch (e) {
     set({ error: (e as ApiError).message, loading: false });
   }
+}
+
+/** Save Reviews preferences (hidden / watched repositories, priority requesters), then reload the list. */
+export async function savePrefs(change: Partial<HubPrefs>): Promise<void> {
+  await put<HubPrefs>("/github/prefs", change);
+  await loadReviews(false);
 }
 
 export function useReviews() {
@@ -95,24 +115,90 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
     if (!state.queue && !state.loading) void loadReviews();
   }, []);
 
-  const groups = useMemo(() => {
+  const [settings, setSettings] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const prefs = queue?.prefs;
+  const { groups, priority, watchedGroups } = useMemo(() => {
     const f = filter.trim().toLowerCase();
-    const items = (queue?.items ?? []).filter((p) => (showDrafts || !p.draft) && (!f || `${p.repo} #${p.number} ${p.title} ${p.author ?? ""} ${p.labels.map((l) => l.name).join(" ")}`.toLowerCase().includes(f)));
+    const keep = (p: ReviewPR) => (showDrafts || !p.draft) && (!f || `${p.repo} #${p.number} ${p.title} ${p.author ?? ""} ${p.requested_by ?? ""} ${p.labels.map((l) => l.name).join(" ")}`.toLowerCase().includes(f));
     const key = (p: ReviewPR) => (sort === "updated" ? -new Date(p.updated_at).getTime() : sort === "waiting" ? new Date(p.created_at).getTime() : p.additions + p.deletions);
-    const by = new Map<string, ReviewPR[]>();
-    for (const p of items) by.set(p.repo, [...(by.get(p.repo) ?? []), p]);
-    return [...by.entries()].map(([repo, prs]) => ({ repo, prs: prs.sort((a, b) => key(a) - key(b)) })).sort((a, b) => b.prs.length - a.prs.length || a.repo.localeCompare(b.repo));
+    const group = (list: ReviewPR[]) => {
+      const by = new Map<string, ReviewPR[]>();
+      for (const p of list) by.set(p.repo, [...(by.get(p.repo) ?? []), p]);
+      return [...by.entries()].map(([repo, prs]) => ({ repo, prs: prs.sort((a, b) => key(a) - key(b)) })).sort((a, b) => b.prs.length - a.prs.length || a.repo.localeCompare(b.repo));
+    };
+    const items = (queue?.items ?? []).filter(keep);
+    return {
+      priority: items.filter((p) => p.priority).sort((a, b) => key(a) - key(b)),
+      groups: group(items.filter((p) => !p.priority)),
+      watchedGroups: group((queue?.watched ?? []).filter(keep)),
+    };
   }, [queue, filter, showDrafts, sort]);
   const drafts = queue?.items.filter((p) => p.draft).length ?? 0;
-  const shown = groups.reduce((n, g) => n + g.prs.length, 0);
+  const shown = priority.length + groups.reduce((n, g) => n + g.prs.length, 0);
+  const change = async (what: string, c: Partial<HubPrefs>) => {
+    setBusy(what);
+    try {
+      await savePrefs(c);
+    } catch (e) {
+      set({ error: (e as ApiError).message });
+    } finally {
+      setBusy(null);
+    }
+  };
+  const hideRepo = (repo: string) => prefs && void change(`hide:${repo}`, { hidden_repos: [...prefs.hidden_repos, repo], watched_repos: prefs.watched_repos.filter((r) => r.toLowerCase() !== repo.toLowerCase()) });
+  const toggle = (repo: string) => setCollapsed((s) => { const n = new Set(s); if (n.has(repo)) n.delete(repo); else n.add(repo); return n; });
+  const prRow = (p: ReviewPR, showRepo = false) => (
+    <button key={`${p.repo}#${p.number}`} className={`review-pr ${p.draft ? "draft" : ""} ${p.priority ? "priority" : ""}`} onClick={() => onOpen(p)}
+      title={`${p.repo}#${p.number}\n${p.title}\n${CI_LABEL[p.ci ?? ""] ?? "no checks"}${p.requested_by ? `\nreview requested by ${p.requested_by}${p.requested_by_company ? ` (${p.requested_by_company})` : ""}` : ""}${p.teams.length ? `\nalso requested from: ${p.teams.join(", ")}` : ""}`}
+      data-testid="review-pr" data-number={p.number} data-priority={p.priority ? "1" : "0"}>
+      <span className={`ci-dot ${(p.ci ?? "none").toLowerCase()}`} aria-label={CI_LABEL[p.ci ?? ""] ?? "no checks"} />
+      <span className="review-pr-main">
+        <span className="review-pr-title">{p.title}</span>
+        <span className="review-pr-meta muted small">
+          {showRepo ? `${p.repo}` : ""}#{p.number} · {p.author ?? "?"} · {ago(p.updated_at)} · <span className="add">+{p.additions}</span> <span className="del">−{p.deletions}</span>
+          {p.requested_by && <span className="review-by" data-testid="review-by"> · asked by {p.requested_by}</span>}
+          {p.draft && <span className="git-badge"> draft</span>}
+          {p.labels.slice(0, 2).map((l) => (
+            <span key={l.name} className="review-label" style={l.color ? { borderColor: `#${l.color}` } : undefined}>{l.name}</span>
+          ))}
+        </span>
+      </span>
+    </button>
+  );
+  const groupBox = (repo: string, prs: ReviewPR[], watched: boolean) => {
+    const open = !collapsed.has((watched ? "w:" : "") + repo);
+    return (
+      <div key={(watched ? "w:" : "") + repo} className="review-group" data-testid={watched ? "review-group-watched" : "review-group"} data-repo={repo}>
+        <div className="review-group-head-row">
+          <button className="review-group-head" onClick={() => toggle((watched ? "w:" : "") + repo)} aria-expanded={open}>
+            <span className="chev">{open ? "⌄" : "›"}</span>
+            <span className="review-repo">{repo}</span>
+            {prs[0]?.private && <span className="git-badge" title="private repository">private</span>}
+            {watched && <span className="git-badge" title="Open PRs of a repository you added (not requested from you)">watching</span>}
+            <span className="spacer" />
+            <span className="git-badge clean">{prs.length}</span>
+          </button>
+          {prefs && (
+            <button className="icon-btn small review-hide" onClick={() => hideRepo(repo)} disabled={busy !== null} title={`Hide ${repo} from Reviews (undo under ⚙)`} aria-label={`Hide ${repo}`} data-testid="review-hide-repo">×</button>
+          )}
+        </div>
+        {open && prs.map((p) => prRow(p))}
+      </div>
+    );
+  };
 
   return (
     <div className="reviews-panel" data-testid="reviews-panel">
       <div className="tree-header">
         <span className="ws-name">Reviews{queue ? ` · ${reviewBadge(queue)}` : ""}</span>
         <span className="spacer" />
+        {prefs && (
+          <button className={`icon-btn ${settings ? "active" : ""}`} onClick={() => setSettings((v) => !v)} title="Repositories and priority" aria-label="Reviews settings" aria-pressed={settings} data-testid="reviews-settings">⚙</button>
+        )}
         <RefreshButton onRefresh={() => loadReviews(true)} title="Refresh from GitHub" testId="reviews-refresh" />
       </div>
+      {settings && prefs && <ReviewsSettings prefs={prefs} busy={busy} change={change} problems={queue?.watch_problems ?? []} />}
       <div className="reviews-controls">
         <input className="reviews-filter" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter: repo, title, author, label…" data-testid="reviews-filter" />
         <div className="reviews-row">
@@ -138,37 +224,71 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
           </div>
         )}
         {queue && shown === 0 && <div className="tree-empty">{queue.items.length ? "Nothing matches the filter." : "No pull requests are waiting for your review. 🎉"}</div>}
-        {groups.map(({ repo, prs }) => {
-          const open = !collapsed.has(repo);
-          return (
-            <div key={repo} className="review-group" data-testid="review-group" data-repo={repo}>
-              <button className="review-group-head" onClick={() => setCollapsed((s) => { const n = new Set(s); if (n.has(repo)) n.delete(repo); else n.add(repo); return n; })} aria-expanded={open}>
-                <span className="chev">{open ? "⌄" : "›"}</span>
-                <span className="review-repo">{repo}</span>
-                {prs[0]?.private && <span className="git-badge" title="private repository">private</span>}
-                <span className="spacer" />
-                <span className="git-badge clean">{prs.length}</span>
-              </button>
-              {open &&
-                prs.map((p) => (
-                  <button key={p.number} className={`review-pr ${p.draft ? "draft" : ""}`} onClick={() => onOpen(p)} title={`${p.repo}#${p.number}\n${p.title}\n${CI_LABEL[p.ci ?? ""] ?? "no checks"}${p.teams.length ? `\nalso requested from: ${p.teams.join(", ")}` : ""}`} data-testid="review-pr" data-number={p.number}>
-                    <span className={`ci-dot ${(p.ci ?? "none").toLowerCase()}`} aria-label={CI_LABEL[p.ci ?? ""] ?? "no checks"} />
-                    <span className="review-pr-main">
-                      <span className="review-pr-title">{p.title}</span>
-                      <span className="review-pr-meta muted small">
-                        #{p.number} · {p.author ?? "?"} · {ago(p.updated_at)} · <span className="add">+{p.additions}</span> <span className="del">−{p.deletions}</span>
-                        {p.draft && <span className="git-badge"> draft</span>}
-                        {p.labels.slice(0, 2).map((l) => (
-                          <span key={l.name} className="review-label" style={l.color ? { borderColor: `#${l.color}` } : undefined}>{l.name}</span>
-                        ))}
-                      </span>
-                    </span>
-                  </button>
-                ))}
-            </div>
-          );
-        })}
+        {priority.length > 0 && (
+          <div className="review-group priority" data-testid="review-priority">
+            <button className="review-group-head" onClick={() => toggle("!priority")} aria-expanded={!collapsed.has("!priority")}
+              title={`Requests from ${prefs?.priority_meta ? "PyTorch Meta maintainers (GitHub profile company / public email)" : ""}${prefs?.priority_meta && prefs.priority_requesters.length ? " and " : ""}${prefs?.priority_requesters.length ? prefs.priority_requesters.join(", ") : ""}`}>
+              <span className="chev">{collapsed.has("!priority") ? "›" : "⌄"}</span>
+              <span className="review-repo">★ Priority</span>
+              <span className="spacer" />
+              <span className="git-badge clean">{priority.length}</span>
+            </button>
+            {!collapsed.has("!priority") && priority.map((p) => prRow(p, true))}
+          </div>
+        )}
+        {groups.map(({ repo, prs }) => groupBox(repo, prs, false))}
+        {watchedGroups.length > 0 && <div className="muted small reviews-meta" data-testid="reviews-watched-head">Watched repositories (all open PRs)</div>}
+        {watchedGroups.map(({ repo, prs }) => groupBox(repo, prs, true))}
+        {(queue?.hidden_count ?? 0) > 0 && <div className="muted small reviews-meta">{queue!.hidden_count} request(s) in hidden repositories (⚙ to show them)</div>}
       </div>
+    </div>
+  );
+}
+
+function ReviewsSettings({ prefs, busy, change, problems }: {
+  prefs: HubPrefs; busy: string | null; change: (what: string, c: Partial<HubPrefs>) => Promise<void>; problems: string[];
+}) {
+  const [repo, setRepo] = useState("");
+  const [people, setPeople] = useState(prefs.priority_requesters.join(", "));
+  useEffect(() => setPeople(prefs.priority_requesters.join(", ")), [prefs.priority_requesters]);
+  const valid = /^[\w.-]+\/[\w.-]+$/.test(repo.trim());
+  const watch = () => {
+    const r = repo.trim();
+    if (!valid) return;
+    void change("watch", { watched_repos: [...prefs.watched_repos.filter((x) => x.toLowerCase() !== r.toLowerCase()), r], hidden_repos: prefs.hidden_repos.filter((x) => x.toLowerCase() !== r.toLowerCase()) }).then(() => setRepo(""));
+  };
+  return (
+    <div className="reviews-settings" data-testid="reviews-settings-box">
+      <div className="small strong">Priority requests</div>
+      <label className="small">
+        <input type="checkbox" checked={prefs.priority_meta} disabled={busy !== null} onChange={(e) => void change("meta", { priority_meta: e.target.checked })} data-testid="reviews-priority-meta" />{" "}
+        PyTorch Meta maintainers (company or public email on their GitHub profile)
+      </label>
+      <div className="reviews-settings-row">
+        <input value={people} onChange={(e) => setPeople(e.target.value)} placeholder="Also these GitHub logins, comma-separated" data-testid="reviews-priority-people"
+          onKeyDown={(e) => { if (e.key === "Enter") void change("people", { priority_requesters: people.split(/[\s,]+/).filter(Boolean) }); }} />
+        <button className="btn small" disabled={busy !== null} onClick={() => void change("people", { priority_requesters: people.split(/[\s,]+/).filter(Boolean) })} data-testid="reviews-priority-save">Save</button>
+      </div>
+      <div className="small strong">Watched repositories <span className="muted">(all their open PRs, besides your review requests)</span></div>
+      {prefs.watched_repos.map((r) => (
+        <div key={r} className="reviews-settings-item" data-testid="reviews-watched-item">
+          <span className="mono small">{r}</span>
+          <button className="icon-btn small" disabled={busy !== null} onClick={() => void change(`unwatch:${r}`, { watched_repos: prefs.watched_repos.filter((x) => x !== r) })} title="Stop watching" aria-label={`Stop watching ${r}`}>×</button>
+        </div>
+      ))}
+      {problems.map((m) => <div key={m} className="tree-error small">{m}</div>)}
+      <div className="reviews-settings-row">
+        <input value={repo} onChange={(e) => setRepo(e.target.value)} placeholder="owner/name, e.g. intel/torch-xpu-ops" onKeyDown={(e) => { if (e.key === "Enter") watch(); }} data-testid="reviews-watch-input" />
+        <button className="btn small" disabled={!valid || busy !== null} onClick={watch} data-testid="reviews-watch-add">{busy === "watch" ? "Adding…" : "Watch"}</button>
+      </div>
+      <div className="small strong">Hidden repositories</div>
+      {prefs.hidden_repos.length === 0 && <div className="muted small">None — use × on a repository to hide it.</div>}
+      {prefs.hidden_repos.map((r) => (
+        <div key={r} className="reviews-settings-item" data-testid="reviews-hidden-item">
+          <span className="mono small">{r}</span>
+          <button className="btn small" disabled={busy !== null} onClick={() => void change(`unhide:${r}`, { hidden_repos: prefs.hidden_repos.filter((x) => x !== r) })} data-testid="reviews-unhide">Show again</button>
+        </div>
+      ))}
     </div>
   );
 }

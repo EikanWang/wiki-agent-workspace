@@ -816,6 +816,8 @@ export default function App() {
               defaultSessionId={doc?.default_session_id ?? null}
               defaultProvider={boot.default_provider}
               githubLogin={hub?.owner ?? null}
+              onOpenPr={(r, n) => openPr(r, n)}
+              onDiscussionsChanged={() => { if (doc) void refreshThreads(doc.document_id); }}
             />
           ) : doc ? (
             <Reader

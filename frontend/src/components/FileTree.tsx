@@ -1,4 +1,5 @@
 import RefreshButton from "./RefreshButton";
+import ContextFolders from "./ContextFolders";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, FileItem, GitSummary, WorkspaceInfo, getIn, post } from "../api";
 import { FileIcon, KIND_LABEL, formatSize } from "./FileIcon";
@@ -73,6 +74,7 @@ export default function FileTree({
 }) {
   const [dirs, setDirs] = useState<Record<string, DirState>>({});
   const dirsRef = useRef(dirs); // read synchronously by the refresh loop
+  const [refsFor, setRefsFor] = useState<WorkspaceInfo | null>(null);
   const [expanded, setExpandedState] = useState<Set<string>>(() => {
     try {
       const saved = JSON.parse(localStorage.getItem("waw.treeExpanded") || "null");
@@ -505,6 +507,9 @@ export default function FileTree({
                   {ws.available && (
                     <RefreshButton className="tree-action hover-only" onRefresh={() => refreshFolder(ws.id, "")} title={`Refresh ${ws.name}`} testId={i === 0 ? "tree-refresh-root" : `tree-refresh-root-${ws.name}`} />
                   )}
+                  {ws.available && (
+                    <button className="tree-action hover-only" onClick={() => setRefsFor(ws)} title="Reference folders: extra folders the agent reads when answering about documents here" data-testid={i === 0 ? "tree-context-root" : `tree-context-root-${ws.name}`}>⧉</button>
+                  )}
                   {ws.available && onOpenDiff && (
                     <button className="tree-action" onClick={() => onOpenDiff(ws.id, "", true)} title="Review all uncommitted changes in this folder" data-testid={i === 0 ? "tree-diff-root" : `tree-diff-root-${ws.name}`}>±</button>
                   )}
@@ -515,6 +520,7 @@ export default function FileTree({
           );
         })}
       </div>
+      {refsFor && <ContextFolders scope={`ws:${refsFor.id}`} title={`For questions about documents in ${refsFor.name}.`} onClose={() => setRefsFor(null)} />}
     </div>
   );
 }

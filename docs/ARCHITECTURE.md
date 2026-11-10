@@ -38,6 +38,21 @@ backend/app/
                    every PR document/discussion to anyone but the owner's GitHub sign-in; review comments:
                    GET pulls/{n}/comments, drafts in github_pr_drafts, one POST pulls/{n}/reviews (with
                    commit_id of the diff shown) on Finish review, replies via comments/{id}/replies
+                   · RateGuard: before every gh call, `gh api rate_limit` (re-read each minute) — at <= 100
+                   left it waits for a reset <= 90 s away or fails with GH_RATE_LIMITED; mutations >= 1 s apart
+                   · hub preferences (hidden / watched repos, priority requesters; kv.py → kv_settings), the
+                   requester of each review request (timeline REVIEW_REQUESTED_EVENT; Meta by profile company),
+                   watched repos' open PRs (one search each, with the queue)
+                   · /contributors: PR author + commit authors / co-authors (GraphQL, no email scope) with a
+                   guessed affiliation; details=true adds REST /users/{login} (public email), cached 1 h
+                   · agent review: a thread created with pr_review=true gets numbered diffs and the
+                   ```waw-review JSON contract in its prompt (annotations.build_pr_prompt); the run is recorded
+                   in kv_settings (agent_review:<repo>#<n>) and, once its message completes, GET .../comments
+                   turns the block into github_pr_drafts (origin=agent, decision=proposed; lines checked against
+                   the diff, else file comments) and replaces the JSON in the message by a note; Finish review
+                   publishes only decision=accepted drafts and deletes discarded ones
+  kv.py            kv_settings get/put; extra reference folders (context:repo:<o>/<r>, context:ws:<id>) added
+                   to every agent prompt for that PR repository / wiki folder (/agent-context)
   office.py        OfficeRenderer: Layout view, LibreOffice headless → PDF, content-addressed cache, parallel
                    limit, timeout, private profiles; routes /office/render (status, starts work), /office/pdf
   anchors.py       anchor resolution algorithm (attached/moved/ambiguous/orphaned) + offset validation

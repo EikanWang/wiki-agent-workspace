@@ -29,7 +29,7 @@ PR_INLINE_CHARS = 60_000
 
 
 def build_pr_prompt(*, question: str, quote: str, copy_text: str, copy_path: str, wiki_root: str, target: dict[str, Any] | None,
-                    prior: list[dict[str, str]] | None) -> str:
+                    prior: list[dict[str, str]] | None, extra: str | None = None, review: bool = False) -> str:
     """Prompt for a discussion about a GitHub pull request (review hub)."""
     head = copy_text.split("\n", 1)[0].lstrip("# ").strip()
     parts = [
@@ -38,7 +38,13 @@ def build_pr_prompt(*, question: str, quote: str, copy_text: str, copy_path: str
         "hardware/software concepts involved, and cite wiki pages you rely on.",
         f"The pull request (metadata, description and full diff) is in this file: {copy_path}",
     ]
+    if extra:
+        parts.append(extra)
     copy_text, _, discussion = copy_text.partition("\n\x00DISCUSSION\x00")
+    if review:
+        from .github_hub import numbered_diffs
+
+        copy_text = numbered_diffs(copy_text)
     if len(copy_text) <= PR_INLINE_CHARS:
         parts.append("<<<PULL_REQUEST\n" + copy_text + "\nPULL_REQUEST>>>")
     else:
@@ -53,6 +59,10 @@ def build_pr_prompt(*, question: str, quote: str, copy_text: str, copy_path: str
     if prior:
         parts.append("Earlier messages in this discussion thread (for context):")
         parts.extend(f"[{m['role']}] {m['content'][:2000]}" for m in prior[-8:])
+    if review:
+        from .github_hub import review_instructions
+
+        parts.append(review_instructions())
     parts += ["User message:", question,
               "Instructions: answer as a careful code reviewer (correctness, performance, tests, API and design). Do not modify any "
               "files and never comment on, approve, push to or otherwise change the pull request on GitHub — only answer."]
@@ -93,12 +103,14 @@ def describe_target(target: dict[str, Any] | None, document_path: str) -> str | 
 
 def build_prompt(*, question: str, quote: str, document_path: str, sha256: str, heading: str | None,
                  prior: list[dict[str, str]] | None, versions: list[dict[str, Any]] | None, whole_document: bool = False,
-                 target: dict[str, Any] | None = None) -> str:
+                 target: dict[str, Any] | None = None, extra: str | None = None) -> str:
     parts = [
         "You are assisting with a Markdown wiki document in this workspace via the Wiki Agent Workspace reader.",
         f"Document path: {document_path}",
         f"Document content SHA-256: {sha256}",
     ]
+    if extra:
+        parts.append(extra)
     if heading:
         parts.append(f"Nearest heading: {heading}")
     if versions:
@@ -362,10 +374,12 @@ class ThreadService:
         if is_pr_path(doc.path):
             text, cpath = _pr_copy(self.docs, doc.path)
             prompt = build_pr_prompt(question=body.question, quote=body.quote, copy_text=text, copy_path=cpath,
-                                     wiki_root=str(self.docs.root), target=target, prior=None)
+                                     wiki_root=str(self.docs.root), target=target, prior=None,
+                                     extra=self._extra(doc.path), review=body.pr_review)
         else:
             prompt = build_prompt(question=body.question, quote=body.quote, document_path=doc.path, sha256=sha, heading=heading,
-                                  prior=None, versions=self.docs.list_versions(doc_id), whole_document=body.whole_document, target=target)
+                                  prior=None, versions=self.docs.list_versions(doc_id), whole_document=body.whole_document, target=target,
+                                  extra=self._extra(doc.path))
         job_id = self.jobs.enqueue_turn(session_id=sess.id, thread_id=thread_id, prompt=prompt,
                                         context={"document_id": doc_id, "document_path": doc.path, "sha256": sha, "quote": body.quote,
                                                  "attachments": attach},
@@ -374,6 +388,10 @@ class ThreadService:
             m = s.get(Message, agent_msg_id)
             if m:
                 m.job_id = job_id
+        if body.pr_review and is_pr_path(doc.path):  # its comments become suggestions in the diff when it finishes
+            from .github_hub import register_agent_review
+
+            register_agent_review(self.ctx, doc.path, job_id, thread_id, agent_msg_id)
         return {"thread_id": thread_id, "job_id": job_id, "session_id": sess.id, "message_id": user_msg_id, "agent_message_id": agent_msg_id}
 
     # ------------------------------------------------------------------ reply
@@ -409,11 +427,11 @@ class ThreadService:
         if is_pr_path(doc.path):
             text, cpath = _pr_copy(self.docs, doc.path)
             prompt = build_pr_prompt(question=body.text, quote=t.cur_quote, copy_text=text, copy_path=cpath, wiki_root=str(self.docs.root),
-                                     target=json.loads(t.target_json) if t.target_json else None, prior=prior)
+                                     target=json.loads(t.target_json) if t.target_json else None, prior=prior, extra=self._extra(doc.path))
         else:
             prompt = build_prompt(question=body.text, quote=t.cur_quote, document_path=doc.path, sha256=sha, heading=t.cur_heading,
                                   prior=prior, versions=self.docs.list_versions(doc.id), whole_document=t.anchor_state in ("document", "page"),
-                                  target=json.loads(t.target_json) if t.target_json else None)
+                                  target=json.loads(t.target_json) if t.target_json else None, extra=self._extra(doc.path))
         job_id = self.jobs.enqueue_turn(session_id=sess.id, thread_id=thread_id, prompt=prompt,
                                         context={"document_id": doc.id, "document_path": doc.path, "sha256": sha, "quote": t.cur_quote,
                                                  "attachments": image_attachments(self.docs, doc.path) + thread_attachments(self.docs.snapshots_dir, t)},
@@ -423,6 +441,12 @@ class ThreadService:
             if m:
                 m.job_id = job_id
         return {"message_id": user_msg_id, "job_id": job_id, "session_id": sess.id, "agent_message_id": agent_msg_id}
+
+    def _extra(self, doc_path: str) -> str | None:
+        """Extra reference folders the user added for this wiki folder / this PR's repository."""
+        from .kv import extra_context
+
+        return extra_context(self.ctx, doc_path, self.docs.workspace_id)
 
     async def _new_default_session_for_thread(self, doc: Document) -> AgentSession:
         """`new` for a reply: new session for this thread only (does not change the document default)."""
@@ -529,6 +553,8 @@ class ThreadCreateIn(BaseModel):
     target: "TargetIn | None" = None
     # data:image/...;base64 — the page render, area crop or picture (required for page/area/image targets)
     image: str | None = Field(None, max_length=17_000_000)
+    # PR tab: an agent review — its line comments are added to the diff as suggestions (Apply / Discard)
+    pr_review: bool = False
 
 
 class MessageIn(BaseModel):

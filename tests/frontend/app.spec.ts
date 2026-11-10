@@ -1432,6 +1432,7 @@ test("file tree: New file opens it in the editor, New folder, errors shown inlin
     // an existing name: the error shows under the box, nothing is overwritten
     await row.hover();
     await page.getByTestId("tree-new-file-drafts").click();
+    await expect(page.getByTestId("tree-new-name")).toBeFocused();
     await page.getByTestId("tree-new-name").fill("idea.md");
     await page.getByTestId("tree-new-name").press("Enter");
     await expect(page.getByTestId("tree-new-error")).toContainText("already exists");
@@ -1800,7 +1801,7 @@ test("GitHub review hub: only the owner's GitHub sign-in sees it; queue grouped 
   await page.goto("/");
   await page.getByTestId("login-github").click();
   await expect(page.getByTestId("view-document")).toBeVisible({ timeout: 15000 });
-  await expect(page.getByTestId("activity-reviews-badge")).toHaveText("3", { timeout: 15000 }); // 4 PRs, 1 draft
+  await expect(page.getByTestId("activity-reviews-badge")).toHaveText("4", { timeout: 15000 }); // 5 PRs, 1 draft
   await page.getByTestId("activity-reviews").click();
   const panel = page.getByTestId("reviews-panel");
   await expect(panel).toBeVisible();
@@ -1822,13 +1823,75 @@ test("GitHub review hub: only the owner's GitHub sign-in sees it; queue grouped 
   await expect(page.getByTestId("review-pr")).toHaveAttribute("data-number", "201");
   await page.getByTestId("reviews-filter").fill("");
   // a PR opens as a tab, with a link to GitHub (never contacted from tests)
-  await page.getByTestId("review-pr").first().click();
+  await page.locator('[data-testid="review-pr"][data-number="101"]').click();
   await expect(page.getByTestId("pr-view")).toBeVisible();
   await expect(page.getByRole("link", { name: "Open on GitHub" })).toHaveAttribute("href", "https://github.com/pytorch/pytorch/pull/101");
   await page.locator('[data-testid="doc-tab"][data-ws="github"]').getByTestId("doc-tab-close").click();
   // back to the files; sign out
   await page.getByTestId("activity-files").click();
   await expect(page.getByTestId("tree-root").first()).toBeVisible();
+  await signOut(page);
+});
+
+test("GitHub review hub: priority requests, hide a repository, watch a repository", async ({ page }) => {
+  await ensureGithubSignIn(page);
+  await page.goto("/");
+  await page.getByTestId("login-github").click();
+  await expect(page.getByTestId("view-document")).toBeVisible({ timeout: 15000 });
+  await page.getByTestId("activity-reviews").click();
+  // a request from a PyTorch Meta maintainer is listed first, under Priority (not again under its repository)
+  const prio = page.getByTestId("review-priority");
+  await expect(prio.getByTestId("review-pr")).toHaveCount(1, { timeout: 15000 });
+  await expect(prio.getByTestId("review-pr")).toHaveAttribute("data-number", "104");
+  await expect(prio).toContainText("asked by metadev");
+  await expect(page.locator('[data-testid="review-group"] [data-number="104"]')).toHaveCount(0);
+  await page.getByTestId("reviews-settings").click();
+  await page.getByTestId("reviews-priority-meta").click(); // saved on the server, then shown
+  await expect(page.getByTestId("reviews-priority-meta")).not.toBeChecked();
+  await expect(prio).toHaveCount(0);
+  await expect(page.locator('[data-testid="review-group"] [data-number="104"]')).toHaveCount(1);
+  await page.getByTestId("reviews-priority-meta").click();
+  await expect(page.getByTestId("reviews-priority-meta")).toBeChecked();
+  await expect(page.getByTestId("review-priority")).toHaveCount(1);
+  // hide a repository, then show it again
+  const intel = page.locator('[data-testid="review-group"][data-repo="intel/torch-xpu-ops"]');
+  await intel.locator(".review-group-head-row").hover();
+  await intel.getByTestId("review-hide-repo").click();
+  await expect(intel).toHaveCount(0);
+  await expect(page.getByTestId("reviews-hidden-item")).toContainText("intel/torch-xpu-ops");
+  await page.getByTestId("reviews-unhide").click();
+  await expect(intel).toHaveCount(1);
+  // watch a repository: its open PRs appear in their own section (fetched in the background)
+  await page.getByTestId("reviews-watch-input").fill("pytorch/ao");
+  await page.getByTestId("reviews-watch-add").click();
+  await expect(page.getByTestId("reviews-watched-item")).toContainText("pytorch/ao");
+  const w = page.locator('[data-testid="review-group-watched"][data-repo="pytorch/ao"]');
+  await expect(w.getByTestId("review-pr")).toHaveAttribute("data-number", "301", { timeout: 15000 });
+  await page.getByTestId("reviews-watched-item").getByRole("button").click();
+  await expect(page.getByTestId("reviews-watched-item")).toHaveCount(0);
+  // a PR's contributors, with details from their GitHub profile on demand
+  await page.locator('[data-testid="review-pr"][data-number="101"]').click();
+  const people = page.getByTestId("pr-contributors");
+  await expect(people.getByTestId("pr-contributor")).toHaveCount(2);
+  await expect(people.getByTestId("pr-contributor").first()).toContainText("alice");
+  await expect(people.getByTestId("pr-contributor").first()).toContainText("author, commit author · 2 commits");
+  await expect(people.getByTestId("pr-contributor").first()).toContainText("Intel"); // affiliation guess
+  await expect(people.getByTestId("pr-contributor").last()).toContainText("Dan Helper");
+  await expect(people.getByTestId("pr-contributor").last()).toContainText("co-author");
+  await people.getByTestId("pr-contributor").first().locator(".pr-person-head").click();
+  await expect(people.getByTestId("pr-contributor-details").first()).toContainText("alice@intel.com");
+  await expect(people.getByTestId("pr-contributor-details").first()).toContainText("Shanghai");
+  await people.getByTestId("pr-contributors-details").check();
+  await expect(people.getByTestId("pr-contributor-details").first()).toContainText("alice@example.com"); // public email (REST)
+  await people.getByTestId("pr-contributors-details").uncheck();
+  // "#103" in the description links to that PR and opens it here, as a tab; `#999` in code is not a link
+  const ref = page.getByTestId("pr-description").locator('a[data-pr="pytorch/pytorch/103"]');
+  await expect(ref).toHaveAttribute("href", "https://github.com/pytorch/pytorch/issues/103");
+  await expect(page.getByTestId("pr-description").locator('a[data-pr="pytorch/pytorch/999"]')).toHaveCount(0);
+  await ref.click();
+  await expect(page.getByTestId("pr-title")).toContainText("Add XPU event timing");
+  await expect(page.locator('[data-testid="doc-tab"][data-ws="github"]')).toHaveCount(2);
+  for (let i = 0; i < 2; i++) await page.locator('[data-testid="doc-tab"][data-ws="github"]').first().getByTestId("doc-tab-close").click();
   await signOut(page);
 });
 
@@ -1853,6 +1916,14 @@ test("GitHub PR tab: overview, files, choose the wiki once, ask about the PR and
   await expect(conv.getByTestId("pr-conv-item").first()).toContainText("CI started");
   await expect(conv.getByTestId("pr-conv-item").last()).toContainText("requested changes");
   await expect(conv.getByTestId("pr-conv-item").last()).toContainText("Please add a test.");
+  // the review's line comment is shown in it, with its code (as on GitHub); bots' HTML is rendered, not shown raw
+  await expect(conv.getByTestId("pr-conv-line")).toContainText("c10/xpu/stub.cpp:11");
+  await expect(conv.getByTestId("pr-conv-line")).toContainText("Is ok ever false?");
+  // a reply is shown in the thread of the comment it answers (its reply-only review is not listed separately)
+  await expect(conv.getByTestId("pr-conv-line").getByTestId("pr-conv-reply")).toContainText("alice");
+  await expect(conv.getByTestId("pr-conv-line").getByTestId("pr-conv-reply")).toContainText("Only without a driver.");
+  await expect(conv.locator("details summary")).toHaveText("CI started");
+  await expect(conv).not.toContainText("<!--");
   await page.getByTestId("pr-conv-text").fill("Thanks, looking now.");
   await page.getByTestId("pr-conv-send").click();
   await expect(conv.getByTestId("pr-conv-item")).toHaveCount(3);
@@ -1932,6 +2003,11 @@ test("GitHub PR tab: overview, files, choose the wiki once, ask about the PR and
   // side by side; comment on a deleted line (left side) → pending
   await page.getByTestId("pr-layout-split").click();
   await expect(stub.getByTestId("pr-diff-split")).toBeVisible();
+  // GitHub's metrics: 20px code lines, line numbers in fixed >= 50px columns that never wrap
+  const metrics = await stub.getByTestId("pr-diff-split").evaluate((el) => [...el.querySelectorAll("tr[data-testid=pr-diff-row]")].map((tr) => [
+    Math.round(tr.querySelector("td.no")!.getBoundingClientRect().width), Math.round(tr.getBoundingClientRect().height)]));
+  expect(metrics.length).toBeGreaterThan(2);
+  expect(metrics.filter(([w, h]) => w < 50 || h !== 20)).toEqual([]);
   await stub.locator('td.code.left.del').first().click();
   await expect(page.getByTestId("pr-composer")).toContainText("Line L11");
   await page.getByTestId("pr-composer-text").fill("Keep the unconditional call for the stub?");
@@ -1979,6 +2055,54 @@ test("GitHub PR tab: overview, files, choose the wiki once, ask about the PR and
   // close the PR tab
   await page.locator('[data-testid="doc-tab"][data-ws="github"]').getByTestId("doc-tab-close").click();
   await expect(page.locator('[data-testid="doc-tab"][data-ws="github"]')).toHaveCount(0);
+  await signOut(page);
+});
+
+test("GitHub PR tab: agent review → suggested comments in the diff; discuss, apply or discard; only applied ones are published", async ({ page }) => {
+  await ensureGithubSignIn(page);
+  await page.goto("/");
+  await page.getByTestId("login-github").click();
+  await expect(page.getByTestId("view-document")).toBeVisible({ timeout: 15000 });
+  await page.getByTestId("activity-reviews").click();
+  await page.locator('[data-testid="review-pr"][data-number="101"]').click();
+  await expect(page.getByTestId("pr-wiki-select")).toBeVisible(); // the wiki was chosen in an earlier test
+  const before = (await (await page.request.get("/fake-github/posted")).json()).length;
+  await page.getByTestId("pr-agent-review").click();
+  await expect(page.getByTestId("selection-question")).toHaveValue(/Review this pull request/);
+  await page.getByTestId("selection-send").click();
+  await expect(page.getByTestId("pr-agent-review-done")).toContainText("suggested 2 comment(s)", { timeout: 25000 });
+  await expect(page.locator('[data-testid="message-agent"][data-status="completed"]').last()).toContainText(/2 suggested comment\(s\) were added to the diff|added to the diff \(Files\) as suggestions/);
+  await expect(page.locator('[data-testid="message-agent"]').last()).not.toContainText("is this guard needed"); // the JSON is not shown
+  await page.getByTestId("pr-tab-files").click();
+  const agent = page.locator('[data-testid="pr-draft"][data-origin="agent"]');
+  await expect(agent).toHaveCount(2);
+  await expect(agent.first()).toHaveAttribute("data-decision", "proposed");
+  await expect(page.getByTestId("pr-undecided")).toContainText("2 agent suggestion(s) to decide");
+  await expect(page.getByTestId("pr-finish-review")).toHaveText(/^Finish review ▾$/); // nothing to publish yet
+  const line = agent.filter({ hasText: "is this guard needed?" });
+  const file = agent.filter({ hasText: "Line 9999: Agent: consider a test." });
+  await expect(page.locator('[data-file="c10/xpu/stub.cpp"] .diff-comment-row').filter({ hasText: "is this guard needed?" })).toHaveCount(1); // under its line
+  // discuss a suggestion with the agent
+  await line.getByTestId("pr-draft-ask").click();
+  await page.getByTestId("pr-draft-ask-text").fill("Is the guard really redundant?");
+  await page.getByTestId("pr-draft-ask-send").click();
+  await expect(page.locator('[data-testid="message-agent"][data-status="completed"]').last()).toContainText("Is the guard really redundant?", { timeout: 20000 });
+  await expect(page.getByTestId("thread-target").last()).toContainText("suggested comment on c10/xpu/stub.cpp R");
+  // decide: apply one, discard the other
+  await line.getByTestId("pr-draft-accepted").click();
+  await expect(line).toHaveAttribute("data-decision", "accepted");
+  await file.getByTestId("pr-draft-discarded").click();
+  await expect(file).toHaveAttribute("data-decision", "discarded");
+  await expect(page.getByTestId("pr-finish-review")).toContainText("Finish review (1)");
+  await page.getByTestId("pr-finish-review").click();
+  await page.getByTestId("pr-submit-send").click();
+  await expect(page.getByTestId("pr-notice")).toContainText("Review published on GitHub");
+  await expect(page.getByTestId("pr-draft")).toHaveCount(0);
+  const posted = (await (await page.request.get("/fake-github/posted")).json()).slice(before);
+  const threads = posted.filter((x: any) => x.mutation === "AddThread").map((x: any) => x.variables);
+  expect(threads).toHaveLength(1);
+  expect(threads[0]).toMatchObject({ path: "c10/xpu/stub.cpp", body: "Agent: is this guard needed?", side: "RIGHT", subject: "LINE" });
+  await page.locator('[data-testid="doc-tab"][data-ws="github"]').getByTestId("doc-tab-close").click();
   await signOut(page);
 });
 
@@ -2060,4 +2184,27 @@ test("projects: add one by cloning a URL, close it, and it stays closed", async 
   } finally {
     for (const d of [src, bare, dest]) fs.rmSync(d, { recursive: true, force: true });
   }
+});
+
+test("reference folders for the agent: add and remove for a wiki folder", async ({ page }) => {
+  await login(page);
+  const root = page.getByTestId("tree-root").first();
+  await root.locator(".tree-root").hover();
+  await page.getByTestId("tree-context-root").click();
+  const box = page.getByTestId("context-folders");
+  await expect(box).toContainText("None yet.");
+  await page.getByTestId("context-folder-input").fill("relative/path");
+  await page.getByTestId("context-folder-add").click();
+  await expect(page.getByTestId("context-folder-error")).toContainText("absolute path");
+  await page.getByTestId("context-folder-input").fill("/tmp");
+  await page.getByTestId("context-folder-add").click();
+  await expect(page.getByTestId("context-folder")).toHaveCount(1);
+  await page.keyboard.press("Escape");
+  await page.mouse.click(5, 5); // close (backdrop)
+  await expect(box).toHaveCount(0);
+  await root.locator(".tree-root").hover();
+  await page.getByTestId("tree-context-root").click();
+  await expect(page.getByTestId("context-folder")).toContainText("/tmp");
+  await page.getByTestId("context-folder-remove").click();
+  await expect(page.getByTestId("context-folder")).toHaveCount(0);
 });
