@@ -157,10 +157,24 @@ def add_fake_review_queue(app) -> None:
              None]  # a PR in an organization that requires SAML SSO
 
     def graphql(query, variables):
+        if "pullRequest(number" in query:
+            n = int(variables["number"])
+            src = next(x for x in nodes if x and x["number"] == n)
+            return {"repository": {"nameWithOwner": src["repository"]["nameWithOwner"], "isPrivate": False, "pullRequest": {
+                **src, "body": "This PR **fixes** the lazy stub.\n\n- adds a check", "state": "OPEN", "mergeable": "MERGEABLE",
+                "baseRefName": "main", "headRefName": f"fix-{n}",
+                "latestReviews": {"nodes": [{"author": {"login": "bob"}, "state": "APPROVED", "submittedAt": "2026-11-08T00:00:00Z", "url": "u"}]},
+                "commits": {"nodes": [{"commit": {"oid": "abc", "statusCheckRollup": {"state": "FAILURE", "contexts": {"nodes": [
+                    {"__typename": "CheckRun", "name": "xpu-test", "conclusion": "FAILURE", "status": "COMPLETED", "detailsUrl": None},
+                    {"__typename": "CheckRun", "name": "lint", "conclusion": "SUCCESS", "status": "COMPLETED", "detailsUrl": None}]}}}}]}}}}
         return {"rateLimit": {"remaining": 4999}, "search": {"issueCount": len(nodes), "pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": nodes},
                 "_errors": [{"type": "FORBIDDEN", "message": "Resource protected by organization SAML enforcement."}]}
 
     ctx.extra["gh_graphql"] = graphql
+    ctx.extra["gh_pr_files"] = lambda o, r, n: [
+        {"filename": "c10/xpu/stub.cpp", "status": "modified", "additions": 2, "deletions": 1,
+         "patch": "@@ -10,3 +10,4 @@ void init() {\n   load();\n-  call();\n+  if (ok)\n+    call();\n }"},
+        {"filename": "docs/xpu.md", "status": "added", "additions": 1, "deletions": 0, "patch": "@@ -0,0 +1 @@\n+XPU notes"}]
 
 
 def main() -> None:

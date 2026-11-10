@@ -88,7 +88,7 @@ Everything below is explained step by step in **[docs/USER_GUIDE.md](docs/USER_G
 
 | Area | What you get |
 | --- | --- |
-| Reviews | GitHub review queue next to the wikis (owner's GitHub sign-in only): PRs requesting your review across all repos, grouped by repo, CI/draft/size, filter and sort, via the server's `gh` login |
+| Reviews | GitHub review queue next to the wikis (owner's GitHub sign-in only): PRs requesting your review across all repos, grouped by repo, CI/draft/size, filter and sort; a PR opens as a tab (overview, checks, reviews, diff) and is discussed with the agent in the repo's wiki, via the server's `gh` login |
 | Folders | Several wiki folders in one window ("add folder", like VS Code), each fully isolated: documents, discussions, sessions, locks, reviews, Git state; named workspaces (sets of folders with their own tabs and terminals); create folders on the server and files/folders in the tree |
 | Reading | Markdown, any text/source file (numbered code), Word, PowerPoint, Visio in their original layout (LibreOffice) plus a selectable text view (`.docx`, `.pptx`, `.vsdx`), PDF; kind icons; section links; Read / Discuss modes; reading position restore; tabs for open documents (switch, close, reorder, across folders) |
 | Asking | Select words or lines → question box (copy icon, Enter to send), ask about a page, slide, area or picture of a PDF / Office document (sent to the agent as an image), or ask about the whole document from the discussions panel (any format, images attached for the agent); anchors survive edits; orphaned/ambiguous detection and manual reanchor; review marks |
@@ -161,8 +161,8 @@ separately (`~/.config/wiki-agent-workspace/config.toml`). Backup, restore and m
 ## Running the tests
 
 ```bash
-scripts/test.sh            # backend: pytest (121 tests; real git + tmux + fake agents), ~25 s
-scripts/test.sh --e2e      # + Playwright browser suite (48 scenarios) against the production build
+scripts/test.sh            # backend: pytest (122 tests; real git + tmux + fake agents), ~25 s
+scripts/test.sh --e2e      # + Playwright browser suite (49 scenarios) against the production build
 # or individually
 .venv/bin/python -m pytest tests/backend -q
 cd frontend && npx playwright install chromium && npm run test:e2e

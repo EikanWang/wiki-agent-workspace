@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import logging
 import shutil
 import subprocess
@@ -19,8 +20,9 @@ import time
 from typing import Any, Callable
 
 from fastapi import APIRouter, Depends, Query, Request
+from pydantic import BaseModel
 
-from .deps import AppContext, require_auth
+from .deps import AppContext, require_auth, require_auth_mutating
 from .errors import ApiError
 
 log = logging.getLogger("waw.github")
@@ -275,3 +277,186 @@ def reset_cache() -> None:
     _cache.clear()
     _errors.clear()
     _tasks.clear()
+    _pr_cache.clear()
+
+
+# ---------------------------------------------------------------------- a pull request (tab)
+
+PR_QUERY = """
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    nameWithOwner isPrivate
+    pullRequest(number: $number) {
+      number title url body state isDraft createdAt updatedAt mergeable additions deletions changedFiles
+      baseRefName headRefName reviewDecision
+      author { login }
+      labels(first: 20) { nodes { name color } }
+      latestReviews(first: 30) { nodes { author { login } state submittedAt url } }
+      reviewRequests(first: 30) { nodes { requestedReviewer { __typename ... on User { login } ... on Team { slug } } } }
+      commits(last: 1) { nodes { commit { oid statusCheckRollup { state contexts(first: 80) { nodes {
+        __typename
+        ... on CheckRun { name conclusion status detailsUrl }
+        ... on StatusContext { context state targetUrl }
+      } } } } } }
+    }
+  }
+}
+"""
+NAME = re.compile(r"^[A-Za-z0-9_.-]{1,100}$")
+MAX_PATCH_CHARS = 400_000  # per PR copy given to the agent / shown (GitHub omits patches of huge files anyway)
+PR_CACHE_SECONDS = 60
+
+
+def _gh_files(owner: str, repo: str, number: int) -> list[dict[str, Any]]:
+    out = _run_gh(["api", "--paginate", f"repos/{owner}/{repo}/pulls/{number}/files?per_page=100",
+                   "--jq", ".[] | {filename, status, additions, deletions, patch, previous_filename}"], timeout=120)
+    return [json.loads(ln) for ln in out.splitlines() if ln.strip()]
+
+
+def _checks(pr: dict[str, Any]) -> tuple[str | None, list[dict[str, Any]]]:
+    nodes = (pr.get("commits") or {}).get("nodes") or []
+    roll = (((nodes[0] or {}).get("commit") or {}).get("statusCheckRollup") or {}) if nodes else {}
+    out = []
+    for c in (roll.get("contexts") or {}).get("nodes") or []:
+        if not c:
+            continue
+        if c.get("__typename") == "CheckRun":
+            state = (c.get("conclusion") or c.get("status") or "").upper()
+            out.append({"name": c.get("name"), "state": state, "url": c.get("detailsUrl")})
+        else:
+            out.append({"name": c.get("context"), "state": (c.get("state") or "").upper(), "url": c.get("targetUrl")})
+    order = {"FAILURE": 0, "ERROR": 0, "TIMED_OUT": 0, "CANCELLED": 1, "ACTION_REQUIRED": 1, "PENDING": 2, "IN_PROGRESS": 2, "QUEUED": 2}
+    out.sort(key=lambda c: (order.get(c["state"], 3), c["name"] or ""))
+    return roll.get("state"), out
+
+
+def pr_markdown(pr: dict[str, Any], files: list[dict[str, Any]]) -> str:
+    """The copy of a pull request the agent reads (and that discussions are attached to)."""
+    lines = [f"# {pr['repo']}#{pr['number']}: {pr['title']}", "",
+             f"- URL: {pr['url']}", f"- Author: {pr['author']}", f"- Branches: {pr['head']} → {pr['base']}",
+             f"- State: {pr['state']}{' (draft)' if pr['draft'] else ''}; review decision: {pr['review_decision'] or 'none'}",
+             f"- Size: {pr['changed_files']} files, +{pr['additions']} −{pr['deletions']}", "",
+             "## Description", "", (pr["body"] or "(no description)").strip(), "", "## Changed files", ""]
+    budget = MAX_PATCH_CHARS
+    for f in files:
+        lines.append(f"### {f['filename']} ({f['status']}, +{f['additions']} −{f['deletions']})")
+        patch = f.get("patch")
+        if not patch:
+            lines += ["", "(no textual diff: binary or too large)", ""]
+            continue
+        if len(patch) > budget:
+            lines += ["", f"(diff omitted: the PR copy is limited to {MAX_PATCH_CHARS} characters of diff)", ""]
+            continue
+        budget -= len(patch)
+        fence = "````" if "```" in patch else "```"
+        lines += ["", f"{fence}diff", patch, fence, ""]
+    return "\n".join(lines) + "\n"
+
+
+def fetch_pr(owner: str, repo: str, number: int, graphql: Callable[[str, dict], dict], files_fn: Callable[[str, str, int], list]) -> dict[str, Any]:
+    d = graphql(PR_QUERY, {"owner": owner, "name": repo, "number": number})
+    r = d.get("repository") or {}
+    p = r.get("pullRequest")
+    if not p:
+        raise ApiError(404, "PR_NOT_FOUND", f"{owner}/{repo}#{number} not found (or not visible to the server's gh account)")
+    ci, checks = _checks(p)
+    pr = {
+        "repo": r["nameWithOwner"], "private": bool(r.get("isPrivate")), "number": p["number"], "title": p["title"], "url": p["url"],
+        "body": p.get("body") or "", "state": p.get("state"), "draft": bool(p.get("isDraft")), "author": (p.get("author") or {}).get("login"),
+        "created_at": p.get("createdAt"), "updated_at": p.get("updatedAt"), "mergeable": p.get("mergeable"),
+        "additions": p.get("additions", 0), "deletions": p.get("deletions", 0), "changed_files": p.get("changedFiles", 0),
+        "base": p.get("baseRefName"), "head": p.get("headRefName"), "review_decision": p.get("reviewDecision"),
+        "labels": [{"name": lb["name"], "color": lb.get("color")} for lb in (p.get("labels") or {}).get("nodes") or []],
+        "reviews": [{"author": (v.get("author") or {}).get("login"), "state": v.get("state"), "submitted_at": v.get("submittedAt"), "url": v.get("url")}
+                    for v in (p.get("latestReviews") or {}).get("nodes") or [] if v],
+        "requested": [(n.get("requestedReviewer") or {}).get("login") or (n.get("requestedReviewer") or {}).get("slug")
+                      for n in (p.get("reviewRequests") or {}).get("nodes") or [] if n],
+        "head_sha": ((((p.get("commits") or {}).get("nodes") or [{}])[0] or {}).get("commit") or {}).get("oid"),
+        "ci": ci, "checks": checks,
+    }
+    files = files_fn(owner, repo, number)
+    return {"pr": pr, "files": [
+        {"path": f["filename"], "previous_path": f.get("previous_filename"), "status": f["status"], "additions": f.get("additions", 0),
+         "deletions": f.get("deletions", 0), "unified": (f"--- a/{f.get('previous_filename') or f['filename']}\n+++ b/{f['filename']}\n{f['patch']}\n" if f.get("patch") else ""),
+         "binary_or_large": not f.get("patch")}
+        for f in files]}
+
+
+_pr_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+
+
+def _check_names(owner: str, repo: str) -> None:
+    if not NAME.match(owner) or not NAME.match(repo):
+        raise ApiError(400, "INVALID_REPO", "invalid repository name")
+
+
+def repo_wiki(ctx: AppContext, repo: str) -> str | None:
+    from .models import GithubRepoWiki
+
+    with ctx.db.read() as s:
+        row = s.get(GithubRepoWiki, repo.lower())
+        return row.workspace_id if row else None
+
+
+@router.get("/github/pr/{owner}/{repo}/{number}")
+async def get_pull_request(owner: str, repo: str, number: int, refresh: bool = Query(False),
+                           auth: tuple[AppContext, str] = Depends(require_owner)):
+    """A pull request for its tab: details, checks, reviews, changed files; writes the copy the agent discusses."""
+    ctx, _ = auth
+    _check_names(owner, repo)
+    key = f"{owner}/{repo}#{number}".lower()
+    hit = _pr_cache.get(key)
+    if hit and not refresh and time.time() - hit[0] < PR_CACHE_SECONDS:
+        data = hit[1]
+    else:
+        graphql = _hooks(ctx)[0]
+        files_fn = ctx.extra.get("gh_pr_files", _gh_files)
+        data = await asyncio.to_thread(fetch_pr, owner, repo, number, graphql, files_fn)
+        _pr_cache[key] = (time.time(), data)
+        # the copy the agent reads; discussions attach to it like to a document of the repo's wiki
+        snap = ctx.settings.snapshots_dir / "github" / owner.lower() / repo.lower()
+        snap.mkdir(parents=True, exist_ok=True)
+        raw = [{"filename": f["path"], "status": f["status"], "additions": f["additions"], "deletions": f["deletions"],
+                "patch": f["unified"].split("\n", 2)[2].rstrip("\n") if f["unified"] else None} for f in data["files"]]
+        text = pr_markdown(data["pr"], raw)
+        (snap / f"{number}.md").write_text(text, encoding="utf-8")
+    wiki = repo_wiki(ctx, data["pr"]["repo"])
+    if wiki and ctx.workspaces is not None and wiki not in ctx.workspaces.runtimes:
+        wiki = None  # that folder is not open in this window (any more): ask again
+    return {**data, "wiki_workspace_id": wiki, "doc_path": f".waw-github/{owner.lower()}/{repo.lower()}/{number}.md"}
+
+
+class RepoWikiIn(BaseModel):
+    repo: str
+    workspace_id: str
+
+
+@router.put("/github/repo-wiki")
+async def set_repo_wiki(body: RepoWikiIn, request: Request, ctx: AppContext = Depends(require_auth_mutating)):
+    """Which wiki folder the agent uses for this repository's pull requests (asked once per repository)."""
+    from .models import GithubRepoWiki
+
+    if not (await hub_status(ctx, request))["available"]:
+        raise ApiError(403, "NOT_GITHUB_OWNER", "only the server's owner signed in with GitHub can change this")
+    parts = body.repo.split("/")
+    if len(parts) != 2:
+        raise ApiError(400, "INVALID_REPO", "repo must be owner/name")
+    _check_names(*parts)
+    if ctx.workspaces is not None and body.workspace_id not in ctx.workspaces.runtimes:
+        raise ApiError(400, "WORKSPACE_NOT_OPEN", "choose a folder that is open in this window")
+    with ctx.db.write() as s:
+        row = s.get(GithubRepoWiki, body.repo.lower())
+        if row is None:
+            s.add(GithubRepoWiki(repo=body.repo.lower(), workspace_id=body.workspace_id))
+        else:
+            row.workspace_id = body.workspace_id
+    return {"repo": body.repo.lower(), "workspace_id": body.workspace_id}
+
+
+@router.get("/github/repo-wikis")
+def list_repo_wikis(auth: tuple[AppContext, str] = Depends(require_owner)):
+    from .models import GithubRepoWiki
+
+    ctx, _ = auth
+    with ctx.db.read() as s:
+        return {"repos": [{"repo": r.repo, "workspace_id": r.workspace_id} for r in s.query(GithubRepoWiki).order_by(GithubRepoWiki.repo).all()]}

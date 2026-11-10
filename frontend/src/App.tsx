@@ -22,7 +22,8 @@ import {
 } from "./api";
 import Login from "./components/Login";
 import FileTree, { notifyTreeChanged } from "./components/FileTree";
-import DocTabs, { DocTab, loadTabs, sameTab, tabsKey, withTab } from "./components/DocTabs";
+import DocTabs, { DocTab, PR_TABS, loadTabs, sameTab, tabsKey, withTab } from "./components/DocTabs";
+import PrView from "./components/PrView";
 import WorkspaceMenu from "./components/WorkspaceMenu";
 import AccountMenu from "./components/AccountMenu";
 import ReviewsPanel, { loadReviews, reviewBadge, useReviews } from "./components/ReviewsPanel";
@@ -53,7 +54,11 @@ export default function App() {
   const [editNext, setEditNext] = useState<string | null>(null);
   // GitHub review hub: only for the server owner's GitHub sign-in
   const [hub, setHub] = useState<{ available: boolean; owner: string | null } | null>(null);
-  const reviews = useReviews(); // path of a just-created file to open in the editor
+  const reviews = useReviews();
+  // the pull request shown in the center (a tab like a document; its discussions live in a hidden PR document)
+  const [prTab, setPrTab] = useState<{ repo: string; number: number } | null>(null);
+  const prTabRef = useRef(prTab);
+  prTabRef.current = prTab; // path of a just-created file to open in the editor
   const lastTab = useRef<(DocTab & { document_id: string }) | null>(null);
   const [docError, setDocError] = useState<string | null>(null);
   const [threads, setThreads] = useState<Thread[]>([]);
@@ -235,11 +240,15 @@ export default function App() {
       try {
         const d = await get<OpenDocument>(`/documents/open?path=${encodeURIComponent(path)}`);
         const tab = { ws: getWorkspace() ?? "", path: d.path };
+        const isPr = d.path.startsWith(".waw-github/");
         const prev = lastTab.current;
         // relinked (same document, new path): the tab follows; otherwise a new tab opens after the current one
         const renamed = prev && prev.document_id === d.document_id && !sameTab(prev, tab) ? prev : null;
-        setDocTabs((tabs) => withTab(tabs, tab, prev, renamed));
-        lastTab.current = { ...tab, document_id: d.document_id };
+        if (!isPr) {
+          setDocTabs((tabs) => withTab(tabs, tab, prev, renamed));
+          lastTab.current = { ...tab, document_id: d.document_id };
+          setPrTab(null);
+        }
         setDoc(d);
         setChanged(null);
         if (!keepThread) {
@@ -318,22 +327,45 @@ export default function App() {
   useEffect(() => {
     if (!workspaces.length) return;
     setDocTabs((tabs) => {
-      const keep = tabs.filter((t) => workspaces.some((w) => w.id === t.ws));
+      const keep = tabs.filter((t) => t.ws === PR_TABS || workspaces.some((w) => w.id === t.ws));
       return keep.length === tabs.length ? tabs : keep;
     });
   }, [workspaces]);
 
+  const openPr = useCallback((repo: string, number: number, title?: string) => {
+    if (!confirmLeaveEditor()) return;
+    const tab = { ws: PR_TABS, path: `${repo}#${number}`, title };
+    setDocTabs((tabs) => {
+      const i = tabs.findIndex((t) => sameTab(t, tab));
+      if (i >= 0) return title && tabs[i].title !== title ? tabs.map((t, j) => (j === i ? { ...t, title } : t)) : tabs;
+      const after = lastTab.current ? tabs.findIndex((t) => sameTab(t, lastTab.current)) : -1;
+      const out = [...tabs];
+      out.splice(after >= 0 ? after + 1 : out.length, 0, tab);
+      return out;
+    });
+    lastTab.current = { ...tab, document_id: "" };
+    setPrTab({ repo, number });
+    setView("document");
+    setMobilePane("doc");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const activateDocTab = useCallback(
     (t: DocTab) => {
+      if (t.ws === PR_TABS) {
+        const m = t.path.match(/^(.+)#(\d+)$/);
+        if (m) openPr(m[1], Number(m[2]), t.title);
+        return;
+      }
       if (t.ws !== getWorkspace()) switchWorkspace(t.ws, false);
       void openDocument(t.path);
     },
-    [switchWorkspace, openDocument],
+    [switchWorkspace, openDocument, openPr],
   );
 
   const closeDocTab = useCallback(
     (t: DocTab) => {
-      const activeTab = doc ? { ws: activeWs ?? "", path: doc.path } : null;
+      const activeTab = prTab ? { ws: PR_TABS, path: `${prTab.repo}#${prTab.number}` } : doc ? { ws: activeWs ?? "", path: doc.path } : null;
       const isActive = sameTab(t, activeTab);
       if (isActive && !confirmLeaveEditor()) return;
       const idx = docTabs.findIndex((x) => sameTab(x, t));
@@ -348,6 +380,7 @@ export default function App() {
       if (!isActive) return;
       editorDirty.current = false;
       lastTab.current = null;
+      setPrTab(null);
       const next = rest[idx] ?? rest[idx - 1];
       if (next) activateDocTab(next);
       else {
@@ -359,7 +392,7 @@ export default function App() {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [doc, activeWs, docTabs, activateDocTab],
+    [doc, activeWs, docTabs, activateDocTab, prTab],
   );
 
   useEffect(() => {
@@ -585,12 +618,18 @@ export default function App() {
   const openRecent = useCallback(
     (item: RecentItem) => {
       setShowRecent(false);
+      const pr = item.path.match(/^\.waw-github\/([^/]+)\/([^/]+)\/(\d+)\.md$/);
+      if (pr) {
+        restoreThreadRef.current = item.last_thread_id;
+        openPr(`${pr[1]}/${pr[2]}`, Number(pr[3]));
+        return;
+      }
       if (item.workspace_id && item.workspace_id !== getWorkspace()) switchWorkspace(item.workspace_id, false);
       restoreThreadRef.current = item.last_thread_id;
       void openDocument(item.path);
       if (item.last_thread_id) setMobilePane("chat");
     },
-    [openDocument, switchWorkspace],
+    [openDocument, switchWorkspace, openPr],
   );
   const activeWsInfo = useMemo(() => workspaces.find((w) => w.id === activeWs) ?? null, [workspaces, activeWs]);
   const removeFolder = useCallback(
@@ -610,6 +649,9 @@ export default function App() {
     },
     [workspaces, switchWorkspace, refreshWorkspaces, notify],
   );
+  // with a PR tab in front, the panel and the session bar belong to the PR's discussion document (once it is open)
+  const isPrDoc = !!doc && doc.path.startsWith(".waw-github/");
+  const panelDoc = prTab ? (isPrDoc && doc!.path.endsWith(`/${prTab.number}.md`) ? doc : null) : doc;
   const defaultSession = useMemo(() => sessions.find((s) => s.id === doc?.default_session_id), [sessions, doc?.default_session_id]);
 
   if (authed === null) return <div className="loading-screen">Loading…</div>;
@@ -653,17 +695,17 @@ export default function App() {
           <span className="muted small hide-mobile" title={activeWsInfo?.root ?? boot.workspace.root}>{activeWsInfo?.name ?? boot.workspace.name}{(activeWsInfo?.git ?? boot.workspace.git)?.branch ? ` · ${(activeWsInfo?.git ?? boot.workspace.git)!.branch}` : ""}</span>
         )}
         <span className="spacer" />
-        {doc && (
+        {panelDoc && (
           <div className="session-area" data-testid="session-area">
             <span className="muted small hide-mobile">Document session</span>
             <button className="btn small session-btn" onClick={() => setShowSessions(true)} data-testid="session-button" title="Choose or link the session new discussions use">
               {defaultSession ? <SessionChip session={defaultSession} /> : <>No session bound · choose…</>}
             </button>
             <button className="btn small" onClick={() => setShowSessions(true)} data-testid="new-session-button">+ New session</button>
-            <button className="btn small" onClick={() => setShowPreview(true)} title="Ask the agent for a change in an isolated copy and review the diff before applying" disabled={!!doc.lock}>Preview change</button>
-            <button className={`btn small toggle ${doc.lock ? "on" : ""}`} onClick={() => void toggleLock(doc.lock && doc.lock.path !== doc.path ? doc.lock.path : doc.path, !doc.lock)} title={doc.lock ? `Locked${doc.lock.path !== doc.path ? ` by folder ${doc.lock.path || "(workspace)"}` : ""} — click to unlock` : "Lock this document (read-only for the app and app-driven agents)"} data-testid="doc-lock-toggle" aria-pressed={!!doc.lock}>
-              {doc.lock ? "🔒 Locked" : "🔓 Lock"}
-            </button>
+            {!isPrDoc && <button className="btn small" onClick={() => setShowPreview(true)} title="Ask the agent for a change in an isolated copy and review the diff before applying" disabled={!!panelDoc.lock}>Preview change</button>}
+            {!isPrDoc && <button className={`btn small toggle ${panelDoc.lock ? "on" : ""}`} onClick={() => void toggleLock(panelDoc.lock && panelDoc.lock.path !== panelDoc.path ? panelDoc.lock.path : panelDoc.path, !panelDoc.lock)} title={panelDoc.lock ? `Locked${panelDoc.lock.path !== panelDoc.path ? ` by folder ${panelDoc.lock.path || "(workspace)"}` : ""} — click to unlock` : "Lock this document (read-only for the app and app-driven agents)"} data-testid="doc-lock-toggle" aria-pressed={!!panelDoc.lock}>
+              {panelDoc.lock ? "🔒 Locked" : "🔓 Lock"}
+            </button>}
           </div>
         )}
         <nav className="view-tabs">
@@ -731,7 +773,7 @@ export default function App() {
           </div>
           {sidebarView === "reviews" && (
             <div className="sidebar-content">
-              <ReviewsPanel onOpen={(pr) => window.open(pr.url, "_blank", "noopener")} />
+              <ReviewsPanel onOpen={(pr) => openPr(pr.repo, pr.number, `#${pr.number} ${pr.title}`)} />
             </div>
           )}
           {sidebarOpen && <Resizer side="right" onResize={resizeSidebar} onEnd={persistPrefs} />}
@@ -739,8 +781,8 @@ export default function App() {
 
         <section className="center" style={{ display: view === "document" ? undefined : "none" }}>
           <DocTabs
-            tabs={workspaces.length ? docTabs.filter((t) => workspaces.some((w) => w.id === t.ws && w.available)) : docTabs}
-            active={doc ? { ws: activeWs ?? "", path: doc.path } : null}
+            tabs={(workspaces.length ? docTabs.filter((t) => t.ws === PR_TABS || workspaces.some((w) => w.id === t.ws && w.available)) : docTabs).filter((t) => t.ws !== PR_TABS || !!hub?.available)}
+            active={prTab ? { ws: PR_TABS, path: `${prTab.repo}#${prTab.number}` } : doc ? { ws: activeWs ?? "", path: doc.path } : null}
             workspaces={workspaces}
             onActivate={activateDocTab}
             onClose={closeDocTab}
@@ -756,8 +798,25 @@ export default function App() {
               })
             }
           />
-          {docError && <div className="banner warn">{docError}</div>}
-          {doc ? (
+          {docError && !prTab && <div className="banner warn">{docError}</div>}
+          {prTab && hub?.available ? (
+            <PrView
+              key={`${prTab.repo}#${prTab.number}`}
+              repo={prTab.repo}
+              number={prTab.number}
+              workspaces={workspaces}
+              docReady={!!doc && doc.path.startsWith(".waw-github/") && doc.path.endsWith(`/${prTab.number}.md`)}
+              onReady={(wsId, docPath, title) => {
+                setDocTabs((tabs) => tabs.map((t) => (t.ws === PR_TABS && t.path === `${prTab.repo}#${prTab.number}` ? { ...t, title } : t)));
+                if (wsId !== getWorkspace()) switchWorkspace(wsId, false);
+                void openDocument(docPath, false, true); // the PR's discussions (panel); quiet: errors stay in the PR view
+              }}
+              onSend={createThread}
+              sessions={sessions}
+              defaultSessionId={doc?.default_session_id ?? null}
+              defaultProvider={boot.default_provider}
+            />
+          ) : doc ? (
             <Reader
               doc={doc}
               threads={threads}
@@ -844,14 +903,14 @@ export default function App() {
           <TerminalPanel terminals={terminals} info={boot.terminal_info} activeId={activeTerminal} onActive={setActiveTerminal} onChanged={refreshTerminals} visible={view === "terminal"} workspaceRoot={activeWsInfo?.root ?? boot.workspace.root} fontSize={prefs.terminalSize} />
         </section>
 
-        {view === "document" && doc && !panelOpen && (
+        {view === "document" && panelDoc && !panelOpen && (
           <aside className="discussion collapsed">
             <button className="collapsed-tab" onClick={() => updatePrefs({ panelOpen: true })} title="Show discussions" data-testid="panel-expand">
               ‹ Discussions{threads.length ? ` (${threads.length})` : ""}
             </button>
           </aside>
         )}
-        {view === "document" && doc && panelOpen && (
+        {view === "document" && panelDoc && panelOpen && (
           <DiscussionPanel
             onCollapse={() => updatePrefs({ panelOpen: false })}
             resizer={<Resizer side="left" onResize={resizePanel} onEnd={persistPrefs} />}
@@ -859,11 +918,11 @@ export default function App() {
             onModeChange={(m) => updatePrefs({ panelMode: m })}
             onSessionChanged={() => void refreshSessions()}
             onAskDocument={(q) => createThread(wholeDocument(), q, null)}
-            docFormat={doc.format}
+            docFormat={panelDoc.format}
             thread={activeThreadObj}
             threads={threads}
             sessions={sessions}
-            defaultSessionId={doc.default_session_id}
+            defaultSessionId={panelDoc.default_session_id}
             liveJob={liveJob}
             onReply={reply}
             onRetry={retry}
@@ -874,7 +933,7 @@ export default function App() {
               setReanchorArmed(false);
               if (id === null) setMobilePane("doc");
             }}
-            docId={doc.document_id}
+            docId={panelDoc.document_id}
             onRequestReanchor={() => {
               setReanchorArmed((a) => !a);
               setMobilePane("doc");

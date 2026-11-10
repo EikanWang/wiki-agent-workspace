@@ -1821,13 +1821,76 @@ test("GitHub review hub: only the owner's GitHub sign-in sees it; queue grouped 
   await expect(page.getByTestId("review-pr")).toHaveCount(1);
   await expect(page.getByTestId("review-pr")).toHaveAttribute("data-number", "201");
   await page.getByTestId("reviews-filter").fill("");
-  // a PR opens on GitHub (the PR tab comes in the next step); never contact the real github.com from tests
-  await page.context().route("https://github.com/**", (r) => r.fulfill({ status: 200, body: "github" }));
-  const popup = page.waitForEvent("popup");
+  // a PR opens as a tab, with a link to GitHub (never contacted from tests)
   await page.getByTestId("review-pr").first().click();
-  expect((await popup).url()).toBe("https://github.com/pytorch/pytorch/pull/101");
+  await expect(page.getByTestId("pr-view")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Open on GitHub" })).toHaveAttribute("href", "https://github.com/pytorch/pytorch/pull/101");
+  await page.locator('[data-testid="doc-tab"][data-ws="github"]').getByTestId("doc-tab-close").click();
   // back to the files; sign out
   await page.getByTestId("activity-files").click();
   await expect(page.getByTestId("tree-root").first()).toBeVisible();
+  await signOut(page);
+});
+
+test("GitHub PR tab: overview, files, choose the wiki once, ask about the PR and about selected diff lines", async ({ page }) => {
+  await ensureGithubSignIn(page);
+  await page.goto("/");
+  await page.getByTestId("login-github").click();
+  await expect(page.getByTestId("view-document")).toBeVisible({ timeout: 15000 });
+  await page.getByTestId("activity-reviews").click();
+  await page.locator('[data-testid="review-pr"][data-number="101"]').click();
+  // the PR opens as a tab next to documents
+  const tab = page.locator('[data-testid="doc-tab"][data-ws="github"]');
+  await expect(tab).toHaveAttribute("aria-selected", "true");
+  await expect(tab).toContainText("#101");
+  await expect(page.getByTestId("pr-title")).toContainText("[xpu] Fix the lazy Level Zero stub");
+  await expect(page.getByTestId("pr-description")).toContainText("This PR fixes the lazy stub.");
+  await expect(page.getByTestId("pr-checks").locator("li").first()).toContainText("xpu-test"); // failing first
+  await expect(page.getByTestId("pr-reviews")).toContainText("bob approved");
+  // first PR of this repository: choose the wiki the agent works in (once)
+  await expect(page.getByTestId("pr-ask")).toBeDisabled();
+  await page.getByTestId("pr-wiki-use").click();
+  await expect(page.getByTestId("pr-choose-wiki")).toHaveCount(0);
+  await expect(page.getByTestId("pr-ask")).toBeEnabled({ timeout: 10000 });
+  // ask about the whole PR
+  if ((await page.getByTestId("mode-individual").count()) > 0) await page.getByTestId("mode-individual").click();
+  await page.getByTestId("pr-ask").click();
+  await page.getByTestId("selection-question").fill("Is the null check enough?");
+  await page.getByTestId("selection-send").click();
+  await expect(page.locator('[data-testid="message-agent"][data-status="completed"]').last()).toContainText("Is the null check enough?", { timeout: 20000 });
+  await expect(page.getByTestId("thread-whole-document")).toBeVisible();
+  // files: select diff lines and ask about them
+  await page.getByTestId("pr-tab-files").click();
+  await expect(page.getByTestId("pr-file")).toHaveCount(2);
+  const lines = page.locator('[data-file="c10/xpu/stub.cpp"] .diff-line.add');
+  await expect(lines).toHaveCount(2);
+  await lines.first().evaluate((first) => {
+    const last = first.nextElementSibling!;
+    const r = document.createRange();
+    r.setStartBefore(first);
+    r.setEndAfter(last);
+    const s = window.getSelection()!;
+    s.removeAllRanges();
+    s.addRange(r);
+  });
+  const b = (await lines.first().boundingBox())!;
+  await lines.first().dispatchEvent("mouseup", { bubbles: true, clientX: b.x + 20, clientY: b.y + 5 });
+  await page.getByTestId("pr-ask-selection").click();
+  await expect(page.locator(".sel-head")).toContainText("Ask about the selected lines (c10/xpu/stub.cpp)");
+  await expect(page.getByTestId("selection-quote")).toContainText("+  if (ok)");
+  await page.getByTestId("selection-question").fill("Why guard call()?");
+  await page.getByTestId("selection-send").click();
+  await expect(page.locator('[data-testid="message-agent"][data-status="completed"]').last()).toContainText("Why guard call()?", { timeout: 20000 });
+  await expect(page.getByTestId("thread-target")).toContainText("c10/xpu/stub.cpp");
+  // the tab is remembered across reloads, and the wiki choice too
+  await page.reload();
+  await expect(page.locator('[data-testid="doc-tab"][data-ws="github"]')).toContainText("#101");
+  await page.locator('[data-testid="doc-tab"][data-ws="github"]').click();
+  await expect(page.getByTestId("pr-title")).toBeVisible();
+  await expect(page.getByTestId("pr-choose-wiki")).toHaveCount(0);
+  await expect(page.getByTestId("pr-wiki-select")).toBeVisible();
+  // close the PR tab
+  await page.locator('[data-testid="doc-tab"][data-ws="github"]').getByTestId("doc-tab-close").click();
+  await expect(page.locator('[data-testid="doc-tab"][data-ws="github"]')).toHaveCount(0);
   await signOut(page);
 });

@@ -606,6 +606,7 @@ function targetLabel(t: Thread["target"]): string {
   if (t.kind === "page") return `📑 ${where}`;
   if (t.kind === "area") return `🔲 Area of ${where.toLowerCase()}`;
   if (t.kind === "image") return `🖼 Image${where ? ` · ${where.toLowerCase()}` : ""}`;
+  if (!t.page && t.label) return `📝 ${t.label}`;
   return `📑 ${where}`;
 }
 

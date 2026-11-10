@@ -31,7 +31,11 @@ backend/app/
                    text model (mirrors frontend/src/textmodel.ts)
   github_hub.py    GitHub review hub: owner gate (GitHub sign-in = gh account), review queue via one paginated
                    GraphQL search through the server's gh CLI (40 PRs/page; smaller on GitHub 502), partial
-                   results (SAML-protected PRs), stale-while-revalidate cache; /github/hub, /github/reviews
+                   results (SAML-protected PRs), stale-while-revalidate cache; /github/hub, /github/reviews;
+                   a PR (/github/pr/{owner}/{repo}/{n}: GraphQL details + REST files, 60 s cache) is written as
+                   a Markdown copy to snapshots/github/ and discussed as the hidden read-only document
+                   .waw-github/<owner>/<repo>/<n>.md of the repo's wiki (github_repo_wikis); deps.py refuses
+                   every PR document/discussion to anyone but the owner's GitHub sign-in
   office.py        OfficeRenderer: Layout view, LibreOffice headless → PDF, content-addressed cache, parallel
                    limit, timeout, private profiles; routes /office/render (status, starts work), /office/pdf
   anchors.py       anchor resolution algorithm (attached/moved/ambiguous/orphaned) + offset validation

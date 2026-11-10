@@ -17,12 +17,50 @@ from .deps import AppContext, require_auth, require_auth_mutating
 from .errors import ApiError, bad_request, conflict, not_found, DOCUMENT_VERSION_CONFLICT, INVALID_ANCHOR
 from .models import AgentSession, AnchorHistory, Document, Job, Message, Thread
 from .sessions import SessionService
+from .documents import is_pr_path
 from .textmodel import NO_TEXT_FORMATS, TextModel, build_text_model_from_html
 
 router = APIRouter()
 
 
 # ---------------------------------------------------------------------- prompt building
+
+PR_INLINE_CHARS = 60_000
+
+
+def build_pr_prompt(*, question: str, quote: str, copy_text: str, copy_path: str, wiki_root: str, target: dict[str, Any] | None,
+                    prior: list[dict[str, str]] | None) -> str:
+    """Prompt for a discussion about a GitHub pull request (review hub)."""
+    head = copy_text.split("\n", 1)[0].lstrip("# ").strip()
+    parts = [
+        f"You are helping the user review the GitHub pull request {head}.",
+        f"Your working directory is the user's wiki ({wiki_root}): use it for background knowledge about the code and the "
+        "hardware/software concepts involved, and cite wiki pages you rely on.",
+        f"The pull request (metadata, description and full diff) is in this file: {copy_path}",
+    ]
+    if len(copy_text) <= PR_INLINE_CHARS:
+        parts.append("<<<PULL_REQUEST\n" + copy_text + "\nPULL_REQUEST>>>")
+    else:
+        parts.append("<<<PULL_REQUEST (first part; read the file for the rest)\n" + copy_text[:PR_INLINE_CHARS] + "\nPULL_REQUEST>>>")
+    if target and target.get("kind") == "text" and quote:
+        where = target.get("label") or "the diff"
+        parts.append(f"The user selected these lines of {where} in the pull request (verbatim):")
+        parts.append("<<<SELECTED_PASSAGE\n" + quote + "\nSELECTED_PASSAGE>>>")
+    if prior:
+        parts.append("Earlier messages in this discussion thread (for context):")
+        parts.extend(f"[{m['role']}] {m['content'][:2000]}" for m in prior[-8:])
+    parts += ["User message:", question,
+              "Instructions: answer as a careful code reviewer (correctness, performance, tests, API and design). Do not modify any "
+              "files and never comment on, approve, push to or otherwise change the pull request on GitHub — only answer."]
+    return "\n\n".join(parts)
+
+
+def _pr_copy(docs, doc_path: str) -> tuple[str, str]:
+    from .documents import pr_snapshot_path
+
+    p = pr_snapshot_path(docs.snapshots_dir, doc_path)
+    return (p.read_text(encoding="utf-8") if p and p.is_file() else "", str(p) if p else "")
+
 
 def describe_target(target: dict[str, Any] | None, document_path: str) -> str | None:
     """What part of a laid-out document the user points at (PDF page, slide, area, embedded image)."""
@@ -313,8 +351,13 @@ class ThreadService:
                 tt = s.get(Thread, thread_id)
                 if tt:
                     tt.target_json = json.dumps(target, ensure_ascii=False)
-        prompt = build_prompt(question=body.question, quote=body.quote, document_path=doc.path, sha256=sha, heading=heading,
-                              prior=None, versions=self.docs.list_versions(doc_id), whole_document=body.whole_document, target=target)
+        if is_pr_path(doc.path):
+            text, cpath = _pr_copy(self.docs, doc.path)
+            prompt = build_pr_prompt(question=body.question, quote=body.quote, copy_text=text, copy_path=cpath,
+                                     wiki_root=str(self.docs.root), target=target, prior=None)
+        else:
+            prompt = build_prompt(question=body.question, quote=body.quote, document_path=doc.path, sha256=sha, heading=heading,
+                                  prior=None, versions=self.docs.list_versions(doc_id), whole_document=body.whole_document, target=target)
         job_id = self.jobs.enqueue_turn(session_id=sess.id, thread_id=thread_id, prompt=prompt,
                                         context={"document_id": doc_id, "document_path": doc.path, "sha256": sha, "quote": body.quote,
                                                  "attachments": attach},
@@ -355,9 +398,14 @@ class ThreadService:
             if tt:
                 tt.last_session_id = sess.id
                 tt.updated_at = utcnow()
-        prompt = build_prompt(question=body.text, quote=t.cur_quote, document_path=doc.path, sha256=sha, heading=t.cur_heading,
-                              prior=prior, versions=self.docs.list_versions(doc.id), whole_document=t.anchor_state in ("document", "page"),
-                              target=json.loads(t.target_json) if t.target_json else None)
+        if is_pr_path(doc.path):
+            text, cpath = _pr_copy(self.docs, doc.path)
+            prompt = build_pr_prompt(question=body.text, quote=t.cur_quote, copy_text=text, copy_path=cpath, wiki_root=str(self.docs.root),
+                                     target=json.loads(t.target_json) if t.target_json else None, prior=prior)
+        else:
+            prompt = build_prompt(question=body.text, quote=t.cur_quote, document_path=doc.path, sha256=sha, heading=t.cur_heading,
+                                  prior=prior, versions=self.docs.list_versions(doc.id), whole_document=t.anchor_state in ("document", "page"),
+                                  target=json.loads(t.target_json) if t.target_json else None)
         job_id = self.jobs.enqueue_turn(session_id=sess.id, thread_id=thread_id, prompt=prompt,
                                         context={"document_id": doc.id, "document_path": doc.path, "sha256": sha, "quote": t.cur_quote,
                                                  "attachments": image_attachments(self.docs, doc.path) + thread_attachments(self.docs.snapshots_dir, t)},

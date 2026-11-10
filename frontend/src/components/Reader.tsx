@@ -787,7 +787,7 @@ function resolveLocal(model: TextModel, t: Thread, sha: string) {
   return resolveAnchor(model, t.anchor, sha);
 }
 
-function SelectionPopover({ anchor, style, sessions, defaultSessionId, defaultProvider, className, onSend, onMark, onReanchor, onClose }: {
+export function SelectionPopover({ anchor, style, sessions, defaultSessionId, defaultProvider, className, onSend, onMark, onReanchor, onClose }: {
   anchor: SelectionAnchor;
   style: React.CSSProperties;
   sessions: AgentSession[];
@@ -939,5 +939,6 @@ function targetTitle(a: SelectionAnchor): string {
   if (t.kind === "page") return `Ask about ${where}`;
   if (t.kind === "area") return `Ask about an area of ${where}`;
   if (t.kind === "image") return `Ask about this image${where ? ` (${where})` : ""}`;
+  if (!t.page && t.label) return `Ask about the selected lines (${t.label})`;
   return `Ask about the selected text${where ? ` (${where})` : ""}`;
 }

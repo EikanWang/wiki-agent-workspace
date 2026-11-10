@@ -99,7 +99,15 @@ can see, grouped by repository (most PRs first):
   size (+/−), draft flag and labels; hover for details;
 - **filter** by repository, title, author or label; **drafts** shows or hides draft PRs; sort by *recently
   updated*, *waiting longest* or *smallest first*; click a repository to fold it;
-- clicking a PR opens it on GitHub (opening PRs as tabs next to your documents is coming next);
+- clicking a PR opens it as a **tab** next to your documents (remembered like them):
+  - **Overview**: description, checks (failing first, linked), reviews and requested reviewers, labels;
+    **Open on GitHub**; ↻ reloads.
+  - **Files**: the diff of every changed file (long ones folded; click a file header to fold/unfold).
+  - **Ask about this PR**, or select lines in a diff → **Ask about selection**. Answers and follow-ups are in the
+    discussions panel, like for documents, and the PR appears in *Recent*.
+  - The agent works in a **wiki of your choice per repository** (asked the first time you open one of its PRs;
+    change it with *Agent wiki* in the PR tab), so it can use your notes; it gets the PR's description and diff
+    and is told never to comment on, approve or push to the PR.
 - **↻** reloads from GitHub. The list is kept for 2 minutes and refreshed in the background, so it opens at once;
   a full fetch of ~80 PRs takes about 30 s.
 - PRs in organizations that require **SAML single sign-on** are counted but hidden until you authorize the

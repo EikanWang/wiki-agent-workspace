@@ -58,6 +58,19 @@ existing row is relocated (see docs/OPERATIONS.md, "Moving or cloning").
 | `active` | BOOLEAN | Open in the window, i.e. a folder of the current named workspace. `false` = not shown now; its data is kept and returns when the folder is shown again. |
 | `created_at` | DATETIME | First seen. |
 
+## `github_repo_wikis` — the wiki the agent uses for a repository's pull requests
+
+Set once per repository when a pull request is first opened from **Reviews** (and changeable in the PR tab).
+Discussions about a PR are attached to a hidden, read-only document of that wiki,
+`.waw-github/<owner>/<repo>/<number>.md`, whose content is the PR copy the review hub writes to
+`<state_dir>/snapshots/github/` (never a file in the wiki).
+
+| Column | Type | Meaning |
+| --- | --- | --- |
+| `repo` | TEXT, PK | `owner/name`, lower case. |
+| `workspace_id` | UUID, FK → `workspaces.id` | Wiki folder the agent works in for this repository's PRs. |
+| `updated_at` | DATETIME | Last change. |
+
 ## `named_workspaces` — named sets of folders (VS Code-style workspaces)
 
 Which folders the window shows, in order. Exactly one row is `current`. "Default" (`is_default`) is created on the

@@ -58,6 +58,15 @@ class NamedWorkspace(Base):
     last_opened_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class GithubRepoWiki(Base):
+    """The wiki folder the agent works in for pull requests of a GitHub repository (review hub)."""
+
+    __tablename__ = "github_repo_wikis"
+    repo: Mapped[str] = mapped_column(Text, primary_key=True)  # owner/name, lower case
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
 class Document(Base):
     __tablename__ = "documents"
     __table_args__ = (UniqueConstraint("workspace_id", "path", name="uq_documents_workspace_path"),)

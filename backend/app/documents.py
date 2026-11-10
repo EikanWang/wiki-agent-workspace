@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
 
 from . import anchors as anchoring
@@ -48,6 +48,23 @@ EXCLUDED_DIRS = {".git", "node_modules", ".codex", ".opencode", "__pycache__"}
 def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
+
+
+# GitHub pull requests opened from Reviews are discussed like documents: "<.waw-github>/<owner>/<repo>/<number>.md"
+# in the repository's wiki folder, with content written by the review hub into <snapshots>/github/ (never into
+# the wiki; the ".waw" prefix also keeps them out of the file tree and the watcher).
+PR_PREFIX = ".waw-github/"
+
+
+def is_pr_path(rel: str) -> bool:
+    return rel.replace("\\", "/").lstrip("/").startswith(PR_PREFIX)
+
+
+def pr_snapshot_path(snapshots_dir: Path, norm: str) -> Path | None:
+    parts = norm[len(PR_PREFIX):].split("/")
+    if len(parts) != 3 or not parts[2].endswith(".md") or any(not p or p in (".", "..") for p in parts):
+        return None
+    return snapshots_dir / "github" / parts[0] / parts[1] / parts[2]
 
 class DocumentService:
     def __init__(self, db: Database, root: Path, snapshots_dir: Path, max_bytes: int):
@@ -230,6 +247,13 @@ class DocumentService:
 
     # ------------------------------------------------------------------ reading files
     def read_bytes(self, rel: str) -> tuple[str, bytes]:
+        if is_pr_path(rel):
+            # a GitHub pull request copied by the review hub (never a file in the wiki)
+            norm = self.normalize_rel(rel)
+            p = pr_snapshot_path(self.snapshots_dir, norm)
+            if p is None or not p.is_file():
+                raise not_found(f"{norm} not found (open the pull request from Reviews first)", "FILE_NOT_FOUND")
+            return norm, p.read_bytes()
         norm, path = self.resolve(rel)
         if not path.is_file():
             raise not_found(f"{norm} is not a file", "FILE_NOT_FOUND")
@@ -361,7 +385,7 @@ class DocumentService:
             "document_id": doc.id,
             "path": norm,
             "format": fmt,
-            "editable": fmt in ("markdown", "text"),
+            "editable": fmt in ("markdown", "text") and not is_pr_path(norm),
             "text": text,
             "html": html if fmt in ("docx", "pptx", "visio", "text") else None,  # markdown is rendered client-side; others server-side
             "sha256": sha,
@@ -742,8 +766,8 @@ class DocumentService:
         hash, so the browser can offer reload / overwrite), for non-text formats, oversize content and locks."""
         doc = self.get_document(doc_id)
         fmt = document_format(Path(doc.path).name)
-        if fmt not in ("markdown", "text"):
-            raise bad_request(f"{fmt} files cannot be edited as text", "NOT_EDITABLE")
+        if fmt not in ("markdown", "text") or is_pr_path(doc.path):
+            raise bad_request(f"{fmt} files cannot be edited as text" if not is_pr_path(doc.path) else "pull requests are read-only", "NOT_EDITABLE")
         _, data, current = self.current_content(doc)
         if current != base_sha256:
             raise conflict(DOCUMENT_VERSION_CONFLICT, "the file changed on disk after you started editing", current_sha256=current)
@@ -951,11 +975,15 @@ def relink_document(doc_id: str, body: RelinkIn, ctx: AppContext = Depends(requi
 
 
 @router.get("/recent")
-def recent_work(limit: int = Query(50, ge=1, le=500), include_hidden: bool = Query(False), all_workspaces: bool = Query(False, alias="all"),
+def recent_work(request: Request, limit: int = Query(50, ge=1, le=500), include_hidden: bool = Query(False), all_workspaces: bool = Query(False, alias="all"),
                 ctx: AppContext = Depends(require_auth)):
-    """Recent work of the current folder, or of every folder of the window with `all=true` (each item tagged)."""
+    """Recent work of the current folder, or of every folder of the window with `all=true` (each item tagged).
+    Pull requests (review hub) are listed only for the hub's owner."""
+    from .deps import is_hub_owner
+
+    owner = is_hub_owner(ctx, request)
     if not all_workspaces or ctx.workspaces is None:
-        items = _svc(ctx).recent(limit, include_hidden)
+        items = [it for it in _svc(ctx).recent(limit, include_hidden) if owner or not is_pr_path(it["path"])]
         for it in items:
             it["workspace_id"] = ctx.workspace_id
         return {"items": items}
@@ -963,6 +991,8 @@ def recent_work(limit: int = Query(50, ge=1, le=500), include_hidden: bool = Que
     items: list[dict[str, Any]] = []
     for wid in ctx.workspaces.order:
         for it in ctx.workspaces.runtimes[wid].docs.recent(limit, include_hidden):
+            if not owner and is_pr_path(it["path"]):
+                continue
             it["workspace_id"] = wid
             it["workspace_name"] = names.get(wid)
             items.append(it)

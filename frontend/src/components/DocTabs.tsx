@@ -1,12 +1,18 @@
 import { useEffect, useRef } from "react";
 import { WorkspaceInfo } from "../api";
 import { FileIcon } from "./FileIcon";
+import { PullRequestIcon } from "./Icons";
 
 /** An open document: which root folder and which path inside it. */
 export interface DocTab {
   ws: string;
   path: string;
+  /** pull-request tabs: "#123 Title" (shown instead of the file name) */
+  title?: string;
 }
+
+/** `ws` of pull-request tabs (path "owner/repo#123"); they are not tied to a folder. */
+export const PR_TABS = "github";
 
 export const sameTab = (a: DocTab | null | undefined, b: DocTab | null | undefined) => !!a && !!b && a.ws === b.ws && a.path === b.path;
 
@@ -96,8 +102,9 @@ export default function DocTabs({
     <div className="doc-tabs" role="tablist" aria-label="Open documents" ref={strip} data-testid="doc-tabs">
       {tabs.map((t, i) => {
         const isActive = sameTab(t, active);
-        const name = fileName(t.path);
-        const hint = (paths.get(t.path) ?? 0) > 1 ? wsName(t.ws) : (names.get(name) ?? 0) > 1 ? parentName(t.path) || wsName(t.ws) : "";
+        const isPr = t.ws === PR_TABS;
+        const name = isPr ? t.title ?? `#${t.path.split("#")[1]}` : fileName(t.path);
+        const hint = isPr ? t.path.split("#")[0] : (paths.get(t.path) ?? 0) > 1 ? wsName(t.ws) : (names.get(name) ?? 0) > 1 ? parentName(t.path) || wsName(t.ws) : "";
         const ext = name.includes(".") ? name.slice(name.lastIndexOf(".") + 1).toLowerCase() : "";
         const kind = KIND_BY_EXT[ext] ?? "text";
         return (
@@ -107,7 +114,7 @@ export default function DocTabs({
             role="tab"
             aria-selected={isActive}
             tabIndex={0}
-            title={`${multi ? `${wsName(t.ws)} › ` : ""}${t.path}\nMiddle-click or × to close · drag to reorder`}
+            title={`${isPr ? `Pull request ${t.path}${t.title ? `\n${t.title}` : ""}` : `${multi ? `${wsName(t.ws)} › ` : ""}${t.path}`}\nMiddle-click or × to close · drag to reorder`}
             data-testid="doc-tab"
             data-path={t.path}
             data-ws={t.ws}
@@ -144,7 +151,7 @@ export default function DocTabs({
               dragFrom.current = null;
             }}
           >
-            <FileIcon item={{ type: "file", kind }} />
+            {isPr ? <PullRequestIcon size={14} /> : <FileIcon item={{ type: "file", kind }} />}
             <span className="doc-tab-name">{name}</span>
             {hint && <span className="doc-tab-hint">{hint}</span>}
             <button
