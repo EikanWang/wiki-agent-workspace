@@ -1788,3 +1788,46 @@ prs.save(${JSON.stringify(deck)})
     fs.rmSync(png, { force: true });
   }
 });
+
+test("GitHub review hub: only the owner's GitHub sign-in sees it; queue grouped by repo, drafts, filter, sort", async ({ page }) => {
+  // token login: no activity bar, the queue is refused
+  await login(page);
+  await expect(page.getByTestId("activity-reviews")).toHaveCount(0);
+  expect((await page.request.get("/api/v1/github/reviews")).status()).toBe(403);
+  await signOut(page);
+  // the owner (gh account) signed in with GitHub
+  await ensureGithubSignIn(page);
+  await page.goto("/");
+  await page.getByTestId("login-github").click();
+  await expect(page.getByTestId("view-document")).toBeVisible({ timeout: 15000 });
+  await expect(page.getByTestId("activity-reviews-badge")).toHaveText("3", { timeout: 15000 }); // 4 PRs, 1 draft
+  await page.getByTestId("activity-reviews").click();
+  const panel = page.getByTestId("reviews-panel");
+  await expect(panel).toBeVisible();
+  await expect(page.getByTestId("reviews-note")).toContainText("SAML");
+  // grouped by repository, most PRs first; drafts hidden by default
+  await expect(page.getByTestId("review-group")).toHaveCount(2);
+  await expect(page.getByTestId("review-group").first()).toHaveAttribute("data-repo", "pytorch/pytorch");
+  const prs = page.locator('[data-repo="pytorch/pytorch"] [data-testid="review-pr"]');
+  await expect(prs).toHaveCount(2);
+  await expect(prs.first()).toHaveAttribute("data-number", "101"); // recently updated first
+  await page.getByTestId("reviews-drafts").check();
+  await expect(prs).toHaveCount(3);
+  await page.getByTestId("reviews-sort").selectOption("size");
+  await expect(prs.last()).toHaveAttribute("data-number", "103"); // biggest last
+  await expect(prs.last().locator(".ci-dot")).toHaveClass(/failure/);
+  // filter
+  await page.getByTestId("reviews-filter").fill("gemm");
+  await expect(page.getByTestId("review-pr")).toHaveCount(1);
+  await expect(page.getByTestId("review-pr")).toHaveAttribute("data-number", "201");
+  await page.getByTestId("reviews-filter").fill("");
+  // a PR opens on GitHub (the PR tab comes in the next step); never contact the real github.com from tests
+  await page.context().route("https://github.com/**", (r) => r.fulfill({ status: 200, body: "github" }));
+  const popup = page.waitForEvent("popup");
+  await page.getByTestId("review-pr").first().click();
+  expect((await popup).url()).toBe("https://github.com/pytorch/pytorch/pull/101");
+  // back to the files; sign out
+  await page.getByTestId("activity-files").click();
+  await expect(page.getByTestId("tree-root").first()).toBeVisible();
+  await signOut(page);
+});

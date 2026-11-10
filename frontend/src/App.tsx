@@ -25,6 +25,8 @@ import FileTree, { notifyTreeChanged } from "./components/FileTree";
 import DocTabs, { DocTab, loadTabs, sameTab, tabsKey, withTab } from "./components/DocTabs";
 import WorkspaceMenu from "./components/WorkspaceMenu";
 import AccountMenu from "./components/AccountMenu";
+import ReviewsPanel, { loadReviews, reviewBadge, useReviews } from "./components/ReviewsPanel";
+import { FilesIcon, PullRequestIcon } from "./components/Icons";
 import Reader from "./components/Reader";
 import DiscussionPanel, { LiveJob, SessionChip, useJobStream } from "./components/DiscussionPanel";
 import SessionPicker from "./components/SessionPicker";
@@ -48,7 +50,10 @@ export default function App() {
   const namedRef = useRef<string>(localStorage.getItem("waw.namedWorkspace") ?? "");
   const [docTabs, setDocTabs] = useState<DocTab[]>(() => loadTabs(namedRef.current));
   const [showNewWorkspace, setShowNewWorkspace] = useState(false);
-  const [editNext, setEditNext] = useState<string | null>(null); // path of a just-created file to open in the editor
+  const [editNext, setEditNext] = useState<string | null>(null);
+  // GitHub review hub: only for the server owner's GitHub sign-in
+  const [hub, setHub] = useState<{ available: boolean; owner: string | null } | null>(null);
+  const reviews = useReviews(); // path of a just-created file to open in the editor
   const lastTab = useRef<(DocTab & { document_id: string }) | null>(null);
   const [docError, setDocError] = useState<string | null>(null);
   const [threads, setThreads] = useState<Thread[]>([]);
@@ -356,6 +361,22 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [doc, activeWs, docTabs, activateDocTab],
   );
+
+  useEffect(() => {
+    if (!authed || !boot) return;
+    let timer: number | undefined;
+    void get<{ available: boolean; owner: string | null }>("/github/hub")
+      .then((h) => {
+        setHub(h);
+        if (!h.available) return;
+        void loadReviews();
+        timer = window.setInterval(() => void loadReviews(), 5 * 60 * 1000); // keep the badge current
+      })
+      .catch(() => setHub(null));
+    return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authed, !!boot]);
+  const sidebarView = hub?.available ? prefs.sidebarView ?? "files" : "files";
 
   // ---------------------------------------------------------------- global events
   useEffect(() => {
@@ -670,31 +691,49 @@ export default function App() {
       {!watcherReady && <div className="banner">The file watcher is still indexing this workspace; until it finishes, use the ↻ button in the file tree to see new files and changes.</div>}
 
       <main className={`layout view-${view === "diff" ? "terminal" : view} ${view === "diff" ? "view-diff" : ""}`}>
-        <aside className="sidebar">
-          <FileTree
-            workspaces={workspaces.length ? workspaces : [{ id: boot.workspace.id, name: boot.workspace.name, root: boot.workspace.root, primary: true, configured: true, available: true, git: boot.workspace.git, watcher: null }]}
-            activeWorkspace={activeWs}
-            selectedPath={doc?.path ?? null}
-            onOpen={(ws, p) => {
-              if (ws !== getWorkspace()) switchWorkspace(ws, false);
-              void openDocument(p);
-            }}
-            onOpenDiff={(ws, p, isDir) => {
-              if (ws !== getWorkspace()) switchWorkspace(ws, false);
-              openDiff(p, isDir);
-            }}
-            onToggleLock={(ws, p, l) => void toggleLock(p, l, ws)}
-            onAddFolder={() => setShowAddFolder(true)}
-            onRemoveFolder={(w) => void removeFolder(w)}
-            onCreated={(ws, p, kind, openable) => {
-              if (kind !== "file") return notify(`Created folder ${p}.`);
-              if (!openable) return notify(`Created ${p}.`);
-              if (ws !== getWorkspace()) switchWorkspace(ws, false);
-              setEditNext(p);
-              void openDocument(p);
-            }}
-            refreshKey={treeKey}
-          />
+        <aside className={`sidebar ${hub?.available ? "with-activity" : ""}`}>
+          {hub?.available && (
+            <nav className="activity-bar" aria-label="Sidebar views">
+              <button className={sidebarView === "files" ? "active" : ""} onClick={() => updatePrefs({ sidebarView: "files" })} title="Files" aria-label="Files" aria-pressed={sidebarView === "files"} data-testid="activity-files">
+                <FilesIcon size={20} />
+              </button>
+              <button className={sidebarView === "reviews" ? "active" : ""} onClick={() => updatePrefs({ sidebarView: "reviews" })} title="Pull requests waiting for your review" aria-label="Reviews" aria-pressed={sidebarView === "reviews"} data-testid="activity-reviews">
+                <PullRequestIcon size={20} />
+                {reviewBadge(reviews.queue) > 0 && <span className="activity-badge" data-testid="activity-reviews-badge">{reviewBadge(reviews.queue)}</span>}
+              </button>
+            </nav>
+          )}
+          <div className="sidebar-content" style={{ display: sidebarView === "files" ? undefined : "none" }}>
+            <FileTree
+              workspaces={workspaces.length ? workspaces : [{ id: boot.workspace.id, name: boot.workspace.name, root: boot.workspace.root, primary: true, configured: true, available: true, git: boot.workspace.git, watcher: null }]}
+              activeWorkspace={activeWs}
+              selectedPath={doc?.path ?? null}
+              onOpen={(ws, p) => {
+                if (ws !== getWorkspace()) switchWorkspace(ws, false);
+                void openDocument(p);
+              }}
+              onOpenDiff={(ws, p, isDir) => {
+                if (ws !== getWorkspace()) switchWorkspace(ws, false);
+                openDiff(p, isDir);
+              }}
+              onToggleLock={(ws, p, l) => void toggleLock(p, l, ws)}
+              onAddFolder={() => setShowAddFolder(true)}
+              onRemoveFolder={(w) => void removeFolder(w)}
+              onCreated={(ws, p, kind, openable) => {
+                if (kind !== "file") return notify(`Created folder ${p}.`);
+                if (!openable) return notify(`Created ${p}.`);
+                if (ws !== getWorkspace()) switchWorkspace(ws, false);
+                setEditNext(p);
+                void openDocument(p);
+              }}
+              refreshKey={treeKey}
+            />
+          </div>
+          {sidebarView === "reviews" && (
+            <div className="sidebar-content">
+              <ReviewsPanel onOpen={(pr) => window.open(pr.url, "_blank", "noopener")} />
+            </div>
+          )}
           {sidebarOpen && <Resizer side="right" onResize={resizeSidebar} onEnd={persistPrefs} />}
         </aside>
 

@@ -29,6 +29,9 @@ backend/app/
                    (python-pptx: slide sections, nested bullets, tables, inline images, notes), .vsdx → HTML
                    (pages and shape text in reading order), the deterministic
                    text model (mirrors frontend/src/textmodel.ts)
+  github_hub.py    GitHub review hub: owner gate (GitHub sign-in = gh account), review queue via one paginated
+                   GraphQL search through the server's gh CLI (40 PRs/page; smaller on GitHub 502), partial
+                   results (SAML-protected PRs), stale-while-revalidate cache; /github/hub, /github/reviews
   office.py        OfficeRenderer: Layout view, LibreOffice headless → PDF, content-addressed cache, parallel
                    limit, timeout, private profiles; routes /office/render (status, starts work), /office/pdf
   anchors.py       anchor resolution algorithm (attached/moved/ambiguous/orphaned) + offset validation

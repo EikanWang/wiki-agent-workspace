@@ -52,6 +52,8 @@ export interface Prefs {
   sidebarWidth: number;
   panelWidth: number;
   sidebarOpen: boolean;
+  /** what the sidebar shows (activity bar): the file tree or the GitHub review queue */
+  sidebarView: "files" | "reviews";
   panelOpen: boolean;
   tocOpen: boolean;
   /** Discussion panel: one discussion at a time, or all discussions of the document as one stream. */
@@ -70,6 +72,7 @@ export const DEFAULT_PREFS: Prefs = {
   sidebarWidth: 260,
   panelWidth: 380,
   sidebarOpen: true,
+  sidebarView: "files",
   panelOpen: true,
   tocOpen: true,
   panelMode: "individual",

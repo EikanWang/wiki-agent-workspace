@@ -137,6 +137,32 @@ def add_fake_github(app) -> None:
         app.router.routes.insert(0, r)
 
 
+def add_fake_review_queue(app) -> None:
+    """The GitHub review hub against canned data: the server's gh account is e2e-user (the fake GitHub sign-in)."""
+    ctx = app.state.ctx
+    ctx.extra["gh_owner"] = lambda: "e2e-user"
+
+    def pr(n, repo, title, *, draft=False, ci="SUCCESS", updated="2026-11-08T00:00:00Z", private=False, adds=10):
+        return {"number": n, "title": title, "url": f"https://github.com/{repo}/pull/{n}", "isDraft": draft,
+                "createdAt": "2026-10-01T00:00:00Z", "updatedAt": updated, "additions": adds, "deletions": 1, "changedFiles": 1,
+                "reviewDecision": "REVIEW_REQUIRED", "author": {"login": "alice"}, "repository": {"nameWithOwner": repo, "isPrivate": private},
+                "labels": {"nodes": [{"name": "module: xpu", "color": "0e8a16"}]},
+                "reviewRequests": {"nodes": [{"requestedReviewer": {"__typename": "User", "login": "e2e-user"}}]},
+                "commits": {"nodes": [{"commit": {"statusCheckRollup": {"state": ci}}}]}}
+
+    nodes = [pr(101, "pytorch/pytorch", "[xpu] Fix the lazy Level Zero stub", updated="2026-11-09T00:00:00Z"),
+             pr(102, "pytorch/pytorch", "Draft: refactor allocator", draft=True),
+             pr(103, "pytorch/pytorch", "Add XPU event timing", ci="FAILURE", adds=500),
+             pr(201, "intel/torch-xpu-ops", "Speed up GEMM tiling"),
+             None]  # a PR in an organization that requires SAML SSO
+
+    def graphql(query, variables):
+        return {"rateLimit": {"remaining": 4999}, "search": {"issueCount": len(nodes), "pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": nodes},
+                "_errors": [{"type": "FORBIDDEN", "message": "Resource protected by organization SAML enforcement."}]}
+
+    ctx.extra["gh_graphql"] = graphql
+
+
 def main() -> None:
     logging.disable(logging.NOTSET)  # conftest silences logging; re-enable for the e2e server log
     reap_stale_runs()
@@ -167,6 +193,7 @@ def main() -> None:
     os.environ["no_proxy"] = os.environ["NO_PROXY"]
     app = create_app(settings)
     add_fake_github(app)
+    add_fake_review_queue(app)
     print(f"E2E workspace: {ws}", flush=True)
     (tmp / "WORKSPACE").write_text(str(ws))
     Path("/tmp/waw-e2e-workspace").write_text(str(ws))

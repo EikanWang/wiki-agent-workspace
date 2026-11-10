@@ -86,6 +86,25 @@ in the tree (Enter creates, Esc cancels). A path such as `notes/2026/today.md` c
 Markdown or text file opens in the editor (a Markdown file starts with a heading from its name). Existing names,
 locked folders and paths through links that leave the folder are refused, with the reason under the name box.
 
+## Reviews (GitHub)
+
+When you sign in with **Continue with GitHub** as the account the server's `gh` CLI is logged in as (the server's
+owner), the sidebar gets an **activity bar**: **Files** (the file tree) and **Reviews** (a pull-request icon with
+the number of PRs waiting for you, drafts not counted). Token logins and other GitHub accounts never see it — the
+queue can include private repositories.
+
+**Reviews** lists the open pull requests that request your review, across every repository your GitHub account
+can see, grouped by repository (most PRs first):
+- each PR shows a CI dot (green passed, red failing, amber running), title, #number, author, last update,
+  size (+/−), draft flag and labels; hover for details;
+- **filter** by repository, title, author or label; **drafts** shows or hides draft PRs; sort by *recently
+  updated*, *waiting longest* or *smallest first*; click a repository to fold it;
+- clicking a PR opens it on GitHub (opening PRs as tabs next to your documents is coming next);
+- **↻** reloads from GitHub. The list is kept for 2 minutes and refreshed in the background, so it opens at once;
+  a full fetch of ~80 PRs takes about 30 s.
+- PRs in organizations that require **SAML single sign-on** are counted but hidden until you authorize the
+  `gh` token for that organization (the note in the panel says how).
+
 ## Reading documents
 
 - **Tabs**: every document you open gets a tab above the reader (like the terminal tabs); opening one that is

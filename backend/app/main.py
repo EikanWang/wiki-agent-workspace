@@ -251,6 +251,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from . import social_login
 
     api.include_router(social_login.router)
+    from . import github_hub
+
+    api.include_router(github_hub.router)
     api.include_router(documents.router)
     api.include_router(annotations.router)
     api.include_router(sessions.router)
