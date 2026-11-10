@@ -358,6 +358,7 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
               <section>
                 <h4>Checks {p.checks.length ? <span className={`ci-dot ${STATE_CLASS[p.ci ?? ""] ?? "none"}`} /> : null}</h4>
                 {p.checks.length === 0 && <div className="muted small">No checks.</div>}
+                <CiControls apiBase={apiBase} onChanged={() => void load(true)} onError={setError} />
                 {failing > 0 && (
                   <div className="small del">
                     {failing} failing{" "}
@@ -814,6 +815,92 @@ function IssueView({ repo, number }: { repo: string; number: number }) {
           </section>
         </div>
       </div>
+    </div>
+  );
+}
+
+interface CiRun { id: number; name: string; status: string; conclusion: string | null; url: string | null; attempt: number; event: string }
+interface CiInfo { head_sha: string; head: string; runs: CiRun[]; workflows: { id: number; name: string; path: string }[]; ciflow_labels: string[]; ciflow_on: string[] }
+
+/** Trigger CI on GitHub: re-run (failed jobs or all) / cancel the PR's workflow runs, ciflow/* labels, manual workflows. */
+function CiControls({ apiBase, onChanged, onError }: { apiBase: string; onChanged: () => void; onError: (m: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [info, setInfo] = useState<CiInfo | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [wf, setWf] = useState<number | "">("");
+  const load = async () => {
+    try {
+      setInfo(await get<CiInfo>(`${apiBase}/workflows`));
+    } catch (e) {
+      onError((e as ApiError).message);
+    }
+  };
+  useEffect(() => { if (open) void load(); }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+  const act = async (key: string, body: Record<string, unknown>, done: string) => {
+    if (body.action === "cancel" && !(await confirmAction({ title: "Cancel this workflow run?", message: "Its running jobs stop on GitHub.", confirmLabel: "Cancel run" }))) return;
+    setBusy(key);
+    try {
+      await post(`${apiBase}/ci`, body);
+      setNote(done);
+      window.setTimeout(() => { void load(); onChanged(); }, 2500); // GitHub needs a moment to show the new state
+    } catch (e) {
+      onError((e as ApiError).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+  if (!open) return <button className="link-btn small" onClick={() => setOpen(true)} data-testid="pr-ci-open">▶ Run CI…</button>;
+  return (
+    <div className="pr-ci-box" data-testid="pr-ci-box">
+      <div className="row"><b className="small">Run CI</b><span className="spacer" /><button className="icon-btn small" onClick={() => setOpen(false)} aria-label="Close">×</button></div>
+      {!info && <div className="muted small">Loading…</div>}
+      {note && <div className="muted small" data-testid="pr-ci-note">{note}</div>}
+      {info && info.ciflow_labels.length > 0 && (
+        <div className="small">
+          <div className="muted">ciflow labels (adding one starts those workflows):</div>
+          <div className="pr-ciflow">
+            {info.ciflow_labels.map((lb) => {
+              const on = info.ciflow_on.includes(lb);
+              return (
+                <label key={lb} className="pr-ciflow-item">
+                  <input type="checkbox" checked={on} disabled={busy !== null} data-testid="pr-ciflow" data-label={lb}
+                    onChange={() => void act(lb, { action: on ? "unlabel" : "label", label: lb }, on ? `Removed ${lb}.` : `Added ${lb}: its workflows start on GitHub.`)} /> {lb.replace("ciflow/", "")}
+                </label>
+              );
+            })}
+          </div>
+        </div>
+      )}
+      {info && (
+        <ul className="pr-ci-runs small" data-testid="pr-ci-runs">
+          {info.runs.length === 0 && <li className="muted">No workflow runs for the head commit.</li>}
+          {info.runs.map((r) => {
+            const running = r.status !== "completed";
+            const failed = ["failure", "timed_out", "cancelled", "startup_failure"].includes(r.conclusion ?? "");
+            return (
+              <li key={r.id} data-testid="pr-ci-run" data-name={r.name}>
+                <span className={`ci-dot ${running ? "pending" : failed ? "failure" : r.conclusion === "success" ? "success" : "none"}`} />{" "}
+                {r.url ? <a href={r.url} target="_blank" rel="noreferrer">{r.name}</a> : r.name}
+                <span className="muted"> · {running ? r.status.replace("_", " ") : r.conclusion}{r.attempt > 1 ? ` · attempt ${r.attempt}` : ""}</span>{" "}
+                {failed && <button className="link-btn small" disabled={busy !== null} onClick={() => void act(`f${r.id}`, { action: "rerun_failed", run_id: r.id }, `Re-running the failed jobs of ${r.name}.`)} data-testid="pr-ci-rerun-failed">re-run failed</button>}{" "}
+                {!running && <button className="link-btn small" disabled={busy !== null} onClick={() => void act(`a${r.id}`, { action: "rerun", run_id: r.id }, `Re-running ${r.name}.`)} data-testid="pr-ci-rerun">re-run all</button>}
+                {running && <button className="link-btn small danger" disabled={busy !== null} onClick={() => void act(`c${r.id}`, { action: "cancel", run_id: r.id }, `Cancelling ${r.name}.`)} data-testid="pr-ci-cancel">cancel</button>}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {info && info.workflows.length > 0 && (
+        <div className="row small">
+          <select value={wf} onChange={(e) => setWf(e.target.value ? Number(e.target.value) : "")} data-testid="pr-ci-workflow" aria-label="Workflow">
+            <option value="">Start a workflow by hand…</option>
+            {info.workflows.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+          </select>
+          <button className="btn small" disabled={!wf || busy !== null} onClick={() => wf && void act("d", { action: "dispatch", workflow_id: wf }, `Started on ${info.head}.`)}
+            title={`Runs on the PR's branch ${info.head} (workflows with a manual trigger only)`} data-testid="pr-ci-dispatch">Run on {info.head}</button>
+        </div>
+      )}
     </div>
   );
 }

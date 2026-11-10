@@ -2022,3 +2022,94 @@ async def issue_comment(owner: str, repo: str, number: int, body: IssueCommentIn
         raise ApiError(400, "INVALID_COMMENT", "a comment needs text")
     res = await asyncio.to_thread(_rest(ctx), "POST", f"repos/{owner}/{repo}/issues/{number}/comments", {"body": body.body.strip()})
     return {"id": (res or {}).get("id"), "body": body.body.strip()}
+
+
+# ---------------------------------------------------------------------- triggering CI
+
+CIFLOW = re.compile(r"^ciflow/[\w./-]+$")
+
+
+@router.get("/github/pr/{owner}/{repo}/{number}/workflows")
+async def pr_workflows(owner: str, repo: str, number: int, auth: tuple[AppContext, str] = Depends(require_owner)):
+    """GitHub Actions runs of the PR's head commit (to re-run / cancel), the repository's workflows that can be
+    started by hand (workflow_dispatch), and the `ciflow/*` labels the repository uses to trigger CI (PyTorch)."""
+    ctx, _ = auth
+    _check_names(owner, repo)
+    pr = await asyncio.to_thread(_pr_node, ctx, owner, repo, number)
+    rest = _rest(ctx)
+    sha = pr.get("head_sha")
+    runs_raw = await asyncio.to_thread(rest, "GET", f"repos/{owner}/{repo}/actions/runs?head_sha={sha}&per_page=100") if sha else []
+    pages = runs_raw if isinstance(runs_raw, list) else [runs_raw]
+    runs = [r for p in pages if isinstance(p, dict) for r in p.get("workflow_runs") or []]
+    latest: dict[str, dict[str, Any]] = {}
+    for r in runs:  # the newest attempt per workflow
+        k = r.get("name") or str(r.get("workflow_id"))
+        if k not in latest or (r.get("run_number", 0), r.get("run_attempt", 0)) > (latest[k].get("run_number", 0), latest[k].get("run_attempt", 0)):
+            latest[k] = r
+    try:
+        wf_raw = await asyncio.to_thread(rest, "GET", f"repos/{owner}/{repo}/actions/workflows?per_page=100")
+        wpages = wf_raw if isinstance(wf_raw, list) else [wf_raw]
+        workflows = [{"id": w["id"], "name": w.get("name"), "path": w.get("path")} for p in wpages if isinstance(p, dict)
+                     for w in p.get("workflows") or [] if w.get("state") == "active"]
+    except ApiError:
+        workflows = []
+    try:
+        lab_raw = await asyncio.to_thread(rest, "GET", f"repos/{owner}/{repo}/labels?per_page=100")
+        ciflow = sorted({lb["name"] for lb in (lab_raw if isinstance(lab_raw, list) else []) if isinstance(lb, dict) and CIFLOW.match(lb.get("name", ""))})
+    except ApiError:
+        ciflow = []
+    on = [lb["name"] for lb in pr.get("labels") or [] if CIFLOW.match(lb.get("name", ""))]
+    return {"head_sha": sha, "head": pr.get("head"), "runs": [
+        {"id": r["id"], "name": r.get("name"), "status": r.get("status"), "conclusion": r.get("conclusion"), "url": r.get("html_url"),
+         "attempt": r.get("run_attempt"), "event": r.get("event")} for r in sorted(latest.values(), key=lambda r: r.get("name") or "")],
+        "workflows": workflows, "ciflow_labels": ciflow, "ciflow_on": on}
+
+
+class CiTriggerIn(BaseModel):
+    action: str  # rerun_failed | rerun | cancel | dispatch | label | unlabel
+    run_id: int | None = None
+    workflow_id: int | None = None
+    ref: str | None = None
+    label: str | None = None
+
+
+@router.post("/github/pr/{owner}/{repo}/{number}/ci")
+async def trigger_ci(owner: str, repo: str, number: int, body: CiTriggerIn, auth: tuple[AppContext, str] = Depends(require_owner_mutating)):
+    """Trigger CI on GitHub: re-run a run's failed jobs or the whole run, cancel a run, start a workflow by hand,
+    or add / remove a `ciflow/*` label (PyTorch starts the matching workflows when such a label is added)."""
+    ctx, _ = auth
+    _check_names(owner, repo)
+    rest = _rest(ctx)
+    base = f"repos/{owner}/{repo}"
+    a = body.action
+    if a in ("rerun_failed", "rerun", "cancel"):
+        if not body.run_id:
+            raise ApiError(400, "INVALID_RUN", "run_id is required")
+        path = {"rerun_failed": "rerun-failed-jobs", "rerun": "rerun", "cancel": "cancel"}[a]
+        await asyncio.to_thread(rest, "POST", f"{base}/actions/runs/{body.run_id}/{path}", {})
+    elif a == "dispatch":
+        if not body.workflow_id:
+            raise ApiError(400, "INVALID_WORKFLOW", "workflow_id is required")
+        pr = await asyncio.to_thread(_pr_node, ctx, owner, repo, number)
+        ref = (body.ref or pr.get("head") or "").strip()
+        if not ref or not re.fullmatch(r"[\w./-]+", ref):
+            raise ApiError(400, "INVALID_REF", "a branch name is required")
+        try:
+            await asyncio.to_thread(rest, "POST", f"{base}/actions/workflows/{body.workflow_id}/dispatches", {"ref": ref})
+        except ApiError as exc:
+            raise ApiError(exc.status, exc.code, f"{exc.message} (only workflows with a workflow_dispatch trigger can be started by hand, "
+                           f"on a branch of {owner}/{repo} — a PR from a fork has no such branch)")
+    elif a in ("label", "unlabel"):
+        lb = (body.label or "").strip()
+        if not CIFLOW.match(lb):
+            raise ApiError(400, "INVALID_LABEL", "only ciflow/* labels")
+        if a == "label":
+            await asyncio.to_thread(rest, "POST", f"{base}/issues/{number}/labels", {"labels": [lb]})
+        else:
+            from urllib.parse import quote
+
+            await asyncio.to_thread(rest, "DELETE", f"{base}/issues/{number}/labels/{quote(lb, safe='')}")
+    else:
+        raise ApiError(400, "INVALID_ACTION", "action must be rerun_failed, rerun, cancel, dispatch, label or unlabel")
+    _pr_cache.pop(f"{owner}/{repo}#{number}".lower(), None)
+    return {"ok": True, "action": a}

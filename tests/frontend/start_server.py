@@ -263,6 +263,16 @@ def add_fake_review_queue(app) -> None:
             return [{"total_count": 2, "check_runs": [
                 {"id": 4242, "name": "xpu-test", "conclusion": "failure", "html_url": "https://github.com/pytorch/pytorch/actions/runs/1/job/4242", "app": {"slug": "github-actions"}},
                 {"id": 4243, "name": "lint", "conclusion": "success", "html_url": None, "app": {"slug": "github-actions"}}]}]
+        if method == "GET" and "/actions/runs?head_sha=" in path:
+            return [{"workflow_runs": [{"id": 900, "name": "pull", "status": "completed", "conclusion": "failure", "html_url": None, "run_number": 1, "run_attempt": 1, "event": "pull_request"},
+                                       {"id": 901, "name": "lint", "status": "in_progress", "conclusion": None, "html_url": None, "run_number": 1, "run_attempt": 1, "event": "pull_request"}]}]
+        if method == "GET" and "/actions/workflows?" in path:
+            return [{"workflows": [{"id": 77, "name": "trunk", "path": ".github/workflows/trunk.yml", "state": "active"}]}]
+        if method == "GET" and "/labels?" in path:
+            return [{"name": "ciflow/trunk"}, {"name": "ciflow/xpu"}, {"name": "module: xpu"}]
+        if "/actions/" in path or re.search(r"/issues/\d+/labels", path):  # CI triggers (recorded)
+            posted.append({"method": method, "path": path, "body": body})
+            return {}
         if path.endswith("/requested_reviewers"):
             posted.append({"method": method, "path": path, "body": body})
             return {}

@@ -170,6 +170,11 @@ can see, grouped by repository (most PRs first):
   - **GitHub logins open the account's page** (new tab), as on github.com: authors, reviewers, commenters,
     contributors, *asked by* in Reviews, and `@mentions` in descriptions and comments (apps such as
     `pytorch-bot[bot]` open their app page).
+  - **Checks** → **▶ Run CI…** triggers CI on GitHub: the PR's workflow runs (newest attempt each) with **re-run
+    failed**, **re-run all** or **cancel** (confirmed); the repository's **`ciflow/*` labels** as checkboxes
+    (adding one makes PyTorch start those workflows, e.g. `ciflow/trunk`, `ciflow/xpu`; unticking removes the
+    label); and **Start a workflow by hand** on the PR's branch (workflows with a manual trigger; not possible for
+    a PR from a fork). All as the server's `gh` account.
   - **Checks** → **Ask agent about the failures…** (or **Ask** next to one failing check): the server downloads
     the failing GitHub Actions jobs' logs (up to 8; external CI is listed with its link) into its state folder and
     gives the agent the log paths and an excerpt — the output leading up to GitHub's `##[error]` marks. The agent

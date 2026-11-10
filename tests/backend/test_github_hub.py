@@ -848,3 +848,44 @@ async def test_star_unstar_search_pr_state_and_issues(running_app):
     r = (await api.post("/api/v1/github/issue/pytorch/pytorch/5/state", json={"action": "close", "reason": "not_planned"})).json()
     assert r["state"] == "CLOSED" and rest_calls[-1] == ("PATCH", "repos/pytorch/pytorch/issues/5", {"state": "closed", "state_reason": "not_planned"})
     assert (await api.post("/api/v1/github/issue/pytorch/pytorch/5/comments", json={"body": "thanks"})).status_code == 201
+
+
+async def test_trigger_ci_rerun_cancel_dispatch_and_ciflow_labels(running_app):
+    github_hub.reset_cache()
+    rest_calls: list = []
+
+    def rest(m, p, b=None):
+        rest_calls.append((m, p, b))
+        if "actions/runs?head_sha=" in p:
+            return [{"workflow_runs": [{"id": 1, "name": "pull", "status": "completed", "conclusion": "failure", "html_url": "u1", "run_number": 5, "run_attempt": 1, "event": "pull_request"},
+                                       {"id": 2, "name": "pull", "status": "completed", "conclusion": "failure", "html_url": "u2", "run_number": 5, "run_attempt": 2, "event": "pull_request"},
+                                       {"id": 3, "name": "lint", "status": "in_progress", "conclusion": None, "html_url": "u3", "run_number": 9, "run_attempt": 1, "event": "pull_request"}]}]
+        if "actions/workflows?" in p:
+            return [{"workflows": [{"id": 77, "name": "trunk", "path": ".github/workflows/trunk.yml", "state": "active"},
+                                   {"id": 78, "name": "old", "path": "x", "state": "disabled_manually"}]}]
+        if "/labels?" in p:
+            return [{"name": "ciflow/trunk"}, {"name": "ciflow/xpu"}, {"name": "module: xpu"}]
+        return {}
+
+    h = await running_app()
+    as_github(h, "EikanWang")
+    h.ctx.extra["gh_owner"] = lambda: "EikanWang"
+    h.ctx.extra["gh_graphql"] = fake_pr_detail([])
+    h.ctx.extra["gh_pr_files"] = lambda o, r, n: []
+    h.ctx.extra["gh_rest"] = rest
+    api = h.api
+    base = "/api/v1/github/pr/pytorch/pytorch/7"
+    w = (await api.get(f"{base}/workflows")).json()
+    assert [(r["name"], r["id"], r["attempt"]) for r in w["runs"]] == [("lint", 3, 1), ("pull", 2, 2)]  # newest attempt per workflow
+    assert w["workflows"] == [{"id": 77, "name": "trunk", "path": ".github/workflows/trunk.yml"}] and w["ciflow_labels"] == ["ciflow/trunk", "ciflow/xpu"]
+    for body, call in [({"action": "rerun_failed", "run_id": 2}, ("POST", "repos/pytorch/pytorch/actions/runs/2/rerun-failed-jobs", {})),
+                       ({"action": "rerun", "run_id": 2}, ("POST", "repos/pytorch/pytorch/actions/runs/2/rerun", {})),
+                       ({"action": "cancel", "run_id": 3}, ("POST", "repos/pytorch/pytorch/actions/runs/3/cancel", {})),
+                       ({"action": "dispatch", "workflow_id": 77}, ("POST", "repos/pytorch/pytorch/actions/workflows/77/dispatches", {"ref": "gemm"})),
+                       ({"action": "label", "label": "ciflow/xpu"}, ("POST", "repos/pytorch/pytorch/issues/7/labels", {"labels": ["ciflow/xpu"]})),
+                       ({"action": "unlabel", "label": "ciflow/xpu"}, ("DELETE", "repos/pytorch/pytorch/issues/7/labels/ciflow%2Fxpu", None))]:
+        r = await api.post(f"{base}/ci", json=body)
+        assert r.status_code == 200, r.text
+        assert rest_calls[-1] == call
+    assert (await api.post(f"{base}/ci", json={"action": "label", "label": "module: xpu"})).json()["error"]["code"] == "INVALID_LABEL"
+    assert (await api.post(f"{base}/ci", json={"action": "rerun"})).json()["error"]["code"] == "INVALID_RUN"

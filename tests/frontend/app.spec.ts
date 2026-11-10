@@ -2054,6 +2054,18 @@ test("GitHub PR tab: overview, files, choose the wiki once, ask about the PR and
   await page.getByTestId("pr-review-item").filter({ hasText: "bob" }).getByTestId("pr-reviewer-rerequest").click();
   await expect(page.getByTestId("pr-reviewer-note")).toContainText("Review requested from bob");
   await expect.poll(async () => (await (await page.request.get("/fake-github/posted")).json()).some((x: any) => x.path?.endsWith("/requested_reviewers") && x.method === "POST" && x.body.reviewers[0] === "bob")).toBe(true);
+  // trigger CI: re-run a workflow's failed jobs, add a ciflow label, start a workflow by hand
+  await page.getByTestId("pr-ci-open").click();
+  const ciRun = page.locator('[data-testid="pr-ci-run"][data-name="pull"]');
+  await ciRun.getByTestId("pr-ci-rerun-failed").click();
+  await expect(page.getByTestId("pr-ci-note")).toContainText("Re-running the failed jobs of pull");
+  await page.locator('[data-testid="pr-ciflow"][data-label="ciflow/xpu"]').click();
+  await expect(page.getByTestId("pr-ci-note")).toContainText("Added ciflow/xpu");
+  await page.getByTestId("pr-ci-workflow").selectOption({ label: "trunk" });
+  await page.getByTestId("pr-ci-dispatch").click();
+  await expect(page.getByTestId("pr-ci-note")).toContainText("Started on fix-101");
+  const ciPosted = (await (await page.request.get("/fake-github/posted")).json()).filter((x: any) => x.path?.includes("/actions/") || x.path?.includes("/labels"));
+  expect(ciPosted.map((x: any) => x.path)).toEqual(expect.arrayContaining(["repos/pytorch/pytorch/actions/runs/900/rerun-failed-jobs", "repos/pytorch/pytorch/issues/101/labels", "repos/pytorch/pytorch/actions/workflows/77/dispatches"]));
   // ask the agent about the CI failures: the server downloads the failing jobs' logs for it
   await page.getByTestId("pr-ci-ask").click();
   await page.getByTestId("pr-ci-ask-send").click();
