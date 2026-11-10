@@ -1,6 +1,7 @@
 """Start a backend for browser tests: temp workspace, fake agents, fixed token, port 8799."""
 import logging
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -165,6 +166,10 @@ def add_fake_review_queue(app) -> None:
     nodes.insert(4, done)
     watched = [pr(301, "pytorch/ao", "int4 weight-only quant on XPU")]  # open PRs of a watched repository
 
+    issue = {"number": 555, "title": "XPU OOM on large batch", "url": "https://github.com/pytorch/pytorch/issues/555", "body": "Crashes with **OOM**.",
+             "state": "OPEN", "stateReason": None, "createdAt": "2026-11-01T00:00:00Z", "updatedAt": "2026-11-01T00:00:00Z", "author": {"login": "carol"},
+             "labels": {"nodes": []}, "assignees": {"nodes": [{"login": "alice"}]},
+             "comments": {"totalCount": 1, "nodes": [{"databaseId": 6001, "author": {"login": "dan"}, "body": "Same here.", "createdAt": "2026-11-02T00:00:00Z", "url": None}]}}
     posted: list = []  # what "GitHub" received (inspected by tests via /fake-github/posted)
     state = {
         "viewed": {},
@@ -188,7 +193,8 @@ def add_fake_review_queue(app) -> None:
         "comments": [{"databaseId": 801, "author": {"login": "pytorch-bot"}, "body": "<!-- drci -->\n<details><summary>CI started</summary>2 jobs</details>", "createdAt": "2026-11-07T00:00:00Z", "url": None}],
     }
     keys = {"MarkViewed": "markFileAsViewed", "MarkUnviewed": "unmarkFileAsViewed", "Resolve": "resolveReviewThread", "Unresolve": "unresolveReviewThread",
-            "AddReview": "addPullRequestReview", "AddThread": "addPullRequestReviewThread", "Submit": "submitPullRequestReview", "DeleteReview": "deletePullRequestReview"}
+            "AddReview": "addPullRequestReview", "AddThread": "addPullRequestReviewThread", "Submit": "submitPullRequestReview", "DeleteReview": "deletePullRequestReview",
+            "MarkReady": "markPullRequestReadyForReview", "ToDraft": "convertPullRequestToDraft"}
 
     def graphql(query, variables):
         q = query.lstrip()
@@ -216,6 +222,8 @@ def add_fake_review_queue(app) -> None:
             return {"repository": {"pullRequest": {"reviews": {"totalCount": len(state["reviews"]), "nodes": state["reviews"]},
                                                     "comments": {"totalCount": len(state["comments"]), "nodes": state["comments"]},
                                                     "pending": {"nodes": []}}}}
+        if "query Issue" in query:
+            return {"repository": {"nameWithOwner": "pytorch/pytorch", "issue": issue if int(variables["number"]) == 555 else None}}
         if "query ReviewerCandidates" in query:
             people = [{"login": "ezyang", "name": "Edward Z. Yang"}, {"login": "albanD", "name": "Alban D"}]
             return {"repository": {"pullRequest": {"suggestedReviewers": [{"isAuthor": False, "isCommenter": False, "reviewer": people[0]}]},
@@ -233,9 +241,11 @@ def add_fake_review_queue(app) -> None:
                 {"commit": {"authors": {"nodes": [{"name": "Alice A.", "email": "alice@intel.com", "user": alice}]}}}]}}}}
         if "query PrDetail" in query:
             n = int(variables["number"])
-            src = next(x for x in nodes if x and x["number"] == n)
+            src = next((x for x in nodes if x and x["number"] == n), None)
+            if src is None:  # not a pull request (e.g. issue #555)
+                return {"repository": {"nameWithOwner": "pytorch/pytorch", "isPrivate": False, "pullRequest": None}}
             return {"repository": {"nameWithOwner": src["repository"]["nameWithOwner"], "isPrivate": False, "pullRequest": {
-                **src, "id": f"PR_e2e{n}", "body": "This PR **fixes** the lazy stub.\n\n- adds a check\n\nFollows #103 (see `#999` in code). cc @bob, not mail@example.com", "state": "OPEN", "mergeable": "MERGEABLE",
+                **src, "id": f"PR_e2e{n}", "body": "This PR **fixes** the lazy stub.\n\n- adds a check\n\nFollows #103 (see `#999` in code), fixes #555. cc @bob, not mail@example.com", "state": "OPEN", "mergeable": "MERGEABLE",
                 "baseRefName": "main", "headRefName": f"fix-{n}",
                 "latestReviews": {"nodes": [{"author": {"login": "bob"}, "state": "CHANGES_REQUESTED", "submittedAt": "2026-11-08T00:00:00Z", "url": "u"}]},
                 "commits": {"nodes": [{"commit": {"oid": "abc", "statusCheckRollup": {"state": "FAILURE", "contexts": {"nodes": [
@@ -270,6 +280,14 @@ def add_fake_review_queue(app) -> None:
         if path.endswith("/issues/101/comments"):
             state["comments"].append({"databaseId": 950 + len(posted), "author": {"login": "e2e-user"}, "body": body["body"], "createdAt": "2026-11-09T01:00:00Z", "url": None})
             return {"id": 950 + len(posted), "body": body["body"], "user": {"login": "e2e-user"}}
+        if method == "PATCH" and re.search(r"/(pulls|issues)/\d+$", path):  # close / reopen
+            if "/issues/555" in path:
+                issue["state"] = body["state"].upper()
+                issue["stateReason"] = (body.get("state_reason") or "").upper() or None
+            return {"state": body["state"], "state_reason": body.get("state_reason")}
+        if method == "POST" and path.endswith("/issues/555/comments"):
+            issue["comments"]["nodes"].append({"databaseId": 7000 + len(posted), "author": {"login": "e2e-user"}, "body": body["body"], "createdAt": "2026-11-10T00:00:00Z", "url": None})
+            return {"id": 7000 + len(posted)}
         raise AssertionError(path)
 
     ctx.extra["gh_rest"] = rest

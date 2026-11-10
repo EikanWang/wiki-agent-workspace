@@ -27,6 +27,8 @@ export interface ReviewPR {
   requested_by_company?: string | null;
   priority?: boolean;
   watched?: boolean;
+  /** OPEN | CLOSED | MERGED */
+  state?: string;
   /** your latest standing review (APPROVED, CHANGES_REQUESTED, COMMENTED…) and what happened since an approval */
   my_review?: string | null;
   approved_no_news?: boolean;
@@ -38,6 +40,8 @@ export interface HubPrefs {
   priority_requesters: string[];
   priority_meta: boolean;
   show_approved: boolean;
+  starred?: string[];
+  unstarred?: string[];
 }
 interface Queue {
   items: ReviewPR[];
@@ -79,7 +83,7 @@ export async function loadReviews(refresh = false): Promise<void> {
 }
 
 /** Save Reviews preferences (hidden / watched repositories, priority requesters), then reload the list. */
-export async function savePrefs(change: Partial<HubPrefs>): Promise<void> {
+export async function savePrefs(change: Partial<HubPrefs> & { star?: string; unstar?: string }): Promise<void> {
   await put<HubPrefs>("/github/prefs", change);
   await loadReviews(false);
 }
@@ -125,6 +129,24 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
   }, []);
 
   const [settings, setSettings] = useState(false);
+  // search pull requests on GitHub (beyond the review queue)
+  const [search, setSearch] = useState<string | null>(null);
+  const [searchState, setSearchState] = useState<"open" | "closed" | "all">("open");
+  const [results, setResults] = useState<{ items: ReviewPR[]; total: number; query: string } | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [searchErr, setSearchErr] = useState<string | null>(null);
+  const runSearch = async (state = searchState) => {
+    if (!search?.trim()) return;
+    setSearching(true);
+    setSearchErr(null);
+    try {
+      setResults(await get<{ items: ReviewPR[]; total: number; query: string }>(`/github/search?q=${encodeURIComponent(search.trim())}&state=${state}`));
+    } catch (e) {
+      setSearchErr((e as ApiError).message);
+    } finally {
+      setSearching(false);
+    }
+  };
   const listScroll = useRestoredScroll("reviews.list", !!queue);
   const [busy, setBusy] = useState<string | null>(null);
   const prefs = queue?.prefs;
@@ -146,7 +168,7 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
   }, [queue, filter, showDrafts, sort]);
   const drafts = queue?.items.filter((p) => p.draft).length ?? 0;
   const shown = priority.length + groups.reduce((n, g) => n + g.prs.length, 0);
-  const change = async (what: string, c: Partial<HubPrefs>) => {
+  const change = async (what: string, c: Partial<HubPrefs> & { star?: string; unstar?: string }) => {
     setBusy(what);
     try {
       await savePrefs(c);
@@ -173,11 +195,12 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
       data-testid="review-pr" data-number={p.number} data-priority={p.priority ? "1" : "0"}>
       <span className={`ci-dot ${(p.ci ?? "none").toLowerCase()}`} aria-label={CI_LABEL[p.ci ?? ""] ?? "no checks"} />
       <span className="review-pr-main">
-        <span className="review-pr-title">{p.title}</span>
+        <span className="review-pr-title">
+          <PrStatus state={p.state} draft={p.draft} />{" "}{p.title}
+        </span>
         <span className="review-pr-meta muted small">
           {showRepo ? `${p.repo}` : ""}#{p.number} · <GhUser login={p.author} bold={false} inButton /> · {ago(p.updated_at)} · <span className="add">+{p.additions}</span> <span className="del">−{p.deletions}</span>
           {p.requested_by && <span className="review-by" data-testid="review-by"> · asked by <GhUser login={p.requested_by} bold={false} inButton /></span>}
-          {p.draft && <span className="git-badge"> draft</span>}
           {p.my_review === "APPROVED" && (
             <span className={`git-badge ${p.approved_no_news ? "clean" : "approved-news"}`} title={p.approved_no_news ? "You approved; nothing new since" : `You approved; since then: ${(p.since_approval ?? []).join(", ")}`} data-testid="review-approved">
               {p.approved_no_news ? " ✓ approved" : ` ✓ approved · ${(p.since_approval ?? []).join(", ")}`}
@@ -189,6 +212,13 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
           ))}
         </span>
       </span>
+      {prefs && (
+        <span className={`review-star ${p.priority ? "on" : ""}`} role="button" tabIndex={-1} data-testid="review-star"
+          title={p.priority ? "Priority — click to un-star (never priority, even when the rules say so)" : "Star: mark as a priority PR"}
+          onClick={(e) => { e.stopPropagation(); void change(`star:${p.repo}#${p.number}`, p.priority ? { unstar: `${p.repo}#${p.number}` } : { star: `${p.repo}#${p.number}` }).then(() => { if (search) void runSearch(); }); }}>
+          {p.priority ? "★" : "☆"}
+        </span>
+      )}
     </button>
   );
   const groupBox = (repo: string, prs: ReviewPR[], watched: boolean) => {
@@ -224,6 +254,33 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
         <RefreshButton onRefresh={() => loadReviews(true)} title="Refresh from GitHub" testId="reviews-refresh" />
       </div>
       {settings && prefs && <ReviewsSettings prefs={prefs} busy={busy} change={change} problems={queue?.watch_problems ?? []} />}
+      <div className="reviews-search">
+        {search === null ? (
+          <button className="link-btn small" onClick={() => setSearch("")} data-testid="reviews-search-open">🔍 Search pull requests on GitHub…</button>
+        ) : (
+          <>
+            <div className="reviews-row">
+              <input autoFocus className="reviews-filter" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="xpu repo:pytorch/pytorch · author:me · owner/repo#123 · a PR link"
+                onKeyDown={(e) => { if (e.key === "Enter") void runSearch(); if (e.key === "Escape") { setSearch(null); setResults(null); } }} data-testid="reviews-search" />
+              <select value={searchState} onChange={(e) => { const st = e.target.value as typeof searchState; setSearchState(st); void runSearch(st); }} aria-label="State" data-testid="reviews-search-state">
+                <option value="open">Open</option>
+                <option value="closed">Closed / merged</option>
+                <option value="all">All</option>
+              </select>
+              <button className="icon-btn small" onClick={() => { setSearch(null); setResults(null); }} aria-label="Close search">×</button>
+            </div>
+            {searching && <div className="muted small">Searching…</div>}
+            {searchErr && <div className="tree-error small">{searchErr}</div>}
+            {results && (
+              <div className="reviews-results" data-testid="reviews-results">
+                <div className="muted small">{results.items.length} of {results.total} · <code>{results.query}</code></div>
+                {results.items.map((p) => prRow(p, true))}
+                {results.items.length === 0 && <div className="muted small">Nothing found{searchState === "open" ? " among open PRs (choose Closed / merged to include those)" : ""}.</div>}
+              </div>
+            )}
+          </>
+        )}
+      </div>
       <div className="reviews-controls">
         <input className="reviews-filter" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter: repo, title, author, label…" data-testid="reviews-filter" />
         <div className="reviews-row">
@@ -323,4 +380,11 @@ function ReviewsSettings({ prefs, busy, change, problems }: {
       ))}
     </div>
   );
+}
+
+/** Where a PR stands, next to its CI signal: Draft / Ready for review (open), Merged, Closed. */
+export function PrStatus({ state, draft }: { state?: string | null; draft?: boolean }) {
+  const st = (state ?? "OPEN").toUpperCase();
+  const [cls, label] = st === "MERGED" ? ["merged", "Merged"] : st === "CLOSED" ? ["closed", "Closed"] : draft ? ["draft", "Draft"] : ["ready", "Ready"];
+  return <span className={`pr-status ${cls}`} title={st === "OPEN" ? (draft ? "Draft: not ready for review yet" : "Open and ready for review") : label} data-testid="pr-status" data-status={cls}>{label}</span>;
 }

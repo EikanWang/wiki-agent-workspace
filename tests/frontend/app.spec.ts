@@ -1868,6 +1868,25 @@ test("GitHub review hub: priority requests, hide a repository, watch a repositor
   await page.getByTestId("reviews-priority-meta").click();
   await expect(page.getByTestId("reviews-priority-meta")).toBeChecked();
   await expect(page.getByTestId("review-priority")).toHaveCount(1);
+  // status next to the CI signal; ☆ star a PR to make it priority, ★ un-star to take one out of Priority
+  await expect(page.locator('[data-testid="review-pr"][data-number="101"] [data-testid="pr-status"]')).toHaveText("Ready");
+  await page.locator('[data-testid="review-group"] [data-testid="review-pr"][data-number="101"] [data-testid="review-star"]').click();
+  await expect(prio.locator('[data-number="101"]')).toHaveCount(1);
+  await prio.locator('[data-number="104"] [data-testid="review-star"]').click();
+  await expect(prio.locator('[data-number="104"]')).toHaveCount(0);
+  await expect(page.locator('[data-testid="review-group"] [data-number="104"]')).toHaveCount(1);
+  await prio.locator('[data-number="101"] [data-testid="review-star"]').click(); // back as it was
+  await page.locator('[data-testid="review-group"] [data-number="104"] [data-testid="review-star"]').click();
+  await expect(prio.locator('[data-number="104"]')).toHaveCount(1);
+  await expect(prio.locator('[data-number="101"]')).toHaveCount(0);
+  // search pull requests on GitHub: open ones by default, closed / merged on request
+  await page.getByTestId("reviews-search-open").click();
+  await page.getByTestId("reviews-search").fill("gemm");
+  await page.getByTestId("reviews-search").press("Enter");
+  await expect(page.getByTestId("reviews-results").locator('[data-number="201"]')).toHaveCount(1);
+  await page.getByTestId("reviews-search-state").selectOption("closed");
+  await expect(page.getByTestId("reviews-results")).toContainText("Nothing found");
+  await page.getByTestId("reviews-search").press("Escape");
   // a PR you approved with nothing new since (only a bot commented) is left out until "approved" is ticked
   await expect(page.getByTestId("reviews-approved-hidden")).toContainText("1 PR(s) you approved");
   await expect(page.locator('[data-testid="review-pr"][data-number="106"]')).toHaveCount(0);
@@ -1882,8 +1901,7 @@ test("GitHub review hub: priority requests, hide a repository, watch a repositor
   await expect(page.getByTestId("confirm-dialog")).toContainText("Hide intel/torch-xpu-ops from Reviews?");
   await page.getByTestId("confirm-cancel").click();
   await expect(intel).toHaveCount(1);
-  await intel.locator(".review-group-head-row").hover();
-  await intel.getByTestId("review-hide-repo").click();
+  await intel.getByTestId("review-hide-repo").dispatchEvent("click"); // (shown on hover)
   await page.getByTestId("confirm-ok").click();
   await expect(intel).toHaveCount(0);
   await expect(page.getByTestId("reviews-hidden-item")).toContainText("intel/torch-xpu-ops");
@@ -1898,6 +1916,26 @@ test("GitHub review hub: priority requests, hide a repository, watch a repositor
   await page.getByTestId("reviews-watched-item").getByRole("button").click();
   await page.getByTestId("confirm-ok").click();
   await expect(page.getByTestId("reviews-watched-item")).toHaveCount(0);
+  // the PR tab says whether it is ready for review; it can be turned into a draft or closed on GitHub
+  await page.locator('[data-testid="review-pr"][data-number="101"]').click();
+  await expect(page.getByTestId("pr-ready-status")).toHaveText("Ready for review");
+  await page.getByTestId("pr-to-draft").click();
+  await expect.poll(async () => (await (await page.request.get("/fake-github/posted")).json()).some((x: any) => x.mutation === "ToDraft")).toBe(true);
+  await page.getByTestId("pr-close").click();
+  await expect(page.getByTestId("confirm-dialog")).toContainText("Close pull request #101?");
+  await page.getByTestId("confirm-ok").click();
+  await expect.poll(async () => (await (await page.request.get("/fake-github/posted")).json()).some((x: any) => x.method === "PATCH" && x.path.endsWith("/pulls/101") && x.body.state === "closed")).toBe(true);
+  // "#555" in the description is an issue: it opens as an issue, which can be commented on and closed
+  await page.getByTestId("pr-description").locator('a[data-pr="pytorch/pytorch/555"]').click();
+  await expect(page.getByTestId("issue-view")).toContainText("XPU OOM on large batch");
+  await expect(page.getByTestId("issue-comment")).toContainText("Same here.");
+  await page.getByTestId("issue-comment-text").fill("Looking into it");
+  await page.getByTestId("issue-comment-send").click();
+  await expect(page.getByTestId("issue-comment")).toHaveCount(2);
+  await page.getByTestId("issue-close-not-planned").click();
+  await page.getByTestId("confirm-ok").click();
+  await expect(page.getByTestId("issue-state")).toContainText("Closed (not planned)");
+  await page.locator('[data-testid="doc-tab"][data-ws="github"]').filter({ hasText: "#555" }).getByTestId("doc-tab-close").click();
   // a PR's contributors, with details from their GitHub profile on demand
   await page.locator('[data-testid="review-pr"][data-number="101"]').click();
   const people = page.getByTestId("pr-contributors");
@@ -2132,7 +2170,7 @@ test("GitHub PR tab: overview, files, choose the wiki once, ask about the PR and
   await expect(page.getByTestId("pr-notice")).toContainText("Review published on GitHub");
   await expect(page.getByTestId("pr-draft")).toHaveCount(0);
   const posted = await (await page.request.get("/fake-github/posted")).json();
-  const muts = posted.filter((x: any) => x.mutation).map((x: any) => x.mutation);
+  const muts = posted.filter((x: any) => x.mutation && x.mutation !== "ToDraft").map((x: any) => x.mutation); // (ToDraft: an earlier test)
   expect(muts).toEqual(["MarkViewed", "MarkUnviewed", "Resolve", "AddReview", "AddThread", "AddThread", "Submit"]);
   const threads = posted.filter((x: any) => x.mutation === "AddThread").map((x: any) => x.variables);
   expect(threads).toContainEqual({ review: "PRR_e2e", path: "docs/xpu.md", body: "Please add a license header.", subject: "FILE" });
@@ -2356,16 +2394,20 @@ test("folder chat: talk with a project directly on the Chats page, then distill 
     await expect(page.getByTestId("chat-acted")).toBeVisible();
     await page.getByTestId("chat-review-changes").click();
     await expect(page.locator('[data-testid="diff-file"][data-path="chat-notes/capture-chat.md"]')).toBeVisible({ timeout: 10000 });
-    // back on the Chats page the chat is listed under its project; it survives a reload; archive it
+    // back on the Chats page: the project's earlier chats are in the Chat menu; it survives a reload; archive it
     await page.getByTestId("view-chats").click();
-    const item = page.getByTestId("chat-item").filter({ hasText: "Capture chat" });
-    await expect(item).toContainText("6 messages");
+    await expect(page.getByTestId("chat-history").locator("option").filter({ hasText: "Capture chat" })).toContainText("(6)");
+    await expect(page.getByTestId("chat-history")).not.toHaveValue("");
+    await page.getByTestId("chats-new").click();
+    await expect(page.getByTestId("chat-new-page")).toBeVisible();
+    await page.getByTestId("chat-history").selectOption({ label: "Capture chat: how is a graph captured? (6)" });
+    await expect(page.getByTestId("chat-view")).toBeVisible();
     await page.reload();
     await expect(page.getByTestId("chat-view")).toBeVisible({ timeout: 15000 });
     await page.getByTestId("chat-archive").click();
     await page.getByTestId("confirm-ok").click();
     await expect(page.getByTestId("chat-new-page")).toBeVisible();
-    await expect(page.getByTestId("chat-item")).toHaveCount(0);
+    await expect(page.getByTestId("chat-history").locator("option")).toHaveCount(1); // only "＋ New chat"
     expect(errs).toEqual([]);
   } finally {
     fs.rmSync(path.join(workspaceDir(), "chat-notes"), { recursive: true, force: true });

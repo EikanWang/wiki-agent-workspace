@@ -1103,14 +1103,25 @@ async def reply_comment(owner: str, repo: str, number: int, comment_id: int, bod
 # ---------------------------------------------------------------------- hub preferences (kv_settings)
 
 
-DEFAULT_PREFS: dict[str, Any] = {"hidden_repos": [], "watched_repos": [], "priority_requesters": [], "priority_meta": True, "show_approved": False}
+DEFAULT_PREFS: dict[str, Any] = {"hidden_repos": [], "watched_repos": [], "priority_requesters": [], "priority_meta": True, "show_approved": False,
+                                 "starred": [], "unstarred": []}
 
 
 def load_prefs(ctx: AppContext) -> dict[str, Any]:
     return {**DEFAULT_PREFS, **kv_get(ctx, "github_hub_prefs", {})}
 
 
+def pr_key(p: dict[str, Any]) -> str:
+    return f"{p['repo']}#{p['number']}".lower()
+
+
 def is_priority(p: dict[str, Any], prefs: dict[str, Any]) -> bool:
+    """★ by hand wins both ways: starred PRs are priority, un-starred ones never are; otherwise the rules."""
+    k = pr_key(p)
+    if k in {x.lower() for x in prefs.get("starred") or []}:
+        return True
+    if k in {x.lower() for x in prefs.get("unstarred") or []}:
+        return False
     by = (p.get("requested_by") or "").lower()
     if by and by in {x.lower() for x in prefs.get("priority_requesters") or []}:
         return True
@@ -1136,6 +1147,8 @@ class PrefsIn(BaseModel):
     priority_requesters: list[str] | None = None
     priority_meta: bool | None = None
     show_approved: bool | None = None  # also list PRs you approved where nothing happened since
+    star: str | None = None    # "owner/repo#n": make it a priority PR
+    unstar: str | None = None  # "owner/repo#n": never priority (even when the rules say so)
 
 
 @router.put("/github/prefs")
@@ -1163,6 +1176,17 @@ async def put_prefs(body: PrefsIn, auth: tuple[AppContext, str] = Depends(requir
         prefs["priority_meta"] = body.priority_meta
     if body.show_approved is not None:
         prefs["show_approved"] = body.show_approved
+    for k, on in ((body.star, "starred"), (body.unstar, "unstarred")):
+        if k is None:
+            continue
+        m = re.fullmatch(r"([\w.-]+)/([\w.-]+)#(\d+)", k.strip())
+        if not m:
+            raise ApiError(400, "INVALID_PR", f"{k!r}: use owner/repo#number")
+        key = k.strip().lower()
+        off = "unstarred" if on == "starred" else "starred"
+        prefs[off] = [x for x in prefs.get(off) or [] if x.lower() != key]
+        prefs[on] = [x for x in prefs.get(on) or [] if x.lower() != key] + [key]
+        prefs[on] = prefs[on][-500:]
     kv_put(ctx, "github_hub_prefs", prefs)
     if body.watched_repos is not None:  # watched PRs are fetched with the queue: refresh it in the background
         _start_refresh(_hooks(ctx)[0], owner, prefs["watched_repos"])
@@ -1881,3 +1905,120 @@ async def ci_failures(owner: str, repo: str, number: int, body: CiIn, auth: tupl
     out += [{"name": c.get("name"), "conclusion": c.get("state", "").lower(), "url": c.get("url"), "app": "status", "log_path": None,
              "lines": 0, "excerpt": None, "error": "an external status: open the link for its log"} for c in external]
     return {"head_sha": sha, "failures": out, "total_failed": len(failed) + len(external), "logs_dir": str(snap)}
+
+
+
+# ---------------------------------------------------------------------- search, PR state, issues
+
+@router.get("/github/search")
+async def search_prs(q: str = Query(..., min_length=1, max_length=300), state: str = Query("open"),
+                     auth: tuple[AppContext, str] = Depends(require_owner)):
+    """Search pull requests on GitHub (GitHub's search syntax: words, repo:owner/name, author:, label:, …).
+    `owner/repo#123` or a PR link finds that PR. state: open (default; merged and closed PRs are left out),
+    closed (closed or merged) or all."""
+    ctx, owner = auth
+    if state not in ("open", "closed", "all"):
+        raise ApiError(400, "INVALID_STATE", "state must be open, closed or all")
+    text = q.strip()
+    m = re.fullmatch(r"(?:https://github\.com/)?([\w.-]+)/([\w.-]+)(?:#|/pull/)(\d+)/?", text)
+    query = f"is:pr repo:{m.group(1)}/{m.group(2)} {m.group(3)}" if m else ("" if re.search(r"\bis:(pr|issue)\b", text) else "is:pr ") + text
+    if not re.search(r"\b(is|state):(open|closed|merged|unmerged)\b", text):
+        query += {"open": " is:open", "closed": " is:closed", "all": ""}[state]
+    d = await asyncio.to_thread(_hooks(ctx)[0], REVIEW_QUERY, {"q": query + " archived:false", "after": None, "n": 30, "me": owner})
+    s = d.get("search") or {}
+    items = [normalize(n, owner) for n in s.get("nodes") or [] if n and n.get("number")]
+    if m:
+        items = [x for x in items if x["number"] == int(m.group(3))] or items
+    prefs = load_prefs(ctx)
+    if state == "open":  # the search index lags behind merges: never show a merged / closed PR here
+        items = [x for x in items if x["state"] == "OPEN"]
+    elif state == "closed":
+        items = [x for x in items if x["state"] != "OPEN"]
+    return {"query": query, "total": s.get("issueCount", 0), "items": [{**x, "priority": is_priority(x, prefs)} for x in items]}
+
+
+M_READY = "mutation MarkReady($id: ID!) { markPullRequestReadyForReview(input: {pullRequestId: $id}) { pullRequest { isDraft } } }"
+M_DRAFT = "mutation ToDraft($id: ID!) { convertPullRequestToDraft(input: {pullRequestId: $id}) { pullRequest { isDraft } } }"
+
+
+class PrStateIn(BaseModel):
+    action: str  # close | reopen | ready | draft
+
+
+@router.post("/github/pr/{owner}/{repo}/{number}/state")
+async def pr_state(owner: str, repo: str, number: int, body: PrStateIn, auth: tuple[AppContext, str] = Depends(require_owner_mutating)):
+    """Close / reopen a pull request, mark it ready for review or convert it to a draft — on GitHub at once."""
+    ctx, owner_login = auth
+    _check_names(owner, repo)
+    if body.action not in ("close", "reopen", "ready", "draft"):
+        raise ApiError(400, "INVALID_ACTION", "action must be close, reopen, ready or draft")
+    if body.action in ("close", "reopen"):
+        await asyncio.to_thread(_rest(ctx), "PATCH", f"repos/{owner}/{repo}/pulls/{number}", {"state": "closed" if body.action == "close" else "open"})
+    else:
+        pr = await asyncio.to_thread(_pr_node, ctx, owner, repo, number)
+        q, key = (M_READY, "markPullRequestReadyForReview") if body.action == "ready" else (M_DRAFT, "convertPullRequestToDraft")
+        await asyncio.to_thread(_mutate, _hooks(ctx)[0], q, {"id": pr["node_id"]}, key)
+    _pr_cache.pop(f"{owner}/{repo}#{number}".lower(), None)
+    _cache.pop(owner_login, None)
+    pr = await asyncio.to_thread(_pr_node, ctx, owner, repo, number)
+    return {"state": pr.get("state"), "draft": pr.get("draft")}
+
+
+ISSUE_QUERY = """
+query Issue($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) { nameWithOwner issue(number: $number) {
+    number title url body state stateReason createdAt updatedAt author { login }
+    labels(first: 20) { nodes { name color } } assignees(first: 10) { nodes { login } }
+    comments(last: 100) { totalCount nodes { databaseId author { login } body createdAt url } }
+  } }
+}"""
+
+
+@router.get("/github/issue/{owner}/{repo}/{number}")
+async def get_issue(owner: str, repo: str, number: int, auth: tuple[AppContext, str] = Depends(require_owner)):
+    """An issue (for links like #123 that are not pull requests): details and comments."""
+    ctx, _ = auth
+    _check_names(owner, repo)
+    d = await asyncio.to_thread(_hooks(ctx)[0], ISSUE_QUERY, {"owner": owner, "name": repo, "number": number})
+    r = d.get("repository") or {}
+    i = r.get("issue")
+    if not i:
+        raise ApiError(404, "ISSUE_NOT_FOUND", f"{owner}/{repo}#{number} is neither a pull request nor an issue visible to the server's gh account")
+    comments = (i.get("comments") or {}).get("nodes") or []
+    return {"repo": r.get("nameWithOwner"), "number": i["number"], "title": i["title"], "url": i["url"], "body": i.get("body") or "",
+            "state": i.get("state"), "state_reason": i.get("stateReason"), "author": (i.get("author") or {}).get("login"),
+            "created_at": i.get("createdAt"), "labels": [{"name": x["name"], "color": x.get("color")} for x in (i.get("labels") or {}).get("nodes") or []],
+            "assignees": [x["login"] for x in (i.get("assignees") or {}).get("nodes") or [] if x],
+            "comments": [{"id": c.get("databaseId"), "author": (c.get("author") or {}).get("login"), "body": c.get("body") or "",
+                          "created_at": c.get("createdAt"), "url": c.get("url")} for c in comments if c],
+            "older_hidden": max(0, (i.get("comments") or {}).get("totalCount", 0) - len(comments))}
+
+
+class IssueStateIn(BaseModel):
+    action: str  # close | reopen
+    reason: str = "completed"  # completed | not_planned (for close)
+
+
+@router.post("/github/issue/{owner}/{repo}/{number}/state")
+async def issue_state(owner: str, repo: str, number: int, body: IssueStateIn, auth: tuple[AppContext, str] = Depends(require_owner_mutating)):
+    ctx, _ = auth
+    _check_names(owner, repo)
+    if body.action not in ("close", "reopen") or body.reason not in ("completed", "not_planned"):
+        raise ApiError(400, "INVALID_ACTION", "action must be close or reopen; reason completed or not_planned")
+    patch = {"state": "closed", "state_reason": body.reason} if body.action == "close" else {"state": "open"}
+    res = await asyncio.to_thread(_rest(ctx), "PATCH", f"repos/{owner}/{repo}/issues/{number}", patch)
+    return {"state": ((res or {}).get("state") or patch["state"]).upper(), "state_reason": (res or {}).get("state_reason")}
+
+
+class IssueCommentIn(BaseModel):
+    body: str
+
+
+@router.post("/github/issue/{owner}/{repo}/{number}/comments", status_code=201)
+async def issue_comment(owner: str, repo: str, number: int, body: IssueCommentIn, auth: tuple[AppContext, str] = Depends(require_owner_mutating)):
+    ctx, _ = auth
+    _check_names(owner, repo)
+    if not body.body.strip():
+        raise ApiError(400, "INVALID_COMMENT", "a comment needs text")
+    res = await asyncio.to_thread(_rest(ctx), "POST", f"repos/{owner}/{repo}/issues/{number}/comments", {"body": body.body.strip()})
+    return {"id": (res or {}).get("id"), "body": body.body.strip()}

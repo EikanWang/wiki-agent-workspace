@@ -90,8 +90,9 @@ The **▣ name ▾** menu in the top bar lists them:
 ### Chats: talk with a project directly
 
 **Chats** (top bar, next to Terminal; or the **chat** icon on a project's row in the file tree) opens a page of its
-own: on the left every project's (folder's) chats, on the right the conversation. To start, pick the **project**
-and just type — the first message starts a chat (titled after it). It is an open conversation with the agent
+own: a bar with the **Project** (any folder of the window) and the **Chat** menu (*＋ New chat* or one of the
+project's earlier chats), and the conversation below. To start, pick the project and just type — the first
+message starts a chat (titled after it). It is an open conversation with the agent
 about the whole project, not about one document: the agent searches and reads the files to answer and cites the
 ones it used. Reference folders (**⧉**) and locks apply as for documents. When the conversation is worth
 keeping, under **Turn into wiki content**:
@@ -133,6 +134,13 @@ can see, grouped by repository (most PRs first):
   many; tick **approved (n)** to list them too. Your standing verdict is the latest approve / request changes (a
   later plain comment or a draft review on github.com does not change it); a PR row shows *✓ approved* — with what
   happened since (*new commits*, *new comments*, *review requested again*) when there is news — or *changes requested*.
+- Each PR shows its status next to the CI dot: **Ready** (open, ready for review) or **Draft**; search results
+  can also be **Merged** or **Closed**.
+- **☆ / ★** at the end of a row: star a PR to make it a **priority PR**, or un-star one to take it out of
+  Priority even when the rules (Meta maintainer, chosen people) would put it there. Also in the PR tab (*☆ Star*).
+- **🔍 Search pull requests on GitHub…**: GitHub's search syntax (`xpu repo:pytorch/pytorch`, `author:…`,
+  `label:…`), `owner/repo#123` or a PR link; **Open** PRs by default — merged and closed ones only with *Closed /
+  merged* (or *All*). Click a result to open it as a tab. Esc closes the search.
 - **★ Priority** at the top: requests from PyTorch Meta maintainers (the requester's GitHub profile company says
   Meta / Facebook) and from people you name; each PR shows who *asked* you. Change it under **⚙**;
 - **⚙** (repositories and priority): **watch** a repository (`owner/name`) to also list all its open PRs (newest 40,
@@ -140,6 +148,10 @@ can see, grouped by repository (most PRs first):
   hidden repository. Hover a repository and click **×** to **hide** it (after a confirmation; stopping watching
   a repository is confirmed too). Kept on the server (`kv_settings`);
 - clicking a PR opens it as a **tab** next to your documents (remembered like them):
+  - The header shows **Ready for review** or **Draft — not ready for review** next to the state, and acts on
+    GitHub at once: **Ready for review** / **Convert to draft**, **Close PR** (confirmed), **Reopen**.
+  - An **issue** link (`#123` that is not a PR) opens the issue: description, comments (add one), assignees, and
+    **Close as completed** / **Close as not planned** (confirmed) or **Reopen**.
   - **Overview**: description, checks (failing first, linked), reviews and requested reviewers, labels;
     **Open on GitHub**; ↻ reloads. Below the description the **Conversation**: every reviewer's review
     (approved / changes requested / commented, with its summary and line comments with their code) and general

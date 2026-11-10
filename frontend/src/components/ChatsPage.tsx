@@ -100,36 +100,26 @@ export default function ChatsPage({ workspaces, target, onTarget, sessions, onRe
 
   return (
     <div className="chats-page" data-testid="chats-page">
-      <aside className="chats-list">
-        {projects.map((w) => (
-          <section key={w.id} className="chats-project" data-testid="chats-project" data-ws={w.id}>
-            <div className="chats-project-head">
-              <b title={w.root}>{w.name}</b>
-              <span className="spacer" />
-              <button className="link-btn small" onClick={() => onTarget({ ws: w.id, path: null })} title={`Start a chat with ${w.name}`} data-testid="chats-new">＋ New</button>
-            </div>
-            {(lists[w.id] ?? []).map((c) => (
-              <button key={c.path} className={`chat-item ${target?.path === c.path && ws === w.id ? "on" : ""}`} onClick={() => onTarget({ ws: w.id, path: c.path })} data-testid="chat-item">
-                <span className="chat-item-title">{c.title}</span>
-                <span className="muted small">{c.messages} message{c.messages === 1 ? "" : "s"}{c.updated_at ? ` · ${new Date(c.updated_at).toLocaleDateString()}` : ""}</span>
-              </button>
-            ))}
-            {lists[w.id]?.length === 0 && <div className="muted small">No chats yet.</div>}
-          </section>
-        ))}
-      </aside>
+      <div className="chats-bar" data-testid="chats-bar">
+        <label className="small">Project{" "}
+          <select value={ws ?? ""} onChange={(e) => onTarget({ ws: e.target.value, path: null })} data-testid="chat-project" title={project?.root}>
+            {projects.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+          </select>
+        </label>
+        <label className="small">Chat{" "}
+          <select value={target?.path ?? ""} onChange={(e) => ws && onTarget({ ws, path: e.target.value || null })} data-testid="chat-history">
+            <option value="">＋ New chat</option>
+            {(ws ? lists[ws] ?? [] : []).map((c) => <option key={c.path} value={c.path}>{c.title} ({c.messages})</option>)}
+          </select>
+        </label>
+        {target?.path && <button className="btn small" onClick={() => ws && onTarget({ ws, path: null })} data-testid="chats-new">＋ New chat</button>}
+        <span className="muted small chats-root">{project?.root}</span>
+      </div>
       <main className="chats-main">
         {err && <div className="banner warn small" role="alert">{err}</div>}
         {ws && !target?.path && (
           <div className="chat-new" data-testid="chat-new-page">
-            <h2>Chat with a project</h2>
-            <label className="small">
-              Project{" "}
-              <select value={ws} onChange={(e) => onTarget({ ws: e.target.value, path: null })} data-testid="chat-project">
-                {projects.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
-              </select>{" "}
-              <span className="muted">{project?.root}</span>
-            </label>
+            <h2>Chat with {project?.name ?? "a project"}</h2>
             <div className="muted small">
               An open conversation with the agent about the whole project — it searches and reads the files to answer and cites them.
               When the conversation is worth keeping, distill it into a page or fold it back into the pages it came from.

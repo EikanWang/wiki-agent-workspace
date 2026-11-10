@@ -153,7 +153,8 @@ def fake_pr_detail(calls, gh=None):
                 return {name and "x": None, "_errors": [{"message": "Line could not be resolved"}]}
             key = {"MarkViewed": "markFileAsViewed", "MarkUnviewed": "unmarkFileAsViewed", "Resolve": "resolveReviewThread",
                    "Unresolve": "unresolveReviewThread", "AddReview": "addPullRequestReview", "AddThread": "addPullRequestReviewThread",
-                   "Submit": "submitPullRequestReview", "DeleteReview": "deletePullRequestReview"}[name]
+                   "Submit": "submitPullRequestReview", "DeleteReview": "deletePullRequestReview",
+                   "MarkReady": "markPullRequestReadyForReview", "ToDraft": "convertPullRequestToDraft"}[name]
             if name in ("MarkViewed", "MarkUnviewed"):
                 gh["viewed"][v["path"]] = "VIEWED" if name == "MarkViewed" else "UNVIEWED"
             res = {"AddReview": {"pullRequestReview": {"id": "PRR_new"}}, "Submit": {"pullRequestReview": {"url": "https://github.com/pytorch/pytorch/pull/7#pullrequestreview-1"}},
@@ -381,7 +382,7 @@ async def test_review_prefs_priority_hidden_and_watched_repos(running_app):
     assert 5 not in by  # closed / merged meanwhile: dropped
     assert by[1]["priority"] and by[2]["priority"] and not by[3]["priority"] and not by[4]["priority"]
     assert by[1]["requested_by"] == "metaguy" and by[1]["requested_by_company"] == "@Meta"
-    assert r["prefs"] == {"hidden_repos": [], "watched_repos": [], "priority_requesters": [], "priority_meta": True, "show_approved": False} and r["watched"] == []
+    assert r["prefs"] == {"hidden_repos": [], "watched_repos": [], "priority_requesters": [], "priority_meta": True, "show_approved": False, "starred": [], "unstarred": []} and r["watched"] == []
     # priority people, no Meta rule; hide a repository; watch one
     assert (await api.put("/api/v1/github/prefs", json={"priority_requesters": ["chosen"], "priority_meta": False})).status_code == 200
     r = (await api.get("/api/v1/github/reviews")).json()
@@ -790,3 +791,60 @@ async def test_ci_failure_logs_are_downloaded_for_the_agent(running_app):
     assert by["circleci: build"]["log_path"] is None and "circleci" in by["circleci: build"]["error"]
     r = (await h.api.post("/api/v1/github/pr/pytorch/pytorch/7/ci-failures", json={"checks": ["xpu-test"]})).json()
     assert [f["name"] for f in r["failures"]] == ["xpu-test"]
+
+
+async def test_star_unstar_search_pr_state_and_issues(running_app):
+    github_hub.reset_cache()
+    calls: list = []
+    base = fake_pr_detail(calls)
+    merged = pr(8)
+    merged["state"] = "MERGED"
+
+    def graphql(q, v):
+        if "query Issue" in q:
+            if v["number"] == 99:
+                return {"repository": {"nameWithOwner": "pytorch/pytorch", "issue": None}}
+            return {"repository": {"nameWithOwner": "pytorch/pytorch", "issue": {
+                "number": v["number"], "title": "XPU OOM", "url": "u", "body": "boom", "state": "OPEN", "stateReason": None, "createdAt": "x", "updatedAt": "x",
+                "author": {"login": "carol"}, "labels": {"nodes": []}, "assignees": {"nodes": []},
+                "comments": {"totalCount": 1, "nodes": [{"databaseId": 1, "author": {"login": "dan"}, "body": "same here", "createdAt": "y", "url": None}]}}}}
+        if "search(" in q:
+            calls.append(("search", v["q"]))
+            return {"search": {"issueCount": 2, "pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": [requested_by(pr(1), "metaguy", company="Meta"), merged]}}
+        return base(q, v)
+
+    rest_calls: list = []
+    h = await running_app()
+    as_github(h, "EikanWang")
+    h.ctx.extra["gh_owner"] = lambda: "EikanWang"
+    h.ctx.extra["gh_graphql"] = graphql
+    h.ctx.extra["gh_pr_files"] = lambda o, r, n: []
+    h.ctx.extra["gh_rest"] = lambda m, p, b=None: rest_calls.append((m, p, b)) or {"state": "closed", "state_reason": (b or {}).get("state_reason")}
+    api = h.api
+    # search: open PRs by default (a merged one is left out), closed on request
+    r = (await api.get("/api/v1/github/search?q=xpu%20repo:pytorch/pytorch")).json()
+    assert [x["number"] for x in r["items"]] == [1] and r["query"].endswith(" is:open") and r["items"][0]["priority"] is True
+    r = (await api.get("/api/v1/github/search?q=xpu&state=closed")).json()
+    assert [x["number"] for x in r["items"]] == [8] and "is:closed" in r["query"]
+    r = (await api.get("/api/v1/github/search?q=https://github.com/pytorch/pytorch/pull/1")).json()
+    assert r["query"].startswith("is:pr repo:pytorch/pytorch 1") and [x["number"] for x in r["items"]] == [1]
+    # un-star a priority PR: never priority; star another: always
+    assert (await api.put("/api/v1/github/prefs", json={"unstar": "pytorch/pytorch#1"})).json()["unstarred"] == ["pytorch/pytorch#1"]
+    assert (await api.get("/api/v1/github/search?q=xpu")).json()["items"][0]["priority"] is False
+    p = (await api.put("/api/v1/github/prefs", json={"star": "pytorch/pytorch#1"})).json()
+    assert p["starred"] == ["pytorch/pytorch#1"] and p["unstarred"] == []
+    assert (await api.put("/api/v1/github/prefs", json={"star": "nope"})).json()["error"]["code"] == "INVALID_PR"
+    # close / reopen / ready / draft
+    await api.get("/api/v1/github/pr/pytorch/pytorch/7")
+    assert (await api.post("/api/v1/github/pr/pytorch/pytorch/7/state", json={"action": "close"})).status_code == 200
+    assert rest_calls[-1] == ("PATCH", "repos/pytorch/pytorch/pulls/7", {"state": "closed"})
+    await api.post("/api/v1/github/pr/pytorch/pytorch/7/state", json={"action": "draft"})
+    assert any(c.get("id") == "PR_node7" for c in calls if isinstance(c, dict))
+    assert (await api.post("/api/v1/github/pr/pytorch/pytorch/7/state", json={"action": "merge"})).json()["error"]["code"] == "INVALID_ACTION"
+    # an issue: details, close as not planned, comment
+    i = (await api.get("/api/v1/github/issue/pytorch/pytorch/5")).json()
+    assert i["title"] == "XPU OOM" and i["comments"][0]["author"] == "dan"
+    assert (await api.get("/api/v1/github/issue/pytorch/pytorch/99")).json()["error"]["code"] == "ISSUE_NOT_FOUND"
+    r = (await api.post("/api/v1/github/issue/pytorch/pytorch/5/state", json={"action": "close", "reason": "not_planned"})).json()
+    assert r["state"] == "CLOSED" and rest_calls[-1] == ("PATCH", "repos/pytorch/pytorch/issues/5", {"state": "closed", "state_reason": "not_planned"})
+    assert (await api.post("/api/v1/github/issue/pytorch/pytorch/5/comments", json={"body": "thanks"})).status_code == 201

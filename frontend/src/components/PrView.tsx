@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { confirmAction } from "./Confirm";
 import { AgentSession, ApiError, WorkspaceInfo, get, post, put } from "../api";
 import { renderGithubMarkdown } from "../markdown";
+import { loadReviews, savePrefs, useReviews } from "./ReviewsPanel";
 import { usePersistentState, useRestoredScroll } from "../persist";
 import { SelectionAnchor, wholeDocument } from "../textmodel";
 import { GhDraft, GhThread, PrFile, PrFileDiff, SubmitReview } from "./PrDiff";
@@ -119,6 +120,7 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
     }
   };
 
+  const [notPr, setNotPr] = useState(false);
   const load = async (refresh = false) => {
     try {
       const d = await get<PrData>(`/github/pr/${owner}/${name}/${number}${refresh ? "?refresh=true" : ""}`);
@@ -128,6 +130,7 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
       if (d.wiki_workspace_id) onReady(d.wiki_workspace_id, d.doc_path, `#${d.pr.number} ${d.pr.title}`);
     } catch (e) {
       setError((e as ApiError).message);
+      if ((e as ApiError).code === "PR_NOT_FOUND") setNotPr(true); // maybe an issue (#123 links): show it as one
     }
   };
   useEffect(() => {
@@ -210,6 +213,7 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
   const askAbout = (quote: string, label: string, question: string) =>
     onSend({ quote, prefix: "", suffix: "", start: 0, end: 0, heading: null, target: { kind: "text", page: null, unit: "page", label } }, question, null);
 
+  if (error && !data && notPr) return <IssueView repo={repo} number={number} />;
   if (error && !data) return <div className="pr-view"><div className="banner warn" data-testid="pr-error">{error} <button className="btn small" onClick={() => void load(true)}>Retry</button> <a className="btn small" href={`https://github.com/${repo}/issues/${number}`} target="_blank" rel="noreferrer">Open on GitHub</a></div></div>;
   if (!data) return <div className="pr-view"><div className="muted pad">Loading {repo}#{number} from GitHub…</div></div>;
   const p = data.pr;
@@ -229,6 +233,11 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
       <div className="pr-head">
         <div className="pr-title-row">
           <span className={`pr-state ${p.draft ? "draft" : p.state.toLowerCase()}`}>{p.draft ? "Draft" : p.state === "OPEN" ? "Open" : p.state === "MERGED" ? "Merged" : "Closed"}</span>
+          {p.state === "OPEN" && (
+            <span className={`pr-status ${p.draft ? "draft" : "ready"}`} data-testid="pr-ready-status" title={p.draft ? "A draft: the author has not asked for reviews yet" : "Ready for review"}>
+              {p.draft ? "Draft — not ready for review" : "Ready for review"}
+            </span>
+          )}
           <h2 className="pr-title" data-testid="pr-title">{p.title} <span className="muted">#{p.number}</span></h2>
         </div>
         <div className="pr-meta muted small">
@@ -264,6 +273,8 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
             title={docReady ? "The agent reviews the PR; its line comments appear in Files as suggestions you apply or discard (nothing is posted until you finish the review)" : "Choose the agent's wiki first"} data-testid="pr-agent-review">
             {reviewing ? "Agent reviewing…" : "Agent review"}
           </button>
+          <PrStar repo={p.repo} number={p.number} />
+          <PrStateMenu apiBase={apiBase} state={p.state} draft={p.draft} number={p.number} onDone={() => load(true)} onError={setError} />
           <a className="btn small" href={p.url} target="_blank" rel="noreferrer">Open on GitHub</a>
           <RefreshButton className="btn small" onRefresh={() => load(true)} title="Reload from GitHub" testId="pr-refresh" />
         </div>
@@ -670,6 +681,138 @@ function CiAsk({ apiBase, canAsk, onAsk, checks, label, compact = false }: {
       <div className="row">
         <button className="btn small primary" disabled={!!busy} onClick={() => void send()} data-testid="pr-ci-ask-send">{busy ?? "Investigate"}</button>
         <button className="btn small" onClick={() => setText(null)}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+/** ★ this PR as a priority PR (or un-star it so it never is) — the same star as in Reviews. */
+function PrStar({ repo, number }: { repo: string; number: number }) {
+  const { queue } = useReviews();
+  const key = `${repo}#${number}`.toLowerCase();
+  const prefs = queue?.prefs;
+  if (!prefs) return null;
+  const inQueue = queue.items.find((x) => `${x.repo}#${x.number}`.toLowerCase() === key);
+  const on = (prefs.starred ?? []).includes(key) || (!!inQueue?.priority && !(prefs.unstarred ?? []).includes(key));
+  return (
+    <button className={`btn small pr-star ${on ? "on" : ""}`} onClick={() => void savePrefs(on ? { unstar: key } : { star: key }).then(() => loadReviews(false))}
+      title={on ? "Priority PR — click to un-star (never priority)" : "Star as a priority PR"} data-testid="pr-star" aria-pressed={on}>
+      {on ? "★ Priority" : "☆ Star"}
+    </button>
+  );
+}
+
+/** Close / reopen the PR, mark it ready for review or turn it back into a draft — on GitHub at once. */
+function PrStateMenu({ apiBase, state, draft, number, onDone, onError }: {
+  apiBase: string; state: string; draft: boolean; number: number; onDone: () => Promise<void> | void; onError: (m: string) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const act = async (action: "close" | "reopen" | "ready" | "draft") => {
+    if (action === "close" && !(await confirmAction({ title: `Close pull request #${number}?`, message: "It is closed on GitHub without merging (it can be reopened).", confirmLabel: "Close pull request" }))) return;
+    setBusy(true);
+    try {
+      await post(`${apiBase}/state`, { action });
+      await onDone();
+      void loadReviews(true);
+    } catch (e) {
+      onError((e as ApiError).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (state === "MERGED") return null;
+  if (state === "CLOSED") return <button className="btn small" disabled={busy} onClick={() => void act("reopen")} data-testid="pr-reopen">Reopen</button>;
+  return (
+    <>
+      {draft
+        ? <button className="btn small" disabled={busy} onClick={() => void act("ready")} title="Mark this draft as ready for review" data-testid="pr-mark-ready">Ready for review</button>
+        : <button className="btn small" disabled={busy} onClick={() => void act("draft")} title="Convert back to a draft" data-testid="pr-to-draft">Convert to draft</button>}
+      <button className="btn small danger" disabled={busy} onClick={() => void act("close")} data-testid="pr-close">Close PR</button>
+    </>
+  );
+}
+
+interface IssueData {
+  repo: string; number: number; title: string; url: string; body: string; state: string; state_reason: string | null; author: string | null;
+  labels: { name: string; color: string | null }[]; assignees: string[]; comments: { id: number; author: string | null; body: string; created_at: string; url: string | null }[];
+  older_hidden: number;
+}
+
+/** An issue (a #123 link that is not a pull request): read it, comment, close or reopen it on GitHub. */
+function IssueView({ repo, number }: { repo: string; number: number }) {
+  const [owner, name] = repo.split("/");
+  const base = `/github/issue/${owner}/${name}/${number}`;
+  const [d, setD] = useState<IssueData | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const load = async () => {
+    try {
+      setD(await get<IssueData>(base));
+      setErr(null);
+    } catch (e) {
+      setErr((e as ApiError).message);
+    }
+  };
+  useEffect(() => { void load(); }, [base]); // eslint-disable-line react-hooks/exhaustive-deps
+  const run = async (fn: () => Promise<unknown>) => {
+    setBusy(true);
+    try {
+      await fn();
+      await load();
+    } catch (e) {
+      setErr((e as ApiError).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const close = async (reason: "completed" | "not_planned") => {
+    if (!(await confirmAction({ title: `Close issue #${number} as ${reason === "completed" ? "completed" : "not planned"}?`, message: "It is closed on GitHub (it can be reopened).", confirmLabel: "Close issue" }))) return;
+    await run(() => post(`${base}/state`, { action: "close", reason }));
+  };
+  const md = (s: string) => renderGithubMarkdown(s, repo);
+  if (!d) return <div className="pr-view"><div className={err ? "banner warn" : "muted pad"} data-testid="pr-error">{err ?? `Loading ${repo}#${number} from GitHub…`} <a className="btn small" href={`https://github.com/${repo}/issues/${number}`} target="_blank" rel="noreferrer">Open on GitHub</a></div></div>;
+  return (
+    <div className="pr-view" data-testid="issue-view">
+      <div className="pr-head">
+        <div className="pr-title-row">
+          <span className={`pr-status ${d.state === "OPEN" ? "ready" : "closed"}`} data-testid="issue-state">{d.state === "OPEN" ? "Open issue" : `Closed${d.state_reason === "NOT_PLANNED" ? " (not planned)" : ""}`}</span>
+          <h2 className="pr-title">{d.title} <span className="muted">#{d.number}</span></h2>
+        </div>
+        <div className="pr-meta muted small"><b>{d.repo}</b> · opened by <GhUser login={d.author} bold={false} />{d.assignees.length ? <> · assigned to {d.assignees.map((a) => <span key={a}><GhUser login={a} bold={false} /> </span>)}</> : null}</div>
+        <div className="pr-actions">
+          {d.state === "OPEN" ? (
+            <>
+              <button className="btn small danger" disabled={busy} onClick={() => void close("completed")} data-testid="issue-close">Close as completed</button>
+              <button className="btn small" disabled={busy} onClick={() => void close("not_planned")} data-testid="issue-close-not-planned">Close as not planned</button>
+            </>
+          ) : (
+            <button className="btn small" disabled={busy} onClick={() => void run(() => post(`${base}/state`, { action: "reopen" }))} data-testid="issue-reopen">Reopen</button>
+          )}
+          <span className="spacer" />
+          <a className="btn small" href={d.url} target="_blank" rel="noreferrer">Open on GitHub</a>
+        </div>
+      </div>
+      {err && <div className="banner warn">{err}</div>}
+      <div className="pr-body">
+        <div className="pr-main-col" style={{ padding: "8px 16px" }}>
+          <article className="markdown-body pr-description" dangerouslySetInnerHTML={{ __html: md(d.body || "_No description._") }} data-testid="issue-body" />
+          <section className="pr-conversation">
+            <h3>Comments</h3>
+            {d.older_hidden > 0 && <div className="muted small">{d.older_hidden} older comment(s) are only on GitHub.</div>}
+            {d.comments.map((c) => (
+              <div key={c.id} className="pr-conv-item comment" data-testid="issue-comment">
+                <div className="small"><GhUser login={c.author} /> <span className="muted">· {new Date(c.created_at).toLocaleString()}</span></div>
+                <div className="markdown-body gh-comment-body" dangerouslySetInnerHTML={{ __html: md(c.body) }} />
+              </div>
+            ))}
+            <div className="pr-conv-new">
+              <textarea rows={3} value={text} onChange={(e) => setText(e.target.value)} placeholder={`Comment on the issue (posted on GitHub; ${COMPOSER_HINT})`}
+                onKeyDown={(e) => composerKeyDown(e, () => void run(async () => { await post(`${base}/comments`, { body: text }); setText(""); }), setText)} data-testid="issue-comment-text" />
+              <div className="row"><button className="btn small primary" disabled={busy || !text.trim()} onClick={() => void run(async () => { await post(`${base}/comments`, { body: text }); setText(""); })} data-testid="issue-comment-send">Comment</button></div>
+            </div>
+          </section>
+        </div>
       </div>
     </div>
   );
