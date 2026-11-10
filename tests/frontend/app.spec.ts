@@ -1915,6 +1915,14 @@ test("GitHub review hub: priority requests, hide a repository, watch a repositor
   await page.getByTestId("pr-local-repo-path").fill("/nonexistent/checkout");
   await page.getByTestId("pr-local-repo-save").click();
   await expect(page.getByTestId("pr-local-repo-error")).toContainText("not a directory");
+  await page.getByTestId("pr-local-repo-browse").click();
+  await page.getByTestId("folder-picker-path").fill(path.dirname(workspaceDir()));
+  await page.getByTestId("folder-picker-path").press("Enter");
+  await expect(page.getByTestId("folder-picker-choose")).toBeDisabled(); // only a Git checkout can be chosen
+  await page.locator('[data-testid="folder-picker-entry"][data-name="wiki"]').click();
+  await expect(page.getByTestId("folder-picker-selected")).toContainText("Git repository");
+  await page.getByTestId("folder-picker-choose").click();
+  await expect(page.getByTestId("pr-local-repo-path")).toHaveValue(workspaceDir());
   await page.getByTestId("pr-local-repo").click();
   // "#103" in the description links to that PR and opens it here, as a tab; `#999` in code is not a link
   const ref = page.getByTestId("pr-description").locator('a[data-pr="pytorch/pytorch/103"]');
@@ -2256,6 +2264,23 @@ test("reference folders for the agent: add and remove for a wiki folder", async 
   await root.locator(".tree-root").hover();
   await page.getByTestId("tree-context-root").click();
   await expect(page.getByTestId("context-folder")).toContainText("/tmp");
+  await page.getByTestId("context-folder-remove").click();
+  await expect(page.getByTestId("context-folder")).toHaveCount(0);
+  // or browse the server's folders: path box, breadcrumbs, filter, then choose
+  await page.getByTestId("context-folder-browse").click();
+  const picker = page.getByTestId("folder-picker");
+  await expect(picker.getByTestId("folder-places")).toContainText("~ home");
+  await page.getByTestId("folder-picker-path").fill(path.dirname(workspaceDir()));
+  await page.getByTestId("folder-picker-path").press("Enter");
+  await page.getByTestId("folder-picker-filter").fill("wik");
+  await picker.locator('[data-testid="folder-picker-entry"][data-name="wiki"]').click();
+  await expect(page.getByTestId("folder-picker-selected")).toContainText(workspaceDir());
+  await page.getByTestId("folder-breadcrumbs").getByRole("button", { name: path.basename(path.dirname(workspaceDir())) }).click();
+  await expect(page.getByTestId("folder-picker-selected")).toContainText(path.dirname(workspaceDir()));
+  await picker.locator('[data-testid="folder-picker-entry"][data-name="wiki"]').click();
+  await page.getByTestId("folder-picker-choose").click();
+  await expect(picker).toHaveCount(0);
+  await expect(page.getByTestId("context-folder")).toContainText(workspaceDir());
   await page.getByTestId("context-folder-remove").click();
   await expect(page.getByTestId("context-folder")).toHaveCount(0);
 });

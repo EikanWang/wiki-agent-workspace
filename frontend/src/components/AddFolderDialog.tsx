@@ -1,14 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ApiError, WorkspaceInfo, get, post } from "../api";
 import { FileIcon } from "./FileIcon";
-
-interface DirListing {
-  path: string;
-  parent: string | null;
-  is_git: boolean;
-  open_as: string | null;
-  entries: { name: string; path: string; is_git: boolean }[];
-}
+import { Breadcrumbs, DirListing, Places } from "./FolderPicker";
 
 /**
  * Browse directories on the server (where the wikis live). Mode "add": open one as a new root of this window.
@@ -35,9 +28,11 @@ export default function AddFolderDialog({ start, onAdded, onClose, mode = "add",
   const [busy, setBusy] = useState(false);
   const [showHidden, setShowHidden] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [filter, setFilter] = useState("");
   const edited = useRef(false); // the user typed in the path box since the last navigation
   const go = (p: string) => {
     edited.current = false;
+    setFilter("");
     setPath(p);
   };
 
@@ -172,6 +167,7 @@ export default function AddFolderDialog({ start, onAdded, onClose, mode = "add",
             browsing the server's file system (where your wikis and agents live).
           </div>
         )}
+        <Places onGo={go} />
         <div className="row">
           <input className="path-input" value={typed} onChange={(e) => { edited.current = true; setTyped(e.target.value); }} onKeyDown={(e) => { if (e.key === "Enter") go(typed); }} data-testid="add-folder-path" />
           <button className="btn small" onClick={() => go(typed)}>Go</button>
@@ -185,11 +181,13 @@ export default function AddFolderDialog({ start, onAdded, onClose, mode = "add",
             <button className="btn small primary" disabled={busy || !newDir.trim()} onClick={() => void createDir()} data-testid="add-folder-newdir-create">Create</button>
           </div>
         )}
+        {listing && <Breadcrumbs path={listing.path} onGo={go} />}
+        <input className="dir-filter" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter the folders shown…" data-testid="add-folder-filter" />
         <div className="dir-list" data-testid="add-folder-list">
           {listing?.parent && (
             <button className="list-item" onClick={() => go(listing.parent!)}><span>‹ ..</span></button>
           )}
-          {listing?.entries.map((e) => (
+          {listing?.entries.filter((e) => !filter || e.name.toLowerCase().includes(filter.toLowerCase())).map((e) => (
             <button key={e.path} className="list-item" onClick={() => go(e.path)} onDoubleClick={() => go(e.path)} data-testid="add-folder-entry">
               <span className="dir-entry"><FileIcon item={{ type: "dir", kind: "dir" }} /> {e.name}</span>
               {e.is_git && <span className="git-badge clean">git</span>}

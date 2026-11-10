@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ApiError, del, get, post, put } from "../api";
 import { confirmAction } from "./Confirm";
+import FolderPicker from "./FolderPicker";
 
 interface Link { path: string; update: boolean; remote: string | null }
 interface Sync { state: "none" | "idle" | "running" | "done" | "failed"; sha?: string; ref?: string; base?: string; base_updated?: boolean | null; notes?: string[]; message?: string }
@@ -27,6 +28,7 @@ export default function LocalRepo({ repo, apiBase, onSynced, onOpenChat }: {
   const [err, setErr] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [browse, setBrowse] = useState(false);
 
   const startSync = async () => {
     try {
@@ -111,7 +113,14 @@ export default function LocalRepo({ repo, apiBase, onSynced, onOpenChat }: {
         <div className="ws-menu pr-local-repo-box" data-testid="pr-local-repo-box">
           <div className="small"><b>Local checkout of {repo}</b> — the agent's default reference for this repository's PRs: opening a PR fetches its
             head there as <code>refs/waw/pr/&lt;n&gt;</code> (never checked out; your working tree is not changed).</div>
-          <input className="mono" value={path} onChange={(e) => setPath(e.target.value)} placeholder="/path/to/pytorch (a git checkout on the server)" data-testid="pr-local-repo-path" />
+          <div className="row">
+            <input className="mono grow" value={path} onChange={(e) => setPath(e.target.value)} placeholder="/path/to/pytorch (a git checkout on the server)" data-testid="pr-local-repo-path" />
+            <button className="btn small" onClick={() => setBrowse(true)} data-testid="pr-local-repo-browse">Browse…</button>
+          </div>
+          {browse && (
+            <FolderPicker title={`Local checkout of ${repo}`} hint="Choose the top folder of a Git checkout of this repository." start={path.trim() || undefined} requireGit
+              confirmLabel="Use this checkout" onClose={() => setBrowse(false)} onChoose={(p) => { setPath(p); setBrowse(false); }} />
+          )}
           <label className="small">
             <input type="checkbox" checked={update} onChange={(e) => setUpdate(e.target.checked)} data-testid="pr-local-repo-update" /> Update the local project first
             <span className="muted"> — fetch the PR's base branch, and fast-forward it when it is checked out with no local changes</span>

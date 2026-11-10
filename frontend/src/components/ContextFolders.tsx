@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { ApiError, get, put } from "../api";
+import FolderPicker from "./FolderPicker";
 
 /**
  * Extra reference folders for the agent (server paths): named in its prompt so it reads them for background.
@@ -10,6 +11,7 @@ export default function ContextFolders({ scope, title, onClose }: { scope: strin
   const [path, setPath] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [browse, setBrowse] = useState(false);
   useEffect(() => {
     get<{ dirs: string[] }>(`/agent-context?scope=${encodeURIComponent(scope)}`).then((r) => setDirs(r.dirs)).catch((e) => setErr((e as ApiError).message));
   }, [scope]);
@@ -46,8 +48,14 @@ export default function ContextFolders({ scope, title, onClose }: { scope: strin
         ))}
         <div className="reviews-settings-row">
           <input value={path} onChange={(e) => setPath(e.target.value)} placeholder="/absolute/path/on/the/server" onKeyDown={(e) => { if (e.key === "Enter") void add(); }} data-testid="context-folder-input" />
+          <button className="btn small" onClick={() => setBrowse(true)} data-testid="context-folder-browse">Browse…</button>
           <button className="btn small primary" disabled={busy || !path.trim() || dirs === null} onClick={() => void add()} data-testid="context-folder-add">Add</button>
         </div>
+        {browse && dirs && (
+          <FolderPicker title="Add a reference folder" hint="The agent is told to read this folder for background." start={path.trim() || dirs[dirs.length - 1]}
+            confirmLabel="Add this folder" onClose={() => setBrowse(false)}
+            onChoose={(p) => { setBrowse(false); void save([...dirs, p]); }} />
+        )}
         {err && <div className="tree-error small" role="alert" data-testid="context-folder-error">{err}</div>}
       </div>
     </div>

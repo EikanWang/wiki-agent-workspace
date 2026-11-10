@@ -57,6 +57,10 @@ state. Nothing is shared between folders except your login, terminals and prefer
 - **Switch folder**: click any file in another folder's tree, use the folder selector in the top bar, or open an
   entry from *Recent*. The header, Diff, Commit, Review and the discussion panel always follow the active folder; the
   last document of each folder is remembered.
+- **Browsing the server's folders** (Add folder, New workspace, **Browse…** for reference folders and a
+  repository's local checkout): quick places (*~ home*, `/`, the folders open in this window and where they
+  live), a path box (Enter opens it), clickable breadcrumbs, a filter for long folder lists, *hidden* to show dot
+  folders, and a *git* badge on Git checkouts; click a folder to enter it, then choose the one shown.
 - **Close a folder**: hover its header row in the tree and click `✕`, then **Close folder** in the confirmation
   (Cancel has the focus, so Enter or a stray click does nothing; Esc cancels). It does not show again — also after a
   restart, also for folders defined in `config.toml`. Its data is kept: add the same folder again with `＋` and
@@ -153,7 +157,8 @@ can see, grouped by repository (most PRs first):
     lines (answer in the discussions panel). **Suggest change** inserts the selected new lines as a GitHub
     *suggested change* block to edit into the replacement.
   - **⎇ Connect local repo** (next to *Agent wiki*): connect the repository to a **local git checkout** on the
-    server (e.g. `pytorch/pytorch` → `/home/me/pytorch`). It becomes the agent's **default reference** for that
+    server (e.g. `pytorch/pytorch` → `/home/me/pytorch`; type the path or **Browse…** — only a Git checkout can be
+    chosen). It becomes the agent's **default reference** for that
     repository's PRs: opening a PR fetches its head into the checkout as `refs/waw/pr/<n>` — never checked out, your
     working tree and branches are not changed — and the agent is told to read the PR's code there
     (`git show refs/waw/pr/<n>:<file>`, `git diff <merge-base> refs/waw/pr/<n>`) and the surrounding code, callers,

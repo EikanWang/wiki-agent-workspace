@@ -820,3 +820,12 @@ mark.waw-hl.review.needs_review { border-bottom: 2px dashed var(--warn); }
   background: var(--bg); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18); font-size: 13px; }
 .mention-list li { padding: 4px 10px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mention-list li.on { background: var(--accent); }
+/* folder browsing */
+.places { display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: center; }
+.chip-btn { border: 1px solid var(--border); background: var(--card); color: inherit; border-radius: 999px; padding: 1px 9px; font-size: 12px; cursor: pointer; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip-btn:hover { border-color: var(--primary); }
+.breadcrumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; font-family: var(--mono); }
+.breadcrumbs .link-btn { padding: 0 2px; }
+.dir-filter { border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; background: var(--bg); color: inherit; }
+.folder-picker { display: flex; flex-direction: column; gap: 8px; }
+input.grow { flex: 1; min-width: 0; }
