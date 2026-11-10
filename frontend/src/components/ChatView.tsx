@@ -14,7 +14,7 @@ type Action = "distill" | "update";
  * produced something worth keeping, **Distill into a page** writes a new wiki page from it, or **Update source
  * pages** folds what it established back into the pages its content came from; the edits are reviewed in Diff.
  */
-export default function ChatView({ doc, folderName, threads, sessions, liveJob, onStart, onSend, onAction, onRetry, onCancel, onPermission, onReviewChanges, onArchived }: {
+export default function ChatView({ doc, folderName, threads, sessions, liveJob, onStart, onSend, onAction, onRetry, onCancel, onPermission, onReviewChanges, onArchived, onWatchJob }: {
   doc: OpenDocument;
   folderName: string;
   threads: Thread[];
@@ -28,6 +28,8 @@ export default function ChatView({ doc, folderName, threads, sessions, liveJob, 
   onPermission: (jobId: string, requestId: string, decision: string) => Promise<void>;
   onReviewChanges: () => void;
   onArchived: () => void;
+  /** follow a running turn (e.g. one started elsewhere: a change summary, or after a reload) */
+  onWatchJob?: (jobId: string) => void;
 }) {
   const thread = threads[0] ?? null; // a chat is one conversation
   const title = (doc.text.split("\n", 1)[0] || "Chat").replace(/^#\s*/, "");
@@ -43,6 +45,11 @@ export default function ChatView({ doc, folderName, threads, sessions, liveJob, 
   const live = liveJob && thread && liveJob.threadId === thread.id ? liveJob : null;
   const liveMessageId = thread?.messages.find((m) => m.job_id === liveJob?.jobId)?.id;
   const running = !!thread?.messages.some((m) => m.role === "agent" && ["queued", "running", "waiting_for_session"].includes(m.id === liveMessageId && live ? live.status : m.status));
+  const pendingJob = thread?.messages.find((m) => m.role === "agent" && m.job_id && ["queued", "running", "waiting_provider_permission", "waiting_for_session"].includes(m.status))?.job_id ?? null;
+  useEffect(() => {
+    if (pendingJob && pendingJob !== liveJob?.jobId) onWatchJob?.(pendingJob);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingJob]);
   useEffect(() => {
     bottom.current?.scrollIntoView({ block: "end" });
   }, [thread?.messages.length, live?.text.length]);

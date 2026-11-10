@@ -212,6 +212,9 @@ def add_fake_review_queue(app) -> None:
             return {"repository": {"pullRequest": {"reviews": {"totalCount": len(state["reviews"]), "nodes": state["reviews"]},
                                                     "comments": {"totalCount": len(state["comments"]), "nodes": state["comments"]},
                                                     "pending": {"nodes": []}}}}
+        if "query Mentionable" in query:
+            people = [{"login": "albanD", "name": "Alban D"}, {"login": "alice", "name": "Alice A."}, {"login": "ezyang", "name": "Edward Z. Yang"}]
+            return {"repository": {"mentionableUsers": {"nodes": [u for u in people if variables["q"].lower() in (u["login"] + u["name"]).lower()]}}}
         if "query PrPeople" in query:
             alice = {"login": "alice", "name": "Alice A.", "company": "@intel", "location": "Shanghai", "bio": None, "websiteUrl": None,
                      "twitterUsername": None, "url": "https://github.com/alice", "avatarUrl": None, "createdAt": "2015-01-01T00:00:00Z",

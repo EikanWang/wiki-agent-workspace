@@ -402,6 +402,8 @@ def reset_cache() -> None:
     _pr_cache.clear()
     _people_cache.clear()
     _user_cache.clear()
+    _mention_cache.clear()
+    _participants.clear()
 
 
 # ---------------------------------------------------------------------- a pull request (tab)
@@ -682,12 +684,16 @@ async def get_pull_request(owner: str, repo: str, number: int, refresh: bool = Q
     if hit and not refresh and time.time() - hit[0] < PR_CACHE_SECONDS:
         data = hit[1]
     else:
+        hit = None
         graphql = _hooks(ctx)[0]
         files_fn = ctx.extra.get("gh_pr_files", _gh_files)
         data = await asyncio.to_thread(fetch_pr, owner, repo, number, graphql, files_fn)
         _pr_cache[key] = (time.time(), data)
-        # the copy the agent reads; discussions attach to it like to a document of the repo's wiki
-        snap = ctx.settings.snapshots_dir / "github" / owner.lower() / repo.lower()
+        hit = None
+    # the copy the agent reads; discussions attach to it like to a document of the repo's wiki (also written when
+    # the PR came into the cache another way, e.g. a local sync, before its tab was opened)
+    snap = ctx.settings.snapshots_dir / "github" / owner.lower() / repo.lower()
+    if hit is None or not (snap / f"{number}.md").is_file():
         snap.mkdir(parents=True, exist_ok=True)
         raw = [{"filename": f["path"], "status": f["status"], "additions": f["additions"], "deletions": f["deletions"],
                 "patch": f["unified"].split("\n", 2)[2].rstrip("\n") if f["unified"] else None} for f in data["files"]]
@@ -823,6 +829,8 @@ async def pr_comments(owner: str, repo: str, number: int, auth: tuple[AppContext
     with ctx.db.read() as s:
         drafts = s.query(GithubPrDraft).filter_by(repo=f"{owner}/{repo}".lower(), number=number).order_by(GithubPrDraft.created_at).all()
         dd = [_draft_dict(d) for d in drafts]
+    _remember_participants(f"{owner}/{repo}#{number}".lower(), [(c.get("author"), "commenter") for c in conv["items"]]
+                           + [(c.get("author"), "commenter") for t in threads for c in t.get("comments") or []])
     # the agent reads the review discussion next to the PR copy
     snap = ctx.settings.snapshots_dir / "github" / owner.lower() / repo.lower()
     snap.mkdir(parents=True, exist_ok=True)
@@ -1273,6 +1281,7 @@ async def pr_contributors(owner: str, repo: str, number: int, refresh: bool = Qu
     else:
         data = await asyncio.to_thread(fetch_people, _hooks(ctx)[0], owner, repo, number)
         _people_cache[key] = (time.time(), data)
+        _remember_participants(key, [(c["login"], "contributor") for c in data["contributors"]])
     if details:
         rest = _rest(ctx)
         people = [dict(x) for x in data["contributors"]]
@@ -1478,3 +1487,181 @@ def import_agent_reviews(ctx: AppContext, owner: str, repo: str, number: int) ->
     if changed:
         kv_put(ctx, key, runs)
     return runs
+
+
+
+# ---------------------------------------------------------------------- local checkout of a repository
+
+class LocalRepoIn(BaseModel):
+    repo: str
+    path: str
+    update: bool = True  # bring the base branch up to date before reviewing (fetch; fast-forward when clean)
+    remote: str | None = None  # where to fetch from (a remote name or URL); default: the checkout's GitHub remote
+
+
+def _repo_arg(repo: str) -> str:
+    parts = repo.strip().split("/")
+    if len(parts) != 2:
+        raise ApiError(400, "INVALID_REPO", "use owner/name")
+    _check_names(*parts)
+    return "/".join(parts)
+
+
+@router.get("/github/local-repo")
+def get_local_repo(repo: str = Query(...), auth: tuple[AppContext, str] = Depends(require_owner)):
+    """The local git checkout connected to a repository (the agent's default reference for its PRs), if any."""
+    from .local_repos import get_link
+
+    ctx, _ = auth
+    repo = _repo_arg(repo)
+    return {"repo": repo, "link": get_link(ctx, repo)}
+
+
+@router.put("/github/local-repo")
+def put_local_repo(body: LocalRepoIn, auth: tuple[AppContext, str] = Depends(require_owner_mutating)):
+    from .local_repos import check_checkout, find_remote
+
+    ctx, _ = auth
+    repo = _repo_arg(body.repo)
+    top = check_checkout(body.path.strip())
+    remote = (body.remote or "").strip() or find_remote(top, repo)
+    if remote and remote.startswith("-"):
+        raise ApiError(400, "INVALID_REMOTE", "not a remote name or URL")
+    link = {"path": top, "update": body.update, "remote": remote}
+    kv_put(ctx, f"local_repo:{repo.lower()}", link)
+    return {"repo": repo, "link": link,
+            "note": None if remote else f"no remote of this checkout points at github.com/{repo}; PRs are fetched from https://github.com/{repo}.git"}
+
+
+@router.delete("/github/local-repo")
+def delete_local_repo(repo: str = Query(...), auth: tuple[AppContext, str] = Depends(require_owner_mutating)):
+    ctx, _ = auth
+    repo = _repo_arg(repo)
+    kv_put(ctx, f"local_repo:{repo.lower()}", None)
+    return {"repo": repo, "link": None}
+
+
+@router.post("/github/pr/{owner}/{repo}/{number}/local-sync")
+async def local_sync(owner: str, repo: str, number: int, auth: tuple[AppContext, str] = Depends(require_owner_mutating)):
+    """Fetch the PR into the connected checkout (in the background); poll with GET."""
+    from .local_repos import start_sync
+
+    ctx, _ = auth
+    _check_names(owner, repo)
+    pr = await asyncio.to_thread(_pr_node, ctx, owner, repo, number)
+    return start_sync(ctx, f"{owner}/{repo}", number, pr.get("base"))
+
+
+@router.get("/github/pr/{owner}/{repo}/{number}/local-sync")
+def local_sync_state(owner: str, repo: str, number: int, auth: tuple[AppContext, str] = Depends(require_owner)):
+    from .local_repos import get_link, sync_state
+
+    ctx, _ = auth
+    _check_names(owner, repo)
+    if get_link(ctx, f"{owner}/{repo}") is None:
+        return {"state": "none"}
+    return sync_state(f"{owner}/{repo}", number) or {"state": "idle"}
+
+
+class RepoSummaryIn(BaseModel):
+    repo: str
+    period: str  # day | week | month | quarter | year
+    end: str | None = None  # last day of the window (YYYY-MM-DD); default today
+    focus: str = ""
+
+
+@router.post("/github/repo-summary", status_code=201)
+async def repo_summary(body: RepoSummaryIn, auth: tuple[AppContext, str] = Depends(require_owner_mutating)):
+    """Summarize a repository's key changes over a day / week / month / quarter / year from the connected checkout's
+    git log: starts a chat in the repository's wiki (to continue, distill into a page, …) with the log as material."""
+    from dataclasses import replace
+
+    from .annotations import ThreadCreateIn, ThreadService
+    from .chats import new_chat
+    from .local_repos import change_log, get_link, period_range, summary_brief
+
+    ctx, _ = auth
+    repo = _repo_arg(body.repo)
+    period_range(body.period, body.end)  # validate before any git work
+    link = get_link(ctx, repo)
+    if link is None:
+        raise ApiError(400, "NO_LOCAL_REPO", f"connect {repo} to a local git checkout first (⎇ in one of its PR tabs)")
+    wiki = repo_wiki(ctx, repo)
+    rt = ctx.workspaces.runtimes.get(wiki) if (wiki and ctx.workspaces is not None) else None
+    if rt is None:
+        raise ApiError(400, "NO_REPO_WIKI", f"choose the agent wiki for {repo} first (in one of its PR tabs)")
+    log_ = await asyncio.to_thread(change_log, link, repo, body.period, body.end)
+    title = f"{repo} changes · {log_['label']}"
+    chat = new_chat(rt.docs, title)
+    sctx = replace(ctx, documents=rt.docs, locks=rt.locks, watcher=rt.watcher, workspace_id=rt.id, workspace_root=rt.root)
+    opened = rt.docs.open_document(chat["path"])
+    question = (f"Summarize the key changes of {repo} in the {log_['label']} ({log_['commits']} commits): group them by area, "
+                "lead with what matters most (new features and APIs, behaviour changes, performance, deprecations and removals, "
+                "notable fixes, build / CI changes), cite PR numbers or commit hashes, and point out what touches topics of "
+                "this wiki." + (f" Focus: {body.focus.strip()}" if body.focus.strip() else ""))
+    r = await ThreadService(sctx).create_thread(chat["document_id"], ThreadCreateIn(
+        version_sha256=opened["sha256"], question=question, whole_document=True, chat_brief=summary_brief(repo, log_, body.focus)))
+    return {**chat, "thread_id": r["thread_id"], "job_id": r["job_id"], "commits": log_["commits"], "since": log_["since"], "until": log_["until"]}
+
+
+# ---------------------------------------------------------------------- @-mention candidates
+
+MENTION_QUERY = """
+query Mentionable($owner: String!, $name: String!, $q: String!) {
+  repository(owner: $owner, name: $name) { mentionableUsers(query: $q, first: 8) { nodes { login name } } }
+}"""
+_mention_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+_participants: dict[str, list[dict[str, Any]]] = {}
+
+
+_RANK = {"author": 0, "reviewer": 1, "requested": 2, "contributor": 3, "commenter": 4}
+
+
+def _remember_participants(key: str, people: list[tuple[str | None, str]]) -> None:
+    """Add people to a PR's participants; a person keeps their most relevant role (author before reviewer …)."""
+    out = {p["login"].lower(): p for p in _participants.get(key, [])}
+    for login, role in people:
+        if not login or login.endswith("[bot]"):
+            continue
+        cur = out.get(login.lower())
+        if cur is None:
+            out[login.lower()] = {"login": login, "name": None, "source": role}
+        elif _RANK.get(role, 9) < _RANK.get(cur["source"], 9):
+            cur["source"] = role
+    _participants[key] = list(out.values())
+
+
+@router.get("/github/pr/{owner}/{repo}/{number}/mentions")
+async def mention_candidates(owner: str, repo: str, number: int, q: str = Query("", max_length=40),
+                             auth: tuple[AppContext, str] = Depends(require_owner)):
+    """People to @-mention: the PR's participants first (author, reviewers, requested reviewers, commenters), then
+    users GitHub says can be mentioned in the repository (searched by login / name)."""
+    ctx, _ = auth
+    _check_names(owner, repo)
+    key = f"{owner}/{repo}#{number}".lower()
+    q = q.strip().lstrip("@")
+    if not re.fullmatch(r"[\w.-]*", q):
+        return {"candidates": []}
+    hit = _pr_cache.get(key)
+    if hit:
+        p = hit[1]["pr"]
+        _remember_participants(key, [(p.get("author"), "author")] + [(r.get("author"), "reviewer") for r in p.get("reviews") or []]
+                               + [(x, "requested") for x in p.get("requested") or []])
+    ql = q.lower()
+    local = sorted((c for c in _participants.get(key, []) if c["login"].lower().startswith(ql)), key=lambda c: _RANK.get(c["source"], 9))[:8]
+    remote: list[dict[str, Any]] = []
+    if q:
+        mk = f"{owner}/{repo}:{ql}".lower()
+        cached = _mention_cache.get(mk)
+        if cached and time.time() - cached[0] < 600:
+            remote = cached[1]
+        else:
+            try:
+                d = await asyncio.to_thread(_hooks(ctx)[0], MENTION_QUERY, {"owner": owner, "name": repo, "q": q})
+                remote = [{"login": n["login"], "name": n.get("name"), "source": "repository"}
+                          for n in (((d.get("repository") or {}).get("mentionableUsers") or {}).get("nodes") or []) if n]
+                _mention_cache[mk] = (time.time(), remote)
+            except ApiError:
+                remote = []
+    seen = {c["login"].lower() for c in local}
+    return {"candidates": local + [c for c in remote if c["login"].lower() not in seen][: max(0, 10 - len(local))]}

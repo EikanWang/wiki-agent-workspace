@@ -55,9 +55,12 @@ class ChatIn(BaseModel):
 @router.post("/chats", status_code=201)
 def create_chat(body: ChatIn, ctx: AppContext = Depends(require_auth_mutating)):
     """A new, empty chat about this folder (the X-Workspace one)."""
-    docs = ctx.documents
-    assert docs is not None
-    title = body.title.strip() or time.strftime("Chat %Y-%m-%d %H:%M")
+    assert ctx.documents is not None
+    return new_chat(ctx.documents, body.title)
+
+
+def new_chat(docs: Any, title: str) -> dict[str, Any]:
+    title = title.strip() or time.strftime("Chat %Y-%m-%d %H:%M")
     norm = f"{CHAT_PREFIX}{_slug(title)}-{secrets.token_hex(3)}.md"
     p = chat_snapshot_path(docs.snapshots_dir, docs.workspace_id, norm)
     assert p is not None
@@ -138,7 +141,7 @@ def check_action(ctx: AppContext, action: str | None, target: str | None) -> str
 
 
 def build_chat_prompt(*, question: str, wiki_root: str, prior: list[dict[str, str]] | None, extra: str | None,
-                      locked: list[str], action: str | None = None, target: str | None = None) -> str:
+                      locked: list[str], action: str | None = None, target: str | None = None, brief: str | None = None) -> str:
     parts = [
         f"You are chatting with the user about their wiki: the folder that is your working directory ({wiki_root}). "
         "This is an open conversation, not about one particular document.",
@@ -149,6 +152,8 @@ def build_chat_prompt(*, question: str, wiki_root: str, prior: list[dict[str, st
         parts.append(extra)
     if locked:
         parts.append("These paths are LOCKED by the user and must NOT be modified: " + ", ".join(locked))
+    if brief:
+        parts.append(brief)
     if prior:
         parts.append("The conversation so far:")
         parts.extend(f"[{m['role']}] {m['content'][:6000]}" for m in prior[-40:])

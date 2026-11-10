@@ -64,4 +64,14 @@ def extra_context(ctx: AppContext, doc_path: str, workspace_id: str) -> str | No
     dirs: list[str] = []
     for sc in scopes_for(doc_path, workspace_id):
         dirs += [d for d in context_dirs(ctx, sc) if d not in dirs]
-    return context_prompt(dirs)
+    parts = [context_prompt(dirs)]
+    from .documents import PR_PREFIX, is_pr_path
+
+    if is_pr_path(doc_path):  # a PR tab: its repository's connected local checkout comes first
+        from .local_repos import local_repo_prompt
+
+        bits = doc_path.replace("\\", "/").lstrip("/")[len(PR_PREFIX):].split("/")
+        if len(bits) == 3 and bits[2].removesuffix(".md").isdigit():
+            parts.insert(0, local_repo_prompt(ctx, f"{bits[0]}/{bits[1]}", int(bits[2].removesuffix(".md"))))
+    text = "\n\n".join(p for p in parts if p)
+    return text or None

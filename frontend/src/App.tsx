@@ -831,6 +831,10 @@ export default function App() {
               githubLogin={hub?.owner ?? null}
               onOpenPr={(r, n) => openPr(r, n)}
               onDiscussionsChanged={() => { if (doc) void refreshThreads(doc.document_id); }}
+              onOpenChat={(ws, p) => {
+                if (ws !== getWorkspace()) switchWorkspace(ws, false);
+                void openDocument(p);
+              }}
             />
           ) : doc && isChatDoc ? (
             <ChatView
@@ -850,6 +854,7 @@ export default function App() {
               onCancel={cancel}
               onPermission={permission}
               onReviewChanges={() => openDiff("", true)}
+              onWatchJob={(j) => setLiveJobId(j)}
               onArchived={() => {
                 const t = docTabs.find((x) => x.ws !== PR_TABS && x.path === doc.path);
                 if (t) closeDocTab(t);

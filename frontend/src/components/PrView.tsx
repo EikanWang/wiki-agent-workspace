@@ -4,8 +4,10 @@ import { renderGithubMarkdown } from "../markdown";
 import { SelectionAnchor, wholeDocument } from "../textmodel";
 import { GhDraft, GhThread, PrFile, PrFileDiff, SubmitReview } from "./PrDiff";
 import { COMPOSER_HINT, composerKeyDown } from "./keys";
+import MentionTextarea from "./MentionTextarea";
 import { SelectionPopover } from "./Reader";
 import ContextFolders from "./ContextFolders";
+import LocalRepo from "./LocalRepo";
 import RefreshButton from "./RefreshButton";
 
 interface Check { name: string | null; state: string; url: string | null }
@@ -69,12 +71,14 @@ const REVIEW_LABEL: Record<string, string> = { APPROVED: "approved", CHANGES_REQ
  * A pull request as a tab: Overview (description, checks, reviews) and Files (diff). Questions go to the agent in
  * the repository's wiki (chosen once per repository): about the whole PR, or about lines selected in the diff.
  */
-export default function PrView({ repo, number, workspaces, docReady, onReady, onSend, sessions, defaultSessionId, defaultProvider, githubLogin = null, onOpenPr, onDiscussionsChanged }: {
+export default function PrView({ repo, number, workspaces, docReady, onReady, onSend, sessions, defaultSessionId, defaultProvider, githubLogin = null, onOpenPr, onDiscussionsChanged, onOpenChat }: {
   repo: string;
   /** open another pull request (a link in a description or comment) as a tab of this app */
   onOpenPr?: (repo: string, number: number) => void;
   /** the discussions changed on the server (an agent review's answer was rewritten): reload them */
   onDiscussionsChanged?: () => void;
+  /** open a chat of a wiki folder (e.g. a change summary) */
+  onOpenChat?: (workspaceId: string, path: string) => void;
   /** the GitHub account reviews are published as (the server's gh login) */
   githubLogin?: string | null;
   number: number;
@@ -236,6 +240,7 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
             onDone={async (url) => { setNotice(url ? `Review published on GitHub.` : "Review published."); await loadComments(); await load(true); }}
             onError={(m) => setError(m)} />
           <span className="spacer" />
+          <LocalRepo repo={p.repo} apiBase={apiBase} onOpenChat={onOpenChat} />
           {data.wiki_workspace_id && (
             <span className="muted small" title="The agent works in this wiki for this repository's pull requests">
               Agent wiki:{" "}
@@ -312,7 +317,7 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
                   </div>
                 ))}
                 <div className="pr-conv-new">
-                  <textarea rows={3} value={convText} onChange={(e) => setConvText(e.target.value)} placeholder={`Add a comment to the conversation (posted on GitHub; ${COMPOSER_HINT})`}
+                  <MentionTextarea apiBase={apiBase} rows={3} value={convText} onValue={setConvText} placeholder={`Add a comment to the conversation (posted on GitHub; ${COMPOSER_HINT})`}
                     onKeyDown={(e) => composerKeyDown(e, () => void postConversation(), setConvText, () => setConvText(""))} data-testid="pr-conv-text" />
                   <div className="row">
                     <button className="btn small primary" disabled={convBusy || !convText.trim()} onClick={() => void postConversation()} data-testid="pr-conv-send">Comment</button>

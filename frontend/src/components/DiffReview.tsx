@@ -456,6 +456,12 @@ export default function DiffReview({
             onExtend={(i) => extendSelect(f.path, i)}
             onViewed={(v) => void setViewed(f, v)}
             onReload={() => void load()}
+            onAskFile={async (q) => {
+              const r = await post<{ thread_id: string }>("/diff/comments", { path: f.path, base, target, side: "file", line_no: null, line_text: "", hunk: f.unified.slice(0, 20000), question: q });
+              setPosted({ thread_id: r.thread_id, file: f.path });
+              await load();
+              window.setTimeout(() => setPosted(null), 6000);
+            }}
           />
         ))}
       </div>
@@ -473,7 +479,7 @@ function commentKey(side: string, text: string) {
   return `${side}:${text.trim()}`;
 }
 
-function FileDiff({ file, lines, comments, pending, lastReview, collapsed, layout, range, composerAfter, composerNode, onToggle, onOpen, onOpenThread, onStart, onExtend, onViewed, onReload }: {
+function FileDiff({ file, lines, comments: allComments, pending, lastReview, collapsed, layout, range, composerAfter, composerNode, onToggle, onOpen, onOpenThread, onStart, onExtend, onViewed, onReload, onAskFile }: {
   file: DiffFile;
   lines: Line[];
   comments: DiffComment[];
@@ -491,7 +497,27 @@ function FileDiff({ file, lines, comments, pending, lastReview, collapsed, layou
   onExtend: (index: number) => void;
   onViewed: (viewed: boolean) => void;
   onReload: () => void;
+  /** ask the agent about all of this file's changes (like GitHub's per-file "Ask"): a discussion of the document */
+  onAskFile: (question: string) => Promise<void>;
 }) {
+  const fileComments = allComments.filter((c) => c.diff.side === "file");
+  const comments = allComments.filter((c) => c.diff.side !== "file");
+  const [asking, setAsking] = useState<string | null>(null);
+  const [askBusy, setAskBusy] = useState(false);
+  const [askErr, setAskErr] = useState<string | null>(null);
+  const ask = async () => {
+    if (!asking?.trim()) return;
+    setAskBusy(true);
+    setAskErr(null);
+    try {
+      await onAskFile(asking.trim());
+      setAsking(null);
+    } catch (e) {
+      setAskErr((e as ApiError).message);
+    } finally {
+      setAskBusy(false);
+    }
+  };
   // comments are keyed by the first selected line's side+text; range comments also know their line span
   const byLine = useMemo(() => {
     const m = new Map<string, DiffComment[]>();
@@ -555,6 +581,9 @@ function FileDiff({ file, lines, comments, pending, lastReview, collapsed, layou
         {comments.length > 0 && <span className="chip" title="Comments on this file's diff">{comments.length} comment{comments.length > 1 ? "s" : ""}</span>}
         <span className="spacer" />
         {file.commentable && file.status !== "deleted" && (
+          <button className="btn small" onClick={(e) => { e.stopPropagation(); setAsking((v) => (v === null ? "" : v)); }} title="Ask the agent about this file's changes" data-testid="diff-ask-file">Ask agent</button>
+        )}
+        {file.commentable && file.status !== "deleted" && (
           <button className="btn small" onClick={(e) => { e.stopPropagation(); onOpen(); }} title="Open in the reader">Open</button>
         )}
         <label className={`viewed-box ${file.viewed ? "on" : ""}`} onClick={(e) => e.stopPropagation()} title={file.viewed_stale ? "You marked this file as viewed, but it changed since — review again" : "Mark this file's changes as viewed (clears automatically if the file changes)"}>
@@ -562,6 +591,20 @@ function FileDiff({ file, lines, comments, pending, lastReview, collapsed, layou
           <span>Viewed{file.viewed_stale ? " · changed since" : ""}</span>
         </label>
       </header>
+      {asking !== null && (
+        <div className="diff-file-ask" data-testid="diff-ask-file-box">
+          <textarea autoFocus rows={2} value={asking} onChange={(e) => setAsking(e.target.value)} placeholder={`Ask the agent about the changes of ${file.path}, e.g. "Is anything lost?" (${COMPOSER_HINT})`}
+            onKeyDown={(e) => composerKeyDown(e, () => void ask(), (v) => setAsking(v), () => setAsking(null))} data-testid="diff-ask-file-text" />
+          {askErr && <div className="small del">{askErr}</div>}
+          <div className="row">
+            <button className="btn small primary" disabled={askBusy || !asking.trim()} onClick={() => void ask()} data-testid="diff-ask-file-send">Ask agent</button>
+            <button className="btn small" onClick={() => setAsking(null)}>Cancel</button>
+          </div>
+        </div>
+      )}
+      {!collapsed && fileComments.map((c) => (
+        <div key={c.thread_id} className="diff-file-comment"><InlineThread comment={c} decision={undefined} onOpen={() => onOpenThread(c.thread_id)} onChanged={onReload} testId="diff-file-thread" /></div>
+      ))}
       {!collapsed && layout === "unified" && (
         <table className="diff-table" data-testid="diff-table-unified" style={numColStyle(lines)}>
           <UnifiedCols />
@@ -650,7 +693,7 @@ function FileDiff({ file, lines, comments, pending, lastReview, collapsed, layou
 
 /** A diff comment shown in place: the question, the agent's answer (streamed while running) and a reply box, so a
  *  review never has to leave the diff. "Open discussion" jumps to the full thread in the document. */
-function InlineThread({ comment, decision, onOpen, onChanged }: { comment: DiffComment; decision?: ReviewComment; onOpen: () => void; onChanged: () => void }) {
+function InlineThread({ comment, decision, onOpen, onChanged, testId = "diff-comment-marker" }: { comment: DiffComment; decision?: ReviewComment; onOpen: () => void; onChanged: () => void; testId?: string }) {
   const msgs = comment.messages ?? [];
   const running = msgs.find((m) => m.role === "agent" && ["queued", "running", "waiting_provider_permission"].includes(m.status) && m.job_id);
   // reload the diff once per finished job (the stream re-subscribes when `comment` is replaced; guard against loops)
@@ -680,7 +723,7 @@ function InlineThread({ comment, decision, onOpen, onChanged }: { comment: DiffC
   };
   const range = comment.diff.line_end && comment.diff.line_no && comment.diff.line_end !== comment.diff.line_no ? ` · lines ${comment.diff.line_no}–${comment.diff.line_end}` : "";
   return (
-    <div className="diff-thread" data-testid="diff-comment-marker">
+    <div className="diff-thread" data-testid={testId}>
       <div className="diff-thread-head">
         <button className="link-btn" onClick={() => setOpen((o) => !o)} title={open ? "Collapse" : "Expand"}>{open ? "▾" : "▸"}</button>
         <span className="muted small">{msgs.length} message{msgs.length === 1 ? "" : "s"}{range}</span>

@@ -809,3 +809,14 @@ mark.waw-hl.review.needs_review { border-bottom: 2px dashed var(--warn); }
 .confirm-message { white-space: pre-wrap; font-size: 14px; color: var(--fg); overflow-wrap: anywhere; }
 .confirm-buttons { gap: 8px; }
 .btn.danger-solid { background: var(--red); color: #fff; border-color: transparent; }
+.pr-local-repo-box { display: flex; flex-direction: column; gap: 8px; width: 460px; padding: 10px; right: 0; left: auto; }
+.pr-local-repo-box input.mono { border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; background: var(--bg); color: inherit; }
+.pr-summary-box { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--border); padding-top: 8px; }
+.pr-summary-box input:not([type]) , .pr-summary-box input[type="date"] { border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; background: var(--bg); color: inherit; }
+/* @-mention suggestions */
+.mention-wrap { display: block; position: relative; width: 100%; }
+.mention-wrap > textarea { width: 100%; box-sizing: border-box; }
+.mention-list { position: absolute; z-index: 50; left: 8px; top: 100%; margin: 2px 0 0; padding: 4px 0; list-style: none; min-width: 260px; max-width: 420px; max-height: 260px; overflow: auto;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18); font-size: 13px; }
+.mention-list li { padding: 4px 10px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mention-list li.on { background: var(--accent); }

@@ -374,7 +374,7 @@ class ThreadService:
                     tt.target_json = json.dumps(target, ensure_ascii=False)
         if is_chat_path(doc.path):
             prompt = build_chat_prompt(question=body.question, wiki_root=str(self.docs.root), prior=None, extra=self._extra(doc.path),
-                                       locked=self._locked())
+                                       locked=self._locked(), brief=body.chat_brief)
         elif is_pr_path(doc.path):
             text, cpath = _pr_copy(self.docs, doc.path)
             prompt = build_pr_prompt(question=body.question, quote=body.quote, copy_text=text, copy_path=cpath,
@@ -573,6 +573,8 @@ class ThreadCreateIn(BaseModel):
     image: str | None = Field(None, max_length=17_000_000)
     # PR tab: an agent review — its line comments are added to the diff as suggestions (Apply / Discard)
     pr_review: bool = False
+    # folder chats: material for the first turn that is not part of the user's message (e.g. a repository's git log)
+    chat_brief: str | None = Field(None, max_length=400_000)
 
 
 class MessageIn(BaseModel):

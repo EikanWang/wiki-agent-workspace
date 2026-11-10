@@ -152,6 +152,28 @@ can see, grouped by repository (most PRs first):
     it *pending* here (edit/delete it; it survives reloads), **Ask agent** asks the agent about exactly those
     lines (answer in the discussions panel). **Suggest change** inserts the selected new lines as a GitHub
     *suggested change* block to edit into the replacement.
+  - **⎇ Connect local repo** (next to *Agent wiki*): connect the repository to a **local git checkout** on the
+    server (e.g. `pytorch/pytorch` → `/home/me/pytorch`). It becomes the agent's **default reference** for that
+    repository's PRs: opening a PR fetches its head into the checkout as `refs/waw/pr/<n>` — never checked out, your
+    working tree and branches are not changed — and the agent is told to read the PR's code there
+    (`git show refs/waw/pr/<n>:<file>`, `git diff <merge-base> refs/waw/pr/<n>`) and the surrounding code, callers,
+    tests and history, without modifying the checkout. **Update the local project first** (on by default) also
+    fetches the PR's base branch and fast-forwards it when the checkout is on that branch with no local changes;
+    otherwise the base is only fetched (`refs/waw/base/<branch>`). The button shows the state (*fetching the PR…*,
+    *PR at abc1234 · main updated*); **Fetch again**, **Disconnect** (confirmed; the checkout is untouched). The PR
+    is fetched from the checkout's remote that points at the GitHub repository, else from `https://github.com/<repo>.git`.
+  - **Summarize key changes** (in the same ⎇ box): a **day**, **week**, **month**, **quarter** or **year** (ending
+    today or on a chosen date), with an optional focus (e.g. *XPU*). The server reads the checkout's git log of the
+    default branch for that window (brought up to date first when *Update* is on) — commits, subjects, files
+    changed per area — and starts a **chat** in the repository's agent wiki with it; the agent groups the key
+    changes by area (features and APIs, behaviour changes, performance, deprecations, notable fixes, build/CI),
+    cites PRs/commits and can read any commit in the checkout. Continue the chat, or **Distill** it into a wiki page.
+  - **@-mentions**: in every box that posts to GitHub (review comments, replies, file comments, the conversation,
+    the review summary) typing `@` lists people — the PR's author, reviewers, requested reviewers, contributors and
+    commenters first, then the repository's users matching what you type; ↑/↓ choose, Enter or Tab inserts, Esc
+    closes the list.
+  - **Ask agent** on a file's header asks about all of that file's changes (its diff goes with the question);
+    the same box can instead add a review comment on the whole file.
   - **Agent review**: the agent reviews the whole PR (the question is prefilled; edit it to focus the review).
     Its line comments appear in **Files** at their lines as **Agent suggestions** — nothing goes to GitHub. For
     each choose **Apply** (published with your review), **Undecided** or **Discard** (not published, dropped when
@@ -309,6 +331,10 @@ uncommitted changes of that folder).
   - **Add to review** (Enter) — stash for the review (next section), or
   - **Ask now** — start a discussion immediately; the answer streams inline under the line, you can reply inline,
     and **Open discussion** jumps to the full thread.
+- **Ask agent** on a file's header asks about all of that file's changes (like GitHub's per-file ask): the
+  question and the file's diff go to the agent; the discussion appears at the top of the file in the diff and
+  in the document's discussions.
+
 
 ## Reviews (stash, then submit)
 

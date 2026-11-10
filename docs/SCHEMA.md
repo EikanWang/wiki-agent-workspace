@@ -111,7 +111,8 @@ cannot be deleted. Folder data belongs to `workspaces`, so a folder in two named
 
 JSON values by key. `github_hub_prefs`: Reviews panel preferences (hidden and watched repositories, priority
 requesters, whether PyTorch Meta maintainers count as priority). `context:repo:<owner>/<name>` and
-`context:ws:<folder id>`: extra reference folders (JSON array of absolute server paths) named in the agent's prompt
+`local_repo:<owner>/<name>`: the connected local checkout (`{path, update, remote}`). `agent_review:<repo>#<n>`:
+agent review runs of a PR (job, message, state, suggestions added). `context:ws:<folder id>`: extra reference folders (JSON array of absolute server paths) named in the agent's prompt
 for that repository's PR tabs or that wiki folder's documents.
 
 | Column | Type | Meaning |

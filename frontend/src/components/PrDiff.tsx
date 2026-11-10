@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, del, patch, post } from "../api";
 import { renderGithubMarkdown } from "../markdown";
 import { COMPOSER_HINT, composerKeyDown } from "./keys";
+import MentionTextarea from "./MentionTextarea";
 import { Line, SplitCols, UnifiedCols, buildSplitRows, numColStyle, parseUnified } from "./DiffReview";
 
 /** A review thread on GitHub (line or whole-file), with all its comments. */
@@ -101,6 +102,19 @@ export function PrFileDiff({ file, layout, threads, drafts, apiBase, canAsk, col
     return `${file.path} ${selected.length === 1 ? n(a) : `${n(a)}–${n(b)}`}`;
   };
 
+  const askFile = async () => {
+    if (!fileText.trim()) return;
+    setBusy(true);
+    try {
+      await onAsk((file.unified || "").slice(0, 20000), `${file.path} (all of this file's changes)`, fileText.trim());
+      setFileText("");
+      setFileComposer(false);
+    } catch (e) {
+      onError((e as ApiError).message);
+    } finally {
+      setBusy(false);
+    }
+  };
   const addFileComment = async () => {
     if (!fileText.trim()) return;
     setBusy(true);
@@ -173,7 +187,7 @@ export function PrFileDiff({ file, layout, threads, drafts, apiBase, canAsk, col
   const composerNode = composer && (
     <div className="diff-composer" data-testid="pr-composer" onPointerDown={(e) => e.stopPropagation()}>
       <div className="muted small">{selected.length > 1 ? `Lines ${label().slice(file.path.length + 1)}` : `Line ${label().slice(file.path.length + 1)}`}</div>
-      <textarea autoFocus rows={3} value={text} onChange={(e) => setText(e.target.value)} placeholder={`Leave a review comment, or ask the agent about these lines (${COMPOSER_HINT})`}
+      <MentionTextarea apiBase={apiBase} autoFocus rows={3} value={text} onValue={setText} placeholder={`Leave a review comment, or ask the agent about these lines (${COMPOSER_HINT})`}
         onKeyDown={(e) => composerKeyDown(e, () => void addComment(), setText, cancel)} data-testid="pr-composer-text" />
       <div className="row">
         <button className="btn small primary" disabled={busy || !text.trim()} onClick={() => void addComment()} title="Saved here; published to GitHub when you submit the review" data-testid="pr-add-comment">Add review comment</button>
@@ -233,6 +247,9 @@ export function PrFileDiff({ file, layout, threads, drafts, apiBase, canAsk, col
         {total > 0 && <span className="chip" data-testid="pr-file-comments" title={`${unresolved} unresolved thread(s)`}>{total} comment{total > 1 ? "s" : ""}</span>}
         {file.viewed === "DISMISSED" && <span className="chip pending" title="You marked this file viewed, but it changed since">changed since viewed</span>}
         <span className="spacer" />
+        {canAsk && !file.binary_or_large && (
+          <button className="btn small" onClick={(e) => { e.stopPropagation(); setCollapsed(false); setFileComposer(true); }} title="Ask the agent about this file's changes (or comment on the whole file)" data-testid="pr-file-ask">Ask agent</button>
+        )}
         <button className="btn small" onClick={(e) => { e.stopPropagation(); setCollapsed(false); setFileComposer(true); }} title="Comment on the whole file" data-testid="pr-file-comment">Comment on file</button>
         <label className={`viewed-box ${file.viewed === "VIEWED" ? "on" : ""}`} onClick={(e) => e.stopPropagation()} title="Mark as viewed (also on GitHub); viewed files fold">
           <input type="checkbox" checked={file.viewed === "VIEWED"} onChange={(e) => { const v = e.target.checked; if (v) setCollapsed(true); void onViewed(v); }} data-testid="pr-viewed" />
@@ -245,11 +262,12 @@ export function PrFileDiff({ file, layout, threads, drafts, apiBase, canAsk, col
           {fileDrafts.map((d) => <DraftBox key={d.id} draft={d} apiBase={apiBase} onChanged={onChanged} onError={onError} canAsk={canAsk} onAsk={onAsk} />)}
           {fileComposer && (
             <div className="diff-composer" data-testid="pr-file-composer">
-              <div className="muted small">Comment on the whole file</div>
-              <textarea autoFocus rows={3} value={fileText} onChange={(e) => setFileText(e.target.value)} placeholder={`Comment on ${file.path} (${COMPOSER_HINT})`}
+              <div className="muted small">The whole file: comment on it (published with your review), or ask the agent about its changes</div>
+              <MentionTextarea apiBase={apiBase} autoFocus rows={3} value={fileText} onValue={setFileText} placeholder={`Comment on ${file.path} (${COMPOSER_HINT})`}
                 onKeyDown={(e) => composerKeyDown(e, () => void addFileComment(), setFileText, () => setFileComposer(false))} data-testid="pr-file-composer-text" />
               <div className="row">
                 <button className="btn small primary" disabled={busy || !fileText.trim()} onClick={() => void addFileComment()} data-testid="pr-file-composer-add">Add review comment</button>
+                <button className="btn small" disabled={busy || !fileText.trim() || !canAsk} onClick={() => void askFile()} title={canAsk ? "Ask the agent about this file's changes; the answer is in the discussions panel" : "Choose the agent's wiki first"} data-testid="pr-file-composer-ask">Ask agent</button>
                 <button className="btn small" onClick={() => setFileComposer(false)}>Cancel</button>
               </div>
             </div>
@@ -368,7 +386,7 @@ function ThreadBox({ thread, apiBase, onChanged, onError, canAsk, onAsk }: {
           )}
           {reply !== null && (
             <div className="gh-reply-box">
-              <textarea autoFocus rows={2} value={reply} onChange={(e) => setReply(e.target.value)} placeholder={`Reply on GitHub (${COMPOSER_HINT})`}
+              <MentionTextarea apiBase={apiBase} autoFocus rows={2} value={reply} onValue={setReply} placeholder={`Reply on GitHub (${COMPOSER_HINT})`}
                 onKeyDown={(e) => composerKeyDown(e, () => void run(async () => { await post(`${apiBase}/comments/${first.id}/reply`, { body: reply }); setReply(null); await onChanged(); }), (v) => setReply(v), () => setReply(null))} data-testid="gh-reply-text" />
               <div className="row">
                 <button className="btn small primary" disabled={busy || !reply.trim()} onClick={() => void run(async () => { await post(`${apiBase}/comments/${first.id}/reply`, { body: reply }); setReply(null); await onChanged(); })} title="Posted to GitHub right away" data-testid="gh-reply-send">Reply on GitHub</button>
@@ -458,7 +476,7 @@ function DraftBox({ draft, apiBase, onChanged, onError, canAsk = false, onAsk }:
         </>
       ) : (
         <>
-          <textarea autoFocus rows={3} value={edit} onChange={(e) => setEdit(e.target.value)} onKeyDown={(e) => composerKeyDown(e, () => void save(), (v) => setEdit(v), () => setEdit(null))} />
+          <MentionTextarea apiBase={apiBase} autoFocus rows={3} value={edit} onValue={setEdit} onKeyDown={(e) => composerKeyDown(e, () => void save(), (v) => setEdit(v), () => setEdit(null))} />
           <div className="row">
             <button className="btn small primary" onClick={() => void save()} disabled={!edit.trim()}>Save</button>
             <button className="btn small" onClick={() => setEdit(null)}>Cancel</button>
@@ -497,7 +515,7 @@ export function SubmitReview({ apiBase, drafts, undecided = 0, fromGithub = 0, o
         <div className="ws-menu pr-submit" data-testid="pr-submit">
           {undecided > 0 && <div className="small reviews-note" data-testid="pr-submit-undecided">{undecided} agent suggestion(s) are undecided and will not be published (choose Apply to include them).</div>}
           {fromGithub > 0 && <div className="small reviews-note" data-testid="pr-submit-github">Your pending review on github.com has {fromGithub} comment(s); they are submitted with this review.</div>}
-          <textarea rows={4} value={body} onChange={(e) => setBody(e.target.value)} placeholder="Summary (optional, Markdown)" data-testid="pr-submit-body" />
+          <MentionTextarea apiBase={apiBase} rows={4} value={body} onValue={setBody} placeholder="Summary (optional, Markdown)" data-testid="pr-submit-body" />
           {(["COMMENT", "APPROVE", "REQUEST_CHANGES"] as const).map((ev) => (
             <label key={ev} className="pr-submit-opt">
               <input type="radio" name="review-event" checked={event === ev} onChange={() => setEvent(ev)} data-testid={`pr-event-${ev.toLowerCase()}`} />

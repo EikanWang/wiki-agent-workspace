@@ -241,6 +241,9 @@ class DiffService:
         start = end = 0
         quote = line_text
         anchored = False
+        whole = body.side == "file"  # a question about all of this file's changes (no line): a whole-document thread
+        if whole:
+            quote, line_text = rel, ""
         if line_text and body.side != "deleted":
             # Diff lines are Markdown *source*; the anchor model is *rendered* text. For a multi-line range the
             # rendered lines are usually contiguous in the model (one block per source line); try the joined
@@ -277,7 +280,7 @@ class DiffService:
                     start, end = fi, li + len(l)
                     quote = model.text[start:end]
                     anchored = True
-        if not anchored:
+        if not anchored and not whole:
             # Fall back to the first non-empty rendered line so the thread still has a valid anchor.
             first = next((ln for ln in model.text.split("\n") if ln.strip()), None)
             if first is None:
@@ -285,21 +288,26 @@ class DiffService:
             start = model.text.index(first)
             end = start + len(first)
             quote = first
-        prefix = model.text[max(0, start - 40):start]
-        suffix = model.text[end:end + 40]
+        prefix = "" if whole else model.text[max(0, start - 40):start]
+        suffix = "" if whole else model.text[end:end + 40]
         heading = model.heading_for(start)
         sess = await svc._session_for_new_thread(doc, body.session_id)
         diff_ctx = {"base": body.base, "target": body.target, "side": body.side, "line_no": body.line_no, "line_end": body.line_end,
-                    "line_text": body.line_text, "hunk": body.hunk[:4000] if body.hunk else None, "anchored": anchored}
+                    "line_text": body.line_text, "hunk": body.hunk[:4000] if body.hunk else None, "anchored": anchored or whole}
         question = body.question
         where = f"lines {body.line_no}-{body.line_end}" if body.line_end and body.line_no and body.line_end != body.line_no else f"line {body.line_no or '?'}"
         kind = {"deleted": "removed", "added": "added", "context": "unchanged", "mixed": "changed"}.get(body.side, body.side)
-        prompt_question = (
-            f"[Comment made while reviewing a diff of {rel} ({body.base} → {body.target}); commented {kind} {where}:\n"
-            + "\n".join("    " + ln for ln in body.line_text.strip().splitlines()[:40]) + "]\n\n" + question
-        )
-        if body.hunk:
-            prompt_question += "\n\nDiff hunk for reference:\n```diff\n" + body.hunk[:4000] + "\n```"
+        if whole:
+            prompt_question = f"[Question about all the changes of {rel} in a diff ({body.base} → {body.target})]\n\n" + question
+            if body.hunk:
+                prompt_question += "\n\nThe file's diff:\n```diff\n" + body.hunk[:20000] + "\n```"
+        else:
+            prompt_question = (
+                f"[Comment made while reviewing a diff of {rel} ({body.base} → {body.target}); commented {kind} {where}:\n"
+                + "\n".join("    " + ln for ln in body.line_text.strip().splitlines()[:40]) + "]\n\n" + question
+            )
+            if body.hunk:
+                prompt_question += "\n\nDiff hunk for reference:\n```diff\n" + body.hunk[:4000] + "\n```"
         thread_id, user_msg_id, agent_msg_id = new_id(), new_id(), new_id()
         if body.defer_agent:
             with self.ctx.db.write() as s:
@@ -307,7 +315,7 @@ class DiffService:
                     id=thread_id, document_id=doc.id,
                     orig_version_sha256=sha, orig_quote=quote, orig_prefix=prefix, orig_suffix=suffix, orig_start=start, orig_end=end, orig_heading=heading,
                     cur_version_sha256=sha, cur_quote=quote, cur_prefix=prefix, cur_suffix=suffix, cur_start=start, cur_end=end, cur_heading=heading,
-                    anchor_state="attached" if anchored else "orphaned", diff_json=json.dumps(diff_ctx, ensure_ascii=False), last_session_id=sess.id,
+                    anchor_state="document" if whole else ("attached" if anchored else "orphaned"), diff_json=json.dumps(diff_ctx, ensure_ascii=False), last_session_id=sess.id,
                 )
                 s.add(t)
                 s.flush()
@@ -319,7 +327,7 @@ class DiffService:
                 id=thread_id, document_id=doc.id,
                 orig_version_sha256=sha, orig_quote=quote, orig_prefix=prefix, orig_suffix=suffix, orig_start=start, orig_end=end, orig_heading=heading,
                 cur_version_sha256=sha, cur_quote=quote, cur_prefix=prefix, cur_suffix=suffix, cur_start=start, cur_end=end, cur_heading=heading,
-                anchor_state="attached" if anchored else "orphaned", diff_json=json.dumps(diff_ctx, ensure_ascii=False), last_session_id=sess.id,
+                anchor_state="document" if whole else ("attached" if anchored else "orphaned"), diff_json=json.dumps(diff_ctx, ensure_ascii=False), last_session_id=sess.id,
             )
             s.add(t)
             s.flush()
@@ -380,7 +388,7 @@ class DiffCommentIn(BaseModel):
     path: str
     base: str = "HEAD"
     target: str = "worktree"
-    side: str = Field("added", pattern="^(added|deleted|context|mixed)$")
+    side: str = Field("added", pattern="^(added|deleted|context|mixed|file)$")  # file: about the file's changes as a whole
     line_no: int | None = None          # first line of the range (new-side number when it exists, else old-side)
     line_end: int | None = None         # last line of the range (inclusive); None = single line
     line_text: str = Field("", max_length=20000)   # the selected lines joined with "\n" (without +/- markers)

@@ -560,6 +560,14 @@ test("Diff review of a folder with line comments that become discussions", async
   await expect(page.getByTestId("view-document")).toHaveClass(/active/, { timeout: 15000 });
   if ((await page.getByTestId("mode-individual").count()) > 0) await page.getByTestId("mode-individual").click();
   await expect(page.getByTestId("thread-quote")).toContainText("item ONE (reviewed)");
+  // ask the agent about a whole file's changes, like GitHub's per-file "Ask"
+  await page.getByTestId("tree-diff-root").click();
+  const guideFile = page.locator('[data-testid="diff-file"][data-path="docs/guide.md"]');
+  await guideFile.getByTestId("diff-ask-file").click();
+  await guideFile.getByTestId("diff-ask-file-text").fill("Does this change lose anything?");
+  await guideFile.getByTestId("diff-ask-file-send").click();
+  const fileThread = guideFile.locator(".diff-file-comment");
+  await expect(fileThread.locator('[data-testid="diff-msg-agent"][data-status="completed"]')).toContainText("Does this change lose anything?", { timeout: 20000 });
 });
 
 test("flat discussion mode shows all threads as one stream; Enter sends, Ctrl+Enter inserts a paragraph", async ({ page }) => {
@@ -1898,6 +1906,16 @@ test("GitHub review hub: priority requests, hide a repository, watch a repositor
   await people.getByTestId("pr-contributors-details").check();
   await expect(people.getByTestId("pr-contributor-details").first()).toContainText("alice@example.com"); // public email (REST)
   await people.getByTestId("pr-contributors-details").uncheck();
+  // connect the repository to a local git checkout (checked on the server)
+  await page.getByTestId("pr-local-repo").click();
+  await expect(page.getByTestId("pr-local-repo-update")).toBeChecked(); // updating the local project is on by default
+  await page.getByTestId("pr-local-repo-path").fill(path.dirname(workspaceDir()));
+  await page.getByTestId("pr-local-repo-save").click();
+  await expect(page.getByTestId("pr-local-repo-error")).toContainText("is not a git checkout");
+  await page.getByTestId("pr-local-repo-path").fill("/nonexistent/checkout");
+  await page.getByTestId("pr-local-repo-save").click();
+  await expect(page.getByTestId("pr-local-repo-error")).toContainText("not a directory");
+  await page.getByTestId("pr-local-repo").click();
   // "#103" in the description links to that PR and opens it here, as a tab; `#999` in code is not a link
   const ref = page.getByTestId("pr-description").locator('a[data-pr="pytorch/pytorch/103"]');
   await expect(ref).toHaveAttribute("href", "https://github.com/pytorch/pytorch/issues/103");
@@ -1938,6 +1956,18 @@ test("GitHub PR tab: overview, files, choose the wiki once, ask about the PR and
   await expect(conv.getByTestId("pr-conv-line").getByTestId("pr-conv-reply")).toContainText("Only without a driver.");
   await expect(conv.locator("details summary")).toHaveText("CI started");
   await expect(conv).not.toContainText("<!--");
+  // @-mentions: participants first, then the repository's users matching what is typed
+  const convBox = page.getByTestId("pr-conv-text");
+  await convBox.click();
+  await page.keyboard.type("cc @");
+  await expect(page.getByTestId("mention-item").first()).toContainText("alice");
+  await expect(page.getByTestId("mention-list")).toContainText("bob");
+  await page.keyboard.type("ez");
+  await expect(page.getByTestId("mention-item")).toHaveCount(1);
+  await expect(page.getByTestId("mention-item")).toContainText("Edward Z. Yang");
+  await page.keyboard.press("Enter"); // picks it, does not send
+  await expect(convBox).toHaveValue("cc @ezyang ");
+  await expect(page.getByTestId("mention-list")).toHaveCount(0);
   await page.getByTestId("pr-conv-text").fill("Thanks, looking now.");
   await page.getByTestId("pr-conv-send").click();
   await expect(conv.getByTestId("pr-conv-item")).toHaveCount(3);
@@ -2014,6 +2044,12 @@ test("GitHub PR tab: overview, files, choose the wiki once, ask about the PR and
   await expect(page.locator('[data-testid="message-agent"][data-status="completed"]').last()).toContainText("Why guard call()?", { timeout: 20000 });
   await expect(page.getByTestId("thread-target")).toContainText("c10/xpu/stub.cpp R11–R12");
   await expect(page.getByTestId("thread-quote")).toContainText("+  if (ok)");
+  // ask the agent about one file's changes as a whole
+  await stub.getByTestId("pr-file-ask").click();
+  await page.getByTestId("pr-file-composer-text").fill("Summarize this file's change");
+  await page.getByTestId("pr-file-composer-ask").click();
+  await expect(page.locator('[data-testid="message-agent"][data-status="completed"]').last()).toContainText("Summarize this file's change", { timeout: 20000 });
+  await expect(page.getByTestId("thread-target").last()).toContainText("all of this file's changes");
   // side by side; comment on a deleted line (left side) → pending
   await page.getByTestId("pr-layout-split").click();
   await expect(stub.getByTestId("pr-diff-split")).toBeVisible();

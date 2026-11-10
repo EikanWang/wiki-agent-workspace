@@ -56,6 +56,14 @@ backend/app/
                    /chats list/create/archive (documents.hidden); build_chat_prompt (the conversation so far, locks,
                    reference folders) and the distill (target page checked against locks / the folder) and
                    update actions (MessageIn.chat_action); edits are reviewed in the Diff view
+  local_repos.py   a repository ↔ local git checkout (kv local_repo:<repo>): PR head fetched as refs/waw/pr/<n>
+                   (git fetch <remote|URL> pull/<n>/head, never checked out), optional base update (fetch to
+                   refs/waw/base/<b>; ff-only merge when on <b> and clean); its prompt text goes first in the PR's
+                   reference context (kv.extra_context); change summaries: rolling day/week/month/quarter/year
+                   windows of the default branch's git log (subjects, per-area file counts) → a folder chat in the
+                   repo's wiki (/github/repo-summary, ThreadCreateIn.chat_brief)
+  · github_hub /mentions: PR participants (author, reviewers, requested, contributors, commenters, kept per PR in
+                   memory) then GraphQL mentionableUsers(query) (cached 10 min)
   kv.py            kv_settings get/put; extra reference folders (context:repo:<o>/<r>, context:ws:<id>) added
                    to every agent prompt for that PR repository / wiki folder (/agent-context)
   office.py        OfficeRenderer: Layout view, LibreOffice headless → PDF, content-addressed cache, parallel

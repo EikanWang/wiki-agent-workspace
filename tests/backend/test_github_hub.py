@@ -555,3 +555,134 @@ def test_review_block_parsing_and_diff_lines():
                                            {"path": "f", "side": "LEFT", "line": 4, "start_line": 9, "body": "bad start"}],
                                           [{"path": "f", "unified": "@@ -3,3 +3,3 @@\n ctx\n-gone\n+new\n tail"}])
     assert drafts[0]["start_line"] == 3 and drafts[0]["line_text"] == " ctx\n+new\n tail" and drafts[1]["start_line"] is None and not bad
+
+
+async def test_local_checkout_fetches_the_pr_and_is_the_agents_reference(running_app, tmp_path):
+    import asyncio
+    import subprocess
+
+    def g(cwd, *a):
+        return subprocess.run(["git", *a], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+
+    up = tmp_path / "upstream"
+    up.mkdir()
+    g(up, "init", "-q", "-b", "main")
+    g(up, "config", "user.email", "t@e")
+    g(up, "config", "user.name", "T")
+    (up / "gemm.cpp").write_text("old\n")
+    g(up, "add", "-A")
+    g(up, "commit", "-qm", "base")
+    local = tmp_path / "checkout"
+    g(tmp_path, "clone", "-q", str(up), str(local))
+    (up / "gemm.cpp").write_text("old\nnewer main\n")
+    g(up, "commit", "-qam", "main moves on")
+    g(up, "checkout", "-qb", "pr7")
+    (up / "gemm.cpp").write_text("old\nnewer main\nfast\n")
+    g(up, "commit", "-qam", "the PR")
+    pr_sha = g(up, "rev-parse", "HEAD")
+    g(up, "update-ref", "refs/pull/7/head", pr_sha)
+    g(up, "checkout", "-q", "main")
+
+    github_hub.reset_cache()
+    h = await running_app()
+    as_github(h, "EikanWang")
+    h.ctx.extra["gh_owner"] = lambda: "EikanWang"
+    h.ctx.extra["gh_graphql"] = fake_pr_detail([])
+    h.ctx.extra["gh_pr_files"] = lambda o, r, n: [{"filename": "gemm.cpp", "status": "modified", "additions": 1, "deletions": 0, "patch": "@@ -1,2 +1,3 @@\n old\n newer main\n+fast"}]
+    api = h.api
+    assert (await api.put("/api/v1/github/local-repo", json={"repo": "pytorch/pytorch", "path": "relative"})).json()["error"]["code"] == "INVALID_PATH"
+    assert (await api.put("/api/v1/github/local-repo", json={"repo": "pytorch/pytorch", "path": str(tmp_path)})).json()["error"]["code"] == "NOT_A_GIT_REPO"
+    r = (await api.put("/api/v1/github/local-repo", json={"repo": "pytorch/pytorch", "path": str(local), "remote": str(up)})).json()
+    assert r["link"] == {"path": str(local), "update": True, "remote": str(up)}
+    assert (await api.get("/api/v1/github/local-repo?repo=pytorch/pytorch")).json()["link"]["path"] == str(local)
+    base = "/api/v1/github/pr/pytorch/pytorch/7"
+    assert (await api.post(f"{base}/local-sync")).json()["state"] == "running"
+    for _ in range(100):
+        st = (await api.get(f"{base}/local-sync")).json()
+        if st["state"] != "running":
+            break
+        await asyncio.sleep(0.1)
+    assert st["state"] == "done" and st["sha"] == pr_sha and st["ref"] == "refs/waw/pr/7", st
+    assert st["base_updated"] is True and "main fast-forwarded" in st["notes"]  # update is on by default; clean, on main
+    assert (local / "gemm.cpp").read_text() == "old\nnewer main\n"  # the PR is never checked out
+    assert g(local, "show", "refs/waw/pr/7:gemm.cpp").endswith("fast")
+    # the agent is told about the checkout and the PR ref
+    ws = (await api.get("/api/v1/workspaces")).json()["workspaces"][0]["id"]
+    await api.put("/api/v1/github/repo-wiki", json={"repo": "pytorch/pytorch", "workspace_id": ws})
+    assert (await api.get(base)).status_code == 200  # writes the PR copy
+    d = (await api.get("/api/v1/documents/open?path=.waw-github/pytorch/pytorch/7.md")).json()
+    r = await api.post(f"/api/v1/documents/{d['document_id']}/threads", json={"whole_document": True, "version_sha256": d["sha256"], "question": "ok?"})
+    await api.wait_job(r.json()["job_id"])
+    from backend.app.models import Job
+
+    with h.ctx.db.read() as s:
+        prompt = s.query(Job).order_by(Job.created_at.desc()).first().prompt
+    assert f"checked out locally at {local}" in prompt and f"git -C {local} show refs/waw/pr/7:<path>" in prompt and "read-only" in prompt
+    # with update off and local changes, nothing in the working tree moves
+    (up / "gemm.cpp").write_text("old\nnewer main\nmain again\n")
+    g(up, "commit", "-qam", "main again")
+    (local / "gemm.cpp").write_text("my local edit\n")
+    await api.put("/api/v1/github/local-repo", json={"repo": "pytorch/pytorch", "path": str(local), "remote": str(up)})
+    await api.post(f"{base}/local-sync")
+    for _ in range(100):
+        st = (await api.get(f"{base}/local-sync")).json()
+        if st["state"] != "running":
+            break
+        await asyncio.sleep(0.1)
+    assert st["state"] == "done" and st["base_updated"] is False and "local changes" in st["notes"][0]
+    assert (local / "gemm.cpp").read_text() == "my local edit\n"
+    await api.put("/api/v1/github/local-repo", json={"repo": "pytorch/pytorch", "path": str(local), "remote": str(up), "update": False})
+    await api.post(f"{base}/local-sync")
+    for _ in range(100):
+        st = (await api.get(f"{base}/local-sync")).json()
+        if st["state"] != "running":
+            break
+        await asyncio.sleep(0.1)
+    assert st["state"] == "done" and st["base_updated"] is None and st["notes"] == []
+    # summarize the repository's changes over a period from the checkout's git log: a chat in the repo's wiki
+    assert (await api.post("/api/v1/github/repo-summary", json={"repo": "pytorch/pytorch", "period": "fortnight"})).json()["error"]["code"] == "INVALID_PERIOD"
+    r = await api.post("/api/v1/github/repo-summary", json={"repo": "pytorch/pytorch", "period": "week", "focus": "XPU"})
+    assert r.status_code == 201, r.text
+    summ = r.json()
+    assert summ["path"].startswith(".waw-chat/pytorch-pytorch-changes-week-") and summ["commits"] == 3 and summ["workspace_id"] == ws
+    await api.wait_job(summ["job_id"])
+    with h.ctx.db.read() as s:
+        prompt = s.query(Job).order_by(Job.created_at.desc()).first().prompt
+    assert "Summarize the key changes of pytorch/pytorch in the week" in prompt and "Focus: XPU" in prompt
+    assert "Material: the git history of pytorch/pytorch" in prompt and "\tmain again" in prompt and "\tthe PR" not in prompt
+    assert "(top level)" in prompt and f"git -C {local} show --stat <hash>" in prompt
+    chats = (await api.get("/api/v1/chats")).json()["chats"]
+    assert any(c["path"] == summ["path"] and c["title"].startswith("pytorch/pytorch changes · week") for c in chats)
+    assert (await api.delete("/api/v1/github/local-repo?repo=pytorch/pytorch")).json()["link"] is None
+    assert (await api.get(f"{base}/local-sync")).json() == {"state": "none"}
+
+
+async def test_mention_candidates_participants_first_then_repository(running_app):
+    github_hub.reset_cache()
+    calls: list = []
+    gh: dict = {"conversation": {"reviews": [], "comments": [{"databaseId": 1, "author": {"login": "carol"}, "body": "x", "createdAt": "2026-11-01T00:00:00Z", "url": None},
+                                                            {"databaseId": 2, "author": {"login": "pytorch-bot[bot]"}, "body": "y", "createdAt": "2026-11-01T00:00:00Z", "url": None}],
+                                 "pending": []}}
+    base_graphql = fake_pr_detail(calls, gh)
+
+    def graphql(q, v):
+        if "query Mentionable" in q:
+            calls.append(("mention", v["q"]))
+            return {"repository": {"mentionableUsers": {"nodes": [{"login": "albanD", "name": "Alban"}, {"login": "alice", "name": "Alice"}]}}}
+        return base_graphql(q, v)
+
+    h = await running_app()
+    as_github(h, "EikanWang")
+    h.ctx.extra["gh_owner"] = lambda: "EikanWang"
+    h.ctx.extra["gh_graphql"] = graphql
+    h.ctx.extra["gh_pr_files"] = lambda o, r, n: []
+    api = h.api
+    base = "/api/v1/github/pr/pytorch/pytorch/7"
+    await api.get(base)
+    await api.get(f"{base}/comments")
+    r = (await api.get(f"{base}/mentions?q=")).json()["candidates"]
+    assert [(c["login"], c["source"]) for c in r] == [("alice", "author"), ("bob", "reviewer"), ("EikanWang", "requested"), ("carol", "commenter")]
+    r = (await api.get(f"{base}/mentions?q=al")).json()["candidates"]
+    assert [c["login"] for c in r] == ["alice", "albanD"]  # the author first, then the repository's users (deduplicated)
+    assert (await api.get(f"{base}/mentions?q=al")).json()["candidates"] == r and calls.count(("mention", "al")) == 1  # cached
+    assert (await api.get(f"{base}/mentions?q=a%20b")).json()["candidates"] == []
