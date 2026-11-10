@@ -161,7 +161,7 @@ separately (`~/.config/wiki-agent-workspace/config.toml`). Backup, restore and m
 ## Running the tests
 
 ```bash
-scripts/test.sh            # backend: pytest (138 tests; real git + tmux + fake agents), ~25 s
+scripts/test.sh            # backend: pytest (140 tests; real git + tmux + fake agents), ~25 s
 scripts/test.sh --e2e      # + Playwright browser suite (56 scenarios) against the production build
 # or individually
 .venv/bin/python -m pytest tests/backend -q

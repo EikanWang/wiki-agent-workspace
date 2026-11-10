@@ -1999,6 +1999,19 @@ test("GitHub PR tab: overview, files, choose the wiki once, ask about the PR and
   await page.getByTestId("selection-send").click();
   await expect(page.locator('[data-testid="message-agent"][data-status="completed"]').last()).toContainText("Is the null check enough?", { timeout: 20000 });
   await expect(page.getByTestId("thread-whole-document")).toBeVisible();
+  // request a review, with suggestions while typing
+  await page.getByTestId("pr-reviewer-add").click();
+  await page.getByTestId("pr-reviewer-input").fill("ez");
+  await expect(page.getByTestId("pr-reviewer-item").first()).toContainText("ezyang");
+  await expect(page.getByTestId("pr-reviewer-item").first()).toContainText("suggested");
+  await page.getByTestId("pr-reviewer-input").press("Enter");
+  await expect.poll(async () => (await (await page.request.get("/fake-github/posted")).json()).some((x: any) => x.path?.endsWith("/requested_reviewers") && x.method === "POST" && x.body.reviewers[0] === "ezyang")).toBe(true);
+  // ask the agent about the CI failures: the server downloads the failing jobs' logs for it
+  await page.getByTestId("pr-ci-ask").click();
+  await page.getByTestId("pr-ci-ask-send").click();
+  await expect(page.locator('[data-testid="message-agent"][data-status="completed"]').last()).toContainText("Investigate these CI failures", { timeout: 20000 });
+  await expect(page.getByTestId("thread-target").last()).toContainText("CI: all failing checks");
+  await expect(page.getByTestId("thread-quote").last()).toContainText("AssertionError: XPU result differs from CPU");
   // ask the agent about a reviewer's comment in the conversation (with its code and replies)
   const lineComment = page.getByTestId("pr-conv-line").first();
   await lineComment.getByTestId("pr-conv-ask").click();

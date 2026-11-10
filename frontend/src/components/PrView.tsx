@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { confirmAction } from "./Confirm";
 import { AgentSession, ApiError, WorkspaceInfo, get, post, put } from "../api";
 import { renderGithubMarkdown } from "../markdown";
 import { usePersistentState, useRestoredScroll } from "../persist";
@@ -340,26 +341,27 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
               </section>
             </div>
             <aside className="pr-side">
+              <Contributors apiBase={apiBase} />
+              <Reviewers apiBase={apiBase} reviews={p.reviews} requested={p.requested.filter(Boolean) as string[]} onChanged={() => void load(true)} onError={setError} />
               <section>
                 <h4>Checks {p.checks.length ? <span className={`ci-dot ${STATE_CLASS[p.ci ?? ""] ?? "none"}`} /> : null}</h4>
                 {p.checks.length === 0 && <div className="muted small">No checks.</div>}
-                {failing > 0 && <div className="small del">{failing} failing</div>}
+                {failing > 0 && (
+                  <div className="small del">
+                    {failing} failing{" "}
+                    <CiAsk apiBase={apiBase} canAsk={docReady} onAsk={askAbout} label="all failing checks" />
+                  </div>
+                )}
                 <ul className="pr-checks" data-testid="pr-checks">
                   {p.checks.slice(0, 40).map((c, i) => (
-                    <li key={i}><span className={`ci-dot ${STATE_CLASS[c.state] ?? "none"}`} title={c.state} /> {c.url ? <a href={c.url} target="_blank" rel="noreferrer">{c.name}</a> : c.name}</li>
+                    <li key={i}>
+                      <span className={`ci-dot ${STATE_CLASS[c.state] ?? "none"}`} title={c.state} /> {c.url ? <a href={c.url} target="_blank" rel="noreferrer">{c.name}</a> : c.name}
+                      {STATE_CLASS[c.state] === "failure" && c.name && <CiAsk apiBase={apiBase} canAsk={docReady} onAsk={askAbout} checks={[c.name]} label={c.name} compact />}
+                    </li>
                   ))}
                   {p.checks.length > 40 && <li className="muted small">… {p.checks.length - 40} more on GitHub</li>}
                 </ul>
               </section>
-              <section>
-                <h4>Reviews</h4>
-                {p.reviews.length === 0 && <div className="muted small">No reviews yet.</div>}
-                <ul className="pr-reviews" data-testid="pr-reviews">
-                  {p.reviews.map((r, i) => <li key={i}><b>{r.author}</b> {REVIEW_LABEL[r.state] ?? r.state.toLowerCase()}</li>)}
-                </ul>
-                {p.requested.filter(Boolean).length > 0 && <div className="muted small">Requested: {p.requested.filter(Boolean).join(", ")}</div>}
-              </section>
-              <Contributors apiBase={apiBase} />
               {p.labels.length > 0 && (
                 <section>
                   <h4>Labels</h4>
@@ -514,6 +516,140 @@ function AskComment({ quote, label, canAsk, onAsk }: { quote: string; label: str
       {err && <div className="small del">{err}</div>}
       <div className="row">
         <button className="btn small primary" disabled={busy || !text.trim()} onClick={() => void send()} data-testid="pr-conv-ask-send">Ask agent</button>
+        <button className="btn small" onClick={() => setText(null)}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+interface Candidate { login: string; name: string | null; source: string; requested?: boolean }
+
+/** Reviews given and requested; request a review from someone (with suggestions) or cancel a request — on GitHub. */
+function Reviewers({ apiBase, reviews, requested, onChanged, onError }: {
+  apiBase: string; reviews: { author: string | null; state: string }[]; requested: string[]; onChanged: () => void; onError: (m: string) => void;
+}) {
+  const [q, setQ] = useState<string | null>(null);
+  const [items, setItems] = useState<Candidate[]>([]);
+  const [sel, setSel] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const seq = useRef(0);
+  useEffect(() => {
+    if (q === null) return;
+    const n = ++seq.current;
+    const t = window.setTimeout(() => {
+      get<{ candidates: Candidate[] }>(`${apiBase}/reviewer-candidates?q=${encodeURIComponent(q.trim())}`)
+        .then((r) => { if (n === seq.current) { setItems(r.candidates); setSel(0); } })
+        .catch(() => undefined);
+    }, q ? 200 : 0);
+    return () => window.clearTimeout(t);
+  }, [q, apiBase]);
+  const change = async (body: { add?: string[]; remove?: string[] }) => {
+    setBusy(true);
+    try {
+      await post(`${apiBase}/reviewers`, body);
+      onChanged();
+    } catch (e) {
+      onError((e as ApiError).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const add = (login: string) => {
+    setQ(null);
+    void change({ add: [login] });
+  };
+  const remove = async (login: string) => {
+    if (!(await confirmAction({ title: `Cancel the review request for ${login}?`, message: "GitHub removes the pending request (their earlier reviews stay).", confirmLabel: "Cancel request" }))) return;
+    void change({ remove: [login] });
+  };
+  const open = items.filter((c) => !c.requested);
+  return (
+    <section data-testid="pr-reviewers">
+      <h4>Reviewers</h4>
+      {reviews.length === 0 && requested.length === 0 && <div className="muted small">No reviews or requests yet.</div>}
+      <ul className="pr-reviews" data-testid="pr-reviews">
+        {reviews.map((r, i) => <li key={i}><b>{r.author}</b> {REVIEW_LABEL[r.state] ?? r.state.toLowerCase()}</li>)}
+        {requested.filter((x) => !reviews.some((r) => r.author === x)).map((x) => (
+          <li key={x} data-testid="pr-requested">
+            <b>{x}</b> <span className="muted">awaiting review</span>{" "}
+            <button className="icon-btn small" disabled={busy} onClick={() => void remove(x)} title={`Cancel the review request for ${x}`} aria-label={`Remove ${x}`} data-testid="pr-reviewer-remove">×</button>
+          </li>
+        ))}
+      </ul>
+      {q === null ? (
+        <button className="link-btn small" onClick={() => setQ("")} data-testid="pr-reviewer-add">＋ Request a review…</button>
+      ) : (
+        <span className="mention-wrap">
+          <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Name or login" data-testid="pr-reviewer-input"
+            onBlur={() => window.setTimeout(() => setQ(null), 200)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") setQ(null);
+              else if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); setSel((i) => (open.length ? (i + (e.key === "ArrowDown" ? 1 : open.length - 1)) % open.length : 0)); }
+              else if (e.key === "Enter" && !e.nativeEvent.isComposing) { e.preventDefault(); const c = open[sel]; if (c) add(c.login); else if (/^[\w.-]+$/.test(q.trim())) add(q.trim()); }
+            }} />
+          {open.length > 0 && (
+            <ul className="mention-list" role="listbox" data-testid="pr-reviewer-list">
+              {open.map((c, i) => (
+                <li key={c.login} role="option" aria-selected={i === sel} className={i === sel ? "on" : ""} onMouseDown={(e) => { e.preventDefault(); add(c.login); }} onMouseEnter={() => setSel(i)} data-testid="pr-reviewer-item">
+                  <b>{c.login}</b>{c.name ? <span className="muted"> {c.name}</span> : null}{c.source !== "repository" ? <span className="muted small"> · {c.source}</span> : null}
+                </li>
+              ))}
+            </ul>
+          )}
+        </span>
+      )}
+    </section>
+  );
+}
+
+interface CiFailure { name: string; conclusion: string; url: string | null; log_path: string | null; lines: number; excerpt: string | null; error: string | null }
+
+/** Ask the agent about failing CI: the server downloads the failing jobs' logs first, so the agent can read them. */
+function CiAsk({ apiBase, canAsk, onAsk, checks, label, compact = false }: {
+  apiBase: string; canAsk: boolean; onAsk: (quote: string, label: string, question: string) => Promise<void>; checks?: string[]; label: string; compact?: boolean;
+}) {
+  const [text, setText] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const send = async () => {
+    setBusy("Downloading the CI logs…");
+    setErr(null);
+    try {
+      const r = await post<{ failures: CiFailure[]; total_failed: number; logs_dir: string }>(`${apiBase}/ci-failures`, { checks: checks ?? null });
+      if (!r.failures.length) throw new ApiError(404, "NO_FAILURES", "no failing check found (it may have been re-run)", {});
+      const quote = [
+        `CI failures of this PR (${r.total_failed} failing${r.failures.length < r.total_failed ? `; ${r.failures.length} downloaded` : ""}). Full logs are saved on the server; read them (search for "##[error]", "FAILED", "Traceback").`,
+        ...r.failures.map((f) => [
+          `### ${f.name} — ${f.conclusion}`, f.url ? `Link: ${f.url}` : "",
+          f.log_path ? `Full log (${f.lines} lines): ${f.log_path}` : `No log: ${f.error ?? "not available"}`,
+          f.excerpt ? "Excerpt (the output leading to the error):\n" + f.excerpt : "",
+        ].filter(Boolean).join("\n")),
+      ].join("\n\n");
+      setBusy("Asking the agent…");
+      const q = (text ?? "").trim() || "Investigate these CI failures.";
+      await onAsk(quote.slice(0, 20000), `CI: ${label}`, `${q}\n\nRead the full CI logs listed above, find the root cause of each failure, and say whether it is caused by this PR (point at the change), a flaky or known issue, or the CI infrastructure; suggest a fix or a re-run.`);
+      setText(null);
+    } catch (e) {
+      setErr((e as ApiError).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+  if (text === null) {
+    return (
+      <button className={`link-btn small ${compact ? "ci-ask-compact" : ""}`} disabled={!canAsk} onClick={() => setText("")}
+        title={canAsk ? `Ask the agent about the CI failure${checks ? ` of ${label}` : "s"}: it reads the logs and investigates` : "Choose the agent's wiki first"} data-testid={compact ? "pr-ci-ask-one" : "pr-ci-ask"}>
+        {compact ? "Ask" : "Ask agent about the failures…"}
+      </button>
+    );
+  }
+  return (
+    <div className="gh-reply-box ci-ask-box" data-testid="pr-ci-ask-box">
+      <textarea autoFocus rows={2} value={text} onChange={(e) => setText(e.target.value)} placeholder={`Optional: what to look at, e.g. "only the XPU jobs" (${COMPOSER_HINT})`}
+        onKeyDown={(e) => composerKeyDown(e, () => void send(), setText, () => setText(null))} data-testid="pr-ci-ask-text" />
+      {err && <div className="small del" role="alert" data-testid="pr-ci-ask-error">{err}</div>}
+      <div className="row">
+        <button className="btn small primary" disabled={!!busy} onClick={() => void send()} data-testid="pr-ci-ask-send">{busy ?? "Investigate"}</button>
         <button className="btn small" onClick={() => setText(null)}>Cancel</button>
       </div>
     </div>

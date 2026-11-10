@@ -1712,3 +1712,172 @@ async def mention_candidates(owner: str, repo: str, number: int, q: str = Query(
                 remote = []
     seen = {c["login"].lower() for c in local}
     return {"candidates": local + [c for c in remote if c["login"].lower() not in seen][: max(0, 10 - len(local))]}
+
+
+# ---------------------------------------------------------------------- reviewers
+
+REVIEWER_QUERY = """
+query ReviewerCandidates($owner: String!, $name: String!, $number: Int!, $q: String!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) { suggestedReviewers { isAuthor isCommenter reviewer { login name } } }
+    assignableUsers(query: $q, first: 10) { nodes { login name } }
+  }
+}"""
+
+
+@router.get("/github/pr/{owner}/{repo}/{number}/reviewer-candidates")
+async def reviewer_candidates(owner: str, repo: str, number: int, q: str = Query("", max_length=40),
+                              auth: tuple[AppContext, str] = Depends(require_owner)):
+    """People to request a review from: GitHub's suggested reviewers (who changed these files) first, then the
+    repository's users that can be assigned, matching `q`."""
+    ctx, owner_login = auth
+    _check_names(owner, repo)
+    q = q.strip().lstrip("@")
+    if not re.fullmatch(r"[\w.-]*", q):
+        return {"candidates": []}
+    d = await asyncio.to_thread(_hooks(ctx)[0], REVIEWER_QUERY, {"owner": owner, "name": repo, "number": number, "q": q})
+    r = d.get("repository") or {}
+    pr = (_pr_cache.get(f"{owner}/{repo}#{number}".lower()) or (0, {"pr": {}}))[1]["pr"]
+    taken = {(x or "").lower() for x in pr.get("requested") or []} | {(pr.get("author") or "").lower()}
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    ql = q.lower()
+    for s in (r.get("pullRequest") or {}).get("suggestedReviewers") or []:
+        u = (s or {}).get("reviewer") or {}
+        login = u.get("login") or ""
+        if login and login.lower() not in seen and (not ql or ql in login.lower() or ql in (u.get("name") or "").lower()):
+            seen.add(login.lower())
+            out.append({"login": login, "name": u.get("name"), "source": "suggested" + (" (commented)" if s.get("isCommenter") else ""),
+                        "requested": login.lower() in taken})
+    for u in (r.get("assignableUsers") or {}).get("nodes") or []:
+        login = (u or {}).get("login") or ""
+        if login and login.lower() not in seen:
+            seen.add(login.lower())
+            out.append({"login": login, "name": u.get("name"), "source": "repository", "requested": login.lower() in taken})
+    return {"candidates": [c for c in out if c["login"].lower() != owner_login.lower()][:12]}
+
+
+class ReviewersIn(BaseModel):
+    add: list[str] = []
+    remove: list[str] = []
+
+
+@router.post("/github/pr/{owner}/{repo}/{number}/reviewers")
+async def change_reviewers(owner: str, repo: str, number: int, body: ReviewersIn, auth: tuple[AppContext, str] = Depends(require_owner_mutating)):
+    """Request reviews from people (or cancel pending requests), on GitHub at once, as the server's gh account."""
+    ctx, _ = auth
+    _check_names(owner, repo)
+    for x in body.add + body.remove:
+        if not NAME.match(x):
+            raise ApiError(400, "INVALID_LOGIN", f"{x!r} is not a GitHub login")
+    if not body.add and not body.remove:
+        raise ApiError(400, "INVALID_REVIEWERS", "nobody to add or remove")
+    rest = _rest(ctx)
+    path = f"repos/{owner}/{repo}/pulls/{number}/requested_reviewers"
+    if body.add:
+        await asyncio.to_thread(rest, "POST", path, {"reviewers": body.add})
+    if body.remove:
+        await asyncio.to_thread(rest, "DELETE", path, {"reviewers": body.remove})
+    _pr_cache.pop(f"{owner}/{repo}#{number}".lower(), None)
+    pr = await asyncio.to_thread(_pr_node, ctx, owner, repo, number)
+    return {"requested": pr.get("requested") or [], "reviews": pr.get("reviews") or []}
+
+
+# ---------------------------------------------------------------------- CI failures (logs for the agent)
+
+FAILED = ("failure", "timed_out", "startup_failure", "action_required")
+MAX_LOGS = 8
+_TS = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d+Z ")
+_ERR = re.compile(r"(##\[error\]|\berror\b|Error:|FAILED|FAIL:|Traceback|AssertionError|RuntimeError|Exception|exit code [1-9]|Segmentation fault|undefined reference|fatal:)", re.I)
+
+
+def gh_job_log(owner: str, repo: str, job_id: int) -> str:
+    """The raw log of a GitHub Actions job (gh follows the redirect to the log file)."""
+    gh = shutil.which("gh")
+    if not gh:
+        raise ApiError(503, "GH_UNAVAILABLE", "the GitHub CLI (gh) is not installed on the server")
+    RATE.before("core")
+    try:
+        p = subprocess.run([gh, "api", f"repos/{owner}/{repo}/actions/jobs/{job_id}/logs"], capture_output=True, timeout=180, check=False)
+    except subprocess.TimeoutExpired:
+        raise ApiError(504, "GH_TIMEOUT", "GitHub did not send the log in time")
+    if p.returncode != 0:
+        err = p.stderr.decode("utf-8", "replace").strip()
+        if "410" in err or "404" in err:
+            raise ApiError(410, "LOG_GONE", "the log is no longer on GitHub (expired or deleted)")
+        raise ApiError(502, "GH_ERROR", f"no log: {err[-300:]}")
+    return p.stdout[:30_000_000].decode("utf-8", "replace")
+
+
+def log_excerpt(text: str, max_chars: int = 6000) -> tuple[str, int]:
+    """What the agent should read first (timestamps stripped); (excerpt, total lines). GitHub marks the failing
+    step with `##[error]` lines: the excerpt is the output leading up to them; without such marks, the lines
+    around error-looking lines plus the end of the log."""
+    lines = [_TS.sub("", ln) for ln in text.splitlines()]
+    marks = [i for i, ln in enumerate(lines) if ln.startswith("##[error]")]
+    keep: set[int] = set()
+    if marks:
+        keep.update(range(max(0, marks[0] - 80), min(len(lines), marks[-1] + 2)))
+    else:
+        hits = [i for i, ln in enumerate(lines) if _ERR.search(ln)]
+        for i in hits[-25:]:
+            keep.update(range(max(0, i - 3), min(len(lines), i + 4)))
+        keep.update(range(max(0, len(lines) - 40), len(lines)))
+    out: list[str] = []
+    prev = -2
+    for i in sorted(keep):
+        if i != prev + 1:
+            out.append("…")
+        out.append(lines[i][:400])
+        prev = i
+    text_out = "\n".join(out)
+    return (text_out if len(text_out) <= max_chars else "…" + text_out[-max_chars:]), len(lines)
+
+
+class CiIn(BaseModel):
+    checks: list[str] | None = None  # only these check names (default: every failing one)
+
+
+@router.post("/github/pr/{owner}/{repo}/{number}/ci-failures")
+async def ci_failures(owner: str, repo: str, number: int, body: CiIn, auth: tuple[AppContext, str] = Depends(require_owner)):
+    """Download the logs of the PR's failing CI jobs (GitHub Actions) to the server for the agent, with excerpts
+    around the errors; other failing checks (external CI) are listed with their links."""
+    ctx, _ = auth
+    _check_names(owner, repo)
+    pr = await asyncio.to_thread(_pr_node, ctx, owner, repo, number)
+    sha = pr.get("head_sha")
+    if not sha:
+        raise ApiError(409, "NO_HEAD", "the PR's head commit is unknown")
+    rest = _rest(ctx)
+    runs = await asyncio.to_thread(rest, "GET", f"repos/{owner}/{repo}/commits/{sha}/check-runs?filter=latest&per_page=100")
+    pages = runs if isinstance(runs, list) else [runs]
+    check_runs = [c for p in pages if isinstance(p, dict) for c in p.get("check_runs") or []]  # one {check_runs: […]} per page
+    failed = [c for c in check_runs if (c.get("conclusion") or "") in FAILED]
+    wanted = {x.lower() for x in body.checks} if body.checks else None
+    if wanted is not None:
+        failed = [c for c in failed if (c.get("name") or "").lower() in wanted]
+    external = [c for c in pr.get("checks") or [] if c.get("state") in ("FAILURE", "ERROR") and not any(c.get("name") == f.get("name") for f in check_runs)]
+    if wanted is not None:
+        external = [c for c in external if (c.get("name") or "").lower() in wanted]
+    snap = ctx.settings.snapshots_dir / "github" / owner.lower() / repo.lower() / f"{number}.ci"
+    snap.mkdir(parents=True, exist_ok=True)
+    fetch = ctx.extra.get("gh_job_log", gh_job_log)
+    out: list[dict[str, Any]] = []
+    for c in failed[:MAX_LOGS]:
+        item = {"name": c.get("name"), "conclusion": c.get("conclusion"), "url": c.get("html_url") or c.get("details_url"),
+                "app": ((c.get("app") or {}).get("slug")), "log_path": None, "lines": 0, "excerpt": None, "error": None}
+        if item["app"] in (None, "github-actions"):
+            try:
+                text = await asyncio.to_thread(fetch, owner, repo, int(c["id"]))
+                f = snap / f"{c['id']}-{re.sub(r'[^A-Za-z0-9_.-]+', '_', c.get('name') or 'job')[:80]}.log"
+                f.write_text(text, encoding="utf-8")
+                item["log_path"] = str(f)
+                item["excerpt"], item["lines"] = log_excerpt(text)
+            except ApiError as exc:
+                item["error"] = exc.message
+        else:
+            item["error"] = f"runs on {item['app']}: open the link for its log"
+        out.append(item)
+    out += [{"name": c.get("name"), "conclusion": c.get("state", "").lower(), "url": c.get("url"), "app": "status", "log_path": None,
+             "lines": 0, "excerpt": None, "error": "an external status: open the link for its log"} for c in external]
+    return {"head_sha": sha, "failures": out, "total_failed": len(failed) + len(external), "logs_dir": str(snap)}

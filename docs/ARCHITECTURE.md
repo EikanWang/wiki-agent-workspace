@@ -68,6 +68,10 @@ backend/app/
                    repo's wiki (/github/repo-summary, ThreadCreateIn.chat_brief)
   · github_hub /mentions: PR participants (author, reviewers, requested, contributors, commenters, kept per PR in
                    memory) then GraphQL mentionableUsers(query) (cached 10 min)
+  · github_hub reviewers: /reviewer-candidates (GraphQL suggestedReviewers + assignableUsers(query)), /reviewers
+                   (REST POST / DELETE pulls/{n}/requested_reviewers); /ci-failures: REST check-runs of the head
+                   commit (filter=latest, paginated), failing GitHub Actions jobs' logs via actions/jobs/{id}/logs
+                   saved to snapshots/github/<o>/<r>/<n>.ci/, excerpt = output before the ##[error] marks
   kv.py            kv_settings get/put; extra reference folders (context:repo:<o>/<r>, context:ws:<id>) added
                    to every agent prompt for that PR repository / wiki folder (/agent-context)
   office.py        OfficeRenderer: Layout view, LibreOffice headless → PDF, content-addressed cache, parallel

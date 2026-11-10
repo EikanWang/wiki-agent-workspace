@@ -147,6 +147,16 @@ can see, grouped by repository (most PRs first):
     "Is the reviewer right?"; the answer is in the discussions panel. Threads in **Files** have the same button. `#123`, `owner/repo#123` and links to pull requests in the
     description and comments **open as PR tabs here** (Ctrl/⌘-click: on GitHub; an issue number shows a note
     with a link to GitHub).
+  - The Overview's right column, top to bottom: **Contributors**, **Reviewers**, **Checks**, **Labels**.
+  - **Reviewers**: the reviews given and the pending requests. **＋ Request a review…** — type a name or login;
+    GitHub's *suggested* reviewers (who changed these files) come first, then the repository's users; ↑/↓ and
+    Enter (or a click) request the review on GitHub at once. **×** on a pending request cancels it (confirmed).
+  - **Checks** → **Ask agent about the failures…** (or **Ask** next to one failing check): the server downloads
+    the failing GitHub Actions jobs' logs (up to 8; external CI is listed with its link) into its state folder and
+    gives the agent the log paths and an excerpt — the output leading up to GitHub's `##[error]` marks. The agent
+    reads the logs, finds the root cause of each failure and says whether it comes from the PR (pointing at the
+    change), is flaky or known, or is an infrastructure problem, and suggests a fix or a re-run. Optional: what to
+    focus on. Logs GitHub no longer keeps (older runs) are reported as gone.
   - **Contributors** (Overview, right): the author, commit authors and co-authors with their commit count and a
     guessed affiliation (Intel, Meta, NVIDIA, … from company, emails and organizations). Click a person for
     details: commit emails, company, organizations, location, website, bio, joined; tick **details** to also load

@@ -830,3 +830,6 @@ mark.waw-hl.review.needs_review { border-bottom: 2px dashed var(--warn); }
 .folder-picker { display: flex; flex-direction: column; gap: 8px; }
 input.grow { flex: 1; min-width: 0; }
 .git-badge.approved-news { color: var(--warn); border-color: var(--warn); }
+.ci-ask-compact { margin-left: 6px; font-size: 11px; }
+.ci-ask-box { margin: 4px 0; }
+.pr-side section { margin-bottom: 14px; }

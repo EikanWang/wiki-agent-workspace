@@ -727,3 +727,66 @@ def test_standing_approval_ignores_pending_and_later_plain_comments():
                            {"state": "PENDING", "submittedAt": None, "commit": {"oid": "h1"}}]
     x = github_hub.normalize(p, "EikanWang")
     assert x["my_review"] == "APPROVED" and x["approved_no_news"] is True
+
+
+async def test_request_reviewers_with_suggestions(running_app):
+    github_hub.reset_cache()
+    calls: list = []
+    base_graphql = fake_pr_detail(calls)
+
+    def graphql(q, v):
+        if "query ReviewerCandidates" in q:
+            calls.append(("cand", v["q"]))
+            return {"repository": {"pullRequest": {"suggestedReviewers": [{"isAuthor": False, "isCommenter": True, "reviewer": {"login": "ezyang", "name": "Edward"}},
+                                                                          {"isAuthor": False, "isCommenter": False, "reviewer": {"login": "EikanWang", "name": "me"}}]},
+                                   "assignableUsers": {"nodes": [{"login": "albanD", "name": "Alban"}, {"login": "ezyang", "name": "Edward"}]}}}
+        return base_graphql(q, v)
+
+    rest_calls: list = []
+    h = await running_app()
+    as_github(h, "EikanWang")
+    h.ctx.extra["gh_owner"] = lambda: "EikanWang"
+    h.ctx.extra["gh_graphql"] = graphql
+    h.ctx.extra["gh_pr_files"] = lambda o, r, n: []
+    h.ctx.extra["gh_rest"] = lambda m, p, b=None: rest_calls.append((m, p, b)) or {}
+    api = h.api
+    base = "/api/v1/github/pr/pytorch/pytorch/7"
+    await api.get(base)
+    c = (await api.get(f"{base}/reviewer-candidates?q=")).json()["candidates"]
+    assert [(x["login"], x["source"]) for x in c] == [("ezyang", "suggested (commented)"), ("albanD", "repository")]  # not yourself, no duplicates
+    assert [x["login"] for x in (await api.get(f"{base}/reviewer-candidates?q=ez")).json()["candidates"]] == ["ezyang", "albanD"]
+    r = await api.post(f"{base}/reviewers", json={"add": ["ezyang"], "remove": ["bob"]})
+    assert r.status_code == 200, r.text
+    assert rest_calls == [("POST", "repos/pytorch/pytorch/pulls/7/requested_reviewers", {"reviewers": ["ezyang"]}),
+                          ("DELETE", "repos/pytorch/pytorch/pulls/7/requested_reviewers", {"reviewers": ["bob"]})]
+    assert (await api.post(f"{base}/reviewers", json={"add": ["bad login"]})).json()["error"]["code"] == "INVALID_LOGIN"
+    assert (await api.post(f"{base}/reviewers", json={})).json()["error"]["code"] == "INVALID_REVIEWERS"
+
+
+async def test_ci_failure_logs_are_downloaded_for_the_agent(running_app):
+    github_hub.reset_cache()
+    h = await running_app()
+    as_github(h, "EikanWang")
+    h.ctx.extra["gh_owner"] = lambda: "EikanWang"
+    h.ctx.extra["gh_graphql"] = fake_pr_detail([])
+    h.ctx.extra["gh_pr_files"] = lambda o, r, n: []
+    pages = [{"total_count": 3, "check_runs": [
+        {"id": 11, "name": "xpu-test", "conclusion": "failure", "html_url": "https://x/11", "app": {"slug": "github-actions"}},
+        {"id": 12, "name": "lint", "conclusion": "success", "html_url": "https://x/12", "app": {"slug": "github-actions"}}]},
+        {"total_count": 3, "check_runs": [{"id": 13, "name": "circleci: build", "conclusion": "failure", "html_url": "https://x/13", "app": {"slug": "circleci"}}]}]
+    h.ctx.extra["gh_rest"] = lambda m, p, b=None: pages
+    log = "\n".join([f"2026-11-10T00:00:00.0000000Z line {i}" for i in range(500)] + ["2026-11-10T00:00:00.0000000Z E   AssertionError: tensors differ",
+                    "2026-11-10T00:00:00.0000000Z ##[error]Process completed with exit code 1."] + ["2026-11-10T00:00:00.0000000Z cleanup"] * 50)
+    h.ctx.extra["gh_job_log"] = lambda o, r, jid: log
+    r = (await h.api.post("/api/v1/github/pr/pytorch/pytorch/7/ci-failures", json={})).json()
+    by = {f["name"]: f for f in r["failures"]}
+    assert r["total_failed"] == 2 and set(by) == {"xpu-test", "circleci: build"}
+    x = by["xpu-test"]
+    from pathlib import Path
+
+    assert x["lines"] == 552 and Path(x["log_path"]).read_text() == log
+    assert "AssertionError: tensors differ" in x["excerpt"] and "##[error]Process completed" in x["excerpt"] and "2026-11-10T" not in x["excerpt"]
+    assert "line 499" in x["excerpt"] and "line 400\n" not in x["excerpt"] and "cleanup\ncleanup" not in x["excerpt"]  # the output leading to the error
+    assert by["circleci: build"]["log_path"] is None and "circleci" in by["circleci: build"]["error"]
+    r = (await h.api.post("/api/v1/github/pr/pytorch/pytorch/7/ci-failures", json={"checks": ["xpu-test"]})).json()
+    assert [f["name"] for f in r["failures"]] == ["xpu-test"]

@@ -216,6 +216,10 @@ def add_fake_review_queue(app) -> None:
             return {"repository": {"pullRequest": {"reviews": {"totalCount": len(state["reviews"]), "nodes": state["reviews"]},
                                                     "comments": {"totalCount": len(state["comments"]), "nodes": state["comments"]},
                                                     "pending": {"nodes": []}}}}
+        if "query ReviewerCandidates" in query:
+            people = [{"login": "ezyang", "name": "Edward Z. Yang"}, {"login": "albanD", "name": "Alban D"}]
+            return {"repository": {"pullRequest": {"suggestedReviewers": [{"isAuthor": False, "isCommenter": False, "reviewer": people[0]}]},
+                                   "assignableUsers": {"nodes": [u for u in people if variables["q"].lower() in (u["login"] + u["name"]).lower()]}}}
         if "query Mentionable" in query:
             people = [{"login": "albanD", "name": "Alban D"}, {"login": "alice", "name": "Alice A."}, {"login": "ezyang", "name": "Edward Z. Yang"}]
             return {"repository": {"mentionableUsers": {"nodes": [u for u in people if variables["q"].lower() in (u["login"] + u["name"]).lower()]}}}
@@ -245,6 +249,13 @@ def add_fake_review_queue(app) -> None:
     ctx.extra["gh_graphql"] = graphql
 
     def rest(method, path, body=None):
+        if method == "GET" and "/check-runs" in path:  # the head commit's checks: one failing GitHub Actions job
+            return [{"total_count": 2, "check_runs": [
+                {"id": 4242, "name": "xpu-test", "conclusion": "failure", "html_url": "https://github.com/pytorch/pytorch/actions/runs/1/job/4242", "app": {"slug": "github-actions"}},
+                {"id": 4243, "name": "lint", "conclusion": "success", "html_url": None, "app": {"slug": "github-actions"}}]}]
+        if path.endswith("/requested_reviewers"):
+            posted.append({"method": method, "path": path, "body": body})
+            return {}
         if method == "GET" and path.startswith("users/"):  # a contributor's public profile (not a change: not recorded)
             return {"email": "alice@example.com", "blog": "alice.dev", "hireable": None, "twitter_username": None, "public_repos": 3, "type": "User"}
         posted.append({"method": method, "path": path, "body": body})
@@ -262,6 +273,8 @@ def add_fake_review_queue(app) -> None:
         raise AssertionError(path)
 
     ctx.extra["gh_rest"] = rest
+    ctx.extra["gh_job_log"] = lambda o, r, jid: ("2026-11-09T10:00:00.0000000Z collecting tests\n" * 20 + "2026-11-09T10:00:01.0000000Z E   AssertionError: XPU result differs from CPU\n"
+                                                 "2026-11-09T10:00:01.0000000Z ##[error]Process completed with exit code 1.\n")
 
     from fastapi.responses import JSONResponse as _J
     from starlette.routing import Route as _R
