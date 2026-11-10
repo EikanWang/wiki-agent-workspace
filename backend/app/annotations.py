@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
@@ -23,8 +24,30 @@ router = APIRouter()
 
 # ---------------------------------------------------------------------- prompt building
 
+def describe_target(target: dict[str, Any] | None, document_path: str) -> str | None:
+    """What part of a laid-out document the user points at (PDF page, slide, area, embedded image)."""
+    if not target:
+        return None
+    unit = "slide" if target.get("unit") == "slide" else "page"
+    n = target.get("page")
+    where = f"{unit} {n}" if n else "the document"
+    layout = Path(document_path).suffix.lower() != ".pdf"
+    note = f" (pages are those of the document rendered to PDF by LibreOffice{'; slide numbers match' if unit == 'slide' else ''})" if layout and n else ""
+    kind = target.get("kind")
+    if kind == "page":
+        return f"The user is asking about {where} of this document as a whole{note}. An image of that {unit} is attached."
+    if kind == "area":
+        return f"The user selected an area of {where}{note} (e.g. a figure or diagram). An image of exactly that area is attached."
+    if kind == "image":
+        return f"The user is asking about an image embedded in this document{' on ' + where if n else ''}. The image is attached."
+    if kind == "text":
+        return f"The user selected text on {where}{note}."
+    return None
+
+
 def build_prompt(*, question: str, quote: str, document_path: str, sha256: str, heading: str | None,
-                 prior: list[dict[str, str]] | None, versions: list[dict[str, Any]] | None, whole_document: bool = False) -> str:
+                 prior: list[dict[str, str]] | None, versions: list[dict[str, Any]] | None, whole_document: bool = False,
+                 target: dict[str, Any] | None = None) -> str:
     parts = [
         "You are assisting with a Markdown wiki document in this workspace via the Wiki Agent Workspace reader.",
         f"Document path: {document_path}",
@@ -36,7 +59,13 @@ def build_prompt(*, question: str, quote: str, document_path: str, sha256: str, 
         refs = ", ".join(f"{v['sha256'][:12]} ({v.get('git_commit') or 'uncommitted'}{', ' + v['git_branch'] if v.get('git_branch') else ''})" for v in versions[:5])
         parts.append(f"Known earlier recorded versions of this file (content hashes, Git commit if any): {refs}. "
                      "Only Git history and these recorded snapshots are available as history; do not claim to know earlier reasoning that is not in them.")
-    if whole_document or quote == document_path:
+    tdesc = describe_target(target, document_path)
+    if tdesc:
+        parts.append(tdesc)
+        if quote:
+            parts.append("Selected text (verbatim):")
+            parts.append("<<<SELECTED_PASSAGE\n" + quote + "\nSELECTED_PASSAGE>>>")
+    elif whole_document or quote == document_path:
         from .textmodel import IMAGE_SUFFIXES
 
         if Path(document_path).suffix.lower() in IMAGE_SUFFIXES:
@@ -52,7 +81,7 @@ def build_prompt(*, question: str, quote: str, document_path: str, sha256: str, 
     parts.append("User message:")
     parts.append(question)
     parts.append(
-        f"Instructions: answer about {'the document' if whole_document or quote == document_path else 'the selected passage and the document'}. Only modify files if this user message "
+        f"Instructions: answer about {'what the user points at and the document' if tdesc else 'the document' if whole_document or quote == document_path else 'the selected passage and the document'}. Only modify files if this user message "
         "explicitly asks for a change; in that case edit the document file at the path above in place and summarize what changed. "
         "Do not ask for additional confirmation beyond your own configured permission rules."
     )
@@ -72,6 +101,41 @@ def image_attachments(docs, doc_path: str) -> list[str]:
     return [str(p.resolve())] if p.is_file() else []
 
 
+MAX_ATTACHMENT_BYTES = 12 * 1024 * 1024
+
+
+def decode_image(data_url: str) -> tuple[bytes, str]:
+    """A data: URL from the browser (page render, area crop, embedded picture) → (bytes, extension). PNG/JPEG/GIF/WebP only."""
+    import base64
+
+    m = re.match(r"^data:image/(png|jpeg|jpg|gif|webp);base64,(.+)$", data_url or "", re.S)
+    if not m:
+        raise bad_request("image must be a data:image/(png|jpeg|gif|webp);base64 URL", "INVALID_IMAGE")
+    try:
+        raw = base64.b64decode(m.group(2), validate=True)
+    except ValueError:
+        raise bad_request("image is not valid base64", "INVALID_IMAGE")
+    if len(raw) > MAX_ATTACHMENT_BYTES:
+        raise bad_request(f"image is larger than {MAX_ATTACHMENT_BYTES // (1024 * 1024)} MiB", "IMAGE_TOO_LARGE")
+    magic = {"png": b"\x89PNG", "jpeg": b"\xff\xd8", "jpg": b"\xff\xd8", "gif": b"GIF8", "webp": b"RIFF"}[m.group(1)]
+    if not raw.startswith(magic):
+        raise bad_request("image content does not match its type", "INVALID_IMAGE")
+    return raw, ("jpg" if m.group(1) == "jpeg" else m.group(1))
+
+
+def attachments_dir(snapshots_dir: Path, thread_id: str) -> Path:
+    return snapshots_dir / "attachments" / thread_id
+
+
+def thread_attachments(snapshots_dir: Path, t: Thread) -> list[str]:
+    """Paths of the images stored with a discussion (sent with every turn of it)."""
+    if not t.target_json:
+        return []
+    names = json.loads(t.target_json).get("attachments") or []
+    d = attachments_dir(snapshots_dir, t.id)
+    return [str(d / n) for n in names if (d / n).is_file()]
+
+
 # ---------------------------------------------------------------------- service
 
 
@@ -83,6 +147,7 @@ def thread_dict(t: Thread, messages: list[Message], jobs_by_message: dict[str, J
         "anchor": anchoring.Anchor(t.cur_version_sha256, t.cur_quote, t.cur_prefix, t.cur_suffix, t.cur_start, t.cur_end, t.cur_heading).as_dict(),
         "anchor_state": t.anchor_state,
         "diff": json.loads(t.diff_json) if t.diff_json else None,
+        "target": json.loads(t.target_json) if t.target_json else None,
         "last_session_id": t.last_session_id,
         "created_at": iso(t.created_at),
         "updated_at": iso(t.updated_at),
@@ -135,8 +200,8 @@ class ThreadService:
                         if j:
                             jobs[m.id] = j
                 d = thread_dict(t, msgs, jobs)
-                if t.anchor_state == "document":
-                    d["anchor_state"] = "document"
+                if t.anchor_state in ("document", "page"):
+                    d["anchor_state"] = t.anchor_state
                     d["current_start"] = None
                     d["current_end"] = None
                 elif model is not None and sha is not None:
@@ -189,7 +254,18 @@ class ThreadService:
                            current_sha256=sha, submitted_sha256=body.version_sha256)
         if body.quote == doc.path and body.start == body.end == 0:
             body.whole_document = True  # older clients: "Ask about this PDF" sent the path as the quote
-        if body.whole_document:
+        target: dict[str, Any] | None = None
+        image: tuple[bytes, str] | None = decode_image(body.image) if body.image else None
+        if body.target is not None:
+            # a page / slide / area / picture of a laid-out document (or a picture in the text view): no text anchor
+            target = {"kind": body.target.kind, "page": body.target.page, "unit": body.target.unit,
+                      "rect": body.target.rect, "label": (body.target.label or None)}
+            if body.target.kind in ("page", "area", "image") and image is None:
+                raise bad_request(f"a question about a {body.target.kind} needs its image", "IMAGE_REQUIRED")
+            body.whole_document = True
+            body.quote = body.quote[:20000] if body.target.kind == "text" else ""
+            body.prefix, body.suffix, body.start, body.end, body.heading = "", "", 0, 0, None
+        elif body.whole_document:
             # a question about the document as a whole: no passage, nothing to validate or re-anchor later
             body.quote, body.prefix, body.suffix, body.start, body.end, body.heading = "", "", "", 0, 0, None
         err = None if body.whole_document else anchoring.validate_offsets(model.text, body.start, body.end, body.quote)
@@ -216,18 +292,32 @@ class ThreadService:
                 orig_version_sha256=sha, orig_quote=body.quote, orig_prefix=body.prefix, orig_suffix=body.suffix,
                 orig_start=body.start, orig_end=body.end, orig_heading=heading,
                 cur_version_sha256=sha, cur_quote=body.quote, cur_prefix=body.prefix, cur_suffix=body.suffix,
-                cur_start=body.start, cur_end=body.end, cur_heading=heading, anchor_state="attached" if not body.whole_document else "document",
+                cur_start=body.start, cur_end=body.end, cur_heading=heading,
+                anchor_state="page" if target else ("document" if body.whole_document else "attached"),
                 last_session_id=sess.id,
             )
             s.add(t)
             s.flush()
             s.add(Message(id=user_msg_id, thread_id=thread_id, session_id=sess.id, role="user", content=body.question, status="completed"))
             s.add(Message(id=agent_msg_id, thread_id=thread_id, session_id=sess.id, role="agent", content="", status="queued"))
+        attach = image_attachments(self.docs, doc.path)
+        if target is not None:
+            if image is not None:
+                d = attachments_dir(self.docs.snapshots_dir, thread_id)
+                d.mkdir(parents=True, exist_ok=True)
+                name = f"{target['kind']}.{image[1]}"
+                (d / name).write_bytes(image[0])
+                target["attachments"] = [name]
+                attach = attach + [str(d / name)]
+            with self.ctx.db.write() as s:
+                tt = s.get(Thread, thread_id)
+                if tt:
+                    tt.target_json = json.dumps(target, ensure_ascii=False)
         prompt = build_prompt(question=body.question, quote=body.quote, document_path=doc.path, sha256=sha, heading=heading,
-                              prior=None, versions=self.docs.list_versions(doc_id), whole_document=body.whole_document)
+                              prior=None, versions=self.docs.list_versions(doc_id), whole_document=body.whole_document, target=target)
         job_id = self.jobs.enqueue_turn(session_id=sess.id, thread_id=thread_id, prompt=prompt,
                                         context={"document_id": doc_id, "document_path": doc.path, "sha256": sha, "quote": body.quote,
-                                                 "attachments": image_attachments(self.docs, doc.path)},
+                                                 "attachments": attach},
                                         agent_message_id=agent_msg_id)
         with self.ctx.db.write() as s:
             m = s.get(Message, agent_msg_id)
@@ -266,10 +356,11 @@ class ThreadService:
                 tt.last_session_id = sess.id
                 tt.updated_at = utcnow()
         prompt = build_prompt(question=body.text, quote=t.cur_quote, document_path=doc.path, sha256=sha, heading=t.cur_heading,
-                              prior=prior, versions=self.docs.list_versions(doc.id), whole_document=t.anchor_state == "document")
+                              prior=prior, versions=self.docs.list_versions(doc.id), whole_document=t.anchor_state in ("document", "page"),
+                              target=json.loads(t.target_json) if t.target_json else None)
         job_id = self.jobs.enqueue_turn(session_id=sess.id, thread_id=thread_id, prompt=prompt,
                                         context={"document_id": doc.id, "document_path": doc.path, "sha256": sha, "quote": t.cur_quote,
-                                                 "attachments": image_attachments(self.docs, doc.path)},
+                                                 "attachments": image_attachments(self.docs, doc.path) + thread_attachments(self.docs.snapshots_dir, t)},
                                         agent_message_id=agent_msg_id)
         with self.ctx.db.write() as s:
             m = s.get(Message, agent_msg_id)
@@ -358,6 +449,14 @@ class ThreadService:
 # ---------------------------------------------------------------------- schemas
 
 
+class TargetIn(BaseModel):
+    kind: Literal["text", "page", "area", "image"]
+    page: int | None = Field(None, ge=1, le=100000)
+    unit: Literal["page", "slide"] = "page"
+    rect: list[float] | None = Field(None, min_length=4, max_length=4)  # x, y, w, h as fractions of the page
+    label: str | None = Field(None, max_length=200)
+
+
 class ThreadCreateIn(BaseModel):
     version_sha256: str
     quote: str = Field("", max_length=20000)
@@ -370,6 +469,10 @@ class ThreadCreateIn(BaseModel):
     session_id: str | None = None  # app session id, or "new"
     # A discussion about the document as a whole (no passage): used for PDFs and other formats without text anchors.
     whole_document: bool = False
+    # A page / slide / area / picture of a laid-out document (PDF, Office layout view) or a picture in a text view.
+    target: "TargetIn | None" = None
+    # data:image/...;base64 — the page render, area crop or picture (required for page/area/image targets)
+    image: str | None = Field(None, max_length=17_000_000)
 
 
 class MessageIn(BaseModel):
@@ -404,6 +507,23 @@ class PermissionDecisionIn(BaseModel):
 @router.get("/documents/{doc_id}/threads")
 def list_threads(doc_id: str, ctx: AppContext = Depends(require_auth)):
     return ThreadService(ctx).list_threads(doc_id)
+
+
+@router.get("/threads/{thread_id}/attachments/{name}")
+def get_attachment(thread_id: str, name: str, ctx: AppContext = Depends(require_auth)):
+    """An image stored with a discussion (page render, area crop, picture): shown as a thumbnail in the panel."""
+    from fastapi.responses import FileResponse
+
+    if not re.fullmatch(r"[a-z]+\.(png|jpg|gif|webp)", name):
+        raise not_found("attachment not found", "ATTACHMENT_NOT_FOUND")
+    with ctx.db.read() as s:
+        t = s.get(Thread, thread_id)
+    if t is None or name not in (json.loads(t.target_json).get("attachments", []) if t.target_json else []):
+        raise not_found("attachment not found", "ATTACHMENT_NOT_FOUND")
+    p = attachments_dir(ctx.documents.snapshots_dir, thread_id) / name
+    if not p.is_file():
+        raise not_found("attachment not found", "ATTACHMENT_NOT_FOUND")
+    return FileResponse(p, headers={"Cache-Control": "private, max-age=86400", "X-Content-Type-Options": "nosniff"})
 
 
 @router.post("/documents/{doc_id}/threads", status_code=201)

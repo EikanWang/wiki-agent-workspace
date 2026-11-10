@@ -126,9 +126,12 @@ class Thread(Base):
     cur_start: Mapped[int] = mapped_column(Integer, nullable=False)
     cur_end: Mapped[int] = mapped_column(Integer, nullable=False)
     cur_heading: Mapped[str | None] = mapped_column(Text, nullable=True)
-    anchor_state: Mapped[str] = mapped_column(String(16), default="attached")  # attached|moved|ambiguous|orphaned
+    anchor_state: Mapped[str] = mapped_column(String(16), default="attached")  # attached|moved|ambiguous|orphaned|document|page
     # set for comments made in the diff review: {base, target, side, line_no, line_text, hunk}
     diff_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # discussions about a page / slide / area of a laid-out document (PDF, Office layout view):
+    # {kind: text|page|area|image, page, unit: page|slide, rect, attachments: [file names]}
+    target_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_session_id: Mapped[str | None] = mapped_column(ForeignKey("agent_sessions.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)

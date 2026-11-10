@@ -266,7 +266,17 @@ export default function DiscussionPanel({
       </div>
       <div className="thread-body">
         <section className="quote-box">
-          {thread.anchor_state === "document" ? (
+          {thread.anchor_state === "page" ? (
+            <div data-testid="thread-target">
+              <div className="label">{targetLabel(thread.target)} <AnchorBadge state={thread.anchor_state} /></div>
+              {thread.target?.attachments?.map((n) => (
+                <a key={n} href={`/api/v1/threads/${thread.id}/attachments/${n}`} target="_blank" rel="noreferrer" title="Open the attached image">
+                  <img className="thread-attachment" src={`/api/v1/threads/${thread.id}/attachments/${n}`} alt="attached to this discussion" data-testid="thread-attachment" />
+                </a>
+              ))}
+              {thread.anchor.quote && <blockquote data-testid="thread-quote">{thread.anchor.quote}</blockquote>}
+            </div>
+          ) : thread.anchor_state === "document" ? (
             <div className="label" data-testid="thread-whole-document">About the whole document <AnchorBadge state={thread.anchor_state} /></div>
           ) : (
             <>
@@ -370,7 +380,7 @@ export function statusLabel(s: string): string {
 }
 
 function AnchorBadge({ state }: { state: string }) {
-  const label = { attached: "attached", moved: "moved", ambiguous: "ambiguous", orphaned: "orphaned", document: "whole document" }[state] ?? state;
+  const label = { attached: "attached", moved: "moved", ambiguous: "ambiguous", orphaned: "orphaned", document: "whole document", page: "attached image" }[state] ?? state;
   return <span className={`chip anchor ${state}`} data-testid="anchor-state">{label}</span>;
 }
 
@@ -589,7 +599,20 @@ function FlatPanel({ threads, sessions, sessionsById, defaultSessionId, liveJob,
 }
 
 /** How a discussion is named in lists: its quoted passage, or "whole document". */
-function quoteLabel(t: { anchor_state: string; anchor: { quote: string } }, max: number): string {
+function targetLabel(t: Thread["target"]): string {
+  if (!t) return "";
+  const where = t.page ? `${t.unit === "slide" ? "Slide" : "Page"} ${t.page}` : "";
+  if (t.kind === "page") return `📑 ${where}`;
+  if (t.kind === "area") return `🔲 Area of ${where.toLowerCase()}`;
+  if (t.kind === "image") return `🖼 Image${where ? ` · ${where.toLowerCase()}` : ""}`;
+  return `📑 ${where}`;
+}
+
+function quoteLabel(t: { anchor_state: string; anchor: { quote: string }; target?: Thread["target"] }, max: number): string {
+  if (t.anchor_state === "page") {
+    const q = t.anchor.quote;
+    return targetLabel(t.target) + (q ? ` · "${q.slice(0, max)}${q.length > max ? "…" : ""}"` : "");
+  }
   if (t.anchor_state === "document" || !t.anchor.quote) return "📄 whole document";
   const q = t.anchor.quote;
   return `"${q.slice(0, max)}${q.length > max ? "…" : ""}"`;

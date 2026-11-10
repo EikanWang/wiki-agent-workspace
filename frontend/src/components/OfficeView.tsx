@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { ApiError, get, getWorkspace } from "../api";
+import { ApiError, Thread, get, getWorkspace } from "../api";
+import PdfView, { PageAsk } from "./PdfView";
 
 interface RenderState {
   state: "ready" | "pending" | "failed" | "unavailable";
@@ -21,7 +22,16 @@ const qs = (path: string, extra: Record<string, string> = {}) => {
  * Layout view of an Office file: the server renders it to PDF with LibreOffice (cached per content), the browser's
  * PDF viewer shows it, so pages, slides and diagrams look as their authors made them (zoom, page navigation, search).
  */
-export default function OfficeView({ path, sha256, onShowText }: { path: string; sha256: string; onShowText: (() => void) | null }) {
+export default function OfficeView({ path, sha256, onShowText, unit, threads, activeThreadId, onAsk, onOpenThread }: {
+  path: string;
+  sha256: string;
+  onShowText: (() => void) | null;
+  unit: "page" | "slide";
+  threads: Thread[];
+  activeThreadId: string | null;
+  onAsk: (a: PageAsk) => void;
+  onOpenThread: (id: string) => void;
+}) {
   const [st, setSt] = useState<RenderState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const timer = useRef<number | undefined>(undefined);
@@ -57,10 +67,10 @@ export default function OfficeView({ path, sha256, onShowText }: { path: string;
     return (
       <div className="pdf-view office-view" data-testid="office-view" data-state="ready">
         <div className="muted small office-note">
-          Original layout, rendered by LibreOffice. Use the viewer to zoom, jump to a page or search.{" "}
+          Original layout, rendered by LibreOffice. Select text, or ask about a whole {unit} or an area of it.{" "}
           <a href={download} download={name}>Download the original</a>
         </div>
-        <iframe title={`${path} (layout)`} src={`/api/v1/office/pdf?${qs(path, { k: st.key ?? "" })}`} data-testid="office-pdf" />
+        <PdfView url={`/api/v1/office/pdf?${qs(path, { k: st.key ?? "" })}`} unit={unit} threads={threads} activeThreadId={activeThreadId} onAsk={onAsk} onOpenThread={onOpenThread} testId="office-pdf" />
       </div>
     );
   }

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { COMPOSER_HINT, composerKeyDown } from "./keys";
 import Editor from "./Editor";
 import OfficeView from "./OfficeView";
+import PdfView, { PageAsk } from "./PdfView";
 import { AgentSession, ApiError, OpenDocument, ReviewMark, Thread, getWorkspace, put } from "../api";
 import { renderMarkdown, sanitizeHtml, slugify } from "../markdown";
 import { SelectionAnchor, TextModel, anchorFromSelection, buildTextModel, makeAnchor, rangeFromOffsets, resolveAnchor, wholeDocument } from "../textmodel";
@@ -91,9 +92,73 @@ export default function Reader(props: ReaderProps) {
       threadDoc.current = doc.document_id; // restored with the document: keep the chosen view
       return;
     }
-    if (activeThreadId && isOffice && hasText && localView === "layout") setLocalView("text");
+    const t = threads.find((x) => x.id === activeThreadId);
+    // page / slide / area discussions live in the layout view; passages and text-view pictures in the text view
+    const inLayout = t?.anchor_state === "page" && t.target?.label !== "text view";
+    if (activeThreadId && isOffice && hasText) {
+      if (inLayout && localView !== "layout") setLocalView("layout");
+      else if (!inLayout && t?.anchor_state !== "document" && localView === "layout") setLocalView("text");
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeThreadId]);
+  const slideDeck = /\.(pptx|ppt|pps|ppsx|odp|key)$/i.test(doc.path);
+  // text view: floating "Ask about this image / slide" buttons (outside the article, so they never enter the text model)
+  const [hoverHit, setHoverHit] = useState<{ kind: "image" | "slide"; el: HTMLElement; x: number; y: number } | null>(null);
+  const onBodyMouseOver = (e: React.MouseEvent) => {
+    const art = containerRef.current;
+    const sc = scrollRef.current;
+    if (!art || !sc || editing || layout) return;
+    const t = e.target as HTMLElement;
+    if (!art.contains(t)) return;
+    const img = t.closest("img");
+    const slide = t.closest<HTMLElement>("section.slide");
+    const el = (img as HTMLElement | null) ?? slide;
+    if (!el) {
+      if (hoverHit) setHoverHit(null);
+      return;
+    }
+    if (el === hoverHit?.el) return;
+    const r = el.getBoundingClientRect();
+    const b = sc.getBoundingClientRect();
+    setHoverHit({ kind: img ? "image" : "slide", el, x: r.right - b.left + sc.scrollLeft, y: r.top - b.top + sc.scrollTop });
+  };
+  const slideNo = (el: Element | null): number | null => {
+    const sec = el?.closest("section.slide");
+    if (!sec || !containerRef.current) return null;
+    return Array.from(containerRef.current.querySelectorAll("section.slide")).indexOf(sec) + 1 || null;
+  };
+  const askHover = async () => {
+    const h = hoverHit;
+    if (!h) return;
+    setHoverHit(null);
+    const unit: "page" | "slide" = doc.format === "pptx" ? "slide" : "page";
+    if (h.kind === "image") {
+      const img = h.el as HTMLImageElement;
+      let url = img.src;
+      if (!url.startsWith("data:")) {
+        // a picture referenced by URL (Markdown): copy it into a data: URL
+        const c = document.createElement("canvas");
+        c.width = img.naturalWidth;
+        c.height = img.naturalHeight;
+        c.getContext("2d")!.drawImage(img, 0, 0);
+        url = c.toDataURL("image/png");
+      }
+      setSheet({ quote: "", prefix: "", suffix: "", start: 0, end: 0, heading: null, image: url,
+        target: { kind: "image", page: doc.format === "pptx" ? slideNo(img) : null, unit, label: "text view" } });
+      return;
+    }
+    // a whole slide: an anchored discussion on all of its text (highlighted, follows edits like any passage)
+    const sel = window.getSelection();
+    if (!sel) return;
+    const range = document.createRange();
+    range.selectNodeContents(h.el);
+    sel.removeAllRanges();
+    sel.addRange(range);
+    const a = computeSelection();
+    sel.removeAllRanges();
+    if (a) setSheet(a);
+  };
+  const askPage = (a: PageAsk) => setSheet({ quote: a.quote, prefix: "", suffix: "", start: 0, end: 0, heading: null, target: a.target, image: a.image });
   const fmtLabel = doc.format === "office" || doc.format === "image" ? (doc.path.split(".").pop() ?? doc.format).toUpperCase() : doc.format === "visio" ? "VISIO" : doc.format.toUpperCase();
 
   const html = useMemo(() => {
@@ -569,7 +634,18 @@ export default function Reader(props: ReaderProps) {
           <button className="icon-btn" onClick={() => setFragmentMissing(null)} aria-label="Dismiss">×</button>
         </div>
       )}
-      <div className="reader-body" ref={scrollRef}>
+      <div className="reader-body" ref={scrollRef} onMouseOver={onBodyMouseOver} onMouseLeave={() => setHoverHit(null)}>
+        {hoverHit && (
+          <button
+            className="btn small hover-ask"
+            style={{ left: hoverHit.x, top: hoverHit.y }}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => void askHover()}
+            data-testid={hoverHit.kind === "image" ? "ask-image" : "ask-slide"}
+          >
+            {hoverHit.kind === "image" ? "Ask about this image" : `Ask about this slide`}
+          </button>
+        )}
         {headings.length > 1 && !editing && !layout && (
           <nav className={`toc ${tocOpen ? "" : "collapsed"}`} data-testid="toc">
             <button className="toc-toggle" onClick={onToggleToc} title={tocOpen ? "Fold outline" : "Unfold outline"} data-testid="toc-toggle">
@@ -602,7 +678,10 @@ export default function Reader(props: ReaderProps) {
             <button className="icon-btn" onClick={() => setTextHint(false)} aria-label="Dismiss">×</button>
           </div>
         )}
-        {isOffice && layout && <OfficeView path={doc.path} sha256={doc.sha256} onShowText={hasText ? () => setView("text") : null} />}
+        {isOffice && layout && (
+          <OfficeView path={doc.path} sha256={doc.sha256} onShowText={hasText ? () => setView("text") : null}
+            unit={slideDeck ? "slide" : "page"} threads={threads} activeThreadId={activeThreadId} onAsk={askPage} onOpenThread={onOpenThread} />
+        )}
         {doc.format === "image" ? (
           <div className={`image-view ${imgZoom ? "zoomed" : ""}`} data-testid="image-view">
             <img
@@ -615,8 +694,14 @@ export default function Reader(props: ReaderProps) {
           </div>
         ) : doc.format === "pdf" ? (
           <div className="pdf-view" data-testid="pdf-view">
-            <div className="muted small">PDF shown with the browser's viewer. Discussions on PDFs attach to the document (no text anchors); use the discussion panel to ask about it.</div>
-            <iframe title={doc.path} src={`/api/v1/raw?path=${encodeURIComponent(doc.path)}${getWorkspace() ? `&workspace=${encodeURIComponent(getWorkspace()!)}` : ""}`} />
+            <PdfView
+              url={`/api/v1/raw?path=${encodeURIComponent(doc.path)}${getWorkspace() ? `&workspace=${encodeURIComponent(getWorkspace()!)}` : ""}&v=${doc.sha256.slice(0, 12)}`}
+              unit="page"
+              threads={threads}
+              activeThreadId={activeThreadId}
+              onAsk={askPage}
+              onOpenThread={onOpenThread}
+            />
           </div>
         ) : (
           <article className="markdown-body" ref={containerRef} data-testid="markdown-body" style={editing || layout ? { display: "none" } : undefined} />
@@ -745,10 +830,13 @@ function SelectionPopover({ anchor, style, sessions, defaultSessionId, defaultPr
   return (
     <div className={`sel-popover ${className ?? ""}`} style={style} data-testid="selection-popover" onMouseDown={(e) => e.stopPropagation()}>
       <div className="sel-head">
-        <span>{anchor.whole_document ? "Ask about the whole document" : "Ask about the selected text"}</span>
+        <span>{targetTitle(anchor)}</span>
         <button className="icon-btn" onClick={onClose} aria-label="Close">×</button>
       </div>
-      {anchor.whole_document ? (
+      {anchor.image && <img className="sel-image" src={anchor.image} alt="What you are asking about" data-testid="selection-image" />}
+      {anchor.target && !anchor.quote ? (
+        <div className="sel-whole muted small" data-testid="selection-target">The image above is attached to your question, so the agent sees it.</div>
+      ) : anchor.whole_document ? (
         <div className="sel-whole muted small" data-testid="selection-whole">The agent reads the whole file; no passage is attached to this discussion.</div>
       ) : (
       <div className="sel-quote-wrap">
@@ -772,7 +860,7 @@ function SelectionPopover({ anchor, style, sessions, defaultSessionId, defaultPr
       <textarea
         ref={taRef}
         className="sel-input"
-        placeholder={`Your question about ${anchor.whole_document ? "the document" : "the selected text"} (${COMPOSER_HINT})`}
+        placeholder={`Your question about ${anchor.target ? targetTitle(anchor).replace(/^Ask about /, "") : anchor.whole_document ? "the document" : "the selected text"} (${COMPOSER_HINT})`}
         value={question}
         onChange={(e) => setQuestion(e.target.value)}
         onKeyDown={(e) => composerKeyDown(e, () => void send(), setQuestion, onClose)}
@@ -795,8 +883,8 @@ function SelectionPopover({ anchor, style, sessions, defaultSessionId, defaultPr
       {error && <div className="error-text" role="alert" data-testid="selection-error">{error}</div>}
       <div className="sel-actions">
         <button className="btn primary" onClick={() => void send()} disabled={busy || !question.trim()} data-testid="selection-send">{busy ? "Sending…" : "Send"}</button>
-        {!anchor.whole_document && <button className="btn" onClick={onMark} title="Explicitly mark as reviewed; scrolling never marks automatically">Mark reviewed</button>}
-        {onReanchor && !anchor.whole_document && <button className="btn" onClick={onReanchor}>Reanchor current discussion here</button>}
+        {!anchor.whole_document && !anchor.target && <button className="btn" onClick={onMark} title="Explicitly mark as reviewed; scrolling never marks automatically">Mark reviewed</button>}
+        {onReanchor && !anchor.whole_document && !anchor.target && <button className="btn" onClick={onReanchor}>Reanchor current discussion here</button>}
       </div>
     </div>
   );
@@ -840,4 +928,16 @@ function CheckIcon() {
       <path fill="currentColor" d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z" />
     </svg>
   );
+}
+
+/** Header of the question box: what the question is about. */
+function targetTitle(a: SelectionAnchor): string {
+  const t = a.target;
+  if (!t) return a.whole_document ? "Ask about the whole document" : "Ask about the selected text";
+  const U = t.unit === "slide" ? "slide" : "page";
+  const where = t.page ? `${U} ${t.page}` : "";
+  if (t.kind === "page") return `Ask about ${where}`;
+  if (t.kind === "area") return `Ask about an area of ${where}`;
+  if (t.kind === "image") return `Ask about this image${where ? ` (${where})` : ""}`;
+  return `Ask about the selected text${where ? ` (${where})` : ""}`;
 }

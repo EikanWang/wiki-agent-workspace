@@ -138,6 +138,17 @@ Anchors survive edits: if the passage moves, the discussion follows; if the text
 discussion is flagged *orphaned* / *ambiguous* and keeps the original quote — use **Reanchor manually** to attach it
 to the new text. **Mark reviewed** marks a passage reviewed; it turns *needs review* when that text changes.
 
+**Asking about text, a page, a slide or a picture (PDF, Word, PowerPoint, Visio).** PDFs and the *Layout* view
+of Office files are shown by the app's own viewer (zoom with − Fit ＋):
+- **Select text** on a page → **Ask about selection** (the page number goes with the question).
+- **Ask about this page** / **Ask about this slide** above each page sends an image of it to the agent.
+- **Select area**, then drag a rectangle around a figure, diagram or table → only that part is sent as an image.
+- A page with discussions shows 💬 *n*; clicking a page/slide discussion in the panel scrolls to it. The panel
+  names them (*📑 Slide 3*, *🔲 Area of page 2*) and shows the attached image.
+
+In the *Text* view, hover a picture for **Ask about this image** and, in PowerPoint, a slide for **Ask about this
+slide** (a normal anchored discussion on the whole slide's text). Selecting text works as everywhere.
+
 **Asking about the whole document.** The discussions panel has a question box at the top (*Ask about this
 document…*, also in Flat mode; **＋ New question** from an open discussion brings you back to it). Type and press
 Enter: the agent reads the whole file. **Ask about this document** in the document header does the same. Works for

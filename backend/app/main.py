@@ -274,7 +274,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not request.url.path.startswith("/api/"):
             resp.headers.setdefault("Content-Security-Policy",
                                     "default-src 'self'; img-src 'self' data: blob: https: http:; style-src 'self' 'unsafe-inline'; "
-                                    "script-src 'self'; connect-src 'self'; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'")
+                                    "script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'")
         return resp
 
     app.add_middleware(IdempotencyMiddleware, db=db)

@@ -198,6 +198,10 @@ export interface SelectionAnchor {
   heading: string | null;
   /** a question about the document as a whole: no passage (quote empty) */
   whole_document?: boolean;
+  /** a page / slide / area / picture of a laid-out document (PDF.js view) or a picture in the text view */
+  target?: { kind: "text" | "page" | "area" | "image"; page: number | null; unit: "page" | "slide"; rect?: number[] | null; label?: string | null };
+  /** data: URL of the page render / area crop / picture sent with the question */
+  image?: string | null;
 }
 
 /** The "anchor" of a question about the whole document. */

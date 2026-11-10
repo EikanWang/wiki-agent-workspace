@@ -524,6 +524,10 @@ class DocumentService:
                     s.query(JobEvent).filter(JobEvent.job_id.in_(job_ids)).delete(synchronize_session=False)
                     s.query(Job).filter(Job.id.in_(job_ids)).delete(synchronize_session=False)
                 s.query(Thread).filter(Thread.id.in_(thread_ids)).delete(synchronize_session=False)
+                import shutil as _shutil
+
+                for tid in thread_ids:  # images stored with page/slide/area discussions
+                    _shutil.rmtree(self.snapshots_dir / "attachments" / tid, ignore_errors=True)
             preview_job_ids = [p.job_id for p in s.query(Preview).filter_by(document_id=doc_id).all()]
             snapshot_refs = [p.proposed_snapshot_ref for p in s.query(Preview).filter_by(document_id=doc_id).all() if p.proposed_snapshot_ref]
             s.query(Preview).filter_by(document_id=doc_id).delete(synchronize_session=False)

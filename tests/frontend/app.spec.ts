@@ -1354,17 +1354,14 @@ prs.save(${JSON.stringify(path.join(ws, "docs", "layout-deck.pptx"))})
     const view = page.getByTestId("office-view");
     await expect(page.getByTestId("office-view-layout")).toHaveAttribute("aria-selected", "true"); // default
     await expect(view).toHaveAttribute("data-state", "ready", { timeout: 60000 });
-    const src = await page.getByTestId("office-pdf").getAttribute("src");
-    const pdf = await page.request.get(src!);
+    // the in-page viewer (PDF.js) loads the rendered PDF and draws its slides
+    const viewer = page.getByTestId("office-pdf");
+    await expect(viewer).toHaveAttribute("data-pages", "1", { timeout: 30000 });
+    await expect(viewer.locator('[data-page="1"]')).toHaveAttribute("data-rendered", "true", { timeout: 15000 });
+    await expect(viewer.locator(".textLayer")).toContainText("Layout deck"); // selectable text of the slide
+    const pdf = await page.request.get(`/api/v1/office/pdf?path=${encodeURIComponent("docs/layout-deck.pptx")}`);
     expect(pdf.status()).toBe(200);
     expect(pdf.headers()["content-type"]).toBe("application/pdf");
-    expect(pdf.headers()["x-frame-options"]).toBe("SAMEORIGIN"); // the reader's frame may show it
-    // and the frame really loads it: a refused frame never fires "load" with a PDF response
-    const frameResp = page.waitForResponse((r) => r.url().includes("/api/v1/office/pdf"));
-    await page.getByTestId("office-pdf").evaluate((f: HTMLIFrameElement) => { f.src = f.src; });
-    const fr = await frameResp;
-    expect(fr.status()).toBe(200);
-    expect(fr.headers()["x-frame-options"]).not.toBe("DENY");
     expect((await pdf.body()).subarray(0, 4).toString()).toBe("%PDF");
     await expect(page.getByTestId("markdown-body")).toBeHidden();
     // Ask in the layout view: passages are picked in the text view
@@ -1650,5 +1647,144 @@ test("ask directly in the discussion panel about the open document, incl. an ima
     await page.getByTestId("mode-individual").click();
   } finally {
     fs.rmSync(path.join(ws, "docs", "pixel.png"), { force: true });
+  }
+});
+
+/** Select the text of the PDF.js text layer that contains `needle` (first page that has it). */
+async function selectPdfText(page: Page, needle: string) {
+  const layer = page.locator(".textLayer", { hasText: needle }).first();
+  await expect(layer).toBeVisible({ timeout: 15000 });
+  const span = layer.locator("span", { hasText: needle }).first();
+  await span.evaluate((el, n) => {
+    const t = el.firstChild!;
+    const i = (t.textContent ?? "").indexOf(n);
+    const r = document.createRange();
+    r.setStart(t, i);
+    r.setEnd(t, i + n.length);
+    const s = window.getSelection()!;
+    s.removeAllRanges();
+    s.addRange(r);
+  }, needle);
+  const b = (await span.boundingBox())!;
+  await page.mouse.move(b.x + 5, b.y + b.height / 2);
+  await page.mouse.up(); // the viewer reacts to mouseup
+  await span.dispatchEvent("mouseup", { bubbles: true, clientX: b.x + 5, clientY: b.y + b.height / 2 });
+}
+
+test("PDF (PDF.js): ask about selected text, a whole page, an area — pictures go with the question", async ({ page }) => {
+  await login(page);
+  const ws = workspaceDir();
+  const cp = require("child_process") as typeof import("child_process");
+  const py = path.resolve(__dirname, "../../.venv/bin/python");
+  const pdf = path.join(ws, "docs", "spec.pdf");
+  cp.execFileSync(py, [path.resolve(__dirname, "../fixtures/make_pdf.py"), pdf, "Rasterizer throughput is two quads", "Second page about caches"]);
+  try {
+    await page.getByTestId("tree-refresh").click();
+    await expect(page.getByTestId("tree-refresh")).toHaveAttribute("data-spinning", "false");
+    const dir = page.getByTestId("tree-root").first().locator(".tree-row.dir", { hasText: "docs" }).first();
+    if ((await page.getByTestId("tree-file-docs/spec.pdf").count()) === 0) await dir.click();
+    await page.getByTestId("tree-file-docs/spec.pdf").locator("button.tree-main").click();
+    const viewer = page.getByTestId("pdfjs-view");
+    await expect(viewer).toHaveAttribute("data-pages", "2", { timeout: 20000 });
+    if ((await page.getByTestId("mode-individual").count()) > 0) await page.getByTestId("mode-individual").click();
+    // 1) selected text on page 1
+    await selectPdfText(page, "throughput");
+    await page.getByTestId("pdfjs-ask-selection").click();
+    await expect(page.locator(".sel-head")).toContainText("Ask about the selected text (page 1)");
+    await expect(page.getByTestId("selection-quote")).toHaveText("throughput");
+    await page.getByTestId("selection-question").fill("What is meant here?");
+    await page.getByTestId("selection-send").click();
+    await expect(page.locator('[data-testid="message-agent"][data-status="completed"]').last()).toContainText("What is meant here?", { timeout: 20000 });
+    await expect(page.getByTestId("thread-target")).toContainText("Page 1");
+    // 2) the whole page 2, as a picture
+    const p2 = viewer.locator('[data-page="2"]');
+    await p2.scrollIntoViewIfNeeded();
+    await expect(p2).toHaveAttribute("data-rendered", "true", { timeout: 15000 });
+    await p2.getByTestId("pdfjs-ask-page").click();
+    await expect(page.locator(".sel-head")).toContainText("Ask about page 2");
+    await expect(page.getByTestId("selection-image")).toBeVisible();
+    await page.getByTestId("selection-question").fill("Summarize this page");
+    await page.getByTestId("selection-send").click();
+    await expect(page.locator('[data-testid="message-agent"][data-status="completed"]').last()).toContainText("Summarize this page", { timeout: 20000 });
+    const thumb = page.getByTestId("thread-attachment");
+    await expect.poll(() => thumb.evaluate((el: HTMLImageElement) => el.complete && el.naturalWidth > 100)).toBe(true);
+    await expect(p2.getByTestId("pdfjs-page-threads")).toHaveText("💬 1"); // the page shows its discussion
+    // 3) an area of page 1
+    const p1 = viewer.locator('[data-page="1"]');
+    await p1.scrollIntoViewIfNeeded();
+    await p1.getByTestId("pdfjs-select-area").click();
+    const area = p1.getByTestId("pdfjs-area");
+    const b = (await area.boundingBox())!;
+    await page.mouse.move(b.x + b.width * 0.1, b.y + b.height * 0.05);
+    await page.mouse.down();
+    await page.mouse.move(b.x + b.width * 0.6, b.y + b.height * 0.2, { steps: 5 });
+    await page.mouse.up();
+    await expect(page.locator(".sel-head")).toContainText("Ask about an area of page 1");
+    await expect(page.getByTestId("selection-image")).toBeVisible();
+    await page.getByTestId("selection-question").fill("What is this figure?");
+    await page.getByTestId("selection-send").click();
+    await expect(page.locator('[data-testid="message-agent"][data-status="completed"]').last()).toContainText("What is this figure?", { timeout: 20000 });
+    await expect(page.getByTestId("thread-target")).toContainText("Area of page 1");
+  } finally {
+    fs.rmSync(pdf, { force: true });
+  }
+});
+
+test("PowerPoint: ask about a slide or a picture (text view) and about a slide in its original layout", async ({ page }) => {
+  await login(page);
+  const ws = workspaceDir();
+  const cp = require("child_process") as typeof import("child_process");
+  const py = path.resolve(__dirname, "../../.venv/bin/python");
+  const png = path.join(ws, "docs", "chart-src.png");
+  fs.writeFileSync(png, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEklEQVR42mP4z8CAFTGMSgwqAABdHcf5TJ11gwAAAABJRU5ErkJggg==", "base64"));
+  const deck = path.join(ws, "docs", "pics.pptx");
+  cp.execFileSync(py, ["-c", `
+from pptx import Presentation
+from pptx.util import Inches
+prs = Presentation()
+s = prs.slides.add_slide(prs.slide_layouts[5]); s.shapes.title.text = "Quarterly chart"
+s.shapes.add_picture(${JSON.stringify(png)}, Inches(2), Inches(2), Inches(3), Inches(3))
+s2 = prs.slides.add_slide(prs.slide_layouts[1]); s2.shapes.title.text = "Plan"; s2.placeholders[1].text_frame.text = "Ship it"
+prs.save(${JSON.stringify(deck)})
+`]);
+  try {
+    await page.getByTestId("tree-refresh").click();
+    await expect(page.getByTestId("tree-refresh")).toHaveAttribute("data-spinning", "false");
+    const dir = page.getByTestId("tree-root").first().locator(".tree-row.dir", { hasText: "docs" }).first();
+    if ((await page.getByTestId("tree-file-docs/pics.pptx").count()) === 0) await dir.click();
+    await page.getByTestId("tree-file-docs/pics.pptx").locator("button.tree-main").click();
+    if ((await page.getByTestId("mode-individual").count()) > 0) await page.getByTestId("mode-individual").click();
+    // Layout: the rendered slides, with a per-slide question
+    await page.getByTestId("office-view-layout").click();
+    const viewer = page.getByTestId("office-pdf");
+    await expect(viewer).toHaveAttribute("data-pages", "2", { timeout: 60000 });
+    const s2 = viewer.locator('[data-page="2"]');
+    await s2.scrollIntoViewIfNeeded();
+    await expect(s2).toHaveAttribute("data-rendered", "true", { timeout: 15000 });
+    await expect(s2.getByTestId("pdfjs-ask-page")).toHaveText("Ask about this slide");
+    await s2.getByTestId("pdfjs-ask-page").click();
+    await expect(page.locator(".sel-head")).toContainText("Ask about slide 2");
+    await page.getByTestId("selection-question").fill("Is this plan realistic?");
+    await page.getByTestId("selection-send").click();
+    await expect(page.locator('[data-testid="message-agent"][data-status="completed"]').last()).toContainText("Is this plan realistic?", { timeout: 20000 });
+    await expect(page.getByTestId("thread-target")).toContainText("Slide 2");
+    // Text view: a whole slide (anchored on its text) and a picture
+    await page.getByTestId("office-view-text").click();
+    const body = page.getByTestId("markdown-body");
+    await body.locator("section.slide").first().locator("h2").hover();
+    await page.getByTestId("ask-slide").click();
+    await expect(page.getByTestId("selection-quote")).toContainText("Slide 1: Quarterly chart");
+    await page.locator(".sheet-backdrop").click({ position: { x: 5, y: 5 } });
+    await body.locator("section.slide img").first().hover();
+    await page.getByTestId("ask-image").click();
+    await expect(page.locator(".sel-head")).toContainText("Ask about this image (slide 1)");
+    await expect(page.getByTestId("selection-image")).toBeVisible();
+    await page.getByTestId("selection-question").fill("What does the chart show?");
+    await page.getByTestId("selection-send").click();
+    await expect(page.locator('[data-testid="message-agent"][data-status="completed"]').last()).toContainText("What does the chart show?", { timeout: 20000 });
+    await expect(page.getByTestId("thread-target")).toContainText("Image");
+  } finally {
+    fs.rmSync(deck, { force: true });
+    fs.rmSync(png, { force: true });
   }
 });

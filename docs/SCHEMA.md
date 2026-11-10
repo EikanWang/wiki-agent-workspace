@@ -140,8 +140,9 @@ is computed at read time and does not overwrite `cur_*`.
 | `orig_start`, `orig_end` | INTEGER | UTF-16 offsets `[start, end)` in the text model of that version. |
 | `orig_heading` | nullable | Nearest preceding heading text. |
 | `cur_version_sha256`, `cur_quote`, `cur_prefix`, `cur_suffix`, `cur_start`, `cur_end`, `cur_heading` | as above | Current anchor (equal to `orig_*` until manually reanchored). |
-| `anchor_state` | `attached` \| `moved` \| `ambiguous` \| `orphaned` | Last stored resolution state (the API recomputes it against the current file on every read). |
+| `anchor_state` | `attached` \| `moved` \| `ambiguous` \| `orphaned` \| `document` \| `page` | Last stored resolution state (the API recomputes it for text anchors on every read). `document`: about the whole document; `page`: about a page, slide, area or picture (see `target_json`); neither is re-anchored. |
 | `diff_json` | JSON, nullable | Set when the discussion was started as a comment in the diff review: `{base, target, side, line_no, line_text, hunk, anchored}`. |
+| `target_json` | JSON, nullable | For `page` discussions: `{kind: text\|page\|area\|image, page, unit: page\|slide, rect: [x,y,w,h] fractions, label, attachments: [file names]}`. The images live in `<state_dir>/snapshots/attachments/<thread id>/` (in backups; removed with the document's history) and are attached to every agent turn of the discussion. |
 | `last_session_id` | FK `agent_sessions.id`, nullable | Session the most recent turn used; replies default to it. |
 | `created_at`, `updated_at` | DATETIME | Lifecycle (`updated_at` moves on reply/reanchor). |
 

@@ -524,3 +524,55 @@ def test_codex_and_opencode_pass_attachments_without_swallowing_the_prompt(tmp_p
         else:
             assert args[-1] == "PROMPT"
     assert P(img).exists()
+
+
+async def test_questions_about_a_page_area_or_picture_with_attached_image(api, workspace, fake_env, settings):
+    """PDF / Office layout view: text on a page, a whole page or slide, an area — the image goes to the agent."""
+    import base64
+
+    png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+    url = "data:image/png;base64," + base64.b64encode(png).decode()
+    (workspace / "docs" / "deck.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
+    d = await api.open_doc("docs/deck.pdf")
+    post = lambda body: api.post(f"/api/v1/documents/{d['document_id']}/threads", json={"version_sha256": d["sha256"], **body})  # noqa: E731
+    # a whole slide, with its picture
+    r = await post({"question": "explain this slide", "target": {"kind": "page", "page": 3, "unit": "slide"}, "image": url})
+    assert r.status_code == 201, r.text
+    tid = r.json()["thread_id"]
+    await api.wait_job(r.json()["job_id"])
+    files = (fake_env / "opencode_last_files").read_text().split()
+    stored = settings.snapshots_dir / "attachments" / tid / "page.png"
+    assert stored.read_bytes() == png and str(stored) in files
+    t = next(x for x in (await api.threads(d["document_id"]))["threads"] if x["id"] == tid)
+    assert t["anchor_state"] == "page" and t["target"]["page"] == 3 and t["target"]["unit"] == "slide" and t["target"]["attachments"] == ["page.png"]
+    # the thumbnail is served
+    img = await api.get(f"/api/v1/threads/{tid}/attachments/page.png")
+    assert img.status_code == 200 and img.content == png
+    assert (await api.get(f"/api/v1/threads/{tid}/attachments/..%2Fx.png")).status_code == 404
+    # a reply sends the same image again
+    (fake_env / "opencode_last_files").unlink()
+    r2 = await api.post(f"/api/v1/threads/{tid}/messages", json={"text": "and the chart?"})
+    await api.wait_job(r2.json()["job_id"])
+    assert str(stored) in (fake_env / "opencode_last_files").read_text().split()
+    # text selected on a page (no image needed) and an area (image needed)
+    r = await post({"question": "what does this mean?", "quote": "Rasterizer throughput", "target": {"kind": "text", "page": 2}})
+    assert r.status_code == 201, r.text
+    assert (await post({"question": "x", "target": {"kind": "area", "page": 1}})).json()["error"]["code"] == "IMAGE_REQUIRED"
+    assert (await post({"question": "x", "target": {"kind": "area", "page": 1, "rect": [0.1, 0.1, 0.5, 0.5]}, "image": "data:image/png;base64,AAAA"})).json()["error"]["code"] == "INVALID_IMAGE"
+    r = await post({"question": "this figure?", "target": {"kind": "area", "page": 1, "rect": [0.1, 0.1, 0.5, 0.5]}, "image": url})
+    assert r.status_code == 201
+    await api.wait_job(r.json()["job_id"])
+    # deleting the document's history removes the stored images too
+    assert (await api.delete(f"/api/v1/documents/{d['document_id']}/history")).status_code == 200
+    assert not stored.exists()
+
+
+def test_prompt_names_the_page_or_slide():
+    from backend.app.annotations import build_prompt
+
+    p = build_prompt(question="q", quote="", document_path="a/deck.pptx", sha256="x", heading=None, prior=None, versions=None,
+                     whole_document=True, target={"kind": "page", "page": 4, "unit": "slide"})
+    assert "slide 4" in p and "image of that slide is attached" in p and "SELECTED_PASSAGE" not in p
+    p = build_prompt(question="q", quote="Hello", document_path="a/x.pdf", sha256="x", heading=None, prior=None, versions=None,
+                     whole_document=True, target={"kind": "text", "page": 2, "unit": "page"})
+    assert "text on page 2" in p and "<<<SELECTED_PASSAGE\nHello" in p

@@ -581,3 +581,30 @@ mark.waw-hl.review.needs_review { border-bottom: 2px dashed var(--warn); }
 .ask-document textarea { width: 100%; resize: vertical; font: inherit; font-size: 13px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--fg); box-sizing: border-box; }
 .ask-document textarea:focus { outline: none; border-color: var(--primary); }
 .ask-document-row { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+/* PDF.js view (PDF files, Office layout view) */
+.pdfjs-view { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.pdfjs-toolbar { display: flex; align-items: center; gap: 6px; padding: 4px 10px; border-bottom: 1px solid var(--border); }
+.pdfjs-pages { position: relative; flex: 1; min-height: 0; overflow: auto; padding: 12px 20px; background: color-mix(in srgb, var(--fg) 6%, var(--bg)); display: flex; flex-direction: column; align-items: center; gap: 14px; }
+.pdfjs-page { display: flex; flex-direction: column; gap: 4px; scroll-margin-top: 8px; }
+.pdfjs-page.flash .pdfjs-page-body { outline: 3px solid var(--primary); }
+.pdfjs-page-bar { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.pdfjs-page-no { font-weight: 600; color: var(--muted); }
+.pdfjs-page-body { position: relative; background: #fff; box-shadow: 0 1px 6px rgba(0, 0, 0, 0.18); transition: outline 0.2s; }
+.pdfjs-page-body canvas { display: block; }
+.pdfjs-area { position: absolute; inset: 0; z-index: 3; cursor: crosshair; background: rgba(51, 156, 255, 0.06); }
+.pdfjs-area-rect { position: absolute; border: 2px solid var(--primary); background: rgba(51, 156, 255, 0.15); }
+.pdfjs-chip { position: absolute; z-index: 5; transform: translateX(-50%); }
+.sel-image { max-width: 100%; max-height: 180px; object-fit: contain; border: 1px solid var(--border); border-radius: 6px; background: #fff; align-self: center; }
+/* PDF.js text layer (from pdfjs-dist/web/pdf_viewer.css, trimmed) */
+.textLayer { position: absolute; text-align: initial; inset: 0; overflow: clip; opacity: 1; line-height: 1; text-size-adjust: none; forced-color-adjust: none; transform-origin: 0 0; caret-color: CanvasText; z-index: 0;
+  --min-font-size: 1; --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size)); --min-font-size-inv: calc(1 / var(--min-font-size)); }
+.textLayer :is(span, br) { color: transparent; position: absolute; white-space: pre; cursor: text; transform-origin: 0% 0%; }
+.textLayer > :not(.markedContent), .textLayer .markedContent span:not(.markedContent) { z-index: 1; --font-height: 0; font-size: calc(var(--text-scale-factor) * var(--font-height)); --scale-x: 1; --rotate: 0deg; transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv)); }
+.textLayer .markedContent { display: contents; }
+.textLayer span[role="img"] { user-select: none; cursor: default; }
+.textLayer ::selection { background: rgba(0, 0, 255, 0.25); }
+.textLayer br::selection { background: transparent; }
+.textLayer .endOfContent { display: block; position: absolute; inset: 100% 0 0; z-index: 0; cursor: default; user-select: none; }
+.textLayer.selecting .endOfContent { top: 0; }
+.hover-ask { position: absolute; z-index: 6; transform: translate(-100%, 4px); box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15); background: var(--card); }
+.thread-attachment { display: block; max-width: 100%; max-height: 220px; object-fit: contain; border: 1px solid var(--border); border-radius: 6px; background: #fff; margin: 6px 0; }
