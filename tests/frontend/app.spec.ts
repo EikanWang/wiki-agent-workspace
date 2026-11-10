@@ -2323,51 +2323,49 @@ test("reference folders for the agent: add and remove for a wiki folder", async 
   await expect(page.getByTestId("context-folder")).toHaveCount(0);
 });
 
-test("folder chat: talk with the agent about the folder, then distill the conversation into a page", async ({ page }) => {
+test("folder chat: talk with a project directly on the Chats page, then distill the conversation into a page", async ({ page }) => {
   const errs: string[] = [];
   page.on("pageerror", (e) => errs.push(String(e)));
   await login(page);
   const out = path.join(workspaceDir(), "chat-notes", "capture-chat.md");
   try {
+    // the chat icon on a project in the file tree (or the Chats tab) opens the Chats page for it: just type
     const root = page.getByTestId("tree-root").first();
     await root.locator(".tree-root").hover();
     await page.getByTestId("tree-chats-root").click();
-    await expect(page.getByTestId("chats-dialog")).toContainText("No chats yet.");
-    await page.getByTestId("chat-new-title").fill("Capture chat");
-    await page.getByTestId("chat-new").click();
-    const chat = page.getByTestId("chat-view");
-    await expect(page.getByTestId("chat-title")).toHaveText("Capture chat");
-    await expect(page.locator('[data-testid="doc-tab"]').filter({ hasText: "Chat: Capture chat" })).toHaveCount(1);
-    await expect(page.getByTestId("panel-expand")).toHaveCount(0); // the conversation is the page: no discussion panel
-    // an open conversation (no document, no passage)
-    await page.getByTestId("chat-input").fill("How is a graph captured?");
+    await expect(page.getByTestId("view-chats")).toHaveClass(/active/);
+    await expect(page.getByTestId("chat-new-page")).toBeVisible();
+    await expect(page.getByTestId("chat-project")).toHaveValue(await root.getAttribute("data-ws") as string);
+    await page.getByTestId("chat-first").fill("Capture chat: how is a graph captured?");
     await page.keyboard.press("Enter");
-    await expect(chat.locator('[data-testid="message-agent"][data-status="completed"]')).toContainText("How is a graph captured?", { timeout: 20000 });
+    const chat = page.getByTestId("chat-view");
+    await expect(page.getByTestId("chat-title")).toHaveText("Capture chat: how is a graph captured?");
+    await expect(chat.locator('[data-testid="message-agent"][data-status="completed"]')).toContainText("how is a graph captured?", { timeout: 20000 });
+    await expect(page.locator('[data-testid="doc-tab"]').filter({ hasText: "Chat" })).toHaveCount(0); // a page of its own, not a document tab
     await page.getByTestId("chat-input").fill("And lowered?");
     await page.getByTestId("chat-send").click();
     await expect(chat.locator('[data-testid="message-agent"][data-status="completed"]')).toHaveCount(2, { timeout: 20000 });
     // distill it into a new page; the change is reviewed in Diff
     await page.getByTestId("chat-action-distill").check();
-    await expect(page.getByTestId("chat-target")).toHaveValue("capture-chat.md");
     await page.getByTestId("chat-target").fill("chat-notes/capture-chat.md");
     await page.getByTestId("chat-action-run").click();
     await expect(chat.locator('[data-testid="message-user"]').last()).toContainText("Distill this conversation into the wiki page `chat-notes/capture-chat.md`.");
     await expect(chat.locator('[data-testid="message-agent"][data-status="completed"]')).toHaveCount(3, { timeout: 20000 });
     await expect(chat.locator('[data-testid="message-agent"]').last()).toContainText("Wrote chat-notes/capture-chat.md from 2 question(s).");
-    expect(fs.readFileSync(out, "utf-8")).toContain("- How is a graph captured?");
+    expect(fs.readFileSync(out, "utf-8")).toContain("- Capture chat: how is a graph captured?");
     await expect(page.getByTestId("chat-acted")).toBeVisible();
     await page.getByTestId("chat-review-changes").click();
     await expect(page.locator('[data-testid="diff-file"][data-path="chat-notes/capture-chat.md"]')).toBeVisible({ timeout: 10000 });
-    // listed under the folder's chats; archive it
-    await page.getByTestId("view-document").click();
-    await root.locator(".tree-root").hover();
-    await page.getByTestId("tree-chats-root").click();
-    await expect(page.getByTestId("chat-item")).toContainText("Capture chat");
-    await expect(page.getByTestId("chat-item")).toContainText("6 messages");
-    await page.getByTestId("chat-item").click();
+    // back on the Chats page the chat is listed under its project; it survives a reload; archive it
+    await page.getByTestId("view-chats").click();
+    const item = page.getByTestId("chat-item").filter({ hasText: "Capture chat" });
+    await expect(item).toContainText("6 messages");
+    await page.reload();
+    await expect(page.getByTestId("chat-view")).toBeVisible({ timeout: 15000 });
     await page.getByTestId("chat-archive").click();
     await page.getByTestId("confirm-ok").click();
-    await expect(page.getByTestId("chat-view")).toHaveCount(0);
+    await expect(page.getByTestId("chat-new-page")).toBeVisible();
+    await expect(page.getByTestId("chat-item")).toHaveCount(0);
     expect(errs).toEqual([]);
   } finally {
     fs.rmSync(path.join(workspaceDir(), "chat-notes"), { recursive: true, force: true });

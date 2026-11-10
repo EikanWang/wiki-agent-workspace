@@ -15,7 +15,7 @@ type Action = "distill" | "update";
  * produced something worth keeping, **Distill into a page** writes a new wiki page from it, or **Update source
  * pages** folds what it established back into the pages its content came from; the edits are reviewed in Diff.
  */
-export default function ChatView({ doc, folderName, threads, sessions, liveJob, onStart, onSend, onAction, onRetry, onCancel, onPermission, onReviewChanges, onArchived, onWatchJob }: {
+export default function ChatView({ doc, folderName, threads, sessions, liveJob, onStart, onSend, onAction, onRetry, onCancel, onPermission, onReviewChanges, onArchived, onWatchJob, workspaceId }: {
   doc: OpenDocument;
   folderName: string;
   threads: Thread[];
@@ -31,6 +31,8 @@ export default function ChatView({ doc, folderName, threads, sessions, liveJob, 
   onArchived: () => void;
   /** follow a running turn (e.g. one started elsewhere: a change summary, or after a reload) */
   onWatchJob?: (jobId: string) => void;
+  /** the chat's project (folder) when it is not the window's active one */
+  workspaceId?: string;
 }) {
   const thread = threads[0] ?? null; // a chat is one conversation
   const title = (doc.text.split("\n", 1)[0] || "Chat").replace(/^#\s*/, "");
@@ -91,7 +93,7 @@ export default function ChatView({ doc, folderName, threads, sessions, liveJob, 
   const archive = () => {
     void run(async () => {
       if (!(await confirmAction({ title: `Archive the chat "${title}"?`, message: "It leaves the folder's chat list. Its conversation is kept (and stays in Recent).", confirmLabel: "Archive chat" }))) return;
-      await del(`/chats?path=${encodeURIComponent(doc.path)}`);
+      await del(`/chats?path=${encodeURIComponent(doc.path)}`, workspaceId ? { workspace: workspaceId } : undefined);
       onArchived();
     });
   };

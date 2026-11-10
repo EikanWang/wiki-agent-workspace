@@ -24,7 +24,8 @@ import Login from "./components/Login";
 import FileTree, { notifyTreeChanged } from "./components/FileTree";
 import DocTabs, { DocTab, PR_TABS, loadTabs, sameTab, tabsKey, withTab } from "./components/DocTabs";
 import PrView from "./components/PrView";
-import ChatView, { isChatPath } from "./components/ChatView";
+import { isChatPath } from "./components/ChatView";
+import ChatsPage, { ChatTarget } from "./components/ChatsPage";
 import { ConfirmHost, confirmAction } from "./components/Confirm";
 import WorkspaceMenu from "./components/WorkspaceMenu";
 import AccountMenu from "./components/AccountMenu";
@@ -41,7 +42,7 @@ import AddFolderDialog from "./components/AddFolderDialog";
 import { SelectionAnchor, wholeDocument } from "./textmodel";
 import { FONT_STACKS, FontSettings, Prefs, Resizer, loadPrefs, savePrefs } from "./components/Layout";
 
-type View = "document" | "terminal" | "diff";
+type View = "document" | "terminal" | "diff" | "chats";
 
 export default function App() {
   const [boot, setBoot] = useState<Bootstrap | null>(null);
@@ -101,6 +102,13 @@ export default function App() {
   const [recentKey, setRecentKey] = useState(0);
   const restoreThreadRef = useRef<string | null>(null);
   const [diffTarget, setDiffTarget] = useState<{ path: string; isDir: boolean } | null>(null);
+  const [chatTarget, setChatTarget] = useState<ChatTarget | null>(null);
+  /** the Chats page: talk with a project (folder) directly; a chat document opens there, never as a tab */
+  const openChats = useCallback((t: ChatTarget) => {
+    setChatTarget(t);
+    setView("chats");
+    setMobilePane("doc");
+  }, []);
   // multi-root window: the folder (workspace) everything is currently scoped to
   const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([]);
   const [activeWs, setActiveWs] = useState<string | null>(() => {
@@ -236,6 +244,10 @@ export default function App() {
 
   const openDocument = useCallback(
     async (path: string, keepThread = false, quiet = false): Promise<boolean> => {
+      if (isChatPath(path)) {
+        openChats({ ws: getWorkspace() ?? "", path });
+        return true;
+      }
       if (!keepThread && !confirmLeaveEditor()) return false;
       if (!keepThread) editorDirty.current = false;
       setDocError(null);
@@ -299,7 +311,7 @@ export default function App() {
   // What the window showed (PR tab, Terminal / Diff view) survives a reload or closing the browser; documents,
   // their reading position and discussion are restored from the server, tabs from localStorage.
   const uiKey = () => `waw.ui.${namedRef.current}`;
-  const savedUi = useRef<{ view?: View; diff?: { path: string; isDir: boolean; ws: string | null } | null; pr?: { repo: string; number: number } | null } | null>(null);
+  const savedUi = useRef<{ view?: View; diff?: { path: string; isDir: boolean; ws: string | null } | null; pr?: { repo: string; number: number } | null; chat?: ChatTarget | null } | null>(null);
   if (savedUi.current === null) {
     try {
       savedUi.current = JSON.parse(localStorage.getItem(uiKey()) || "{}");
@@ -310,9 +322,9 @@ export default function App() {
   const [uiRestored, setUiRestored] = useState(false);
   useEffect(() => {
     if (!uiRestored) return; // do not overwrite the saved state before it was applied
-    localStorage.setItem(uiKey(), JSON.stringify({ view, diff: diffTarget ? { ...diffTarget, ws: getWorkspace() } : null, pr: prTab }));
+    localStorage.setItem(uiKey(), JSON.stringify({ view, diff: diffTarget ? { ...diffTarget, ws: getWorkspace() } : null, pr: prTab, chat: chatTarget }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, diffTarget, prTab, uiRestored]);
+  }, [view, diffTarget, prTab, chatTarget, uiRestored]);
 
   useEffect(() => {
     if (!(authed && activeWs && boot)) return;
@@ -320,6 +332,7 @@ export default function App() {
       if (!doc) await restoreLast(activeWs);
       const ui = savedUi.current ?? {};
       if (ui.view === "terminal") setView("terminal");
+      else if (ui.view === "chats") openChats(ui.chat ?? { ws: getWorkspace() ?? "", path: null });
       else if (ui.view === "diff" && ui.diff && (!ui.diff.ws || ui.diff.ws === getWorkspace())) openDiff(ui.diff.path, ui.diff.isDir);
       setUiRestored(true);
     })();
@@ -694,14 +707,8 @@ export default function App() {
   );
   // with a PR tab in front, the panel and the session bar belong to the PR's discussion document (once it is open)
   const isPrDoc = !!doc && doc.path.startsWith(".waw-github/");
-  const isChatDoc = !prTab && !!doc && isChatPath(doc.path); // a folder chat: the conversation is the page itself
-  const panelDoc = prTab ? (isPrDoc && doc!.path.endsWith(`/${prTab.number}.md`) ? doc : null) : isChatDoc ? null : doc;
+  const panelDoc = prTab ? (isPrDoc && doc!.path.endsWith(`/${prTab.number}.md`) ? doc : null) : doc;
   const defaultSession = useMemo(() => sessions.find((s) => s.id === doc?.default_session_id), [sessions, doc?.default_session_id]);
-  const chatTitle = isChatDoc ? (doc!.text.split("\n", 1)[0] || "").replace(/^#\s*/, "") : null;
-  useEffect(() => {
-    if (!chatTitle || !doc) return; // name the chat's tab after its title
-    setDocTabs((tabs) => (tabs.some((t) => t.path === doc.path && t.title !== chatTitle) ? tabs.map((t) => (t.path === doc.path ? { ...t, title: chatTitle } : t)) : tabs));
-  }, [chatTitle, doc?.path]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (authed === null) return <div className="loading-screen">Loading…</div>;
   if (!authed) return <Login onDone={() => void loadBootstrap()} />;
@@ -760,6 +767,7 @@ export default function App() {
         <nav className="view-tabs">
           <button className={view === "document" ? "active" : ""} onClick={() => setView("document")} data-testid="view-document">Document</button>
           <button className={view === "terminal" ? "active" : ""} onClick={() => setView("terminal")} data-testid="view-terminal">Terminal</button>
+          <button className={view === "chats" ? "active" : ""} onClick={() => openChats(chatTarget ?? { ws: getWorkspace() ?? "", path: null })} title="Chat with a project (a folder of this window) directly" data-testid="view-chats">Chats</button>
           <button
             className={view === "diff" ? "active" : ""}
             onClick={() => (doc ? openDiff(doc.path, false) : openDiff("", true))}
@@ -781,7 +789,7 @@ export default function App() {
       {boot.settings.watcher_error && <div className="banner warn">{boot.settings.watcher_error}</div>}
       {!watcherReady && <div className="banner">The file watcher is still indexing this workspace; until it finishes, use the ↻ button in the file tree to see new files and changes.</div>}
 
-      <main className={`layout view-${view === "diff" ? "terminal" : view} ${view === "diff" ? "view-diff" : ""} ${isChatDoc && view === "document" ? "view-chat" : ""}`}>
+      <main className={`layout view-${view === "diff" || view === "chats" ? "terminal" : view} ${view === "diff" ? "view-diff" : ""} ${view === "chats" ? "view-chats" : ""}`}>
         <aside className={`sidebar ${hub?.available ? "with-activity" : ""}`}>
           {hub?.available && (
             <nav className="activity-bar" aria-label="Sidebar views">
@@ -810,6 +818,7 @@ export default function App() {
               onToggleLock={(ws, p, l) => void toggleLock(p, l, ws)}
               onAddFolder={() => setShowAddFolder(true)}
               onRemoveFolder={(w) => void removeFolder(w)}
+              onOpenChats={(ws) => openChats({ ws, path: null })}
               onCreated={(ws, p, kind, openable) => {
                 if (kind !== "file") return notify(`Created folder ${p}.`);
                 if (!openable) return notify(`Created ${p}.`);
@@ -830,7 +839,7 @@ export default function App() {
 
         <section className="center" style={{ display: view === "document" ? undefined : "none" }}>
           <DocTabs
-            tabs={(workspaces.length ? docTabs.filter((t) => t.ws === PR_TABS || workspaces.some((w) => w.id === t.ws && w.available)) : docTabs).filter((t) => t.ws !== PR_TABS || !!hub?.available)}
+            tabs={(workspaces.length ? docTabs.filter((t) => !isChatPath(t.path)).filter((t) => t.ws === PR_TABS || workspaces.some((w) => w.id === t.ws && w.available)) : docTabs).filter((t) => t.ws !== PR_TABS || !!hub?.available)}
             active={prTab ? { ws: PR_TABS, path: `${prTab.repo}#${prTab.number}` } : doc ? { ws: activeWs ?? "", path: doc.path } : null}
             workspaces={workspaces}
             onActivate={activateDocTab}
@@ -867,37 +876,7 @@ export default function App() {
               githubLogin={hub?.owner ?? null}
               onOpenPr={(r, n) => openPr(r, n)}
               onDiscussionsChanged={() => { if (doc) void refreshThreads(doc.document_id); }}
-              onOpenChat={(ws, p) => {
-                if (ws !== getWorkspace()) switchWorkspace(ws, false);
-                void openDocument(p);
-              }}
-            />
-          ) : doc && isChatDoc ? (
-            <ChatView
-              doc={doc}
-              folderName={activeWsInfo?.name ?? boot.workspace.name}
-              threads={threads}
-              sessions={sessions}
-              liveJob={liveJob}
-              onStart={(q) => createThread(wholeDocument(), q, null)}
-              onSend={(tid, text) => reply(tid, text, null)}
-              onAction={async (tid, action, target, note) => {
-                const r = await post<{ job_id: string }>(`/threads/${tid}/messages`, { text: note, chat_action: action, target_path: target ?? undefined }, { idempotencyKey: newIdempotencyKey() });
-                await refreshThreads(doc.document_id);
-                setLiveJobId(r.job_id);
-              }}
-              onRetry={retry}
-              onCancel={cancel}
-              onPermission={permission}
-              onReviewChanges={() => openDiff("", true)}
-              onWatchJob={(j) => setLiveJobId(j)}
-              onArchived={() => {
-                const t = docTabs.find((x) => x.ws !== PR_TABS && x.path === doc.path);
-                if (t) closeDocTab(t);
-                setDoc((d) => (d && isChatPath(d.path) ? null : d)); // if it was not the active tab entry, still leave the chat
-                setThreads([]);
-                notify("Chat archived.");
-              }}
+              onOpenChat={(ws, p) => openChats({ ws, path: p })}
             />
           ) : doc ? (
             <Reader
@@ -963,6 +942,21 @@ export default function App() {
           )}
         </section>
 
+        <section className="center chats-center" style={{ display: view === "chats" ? undefined : "none" }}>
+          {view === "chats" && (
+            <ChatsPage
+              workspaces={workspaces}
+              target={chatTarget}
+              onTarget={(t) => setChatTarget(t)}
+              sessions={sessions}
+              onNotify={notify}
+              onReviewChanges={(ws) => {
+                if (ws !== getWorkspace()) switchWorkspace(ws, false);
+                openDiff("", true);
+              }}
+            />
+          )}
+        </section>
         <section className="center" style={{ display: view === "diff" ? undefined : "none" }}>
           {view === "diff" && diffTarget && (
             <DiffReview
@@ -1031,6 +1025,7 @@ export default function App() {
         <button className={mobilePane === "doc" && view === "document" ? "active" : ""} onClick={() => { setView("document"); setMobilePane("doc"); }}>Document</button>
         <button className={mobilePane === "chat" ? "active" : ""} onClick={() => { setView("document"); setMobilePane("chat"); }}>Discussion</button>
         <button className={view === "terminal" ? "active" : ""} onClick={() => setView("terminal")}>Terminal</button>
+        <button className={view === "chats" ? "active" : ""} onClick={() => openChats(chatTarget ?? { ws: getWorkspace() ?? "", path: null })}>Chats</button>
       </nav>
 
       <ConfirmHost />

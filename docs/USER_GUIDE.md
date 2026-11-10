@@ -87,22 +87,24 @@ The **▣ name ▾** menu in the top bar lists them:
 - The current workspace is the server's: switching in one browser switches your other open browsers too (they
   reload with a notice).
 
-### Chatting with a folder
+### Chats: talk with a project directly
 
-Hover a root folder and click the **chat** icon: the folder's chats, and **New chat** (optional title). A chat
-opens as a tab (*Chat: title*) with the conversation in the middle — an open conversation with the agent about the
-whole folder, not about one document: it searches and reads the wiki to answer and cites the pages it used.
-Reference folders (**⧉**) and locks apply as for documents. When the conversation is worth keeping, under
-**Turn into wiki content**:
+**Chats** (top bar, next to Terminal; or the **chat** icon on a project's row in the file tree) opens a page of its
+own: on the left every project's (folder's) chats, on the right the conversation. To start, pick the **project**
+and just type — the first message starts a chat (titled after it). It is an open conversation with the agent
+about the whole project, not about one document: the agent searches and reads the files to answer and cites the
+ones it used. Reference folders (**⧉**) and locks apply as for documents. When the conversation is worth
+keeping, under **Turn into wiki content**:
 - **Distill into a new page** — give the page path (`folder/page.md`, suggested from the title) and an optional
   focus; the agent writes a standalone article from the conversation, linking the pages it came from, and touches
   no other file;
 - **Update the pages it came from** — when the content mostly came from existing pages, the agent folds the
   conclusions and corrections back into those pages in place (optional note: which pages, what to leave alone).
 
-Both are ordinary changes in the folder: **Review changes** opens the Diff view to keep, edit or revert them
+Both are ordinary changes in the project: **Review changes** opens the Diff view to keep, edit or revert them
 before committing. **Archive** (confirmed) removes a chat from the list; its conversation is kept. Chats are
-stored by the app, never as files in the wiki, and appear in *Recent*.
+stored by the app, never as files in the project; opening one from *Recent* goes to the Chats page, which also
+comes back after a reload. Change summaries of a GitHub repository (⎇ in a PR tab) open here too.
 
 ### Creating files and folders
 
