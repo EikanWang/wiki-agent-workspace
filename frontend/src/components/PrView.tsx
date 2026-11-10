@@ -608,7 +608,7 @@ function Reviewers({ apiBase, reviews, requested, onChanged, onError }: {
       </ul>
       {note && <div className="muted small" data-testid="pr-reviewer-note">{note}</div>}
       {q === null ? (
-        <button className="link-btn small" onClick={() => setQ("")} data-testid="pr-reviewer-add">＋ Request a review…</button>
+        <button className="link-btn small" onClick={() => setQ("")} data-testid="pr-reviewer-add">+ Request a review…</button>
       ) : (
         <span className="mention-wrap">
           <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Name or login" data-testid="pr-reviewer-input"
