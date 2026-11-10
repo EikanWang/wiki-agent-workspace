@@ -125,6 +125,12 @@ can see, grouped by repository (most PRs first):
 - **filter** by repository, title, author, requester or label; **drafts** shows or hides draft PRs; sort by
   *recently updated*, *waiting longest* or *smallest first*; click a repository to fold it; closed or merged PRs
   are dropped even while GitHub's search still lists them;
+- **PRs you approved with nothing new since are left out**: no commits after the commit you approved, no review
+  or comment from a person since (bots such as pytorchmergebot, pytorch-bot, facebook-github-bot, EasyCLA and
+  GitHub Actions do not count, nor do your own comments), and your review was not requested again. A note says how
+  many; tick **approved (n)** to list them too. Your standing verdict is the latest approve / request changes (a
+  later plain comment or a draft review on github.com does not change it); a PR row shows *✓ approved* — with what
+  happened since (*new commits*, *new comments*, *review requested again*) when there is news — or *changes requested*.
 - **★ Priority** at the top: requests from PyTorch Meta maintainers (the requester's GitHub profile company says
   Meta / Facebook) and from people you name; each PR shows who *asked* you. Change it under **⚙**;
 - **⚙** (repositories and priority): **watch** a repository (`owner/name`) to also list all its open PRs (newest 40,

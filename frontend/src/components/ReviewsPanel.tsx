@@ -25,12 +25,17 @@ export interface ReviewPR {
   requested_by_company?: string | null;
   priority?: boolean;
   watched?: boolean;
+  /** your latest standing review (APPROVED, CHANGES_REQUESTED, COMMENTED…) and what happened since an approval */
+  my_review?: string | null;
+  approved_no_news?: boolean;
+  since_approval?: string[];
 }
 export interface HubPrefs {
   hidden_repos: string[];
   watched_repos: string[];
   priority_requesters: string[];
   priority_meta: boolean;
+  show_approved: boolean;
 }
 interface Queue {
   items: ReviewPR[];
@@ -45,6 +50,7 @@ interface Queue {
   watched?: ReviewPR[];
   watch_problems?: string[];
   hidden_count?: number;
+  approved_hidden?: number;
   prefs?: HubPrefs;
 }
 
@@ -169,6 +175,12 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
           {showRepo ? `${p.repo}` : ""}#{p.number} · {p.author ?? "?"} · {ago(p.updated_at)} · <span className="add">+{p.additions}</span> <span className="del">−{p.deletions}</span>
           {p.requested_by && <span className="review-by" data-testid="review-by"> · asked by {p.requested_by}</span>}
           {p.draft && <span className="git-badge"> draft</span>}
+          {p.my_review === "APPROVED" && (
+            <span className={`git-badge ${p.approved_no_news ? "clean" : "approved-news"}`} title={p.approved_no_news ? "You approved; nothing new since" : `You approved; since then: ${(p.since_approval ?? []).join(", ")}`} data-testid="review-approved">
+              {p.approved_no_news ? " ✓ approved" : ` ✓ approved · ${(p.since_approval ?? []).join(", ")}`}
+            </span>
+          )}
+          {p.my_review === "CHANGES_REQUESTED" && <span className="git-badge" title="You requested changes"> changes requested</span>}
           {p.labels.slice(0, 2).map((l) => (
             <span key={l.name} className="review-label" style={l.color ? { borderColor: `#${l.color}` } : undefined}>{l.name}</span>
           ))}
@@ -215,6 +227,12 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
           <label className="small" title={`${drafts} draft PR(s)`}>
             <input type="checkbox" checked={showDrafts} onChange={(e) => setShowDrafts(e.target.checked)} data-testid="reviews-drafts" /> drafts ({drafts})
           </label>
+          {queue?.prefs && (
+            <label className="small" title="PRs you approved where nothing happened since (no new commits, no comments or reviews from people — bots and GitHub Actions do not count)">
+              <input type="checkbox" checked={queue.prefs.show_approved} disabled={busy !== null}
+                onChange={(e) => void change("approved", { show_approved: e.target.checked })} data-testid="reviews-show-approved" /> approved ({queue.prefs.show_approved ? queue.items.filter((p) => p.approved_no_news).length : queue.approved_hidden ?? 0})
+            </label>
+          )}
           <select className="reviews-sort" value={sort} onChange={(e) => setSort(e.target.value as Sort)} data-testid="reviews-sort" aria-label="Sort">
             <option value="updated">Recently updated</option>
             <option value="waiting">Waiting longest</option>
@@ -249,6 +267,7 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
         {groups.map(({ repo, prs }) => groupBox(repo, prs, false))}
         {watchedGroups.length > 0 && <div className="muted small reviews-meta" data-testid="reviews-watched-head">Watched repositories (all open PRs)</div>}
         {watchedGroups.map(({ repo, prs }) => groupBox(repo, prs, true))}
+        {(queue?.approved_hidden ?? 0) > 0 && <div className="muted small reviews-meta" data-testid="reviews-approved-hidden">{queue!.approved_hidden} PR(s) you approved with nothing new since are not listed (tick “approved” to show them).</div>}
         {(queue?.hidden_count ?? 0) > 0 && <div className="muted small reviews-meta">{queue!.hidden_count} request(s) in hidden repositories (⚙ to show them)</div>}
       </div>
     </div>

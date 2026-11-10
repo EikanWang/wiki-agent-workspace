@@ -37,7 +37,7 @@ OWNER_CACHE_SECONDS = 600
 router = APIRouter()
 
 REVIEW_QUERY = """
-query($q: String!, $after: String, $n: Int!) {
+query($q: String!, $after: String, $n: Int!, $me: String!) {
   rateLimit { remaining resetAt }
   search(query: $q, type: ISSUE, first: $n, after: $after) {
     issueCount
@@ -46,8 +46,12 @@ query($q: String!, $after: String, $n: Int!) {
       ... on PullRequest {
         number title url state isDraft createdAt updatedAt additions deletions changedFiles reviewDecision
         author { login }
+        headRefOid
+        mine: reviews(author: $me, last: 10) { nodes { state submittedAt commit { oid } } }
+        others: reviews(last: 10) { nodes { submittedAt author { __typename login } } }
+        comments(last: 10) { nodes { createdAt author { __typename login } } }
         timelineItems(itemTypes: [REVIEW_REQUESTED_EVENT], last: 8) { nodes { ... on ReviewRequestedEvent {
-          actor { login ... on User { company } } requestedReviewer { __typename ... on User { login } ... on Team { slug } } } } }
+          createdAt actor { login ... on User { company } } requestedReviewer { __typename ... on User { login } ... on Team { slug } } } } }
         repository { nameWithOwner isPrivate }
         labels(first: 6) { nodes { name color } }
         reviewRequests(first: 20) { nodes { requestedReviewer { __typename ... on User { login } ... on Team { slug name } } } }
@@ -234,8 +238,45 @@ def normalize(pr: dict[str, Any], owner: str) -> dict[str, Any]:
         "review_decision": pr.get("reviewDecision"), "ci": _ci(pr),
         "labels": [{"name": lb["name"], "color": lb.get("color")} for lb in (pr.get("labels") or {}).get("nodes") or []],
         "requested": "you" if requested_user else ("team" if teams else "you"), "teams": teams,
-        "state": pr.get("state") or "OPEN", **_requester(pr, owner),
+        "state": pr.get("state") or "OPEN", **_requester(pr, owner), **_approval(pr, owner),
     }
+
+
+# Not people: their comments are no news for a reviewer (CI, merge and CLA bots; after ai_tools ignored_authors)
+BOT_LOGINS = {"pytorchmergebot", "pytorch-bot", "facebook-github-bot", "linux-foundation-easycla", "github-actions", "dependabot",
+              "codecov", "netlify", "vercel", "copilot-pull-request-reviewer", "copilot-swe-agent"}
+
+
+def is_bot(author: dict[str, Any] | None) -> bool:
+    a = author or {}
+    login = (a.get("login") or "").lower()
+    return a.get("__typename") == "Bot" or not login or login.endswith("[bot]") or login in BOT_LOGINS
+
+
+def _approval(pr: dict[str, Any], owner: str) -> dict[str, Any]:
+    """Your latest review, and whether anything happened since you approved: new commits, a review or comment from
+    a person (bots and GitHub Actions do not count), or a new request for your review."""
+    mine = [n for n in (pr.get("mine") or {}).get("nodes") or [] if n and n.get("state") != "PENDING"]  # not a draft on github.com
+    if not mine:
+        return {"my_review": None, "approved_no_news": False}
+    # your standing verdict: the latest approve / request changes / dismissal (a later plain comment does not undo it)
+    verdicts = [n for n in mine if n.get("state") in ("APPROVED", "CHANGES_REQUESTED", "DISMISSED")]
+    last = verdicts[-1] if verdicts else mine[-1]
+    state, at = last.get("state"), last.get("submittedAt") or ""
+    if state != "APPROVED" or not at:
+        return {"my_review": state, "approved_no_news": False}
+    new_commits = bool(pr.get("headRefOid")) and ((last.get("commit") or {}).get("oid") or "") != pr.get("headRefOid")
+    me = owner.lower()
+
+    def news(at2: str | None, author: dict[str, Any] | None) -> bool:
+        return bool(at2 and at2 > at and not is_bot(author) and (author or {}).get("login", "").lower() != me)
+
+    talk = any(news(n.get("submittedAt"), n.get("author")) for n in (pr.get("others") or {}).get("nodes") or [] if n) or \
+        any(news(n.get("createdAt"), n.get("author")) for n in (pr.get("comments") or {}).get("nodes") or [] if n)
+    re_requested = any((n or {}).get("createdAt", "") > at and ((n or {}).get("requestedReviewer") or {}).get("login", "").lower() == me
+                       for n in (pr.get("timelineItems") or {}).get("nodes") or [])
+    return {"my_review": state, "approved_no_news": not (new_commits or talk or re_requested),
+            "since_approval": [x for x, on in (("new commits", new_commits), ("new comments", talk), ("review requested again", re_requested)) if on]}
 
 
 # Who counts as a "PyTorch Meta maintainer" for prioritising review requests (after ai_tools HARDWARE_VENDORS META)
@@ -266,7 +307,7 @@ def fetch_queue(graphql: Callable[[str, dict], dict], owner: str) -> dict[str, A
     size = PAGE_SIZE
     while len(items) < MAX_PRS:
         try:
-            d = graphql(REVIEW_QUERY, {"q": "is:pr is:open archived:false review-requested:@me", "after": after, "n": size})
+            d = graphql(REVIEW_QUERY, {"q": "is:pr is:open archived:false review-requested:@me", "after": after, "n": size, "me": owner})
         except ApiError as exc:
             if exc.code != "GH_BUSY" or size <= 10:
                 raise
@@ -309,7 +350,7 @@ def fetch_watched(graphql: Callable[[str, dict], dict], owner: str, repos: list[
     problems: list[str] = []
     for repo in repos:
         try:
-            d = graphql(REVIEW_QUERY, {"q": f"is:pr is:open archived:false repo:{repo} sort:updated-desc", "after": None, "n": WATCH_PRS})
+            d = graphql(REVIEW_QUERY, {"q": f"is:pr is:open archived:false repo:{repo} sort:updated-desc", "after": None, "n": WATCH_PRS, "me": owner})
         except ApiError as exc:
             problems.append(f"{repo}: {exc.message}")
             continue
@@ -1062,7 +1103,7 @@ async def reply_comment(owner: str, repo: str, number: int, comment_id: int, bod
 # ---------------------------------------------------------------------- hub preferences (kv_settings)
 
 
-DEFAULT_PREFS: dict[str, Any] = {"hidden_repos": [], "watched_repos": [], "priority_requesters": [], "priority_meta": True}
+DEFAULT_PREFS: dict[str, Any] = {"hidden_repos": [], "watched_repos": [], "priority_requesters": [], "priority_meta": True, "show_approved": False}
 
 
 def load_prefs(ctx: AppContext) -> dict[str, Any]:
@@ -1079,11 +1120,14 @@ def is_priority(p: dict[str, Any], prefs: dict[str, Any]) -> bool:
 def apply_prefs(data: dict[str, Any], prefs: dict[str, Any]) -> dict[str, Any]:
     """Hide removed repositories and mark priority requests (PyTorch Meta maintainers / chosen people)."""
     hidden = {r.lower() for r in prefs.get("hidden_repos") or []}
-    items = [{**p, "priority": is_priority(p, prefs)} for p in data.get("items", []) if p["repo"].lower() not in hidden]
+    visible = [p for p in data.get("items", []) if p["repo"].lower() not in hidden]
+    quiet = [p for p in visible if p.get("approved_no_news")] if not prefs.get("show_approved") else []
+    items = [{**p, "priority": is_priority(p, prefs)} for p in visible if p not in quiet]
     watching = {r.lower() for r in prefs.get("watched_repos") or []}  # a repository just unwatched disappears at once
     watched = [{**p, "priority": False, "watched": True} for p in data.get("watched", [])
-               if p["repo"].lower() not in hidden and p["repo"].lower() in watching]
-    return {**data, "items": items, "watched": watched, "hidden_count": len(data.get("items", [])) - len(items)}
+               if p["repo"].lower() not in hidden and p["repo"].lower() in watching and (prefs.get("show_approved") or not p.get("approved_no_news"))]
+    return {**data, "items": items, "watched": watched, "hidden_count": len(data.get("items", [])) - len(visible),
+            "approved_hidden": len(quiet)}
 
 
 class PrefsIn(BaseModel):
@@ -1091,6 +1135,7 @@ class PrefsIn(BaseModel):
     watched_repos: list[str] | None = None
     priority_requesters: list[str] | None = None
     priority_meta: bool | None = None
+    show_approved: bool | None = None  # also list PRs you approved where nothing happened since
 
 
 @router.put("/github/prefs")
@@ -1116,6 +1161,8 @@ async def put_prefs(body: PrefsIn, auth: tuple[AppContext, str] = Depends(requir
             prefs[k] = clean
     if body.priority_meta is not None:
         prefs["priority_meta"] = body.priority_meta
+    if body.show_approved is not None:
+        prefs["show_approved"] = body.show_approved
     kv_put(ctx, "github_hub_prefs", prefs)
     if body.watched_repos is not None:  # watched PRs are fetched with the queue: refresh it in the background
         _start_refresh(_hooks(ctx)[0], owner, prefs["watched_repos"])

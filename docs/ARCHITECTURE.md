@@ -43,6 +43,10 @@ backend/app/
                    · hub preferences (hidden / watched repos, priority requesters; kv.py → kv_settings), the
                    requester of each review request (timeline REVIEW_REQUESTED_EVENT; Meta by profile company),
                    watched repos' open PRs (one search each, with the queue)
+                   · approval news: each queue PR carries your reviews (reviews(author: me)), headRefOid,
+                   the last 10 reviews and comments and review-request events; an APPROVED verdict with the same head
+                   commit and no later human (non-bot, not you) review/comment or re-request is left out
+                   (prefs.show_approved lists it)
                    · /contributors: PR author + commit authors / co-authors (GraphQL, no email scope) with a
                    guessed affiliation; details=true adds REST /users/{login} (public email), cached 1 h
                    · agent review: a thread created with pr_review=true gets numbered diffs and the

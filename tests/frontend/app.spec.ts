@@ -1868,6 +1868,13 @@ test("GitHub review hub: priority requests, hide a repository, watch a repositor
   await page.getByTestId("reviews-priority-meta").click();
   await expect(page.getByTestId("reviews-priority-meta")).toBeChecked();
   await expect(page.getByTestId("review-priority")).toHaveCount(1);
+  // a PR you approved with nothing new since (only a bot commented) is left out until "approved" is ticked
+  await expect(page.getByTestId("reviews-approved-hidden")).toContainText("1 PR(s) you approved");
+  await expect(page.locator('[data-testid="review-pr"][data-number="106"]')).toHaveCount(0);
+  await page.getByTestId("reviews-show-approved").click();
+  await expect(page.locator('[data-testid="review-pr"][data-number="106"]')).toContainText("✓ approved");
+  await page.getByTestId("reviews-show-approved").click();
+  await expect(page.locator('[data-testid="review-pr"][data-number="106"]')).toHaveCount(0);
   // hide a repository, then show it again
   const intel = page.locator('[data-testid="review-group"][data-repo="intel/torch-xpu-ops"]');
   await intel.locator(".review-group-head-row").hover();

@@ -829,3 +829,4 @@ mark.waw-hl.review.needs_review { border-bottom: 2px dashed var(--warn); }
 .dir-filter { border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; background: var(--bg); color: inherit; }
 .folder-picker { display: flex; flex-direction: column; gap: 8px; }
 input.grow { flex: 1; min-width: 0; }
+.git-badge.approved-news { color: var(--warn); border-color: var(--warn); }

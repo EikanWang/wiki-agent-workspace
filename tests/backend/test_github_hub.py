@@ -381,7 +381,7 @@ async def test_review_prefs_priority_hidden_and_watched_repos(running_app):
     assert 5 not in by  # closed / merged meanwhile: dropped
     assert by[1]["priority"] and by[2]["priority"] and not by[3]["priority"] and not by[4]["priority"]
     assert by[1]["requested_by"] == "metaguy" and by[1]["requested_by_company"] == "@Meta"
-    assert r["prefs"] == {"hidden_repos": [], "watched_repos": [], "priority_requesters": [], "priority_meta": True} and r["watched"] == []
+    assert r["prefs"] == {"hidden_repos": [], "watched_repos": [], "priority_requesters": [], "priority_meta": True, "show_approved": False} and r["watched"] == []
     # priority people, no Meta rule; hide a repository; watch one
     assert (await api.put("/api/v1/github/prefs", json={"priority_requesters": ["chosen"], "priority_meta": False})).status_code == 200
     r = (await api.get("/api/v1/github/reviews")).json()
@@ -686,3 +686,44 @@ async def test_mention_candidates_participants_first_then_repository(running_app
     assert [c["login"] for c in r] == ["alice", "albanD"]  # the author first, then the repository's users (deduplicated)
     assert (await api.get(f"{base}/mentions?q=al")).json()["candidates"] == r and calls.count(("mention", "al")) == 1  # cached
     assert (await api.get(f"{base}/mentions?q=a%20b")).json()["candidates"] == []
+
+
+def approved(p, *, at="2026-11-05T00:00:00Z", commit="h1", head="h1", others=(), comments=(), rerequest=None):
+    p["headRefOid"] = head
+    p["mine"] = {"nodes": [{"state": "APPROVED", "submittedAt": at, "commit": {"oid": commit}}]}
+    p["others"] = {"nodes": [{"submittedAt": t, "author": a} for t, a in others]}
+    p["comments"] = {"nodes": [{"createdAt": t, "author": a} for t, a in comments]}
+    if rerequest:
+        p["timelineItems"] = {"nodes": [{"createdAt": rerequest, "actor": {"login": "x"}, "requestedReviewer": {"__typename": "User", "login": "EikanWang"}}]}
+    return p
+
+
+def test_approved_prs_without_news_are_left_out():
+    late = "2026-11-06T00:00:00Z"
+    human, bot, app, me = {"__typename": "User", "login": "bob"}, {"__typename": "User", "login": "pytorchmergebot"}, \
+        {"__typename": "Bot", "login": "github-actions"}, {"__typename": "User", "login": "eikanwang"}
+    cases = {
+        1: approved(pr(1)),                                                        # approved, nothing since
+        2: approved(pr(2), head="h2"),                                             # new commits
+        3: approved(pr(3), comments=[(late, human)]),                              # a person commented
+        4: approved(pr(4), comments=[(late, bot), (late, app), (late, me)], others=[(late, {"__typename": "Bot", "login": "x[bot]"})]),  # only bots / me
+        5: approved(pr(5), others=[(late, human)]),                                # a person reviewed
+        6: approved(pr(6), comments=[("2026-11-04T00:00:00Z", human)]),            # comment before the approval
+        7: approved(pr(7), rerequest=late),                                        # your review requested again
+        8: pr(8),                                                                  # never reviewed
+    }
+    got = {n: github_hub.normalize(p, "EikanWang") for n, p in cases.items()}
+    assert {n for n, x in got.items() if x["approved_no_news"]} == {1, 4, 6}
+    assert got[2]["since_approval"] == ["new commits"] and got[7]["since_approval"] == ["review requested again"]
+    data = {"items": list(got.values()), "watched": []}
+    shown = github_hub.apply_prefs(data, {**github_hub.DEFAULT_PREFS})
+    assert sorted(p["number"] for p in shown["items"]) == [2, 3, 5, 7, 8] and shown["approved_hidden"] == 3
+    assert len(github_hub.apply_prefs(data, {**github_hub.DEFAULT_PREFS, "show_approved": True})["items"]) == 8
+
+
+def test_standing_approval_ignores_pending_and_later_plain_comments():
+    p = approved(pr(9))
+    p["mine"]["nodes"] += [{"state": "COMMENTED", "submittedAt": "2026-11-07T00:00:00Z", "commit": {"oid": "h1"}},
+                           {"state": "PENDING", "submittedAt": None, "commit": {"oid": "h1"}}]
+    x = github_hub.normalize(p, "EikanWang")
+    assert x["my_review"] == "APPROVED" and x["approved_no_news"] is True
