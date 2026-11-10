@@ -103,7 +103,8 @@ export default function DocTabs({
       {tabs.map((t, i) => {
         const isActive = sameTab(t, active);
         const isPr = t.ws === PR_TABS;
-        const name = isPr ? t.title ?? `#${t.path.split("#")[1]}` : fileName(t.path);
+        const isChat = !isPr && t.path.startsWith(".waw-chat/");
+        const name = isPr ? t.title ?? `#${t.path.split("#")[1]}` : isChat ? `Chat: ${t.title ?? fileName(t.path).replace(/-[0-9a-f]{6}\.md$/, "")}` : fileName(t.path);
         const hint = isPr ? t.path.split("#")[0] : (paths.get(t.path) ?? 0) > 1 ? wsName(t.ws) : (names.get(name) ?? 0) > 1 ? parentName(t.path) || wsName(t.ws) : "";
         const ext = name.includes(".") ? name.slice(name.lastIndexOf(".") + 1).toLowerCase() : "";
         const kind = KIND_BY_EXT[ext] ?? "text";

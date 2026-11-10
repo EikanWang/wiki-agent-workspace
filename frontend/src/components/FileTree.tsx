@@ -2,6 +2,7 @@ import RefreshButton from "./RefreshButton";
 import ContextFolders from "./ContextFolders";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, FileItem, GitSummary, WorkspaceInfo, getIn, post } from "../api";
+import { ChatIcon } from "./Icons";
 import { FileIcon, KIND_LABEL, formatSize } from "./FileIcon";
 import { NewFileIcon, NewFolderIcon, PlusIcon } from "./Icons";
 
@@ -75,6 +76,7 @@ export default function FileTree({
   const [dirs, setDirs] = useState<Record<string, DirState>>({});
   const dirsRef = useRef(dirs); // read synchronously by the refresh loop
   const [refsFor, setRefsFor] = useState<WorkspaceInfo | null>(null);
+  const [chatsFor, setChatsFor] = useState<WorkspaceInfo | null>(null);
   const [expanded, setExpandedState] = useState<Set<string>>(() => {
     try {
       const saved = JSON.parse(localStorage.getItem("waw.treeExpanded") || "null");
@@ -508,6 +510,11 @@ export default function FileTree({
                     <RefreshButton className="tree-action hover-only" onRefresh={() => refreshFolder(ws.id, "")} title={`Refresh ${ws.name}`} testId={i === 0 ? "tree-refresh-root" : `tree-refresh-root-${ws.name}`} />
                   )}
                   {ws.available && (
+                    <button className="tree-action hover-only" onClick={() => setChatsFor(ws)} title="Chat with the agent about this folder (not about one document)" data-testid={i === 0 ? "tree-chats-root" : `tree-chats-root-${ws.name}`}>
+                      <ChatIcon />
+                    </button>
+                  )}
+                  {ws.available && (
                     <button className="tree-action hover-only" onClick={() => setRefsFor(ws)} title="Reference folders: extra folders the agent reads when answering about documents here" data-testid={i === 0 ? "tree-context-root" : `tree-context-root-${ws.name}`}>⧉</button>
                   )}
                   {ws.available && onOpenDiff && (
@@ -520,6 +527,7 @@ export default function FileTree({
           );
         })}
       </div>
+      {chatsFor && <ChatsDialog ws={chatsFor} onOpen={(p) => { setChatsFor(null); onOpen(chatsFor.id, p); }} onClose={() => setChatsFor(null)} />}
       {refsFor && <ContextFolders scope={`ws:${refsFor.id}`} title={`For questions about documents in ${refsFor.name}.`} onClose={() => setRefsFor(null)} />}
     </div>
   );
@@ -527,4 +535,49 @@ export default function FileTree({
 
 export function gitLabel(s: string): string {
   return s;
+}
+
+interface ChatItem { path: string; title: string; messages: number; updated_at: string | null }
+
+/** The folder's chats: open one, or start a new one. */
+function ChatsDialog({ ws, onOpen, onClose }: { ws: WorkspaceInfo; onOpen: (path: string) => void; onClose: () => void }) {
+  const [chats, setChats] = useState<ChatItem[] | null>(null);
+  const [title, setTitle] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    getIn<{ chats: ChatItem[] }>(ws.id, "/chats").then((r) => setChats(r.chats)).catch((e) => setErr((e as ApiError).message));
+  }, [ws.id]);
+  const create = async () => {
+    setBusy(true);
+    try {
+      const r = await post<{ path: string }>("/chats", { title: title.trim() }, { workspace: ws.id });
+      onOpen(r.path);
+    } catch (e) {
+      setErr((e as ApiError).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="sheet-backdrop" onClick={onClose}>
+      <div className="sheet context-folders" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Chats" data-testid="chats-dialog">
+        <div className="row"><b>Chats about {ws.name}</b><span className="spacer" /><button className="icon-btn" onClick={onClose} aria-label="Close">×</button></div>
+        <div className="muted small">An open conversation with the agent about this folder — not about one document. Distill it into a page or fold it back into the pages it came from when it is worth keeping.</div>
+        <div className="reviews-settings-row">
+          <input autoFocus value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Title (optional), e.g. Graph capture across backends" onKeyDown={(e) => { if (e.key === "Enter") void create(); }} data-testid="chat-new-title" />
+          <button className="btn small primary" disabled={busy} onClick={() => void create()} data-testid="chat-new">New chat</button>
+        </div>
+        {chats === null && !err && <div className="muted small">Loading…</div>}
+        {chats?.length === 0 && <div className="muted small">No chats yet.</div>}
+        {chats?.map((c) => (
+          <button key={c.path} className="chat-item" onClick={() => onOpen(c.path)} data-testid="chat-item">
+            <span className="chat-item-title">{c.title}</span>
+            <span className="muted small">{c.messages} message{c.messages === 1 ? "" : "s"}{c.updated_at ? ` · ${new Date(c.updated_at).toLocaleString()}` : ""}</span>
+          </button>
+        ))}
+        {err && <div className="tree-error small" role="alert">{err}</div>}
+      </div>
+    </div>
+  );
 }

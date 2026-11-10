@@ -57,7 +57,8 @@ state. Nothing is shared between folders except your login, terminals and prefer
 - **Switch folder**: click any file in another folder's tree, use the folder selector in the top bar, or open an
   entry from *Recent*. The header, Diff, Commit, Review and the discussion panel always follow the active folder; the
   last document of each folder is remembered.
-- **Close a folder**: hover its header row in the tree and click `✕`. It does not show again — also after a
+- **Close a folder**: hover its header row in the tree and click `✕`, then **Close folder** in the confirmation
+  (Cancel has the focus, so Enter or a stray click does nothing; Esc cancels). It does not show again — also after a
   restart, also for folders defined in `config.toml`. Its data is kept: add the same folder again with `＋` and
   everything is back. The window needs at least one folder.
 - A folder that disappeared from disk is shown as *missing*; restore it or remove it.
@@ -81,6 +82,23 @@ The **▣ name ▾** menu in the top bar lists them:
   workspace that shows it.
 - The current workspace is the server's: switching in one browser switches your other open browsers too (they
   reload with a notice).
+
+### Chatting with a folder
+
+Hover a root folder and click the **chat** icon: the folder's chats, and **New chat** (optional title). A chat
+opens as a tab (*Chat: title*) with the conversation in the middle — an open conversation with the agent about the
+whole folder, not about one document: it searches and reads the wiki to answer and cites the pages it used.
+Reference folders (**⧉**) and locks apply as for documents. When the conversation is worth keeping, under
+**Turn into wiki content**:
+- **Distill into a new page** — give the page path (`folder/page.md`, suggested from the title) and an optional
+  focus; the agent writes a standalone article from the conversation, linking the pages it came from, and touches
+  no other file;
+- **Update the pages it came from** — when the content mostly came from existing pages, the agent folds the
+  conclusions and corrections back into those pages in place (optional note: which pages, what to leave alone).
+
+Both are ordinary changes in the folder: **Review changes** opens the Diff view to keep, edit or revert them
+before committing. **Archive** (confirmed) removes a chat from the list; its conversation is kept. Chats are
+stored by the app, never as files in the wiki, and appear in *Recent*.
 
 ### Creating files and folders
 
@@ -107,7 +125,8 @@ can see, grouped by repository (most PRs first):
   Meta / Facebook) and from people you name; each PR shows who *asked* you. Change it under **⚙**;
 - **⚙** (repositories and priority): **watch** a repository (`owner/name`) to also list all its open PRs (newest 40,
   in a *Watched repositories* section), stop watching it, choose the priority people, and **show again** a
-  hidden repository. Hover a repository and click **×** to **hide** it. Kept on the server (`kv_settings`);
+  hidden repository. Hover a repository and click **×** to **hide** it (after a confirmation; stopping watching
+  a repository is confirmed too). Kept on the server (`kv_settings`);
 - clicking a PR opens it as a **tab** next to your documents (remembered like them):
   - **Overview**: description, checks (failing first, linked), reviews and requested reviewers, labels;
     **Open on GitHub**; ↻ reloads. Below the description the **Conversation**: every reviewer's review

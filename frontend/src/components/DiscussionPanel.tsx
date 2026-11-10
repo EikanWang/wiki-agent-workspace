@@ -391,7 +391,7 @@ function AnchorBadge({ state }: { state: string }) {
   return <span className={`chip anchor ${state}`} data-testid="anchor-state">{label}</span>;
 }
 
-function MessageView({ m, session, live, onRetry, onCancel, onPermission, sessions }: { m: Message; session: AgentSession | undefined; live: LiveJob | null; onRetry: (sid: string | null) => Promise<void>; onCancel: (jobId: string) => Promise<void>; onPermission: (jobId: string, requestId: string, decision: string) => Promise<void>; sessions: AgentSession[] }) {
+export function MessageView({ m, session, live, onRetry, onCancel, onPermission, sessions }: { m: Message; session: AgentSession | undefined; live: LiveJob | null; onRetry: (sid: string | null) => Promise<void>; onCancel: (jobId: string) => Promise<void>; onPermission: (jobId: string, requestId: string, decision: string) => Promise<void>; sessions: AgentSession[] }) {
   const [retrySession, setRetrySession] = useState<string>("__same__");
   const status = live ? live.status : m.status;
   const content = hideReviewBlock(stripAnsi(live && live.text ? live.text : m.content));

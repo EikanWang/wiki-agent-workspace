@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { ApiError, get, put } from "../api";
 import RefreshButton from "./RefreshButton";
+import { confirmAction } from "./Confirm";
 
 export interface ReviewPR {
   repo: string;
@@ -146,7 +147,16 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
       setBusy(null);
     }
   };
-  const hideRepo = (repo: string) => prefs && void change(`hide:${repo}`, { hidden_repos: [...prefs.hidden_repos, repo], watched_repos: prefs.watched_repos.filter((r) => r.toLowerCase() !== repo.toLowerCase()) });
+  const hideRepo = async (repo: string) => {
+    if (!prefs) return;
+    const n = (queue?.items ?? []).filter((p) => p.repo === repo).length;
+    const ok = await confirmAction({
+      title: `Hide ${repo} from Reviews?`,
+      message: `Its ${n ? `${n} review request(s) are` : "open PRs are"} no longer listed${prefs.watched_repos.some((r) => r.toLowerCase() === repo.toLowerCase()) ? " and it is no longer watched" : ""}. Nothing changes on GitHub. Show it again under ⚙ → Hidden repositories.`,
+      confirmLabel: "Hide repository",
+    });
+    if (ok) void change(`hide:${repo}`, { hidden_repos: [...prefs.hidden_repos, repo], watched_repos: prefs.watched_repos.filter((r) => r.toLowerCase() !== repo.toLowerCase()) });
+  };
   const toggle = (repo: string) => setCollapsed((s) => { const n = new Set(s); if (n.has(repo)) n.delete(repo); else n.add(repo); return n; });
   const prRow = (p: ReviewPR, showRepo = false) => (
     <button key={`${p.repo}#${p.number}`} className={`review-pr ${p.draft ? "draft" : ""} ${p.priority ? "priority" : ""}`} onClick={() => onOpen(p)}
@@ -180,7 +190,7 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
             <span className="git-badge clean">{prs.length}</span>
           </button>
           {prefs && (
-            <button className="icon-btn small review-hide" onClick={() => hideRepo(repo)} disabled={busy !== null} title={`Hide ${repo} from Reviews (undo under ⚙)`} aria-label={`Hide ${repo}`} data-testid="review-hide-repo">×</button>
+            <button className="icon-btn small review-hide" onClick={() => void hideRepo(repo)} disabled={busy !== null} title={`Hide ${repo} from Reviews (undo under ⚙)`} aria-label={`Hide ${repo}`} data-testid="review-hide-repo">×</button>
           )}
         </div>
         {open && prs.map((p) => prRow(p))}
@@ -273,7 +283,7 @@ function ReviewsSettings({ prefs, busy, change, problems }: {
       {prefs.watched_repos.map((r) => (
         <div key={r} className="reviews-settings-item" data-testid="reviews-watched-item">
           <span className="mono small">{r}</span>
-          <button className="icon-btn small" disabled={busy !== null} onClick={() => void change(`unwatch:${r}`, { watched_repos: prefs.watched_repos.filter((x) => x !== r) })} title="Stop watching" aria-label={`Stop watching ${r}`}>×</button>
+          <button className="icon-btn small" disabled={busy !== null} onClick={() => void confirmAction({ title: `Stop watching ${r}?`, message: "Its open PRs leave Reviews (review requests from it stay). Watch it again any time.", confirmLabel: "Stop watching" }).then((ok) => { if (ok) void change(`unwatch:${r}`, { watched_repos: prefs.watched_repos.filter((x) => x !== r) }); })} title="Stop watching" aria-label={`Stop watching ${r}`}>×</button>
         </div>
       ))}
       {problems.map((m) => <div key={m} className="tree-error small">{m}</div>)}

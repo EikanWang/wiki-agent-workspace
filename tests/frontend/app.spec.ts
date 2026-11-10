@@ -827,10 +827,17 @@ test("multi-root window: add a folder, work in both wikis, Recent across folders
   await expect(page.getByTestId("recent-ws").first()).toBeVisible();
   await page.getByTestId("recent-item").filter({ has: page.getByTestId("recent-ws").filter({ hasText: "Second" }) }).first().locator(".recent-main").click();
   await expect(page.getByTestId("markdown-body").locator("h1")).toHaveText("Second guide");
-  // remove the folder from the window (data kept)
-  page.once("dialog", (d) => d.accept());
+  // remove the folder from the window (data kept) — only after confirming in the dialog
   await page.getByTestId("tree-root").nth(1).locator(".tree-root").hover();
   await page.getByTestId("tree-remove-Second").click();
+  await expect(page.getByTestId("confirm-dialog")).toContainText('Close the folder "Second"?');
+  await expect(page.getByTestId("confirm-cancel")).toBeFocused(); // Enter / a stray click does not close it
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("confirm-dialog")).toHaveCount(0);
+  await expect(page.getByTestId("tree-root")).toHaveCount(2);
+  await page.getByTestId("tree-root").nth(1).locator(".tree-root").hover();
+  await page.getByTestId("tree-remove-Second").click();
+  await page.getByTestId("confirm-ok").click();
   await expect(page.getByTestId("tree-root")).toHaveCount(1);
   await expect(page.getByTestId("markdown-body").locator("h1")).toContainText("Guide", { timeout: 10000 });
   await expect(page.locator(`[data-testid="doc-tab"][data-ws="${secondId}"]`)).toHaveCount(0); // its tabs went with it
@@ -1505,8 +1512,8 @@ test("named workspaces: create one (its own folders, tabs, terminals), switch ba
     page.once("dialog", (d) => d.accept("Side project 2"));
     await page.locator('[data-testid="ws-menu-item"][data-name="Side project"] [data-testid="ws-menu-rename"]').click();
     await expect(page.locator('[data-testid="ws-menu-item"][data-name="Side project 2"]')).toBeVisible();
-    page.once("dialog", (d) => d.accept());
     await page.locator('[data-testid="ws-menu-item"][data-name="Side project 2"] [data-testid="ws-menu-delete"]').click();
+    await page.getByTestId("confirm-ok").click();
     await expect(page.getByTestId("ws-menu-item")).toHaveCount(1);
   } finally {
     // leave the shared test server in Default for the other tests
@@ -1857,6 +1864,12 @@ test("GitHub review hub: priority requests, hide a repository, watch a repositor
   const intel = page.locator('[data-testid="review-group"][data-repo="intel/torch-xpu-ops"]');
   await intel.locator(".review-group-head-row").hover();
   await intel.getByTestId("review-hide-repo").click();
+  await expect(page.getByTestId("confirm-dialog")).toContainText("Hide intel/torch-xpu-ops from Reviews?");
+  await page.getByTestId("confirm-cancel").click();
+  await expect(intel).toHaveCount(1);
+  await intel.locator(".review-group-head-row").hover();
+  await intel.getByTestId("review-hide-repo").click();
+  await page.getByTestId("confirm-ok").click();
   await expect(intel).toHaveCount(0);
   await expect(page.getByTestId("reviews-hidden-item")).toContainText("intel/torch-xpu-ops");
   await page.getByTestId("reviews-unhide").click();
@@ -1868,6 +1881,7 @@ test("GitHub review hub: priority requests, hide a repository, watch a repositor
   const w = page.locator('[data-testid="review-group-watched"][data-repo="pytorch/ao"]');
   await expect(w.getByTestId("review-pr")).toHaveAttribute("data-number", "301", { timeout: 15000 });
   await page.getByTestId("reviews-watched-item").getByRole("button").click();
+  await page.getByTestId("confirm-ok").click();
   await expect(page.getByTestId("reviews-watched-item")).toHaveCount(0);
   // a PR's contributors, with details from their GitHub profile on demand
   await page.locator('[data-testid="review-pr"][data-number="101"]').click();
@@ -2175,9 +2189,10 @@ test("projects: add one by cloning a URL, close it, and it stays closed", async 
     await expect(root).toContainText("clone-src-copy");
     // the config.toml folder can be closed too (button present); close the clone
     await expect(page.getByTestId("tree-root").first().locator('[data-testid^="tree-remove-"]')).toHaveCount(1);
-    page.once("dialog", (d) => { expect(d.message()).toContain("will not show again"); d.accept(); });
     await root.locator(".tree-root").hover();
     await page.getByTestId("tree-remove-clone-src-copy").click();
+    await expect(page.getByTestId("confirm-dialog")).toContainText("will not show again");
+    await page.getByTestId("confirm-ok").click();
     await expect(page.getByTestId("tree-root")).toHaveCount(1);
     await page.reload();
     await expect(page.getByTestId("tree-root")).toHaveCount(1); // stays closed
@@ -2207,4 +2222,55 @@ test("reference folders for the agent: add and remove for a wiki folder", async 
   await expect(page.getByTestId("context-folder")).toContainText("/tmp");
   await page.getByTestId("context-folder-remove").click();
   await expect(page.getByTestId("context-folder")).toHaveCount(0);
+});
+
+test("folder chat: talk with the agent about the folder, then distill the conversation into a page", async ({ page }) => {
+  const errs: string[] = [];
+  page.on("pageerror", (e) => errs.push(String(e)));
+  await login(page);
+  const out = path.join(workspaceDir(), "chat-notes", "capture-chat.md");
+  try {
+    const root = page.getByTestId("tree-root").first();
+    await root.locator(".tree-root").hover();
+    await page.getByTestId("tree-chats-root").click();
+    await expect(page.getByTestId("chats-dialog")).toContainText("No chats yet.");
+    await page.getByTestId("chat-new-title").fill("Capture chat");
+    await page.getByTestId("chat-new").click();
+    const chat = page.getByTestId("chat-view");
+    await expect(page.getByTestId("chat-title")).toHaveText("Capture chat");
+    await expect(page.locator('[data-testid="doc-tab"]').filter({ hasText: "Chat: Capture chat" })).toHaveCount(1);
+    await expect(page.getByTestId("panel-expand")).toHaveCount(0); // the conversation is the page: no discussion panel
+    // an open conversation (no document, no passage)
+    await page.getByTestId("chat-input").fill("How is a graph captured?");
+    await page.keyboard.press("Enter");
+    await expect(chat.locator('[data-testid="message-agent"][data-status="completed"]')).toContainText("How is a graph captured?", { timeout: 20000 });
+    await page.getByTestId("chat-input").fill("And lowered?");
+    await page.getByTestId("chat-send").click();
+    await expect(chat.locator('[data-testid="message-agent"][data-status="completed"]')).toHaveCount(2, { timeout: 20000 });
+    // distill it into a new page; the change is reviewed in Diff
+    await page.getByTestId("chat-action-distill").check();
+    await expect(page.getByTestId("chat-target")).toHaveValue("capture-chat.md");
+    await page.getByTestId("chat-target").fill("chat-notes/capture-chat.md");
+    await page.getByTestId("chat-action-run").click();
+    await expect(chat.locator('[data-testid="message-user"]').last()).toContainText("Distill this conversation into the wiki page `chat-notes/capture-chat.md`.");
+    await expect(chat.locator('[data-testid="message-agent"][data-status="completed"]')).toHaveCount(3, { timeout: 20000 });
+    await expect(chat.locator('[data-testid="message-agent"]').last()).toContainText("Wrote chat-notes/capture-chat.md from 2 question(s).");
+    expect(fs.readFileSync(out, "utf-8")).toContain("- How is a graph captured?");
+    await expect(page.getByTestId("chat-acted")).toBeVisible();
+    await page.getByTestId("chat-review-changes").click();
+    await expect(page.locator('[data-testid="diff-file"][data-path="chat-notes/capture-chat.md"]')).toBeVisible({ timeout: 10000 });
+    // listed under the folder's chats; archive it
+    await page.getByTestId("view-document").click();
+    await root.locator(".tree-root").hover();
+    await page.getByTestId("tree-chats-root").click();
+    await expect(page.getByTestId("chat-item")).toContainText("Capture chat");
+    await expect(page.getByTestId("chat-item")).toContainText("6 messages");
+    await page.getByTestId("chat-item").click();
+    await page.getByTestId("chat-archive").click();
+    await page.getByTestId("confirm-ok").click();
+    await expect(page.getByTestId("chat-view")).toHaveCount(0);
+    expect(errs).toEqual([]);
+  } finally {
+    fs.rmSync(path.join(workspaceDir(), "chat-notes"), { recursive: true, force: true });
+  }
 });

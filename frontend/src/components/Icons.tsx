@@ -12,3 +12,4 @@ export const NewFileIcon = (p: { size?: number }) => <S {...p}><path d="M9 1.8H4
 export const NewFolderIcon = (p: { size?: number }) => <S {...p}><path d="M1.8 4.2a1 1 0 011-1h3.4l1.5 1.6h5.5a1 1 0 011 1v6.9a1 1 0 01-1 1H2.8a1 1 0 01-1-1z" /><path d="M8 7.2v4M6 9.2h4" /></S>;
 export const FilesIcon = (p: { size?: number }) => <S {...p}><path d="M2 4a1 1 0 011-1h3.4l1.5 1.6H13a1 1 0 011 1v6.9a1 1 0 01-1 1H3a1 1 0 01-1-1z" /></S>;
 export const PullRequestIcon = (p: { size?: number }) => <S {...p}><circle cx="4" cy="3.5" r="1.6" /><circle cx="4" cy="12.5" r="1.6" /><circle cx="12" cy="12.5" r="1.6" /><path d="M4 5.1v5.8M12 10.9V6.3a2 2 0 00-2-2H7.2M8.6 2.8L7 4.3l1.6 1.5" /></S>;
+export const ChatIcon = (p: { size?: number }) => <S {...p}><path d="M2.5 3.5a1 1 0 011-1h9a1 1 0 011 1v6.2a1 1 0 01-1 1H7l-3 2.6v-2.6h-.5a1 1 0 01-1-1z" /><path d="M5 5.8h6M5 8h4" /></S>;

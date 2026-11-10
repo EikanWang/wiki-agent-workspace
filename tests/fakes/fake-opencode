@@ -184,6 +184,15 @@ def main(argv):
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content.replace("\\n", "\n"))
         text = f"wrote {rel}"
+    if "distill this whole conversation into a wiki page at `" in prompt:
+        # a folder chat distilled into a page: the page holds the conversation's user questions
+        import re as _re
+        rel = prompt.split("distill this whole conversation into a wiki page at `", 1)[1].split("`", 1)[0]
+        asked = _re.findall(r"^\[user\] (.*)$", prompt, _re.M)
+        p = Path(directory) / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("# Distilled\n\n" + "".join(f"- {q}\n" for q in asked))
+        text = f"Wrote {rel} from {len(asked)} question(s)."
     emit({"type": "text", "sessionID": session, "part": {"id": "prt_1", "type": "text", "text": text}})
     emit({"type": "step_finish", "sessionID": session, "part": {"type": "step-finish", "reason": "stop"}})
     return 0

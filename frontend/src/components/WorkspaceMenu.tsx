@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { confirmAction } from "./Confirm";
 import { ApiError, NamedWorkspaceList, del, get, patch, post } from "../api";
 
 /**
@@ -14,7 +15,10 @@ export default function WorkspaceMenu({ initial, onNew, beforeSwitch, onNotify }
   useEffect(() => {
     if (!open) return;
     void get<NamedWorkspaceList>("/named-workspaces").then(setList).catch(() => undefined);
-    const close = (e: MouseEvent) => { if (box.current && !box.current.contains(e.target as Node)) setOpen(false); };
+    const close = (e: MouseEvent) => {
+      if ((e.target as Element).closest?.(".confirm-backdrop")) return; // answering its confirmation keeps the menu open
+      if (box.current && !box.current.contains(e.target as Node)) setOpen(false);
+    };
     const esc = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
     document.addEventListener("mousedown", close);
     document.addEventListener("keydown", esc);
@@ -50,7 +54,7 @@ export default function WorkspaceMenu({ initial, onNew, beforeSwitch, onNotify }
     });
   const remove = (id: string, name: string) =>
     run(async () => {
-      if (!window.confirm(`Delete the workspace "${name}"? Its folders, their discussions and history are not touched; its terminals move to Default and keep running.`)) return;
+      if (!(await confirmAction({ title: `Delete the workspace "${name}"?`, message: "Only this named set of folders goes. Its folders, their discussions and history are not touched; its terminals move to Default and keep running.", confirmLabel: "Delete workspace" }))) return;
       setList(await del<NamedWorkspaceList>(`/named-workspaces/${id}`));
     });
 

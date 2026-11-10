@@ -24,6 +24,8 @@ import Login from "./components/Login";
 import FileTree, { notifyTreeChanged } from "./components/FileTree";
 import DocTabs, { DocTab, PR_TABS, loadTabs, sameTab, tabsKey, withTab } from "./components/DocTabs";
 import PrView from "./components/PrView";
+import ChatView, { isChatPath } from "./components/ChatView";
+import { ConfirmHost, confirmAction } from "./components/Confirm";
 import WorkspaceMenu from "./components/WorkspaceMenu";
 import AccountMenu from "./components/AccountMenu";
 import ReviewsPanel, { loadReviews, reviewBadge, useReviews } from "./components/ReviewsPanel";
@@ -634,7 +636,12 @@ export default function App() {
   const activeWsInfo = useMemo(() => workspaces.find((w) => w.id === activeWs) ?? null, [workspaces, activeWs]);
   const removeFolder = useCallback(
     async (w: WorkspaceInfo) => {
-      if (!window.confirm(`Close "${w.name}" (${w.root})? It will not show again. Its discussions, sessions and history are kept and come back if you add the folder again with +.`)) return;
+      const ok = await confirmAction({
+        title: `Close the folder "${w.name}"?`,
+        message: `${w.root}\n\nIt leaves this window and will not show again (also after a restart). Nothing is deleted on disk; its discussions, sessions and history are kept and come back if you add the folder again with +.`,
+        confirmLabel: "Close folder",
+      });
+      if (!ok) return;
       try {
         await del(`/workspaces/${w.id}`);
         if (w.id === getWorkspace()) {
@@ -651,8 +658,14 @@ export default function App() {
   );
   // with a PR tab in front, the panel and the session bar belong to the PR's discussion document (once it is open)
   const isPrDoc = !!doc && doc.path.startsWith(".waw-github/");
-  const panelDoc = prTab ? (isPrDoc && doc!.path.endsWith(`/${prTab.number}.md`) ? doc : null) : doc;
+  const isChatDoc = !prTab && !!doc && isChatPath(doc.path); // a folder chat: the conversation is the page itself
+  const panelDoc = prTab ? (isPrDoc && doc!.path.endsWith(`/${prTab.number}.md`) ? doc : null) : isChatDoc ? null : doc;
   const defaultSession = useMemo(() => sessions.find((s) => s.id === doc?.default_session_id), [sessions, doc?.default_session_id]);
+  const chatTitle = isChatDoc ? (doc!.text.split("\n", 1)[0] || "").replace(/^#\s*/, "") : null;
+  useEffect(() => {
+    if (!chatTitle || !doc) return; // name the chat's tab after its title
+    setDocTabs((tabs) => (tabs.some((t) => t.path === doc.path && t.title !== chatTitle) ? tabs.map((t) => (t.path === doc.path ? { ...t, title: chatTitle } : t)) : tabs));
+  }, [chatTitle, doc?.path]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (authed === null) return <div className="loading-screen">Loading…</div>;
   if (!authed) return <Login onDone={() => void loadBootstrap()} />;
@@ -732,7 +745,7 @@ export default function App() {
       {boot.settings.watcher_error && <div className="banner warn">{boot.settings.watcher_error}</div>}
       {!watcherReady && <div className="banner">The file watcher is still indexing this workspace; until it finishes, use the ↻ button in the file tree to see new files and changes.</div>}
 
-      <main className={`layout view-${view === "diff" ? "terminal" : view} ${view === "diff" ? "view-diff" : ""}`}>
+      <main className={`layout view-${view === "diff" ? "terminal" : view} ${view === "diff" ? "view-diff" : ""} ${isChatDoc && view === "document" ? "view-chat" : ""}`}>
         <aside className={`sidebar ${hub?.available ? "with-activity" : ""}`}>
           {hub?.available && (
             <nav className="activity-bar" aria-label="Sidebar views">
@@ -818,6 +831,32 @@ export default function App() {
               githubLogin={hub?.owner ?? null}
               onOpenPr={(r, n) => openPr(r, n)}
               onDiscussionsChanged={() => { if (doc) void refreshThreads(doc.document_id); }}
+            />
+          ) : doc && isChatDoc ? (
+            <ChatView
+              doc={doc}
+              folderName={activeWsInfo?.name ?? boot.workspace.name}
+              threads={threads}
+              sessions={sessions}
+              liveJob={liveJob}
+              onStart={(q) => createThread(wholeDocument(), q, null)}
+              onSend={(tid, text) => reply(tid, text, null)}
+              onAction={async (tid, action, target, note) => {
+                const r = await post<{ job_id: string }>(`/threads/${tid}/messages`, { text: note, chat_action: action, target_path: target ?? undefined }, { idempotencyKey: newIdempotencyKey() });
+                await refreshThreads(doc.document_id);
+                setLiveJobId(r.job_id);
+              }}
+              onRetry={retry}
+              onCancel={cancel}
+              onPermission={permission}
+              onReviewChanges={() => openDiff("", true)}
+              onArchived={() => {
+                const t = docTabs.find((x) => x.ws !== PR_TABS && x.path === doc.path);
+                if (t) closeDocTab(t);
+                setDoc((d) => (d && isChatPath(d.path) ? null : d)); // if it was not the active tab entry, still leave the chat
+                setThreads([]);
+                notify("Chat archived.");
+              }}
             />
           ) : doc ? (
             <Reader
@@ -953,6 +992,7 @@ export default function App() {
         <button className={view === "terminal" ? "active" : ""} onClick={() => setView("terminal")}>Terminal</button>
       </nav>
 
+      <ConfirmHost />
       {showAddFolder && (
         <AddFolderDialog
           start={(activeWsInfo?.root ?? boot.workspace.root).split("/").slice(0, -1).join("/") || "/"}

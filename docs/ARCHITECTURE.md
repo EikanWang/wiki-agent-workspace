@@ -51,6 +51,11 @@ backend/app/
                    turns the block into github_pr_drafts (origin=agent, decision=proposed; lines checked against
                    the diff, else file comments) and replaces the JSON in the message by a note; Finish review
                    publishes only decision=accepted drafts and deletes discarded ones
+  chats.py         folder chats: the hidden read-only document .waw-chat/<slug>-<id>.md of a folder (stub in
+                   snapshots/chats/<folder id>/, never in the wiki) reusing threads, sessions and streaming;
+                   /chats list/create/archive (documents.hidden); build_chat_prompt (the conversation so far, locks,
+                   reference folders) and the distill (target page checked against locks / the folder) and
+                   update actions (MessageIn.chat_action); edits are reviewed in the Diff view
   kv.py            kv_settings get/put; extra reference folders (context:repo:<o>/<r>, context:ws:<id>) added
                    to every agent prompt for that PR repository / wiki folder (/agent-context)
   office.py        OfficeRenderer: Layout view, LibreOffice headless → PDF, content-addressed cache, parallel

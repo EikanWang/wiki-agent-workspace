@@ -17,6 +17,7 @@ from .deps import AppContext, require_auth, require_auth_mutating
 from .errors import ApiError, bad_request, conflict, not_found, DOCUMENT_VERSION_CONFLICT, INVALID_ANCHOR
 from .models import AgentSession, AnchorHistory, Document, Job, Message, Thread
 from .sessions import SessionService
+from .chats import action_message, build_chat_prompt, check_action, is_chat_path
 from .documents import is_pr_path
 from .textmodel import NO_TEXT_FORMATS, TextModel, build_text_model_from_html
 
@@ -371,7 +372,10 @@ class ThreadService:
                 tt = s.get(Thread, thread_id)
                 if tt:
                     tt.target_json = json.dumps(target, ensure_ascii=False)
-        if is_pr_path(doc.path):
+        if is_chat_path(doc.path):
+            prompt = build_chat_prompt(question=body.question, wiki_root=str(self.docs.root), prior=None, extra=self._extra(doc.path),
+                                       locked=self._locked())
+        elif is_pr_path(doc.path):
             text, cpath = _pr_copy(self.docs, doc.path)
             prompt = build_pr_prompt(question=body.question, quote=body.quote, copy_text=text, copy_path=cpath,
                                      wiki_root=str(self.docs.root), target=target, prior=None,
@@ -415,16 +419,26 @@ class ThreadService:
             _, _, sha = self.docs.current_content(doc)
         except ApiError:
             sha = t.cur_version_sha256
+        target = None
+        shown = body.text
+        if body.chat_action is not None:
+            if not is_chat_path(doc.path):
+                raise ApiError(400, "INVALID_ACTION", "distill / update are for folder chats")
+            target = check_action(self.ctx, body.chat_action, body.target_path)
+            shown = action_message(body.chat_action, target, body.text if body.text.strip() != "-" else "")
         user_msg_id = new_id()
         agent_msg_id = new_id()
         with self.ctx.db.write() as s:
-            s.add(Message(id=user_msg_id, thread_id=thread_id, session_id=sess.id, role="user", content=body.text, status="completed"))
+            s.add(Message(id=user_msg_id, thread_id=thread_id, session_id=sess.id, role="user", content=shown, status="completed"))
             s.add(Message(id=agent_msg_id, thread_id=thread_id, session_id=sess.id, role="agent", content="", status="queued"))
             tt = s.get(Thread, thread_id)
             if tt:
                 tt.last_session_id = sess.id
                 tt.updated_at = utcnow()
-        if is_pr_path(doc.path):
+        if is_chat_path(doc.path):
+            prompt = build_chat_prompt(question=shown, wiki_root=str(self.docs.root), prior=prior, extra=self._extra(doc.path),
+                                       locked=self._locked(), action=body.chat_action, target=target)
+        elif is_pr_path(doc.path):
             text, cpath = _pr_copy(self.docs, doc.path)
             prompt = build_pr_prompt(question=body.text, quote=t.cur_quote, copy_text=text, copy_path=cpath, wiki_root=str(self.docs.root),
                                      target=json.loads(t.target_json) if t.target_json else None, prior=prior, extra=self._extra(doc.path))
@@ -441,6 +455,10 @@ class ThreadService:
             if m:
                 m.job_id = job_id
         return {"message_id": user_msg_id, "job_id": job_id, "session_id": sess.id, "agent_message_id": agent_msg_id}
+
+    def _locked(self) -> list[str]:
+        locks = self.ctx.locks
+        return sorted({x["path"] or "(the whole folder)" for x in locks.list()}) if locks is not None else []
 
     def _extra(self, doc_path: str) -> str | None:
         """Extra reference folders the user added for this wiki folder / this PR's repository."""
@@ -560,6 +578,10 @@ class ThreadCreateIn(BaseModel):
 class MessageIn(BaseModel):
     text: str = Field(min_length=1, max_length=100000)
     session_id: str | None = None
+    # folder chats: turn the conversation into wiki content — distill (into target_path) or update the source pages;
+    # `text` is then an optional note for the agent ("-" for none)
+    chat_action: str | None = None
+    target_path: str | None = Field(None, max_length=1000)
 
 
 class AnchorUpdateIn(BaseModel):

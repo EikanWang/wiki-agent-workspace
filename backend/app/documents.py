@@ -254,6 +254,14 @@ class DocumentService:
             if p is None or not p.is_file():
                 raise not_found(f"{norm} not found (open the pull request from Reviews first)", "FILE_NOT_FOUND")
             return norm, p.read_bytes()
+        from .chats import chat_snapshot_path, is_chat_path
+
+        if is_chat_path(rel):  # a folder chat (never a file in the wiki)
+            norm = self.normalize_rel(rel)
+            p = chat_snapshot_path(self.snapshots_dir, self.workspace_id, norm)
+            if p is None or not p.is_file():
+                raise not_found(f"{norm} not found", "FILE_NOT_FOUND")
+            return norm, p.read_bytes()
         norm, path = self.resolve(rel)
         if not path.is_file():
             raise not_found(f"{norm} is not a file", "FILE_NOT_FOUND")
@@ -385,7 +393,7 @@ class DocumentService:
             "document_id": doc.id,
             "path": norm,
             "format": fmt,
-            "editable": fmt in ("markdown", "text") and not is_pr_path(norm),
+            "editable": fmt in ("markdown", "text") and not is_pr_path(norm) and not norm.startswith(".waw-chat/"),
             "text": text,
             "html": html if fmt in ("docx", "pptx", "visio", "text") else None,  # markdown is rendered client-side; others server-side
             "sha256": sha,
@@ -766,7 +774,7 @@ class DocumentService:
         hash, so the browser can offer reload / overwrite), for non-text formats, oversize content and locks."""
         doc = self.get_document(doc_id)
         fmt = document_format(Path(doc.path).name)
-        if fmt not in ("markdown", "text") or is_pr_path(doc.path):
+        if fmt not in ("markdown", "text") or is_pr_path(doc.path) or doc.path.startswith(".waw-chat/"):
             raise bad_request(f"{fmt} files cannot be edited as text" if not is_pr_path(doc.path) else "pull requests are read-only", "NOT_EDITABLE")
         _, data, current = self.current_content(doc)
         if current != base_sha256:
