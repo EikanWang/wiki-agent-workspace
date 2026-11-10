@@ -1907,7 +1907,8 @@ test("GitHub review hub: priority requests, hide a repository, watch a repositor
   await expect(people.getByTestId("pr-contributor").first()).toContainText("Intel"); // affiliation guess
   await expect(people.getByTestId("pr-contributor").last()).toContainText("Dan Helper");
   await expect(people.getByTestId("pr-contributor").last()).toContainText("co-author");
-  await people.getByTestId("pr-contributor").first().locator(".pr-person-head").click();
+  await expect(people.getByTestId("pr-contributor").first().getByTestId("gh-user")).toHaveAttribute("href", "https://github.com/alice");
+  await people.getByTestId("pr-contributor").first().getByTestId("pr-contributor-toggle").click();
   await expect(people.getByTestId("pr-contributor-details").first()).toContainText("alice@intel.com");
   await expect(people.getByTestId("pr-contributor-details").first()).toContainText("Shanghai");
   await people.getByTestId("pr-contributors-details").check();
@@ -1955,6 +1956,11 @@ test("GitHub PR tab: overview, files, choose the wiki once, ask about the PR and
   await expect(tab).toContainText("#101");
   await expect(page.getByTestId("pr-title")).toContainText("[xpu] Fix the lazy Level Zero stub");
   await expect(page.getByTestId("pr-description")).toContainText("This PR fixes the lazy stub.");
+  // GitHub logins open the account's page, like on github.com: the author, @mentions, reviewers, commenters
+  await expect(page.locator('.pr-meta [data-testid="gh-user"]')).toHaveAttribute("href", "https://github.com/alice");
+  await expect(page.getByTestId("pr-description").locator('a.gh-user[data-login="bob"]')).toHaveAttribute("href", "https://github.com/bob");
+  await expect(page.getByTestId("pr-description").locator('a.gh-user')).toHaveCount(1); // not the e-mail address
+  await expect(page.getByTestId("pr-reviews").locator('[data-testid="gh-user"]').first()).toHaveAttribute("href", "https://github.com/bob");
   await expect(page.getByTestId("pr-checks").locator("li").first()).toContainText("xpu-test"); // failing first
   await expect(page.getByTestId("pr-reviews")).toContainText("bob requested changes");
   // conversation: reviewers' summaries and general comments, in time order; post one
@@ -2006,6 +2012,10 @@ test("GitHub PR tab: overview, files, choose the wiki once, ask about the PR and
   await expect(page.getByTestId("pr-reviewer-item").first()).toContainText("suggested");
   await page.getByTestId("pr-reviewer-input").press("Enter");
   await expect.poll(async () => (await (await page.request.get("/fake-github/posted")).json()).some((x: any) => x.path?.endsWith("/requested_reviewers") && x.method === "POST" && x.body.reviewers[0] === "ezyang")).toBe(true);
+  // re-request a review from someone who already reviewed (bob requested changes)
+  await page.getByTestId("pr-review-item").filter({ hasText: "bob" }).getByTestId("pr-reviewer-rerequest").click();
+  await expect(page.getByTestId("pr-reviewer-note")).toContainText("Review requested from bob");
+  await expect.poll(async () => (await (await page.request.get("/fake-github/posted")).json()).some((x: any) => x.path?.endsWith("/requested_reviewers") && x.method === "POST" && x.body.reviewers[0] === "bob")).toBe(true);
   // ask the agent about the CI failures: the server downloads the failing jobs' logs for it
   await page.getByTestId("pr-ci-ask").click();
   await page.getByTestId("pr-ci-ask-send").click();

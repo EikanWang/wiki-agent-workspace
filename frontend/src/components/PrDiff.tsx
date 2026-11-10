@@ -3,6 +3,7 @@ import { ApiError, del, patch, post } from "../api";
 import { renderGithubMarkdown } from "../markdown";
 import { COMPOSER_HINT, composerKeyDown } from "./keys";
 import MentionTextarea from "./MentionTextarea";
+import GhUser from "./GhUser";
 import { Line, SplitCols, UnifiedCols, buildSplitRows, numColStyle, parseUnified } from "./DiffReview";
 
 /** A review thread on GitHub (line or whole-file), with all its comments. */
@@ -370,7 +371,7 @@ function ThreadBox({ thread, apiBase, onChanged, onError, canAsk, onAsk }: {
         <>
           {thread.comments.map((c) => (
             <div key={c.id} className="gh-comment">
-              <div className="gh-comment-head small"><b>{c.author}</b> <span className="muted">{ago(c.created_at)}</span>{c.url && <> · <a href={c.url} target="_blank" rel="noreferrer">GitHub</a></>}</div>
+              <div className="gh-comment-head small"><GhUser login={c.author} /> <span className="muted">{ago(c.created_at)}</span>{c.url && <> · <a href={c.url} target="_blank" rel="noreferrer">GitHub</a></>}</div>
               <div className="markdown-body gh-comment-body" dangerouslySetInnerHTML={{ __html: md(c.body, apiBase) }} />
             </div>
           ))}

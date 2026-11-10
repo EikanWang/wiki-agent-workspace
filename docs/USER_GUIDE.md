@@ -151,6 +151,11 @@ can see, grouped by repository (most PRs first):
   - **Reviewers**: the reviews given and the pending requests. **＋ Request a review…** — type a name or login;
     GitHub's *suggested* reviewers (who changed these files) come first, then the repository's users; ↑/↓ and
     Enter (or a click) request the review on GitHub at once. **×** on a pending request cancels it (confirmed).
+    **↻** next to someone who already reviewed **re-requests** their review (as on GitHub, e.g. after you addressed
+    their comments); they show *re-requested* until they review again, with **×** to cancel.
+  - **GitHub logins open the account's page** (new tab), as on github.com: authors, reviewers, commenters,
+    contributors, *asked by* in Reviews, and `@mentions` in descriptions and comments (apps such as
+    `pytorch-bot[bot]` open their app page).
   - **Checks** → **Ask agent about the failures…** (or **Ask** next to one failing check): the server downloads
     the failing GitHub Actions jobs' logs (up to 8; external CI is listed with its link) into its state folder and
     gives the agent the log paths and an excerpt — the output leading up to GitHub's `##[error]` marks. The agent

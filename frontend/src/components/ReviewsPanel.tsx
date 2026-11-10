@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { ApiError, get, put } from "../api";
 import RefreshButton from "./RefreshButton";
 import { confirmAction } from "./Confirm";
+import GhUser from "./GhUser";
 import { useRestoredScroll } from "../persist";
 
 export interface ReviewPR {
@@ -174,8 +175,8 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
       <span className="review-pr-main">
         <span className="review-pr-title">{p.title}</span>
         <span className="review-pr-meta muted small">
-          {showRepo ? `${p.repo}` : ""}#{p.number} · {p.author ?? "?"} · {ago(p.updated_at)} · <span className="add">+{p.additions}</span> <span className="del">−{p.deletions}</span>
-          {p.requested_by && <span className="review-by" data-testid="review-by"> · asked by {p.requested_by}</span>}
+          {showRepo ? `${p.repo}` : ""}#{p.number} · <GhUser login={p.author} bold={false} inButton /> · {ago(p.updated_at)} · <span className="add">+{p.additions}</span> <span className="del">−{p.deletions}</span>
+          {p.requested_by && <span className="review-by" data-testid="review-by"> · asked by <GhUser login={p.requested_by} bold={false} inButton /></span>}
           {p.draft && <span className="git-badge"> draft</span>}
           {p.my_review === "APPROVED" && (
             <span className={`git-badge ${p.approved_no_news ? "clean" : "approved-news"}`} title={p.approved_no_news ? "You approved; nothing new since" : `You approved; since then: ${(p.since_approval ?? []).join(", ")}`} data-testid="review-approved">

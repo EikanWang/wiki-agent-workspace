@@ -9,6 +9,7 @@ import { COMPOSER_HINT, composerKeyDown } from "./keys";
 import MentionTextarea from "./MentionTextarea";
 import { SelectionPopover } from "./Reader";
 import ContextFolders from "./ContextFolders";
+import GhUser from "./GhUser";
 import LocalRepo from "./LocalRepo";
 import RefreshButton from "./RefreshButton";
 
@@ -231,7 +232,7 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
           <h2 className="pr-title" data-testid="pr-title">{p.title} <span className="muted">#{p.number}</span></h2>
         </div>
         <div className="pr-meta muted small">
-          <b>{p.repo}</b>{p.private ? " (private)" : ""} · {p.author} wants to merge <code>{p.head}</code> → <code>{p.base}</code> · {p.changed_files} files <span className="add">+{p.additions}</span> <span className="del">−{p.deletions}</span>
+          <b>{p.repo}</b>{p.private ? " (private)" : ""} · <GhUser login={p.author} bold={false} /> wants to merge <code>{p.head}</code> → <code>{p.base}</code> · {p.changed_files} files <span className="add">+{p.additions}</span> <span className="del">−{p.deletions}</span>
         </div>
         <div className="pr-actions">
           <span className="mode-switch" role="tablist" aria-label="Pull request view">
@@ -299,7 +300,7 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
                 {conv.items.map((c) => (
                   <div key={`${c.kind}${c.id}`} className={`pr-conv-item ${c.kind} ${(c.state ?? "").toLowerCase()}`} data-testid="pr-conv-item" data-kind={c.kind}>
                     <div className="small">
-                      <b>{c.author}</b>{" "}
+                      <GhUser login={c.author} />{" "}
                       {c.kind === "review" ? <span className={`pr-review-state ${(c.state ?? "").toLowerCase()}`}>{REVIEW_LABEL[c.state ?? ""] ?? c.state?.toLowerCase()}</span> : <span className="muted">commented</span>}
 
                       <span className="muted"> · {c.created_at ? new Date(c.created_at).toLocaleString() : ""}</span>
@@ -319,7 +320,7 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
                         <div className="markdown-body gh-comment-body" dangerouslySetInnerHTML={{ __html: md(lc.body) }} />
                         {(conv.threads.get(lc.id) ?? []).map((r) => (
                           <div key={r.id} className="pr-conv-reply" data-testid="pr-conv-reply">
-                            <div className="small"><b>{r.author}</b><span className="muted"> · {r.created_at ? new Date(r.created_at).toLocaleString() : ""}</span>{r.url && <> · <a href={r.url} target="_blank" rel="noreferrer">GitHub</a></>}</div>
+                            <div className="small"><GhUser login={r.author} /><span className="muted"> · {r.created_at ? new Date(r.created_at).toLocaleString() : ""}</span>{r.url && <> · <a href={r.url} target="_blank" rel="noreferrer">GitHub</a></>}</div>
                             <div className="markdown-body gh-comment-body" dangerouslySetInnerHTML={{ __html: md(r.body) }} />
                           </div>
                         ))}
@@ -450,10 +451,11 @@ function Contributors({ apiBase }: { apiBase: string }) {
           const show = details || open.has(k);
           return (
             <li key={k} className="pr-person" data-testid="pr-contributor" data-login={c.login ?? ""}>
-              <button className="link-btn pr-person-head" onClick={() => toggle(k)} aria-expanded={show} title="Show / hide details">
+              <div className="pr-person-head">
                 {c.avatar ? <img className="pr-avatar" src={`${c.avatar}${c.avatar.includes("?") ? "&" : "?"}s=40`} alt="" loading="lazy" /> : <span className="pr-avatar none" />}
-                <span className="pr-person-name"><b>{c.login ?? c.name ?? "?"}</b>{c.login && c.name ? <span className="muted"> {c.name}</span> : null}</span>
-              </button>
+                <span className="pr-person-name">{c.login ? <GhUser login={c.login} /> : <b>{c.name ?? "?"}</b>}{c.login && c.name ? <span className="muted"> {c.name}</span> : null}</span>
+                <button className="link-btn small" onClick={() => toggle(k)} aria-expanded={show} title="Show / hide details" data-testid="pr-contributor-toggle">{show ? "▾" : "▸"}</button>
+              </div>
               <div className="small muted">
                 {c.roles.join(", ")}{c.commits ? ` · ${c.commits} commit${c.commits > 1 ? "s" : ""}` : ""}
                 {c.affiliation.map((a) => <span key={a} className="chip pr-aff" title="Guessed from company, emails and organizations">{a}</span>)}
@@ -543,10 +545,12 @@ function Reviewers({ apiBase, reviews, requested, onChanged, onError }: {
     }, q ? 200 : 0);
     return () => window.clearTimeout(t);
   }, [q, apiBase]);
+  const [note, setNote] = useState<string | null>(null);
   const change = async (body: { add?: string[]; remove?: string[] }) => {
     setBusy(true);
     try {
       await post(`${apiBase}/reviewers`, body);
+      setNote(body.add?.length ? `Review requested from ${body.add.join(", ")} on GitHub.` : `Request cancelled on GitHub.`);
       onChanged();
     } catch (e) {
       onError((e as ApiError).message);
@@ -568,14 +572,29 @@ function Reviewers({ apiBase, reviews, requested, onChanged, onError }: {
       <h4>Reviewers</h4>
       {reviews.length === 0 && requested.length === 0 && <div className="muted small">No reviews or requests yet.</div>}
       <ul className="pr-reviews" data-testid="pr-reviews">
-        {reviews.map((r, i) => <li key={i}><b>{r.author}</b> {REVIEW_LABEL[r.state] ?? r.state.toLowerCase()}</li>)}
+        {reviews.map((r, i) => (
+          <li key={i} data-testid="pr-review-item">
+            <GhUser login={r.author} /> {REVIEW_LABEL[r.state] ?? r.state.toLowerCase()}
+            {r.author && !requested.includes(r.author) && !r.author.endsWith("[bot]") && (
+              <button className="icon-btn small rerequest" disabled={busy} onClick={() => void change({ add: [r.author!] })}
+                title={`Re-request review from ${r.author} (GitHub notifies them; e.g. after you addressed their comments)`} aria-label={`Re-request review from ${r.author}`} data-testid="pr-reviewer-rerequest">↻</button>
+            )}
+            {r.author && requested.includes(r.author) && (
+              <>
+                <span className="muted small" data-testid="pr-rerequested"> · re-requested</span>{" "}
+                <button className="icon-btn small" disabled={busy} onClick={() => void remove(r.author!)} title={`Cancel the review request for ${r.author}`} aria-label={`Remove ${r.author}`} data-testid="pr-reviewer-remove">×</button>
+              </>
+            )}
+          </li>
+        ))}
         {requested.filter((x) => !reviews.some((r) => r.author === x)).map((x) => (
           <li key={x} data-testid="pr-requested">
-            <b>{x}</b> <span className="muted">awaiting review</span>{" "}
+            <GhUser login={x} /> <span className="muted">awaiting review</span>{" "}
             <button className="icon-btn small" disabled={busy} onClick={() => void remove(x)} title={`Cancel the review request for ${x}`} aria-label={`Remove ${x}`} data-testid="pr-reviewer-remove">×</button>
           </li>
         ))}
       </ul>
+      {note && <div className="muted small" data-testid="pr-reviewer-note">{note}</div>}
       {q === null ? (
         <button className="link-btn small" onClick={() => setQ("")} data-testid="pr-reviewer-add">＋ Request a review…</button>
       ) : (

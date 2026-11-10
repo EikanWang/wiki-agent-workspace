@@ -833,3 +833,8 @@ input.grow { flex: 1; min-width: 0; }
 .ci-ask-compact { margin-left: 6px; font-size: 11px; }
 .ci-ask-box { margin: 4px 0; }
 .pr-side section { margin-bottom: 14px; }
+.gh-user { color: inherit; text-decoration: none; cursor: pointer; }
+.gh-user:hover { color: var(--primary); text-decoration: underline; }
+.markdown-body a.gh-user { font-weight: 600; color: var(--fg); }
+.pr-person-head { display: flex; align-items: center; gap: 6px; }
+.icon-btn.rerequest { margin-left: 4px; }

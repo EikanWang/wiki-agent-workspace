@@ -41,6 +41,7 @@ export function renderGithubMarkdown(src: string, repo?: string): string {
 }
 
 const PR_URL = /^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:pull|issues)\/(\d+)(?:\/(?:files|commits)?)?\/?(?:[?#].*)?$/;
+const MENTION = /(^|[^\w`/@.-])@([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))(?![\w/-])/g;
 const REF = /(^|[^\w/#&.-])((?:([\w.-]+)\/([\w.-]+))?#(\d+))(?![\w-])/g;
 
 /**
@@ -58,17 +59,15 @@ export function linkGithubRefs(html: string, repo?: string): string {
   const texts: Text[] = [];
   for (let n = walker.nextNode(); n; n = walker.nextNode()) {
     const t = n as Text;
-    if (!t.parentElement?.closest("a, code, pre") && /#\d/.test(t.data)) texts.push(t);
+    if (!t.parentElement?.closest("a, code, pre") && /#\d|@\w/.test(t.data)) texts.push(t);
   }
   for (const t of texts) {
-    const frag = document.createDocumentFragment();
-    let last = 0;
-    let hit = false;
+    // #123 / owner/repo#123 → pull request links; @login → the account's GitHub page (as GitHub renders them)
+    const hits: { start: number; end: number; node: HTMLAnchorElement }[] = [];
     for (const m of t.data.matchAll(REF)) {
       const target = m[3] ? `${m[3]}/${m[4]}` : repo;
       if (!target) continue;
       const start = (m.index ?? 0) + m[1].length;
-      frag.append(t.data.slice(last, start));
       const a = document.createElement("a");
       a.href = `https://github.com/${target}/issues/${m[5]}`;
       a.target = "_blank";
@@ -76,11 +75,30 @@ export function linkGithubRefs(html: string, repo?: string): string {
       a.textContent = m[2];
       a.setAttribute("data-pr", `${target}/${m[5]}`);
       a.setAttribute("data-external", "1");
-      frag.append(a);
-      last = start + m[2].length;
-      hit = true;
+      hits.push({ start, end: start + m[2].length, node: a });
     }
-    if (!hit) continue;
+    for (const m of t.data.matchAll(MENTION)) {
+      const start = (m.index ?? 0) + m[1].length;
+      if (hits.some((h) => start < h.end && start + m[2].length + 1 > h.start)) continue;
+      const a = document.createElement("a");
+      a.href = `https://github.com/${m[2]}`;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      a.className = "gh-user";
+      a.textContent = `@${m[2]}`;
+      a.setAttribute("data-external", "1");
+      a.setAttribute("data-login", m[2]);
+      hits.push({ start, end: start + m[2].length + 1, node: a });
+    }
+    if (!hits.length) continue;
+    hits.sort((x, y) => x.start - y.start);
+    const frag = document.createDocumentFragment();
+    let last = 0;
+    for (const h of hits) {
+      if (h.start < last) continue;
+      frag.append(t.data.slice(last, h.start), h.node);
+      last = h.end;
+    }
     frag.append(t.data.slice(last));
     t.replaceWith(frag);
   }
