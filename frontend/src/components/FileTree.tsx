@@ -2,6 +2,7 @@ import RefreshButton from "./RefreshButton";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, FileItem, GitSummary, WorkspaceInfo, getIn, post } from "../api";
 import { FileIcon, KIND_LABEL, formatSize } from "./FileIcon";
+import { NewFileIcon, NewFolderIcon, PlusIcon } from "./Icons";
 
 interface DirState {
   items: FileItem[];
@@ -375,8 +376,8 @@ export default function FileTree({
     ) : null;
   const newButtons = (ws: string, dir: string, testSuffix: string | undefined) => (
     <>
-      <button className="tree-action new-entry" onClick={() => startCreate(ws, dir, "file")} title="New file" aria-label="New file" data-testid={testSuffix !== undefined ? `tree-new-file${testSuffix}` : undefined}>＋🗎</button>
-      <button className="tree-action new-entry" onClick={() => startCreate(ws, dir, "dir")} title="New folder" aria-label="New folder" data-testid={testSuffix !== undefined ? `tree-new-dir${testSuffix}` : undefined}>＋🗀</button>
+      <button className="tree-action new-entry" onClick={() => startCreate(ws, dir, "file")} title="New file" aria-label="New file" data-testid={testSuffix !== undefined ? `tree-new-file${testSuffix}` : undefined}><NewFileIcon /></button>
+      <button className="tree-action new-entry" onClick={() => startCreate(ws, dir, "dir")} title="New folder" aria-label="New folder" data-testid={testSuffix !== undefined ? `tree-new-dir${testSuffix}` : undefined}><NewFolderIcon /></button>
     </>
   );
 
@@ -477,7 +478,7 @@ export default function FileTree({
       <div className="tree-header">
         <span className="ws-name">{multi ? `${workspaces.filter((w) => w.available).length} folders` : workspaces[0]?.name ?? ""}</span>
         <span className="spacer" />
-        {onAddFolder && <button className="icon-btn" onClick={onAddFolder} title="Add a folder (another wiki) to this window" data-testid="tree-add-folder">＋</button>}
+        {onAddFolder && <button className="icon-btn" onClick={onAddFolder} title="Add a folder (another wiki) to this window" data-testid="tree-add-folder"><PlusIcon size={15} /></button>}
         <RefreshButton onRefresh={refreshNow} title="Refresh file tree" testId="tree-refresh" />
       </div>
       <div className="tree-body">

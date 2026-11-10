@@ -355,7 +355,7 @@ mark.waw-hl.review.needs_review { border-bottom: 2px dashed var(--warn); }
 .source-view .ln { display: block; counter-increment: line; padding-left: 4.2em; position: relative; }
 .source-view .ln::before { content: counter(line); position: absolute; left: 0; width: 3.2em; text-align: right; color: var(--muted); user-select: none; font-size: 0.85em; padding-right: 0.6em; border-right: 1px solid var(--border); }
 .pdf-view { flex: 1; display: flex; flex-direction: column; gap: 6px; min-height: 0; }
-.pdf-view iframe { flex: 1; min-height: 70vh; border: 1px solid var(--border); border-radius: 8px; background: #fff; }
+
 .chip.locked { background: var(--warn-bg); color: var(--warn); }
 .tree-row .lock-badge { font-size: 11px; color: var(--warn); flex: none; }
 .tree-row .lock-badge.inherited { opacity: 0.55; }
@@ -608,3 +608,33 @@ mark.waw-hl.review.needs_review { border-bottom: 2px dashed var(--warn); }
 .textLayer.selecting .endOfContent { top: 0; }
 .hover-ask { position: absolute; z-index: 6; transform: translate(-100%, 4px); box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15); background: var(--card); }
 .thread-attachment { display: block; max-width: 100%; max-height: 220px; object-fit: contain; border: 1px solid var(--border); border-radius: 6px; background: #fff; margin: 6px 0; }
+.ui-icon { display: inline-block; vertical-align: -2px; flex: none; }
+.btn .ui-icon + *, .btn > .ui-icon { margin-right: 2px; }
+/* PDF / Office layout: the viewer gets the whole reader area and is the only scroll container */
+.reader-body.fill { padding: 0; overflow: hidden; gap: 0; }
+.reader-body.fill > .pdf-view, .reader-body.fill > .office-view { flex: 1; min-width: 0; min-height: 0; height: 100%; gap: 0; }
+.reader-body.fill .office-note { padding: 4px 12px; border-bottom: 1px solid var(--border); }
+.reader-body.fill .pdfjs-pages { padding: 16px 20px 40px; }
+/* top bar stays on one line on normal screens: long session names are shortened (full name on hover) */
+.topbar .btn.session-btn { max-width: 300px; overflow: hidden; }
+.topbar .btn.session-btn .chip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; min-width: 0; }
+.session-area { flex-wrap: nowrap; min-width: 0; }
+@media (max-width: 1500px) { .session-area > .muted.small { display: none; } }
+/* discussion panel header: one line even when narrow */
+.panel-head { flex-wrap: nowrap; min-width: 0; }
+.panel-head .panel-title { white-space: nowrap; }
+.panel-head .mode-switch button { white-space: nowrap; }
+.nowrap { white-space: nowrap; }
+.retry-select { max-width: 100%; min-width: 0; flex: 1; }
+.ws-menu-new { display: block; text-decoration: none; }
+/* top bar: fit one line on laptop screens */
+.topbar { row-gap: 6px; }
+.topbar .ws-switch { max-width: 170px; text-overflow: ellipsis; }
+.topbar .btn.session-btn { max-width: 240px; }
+@media (max-width: 1800px) { .topbar .brand-title { display: none; } }
+@media (max-width: 1450px) {
+  .topbar { gap: 6px; }
+  .topbar .btn.session-btn { max-width: 170px; }
+  .topbar .ws-switch { max-width: 130px; }
+  .topbar .view-tabs button { padding-left: 10px; padding-right: 10px; }
+}

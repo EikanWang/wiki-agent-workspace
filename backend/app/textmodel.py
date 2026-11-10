@@ -193,10 +193,15 @@ def render_pptx(data: bytes) -> str:
             items.clear()
 
         for p in paragraphs:
-            txt = "".join(
-                (f"<strong>{esc(r.text)}</strong>" if r.font.bold else f"<em>{esc(r.text)}</em>" if r.font.italic else esc(r.text))
-                for r in p.runs
-            ) or esc(p.text)
+            if "\x0b" in p.text:
+                # a line break inside the paragraph (Shift+Enter in PowerPoint): python-pptx reports it as a vertical
+                # tab, and the runs alone would glue the words around it together
+                txt = "<br>".join(esc(part) for part in p.text.split("\x0b"))
+            else:
+                txt = "".join(
+                    (f"<strong>{esc(r.text)}</strong>" if r.font.bold else f"<em>{esc(r.text)}</em>" if r.font.italic else esc(r.text))
+                    for r in p.runs
+                ) or esc(p.text)
             if not txt.strip():
                 flush()
                 continue
@@ -239,7 +244,7 @@ def render_pptx(data: bytes) -> str:
     parts: list[str] = []
     for i, slide in enumerate(prs.slides, 1):
         title_shape = slide.shapes.title if slide.shapes.title is not None and slide.shapes.title.has_text_frame else None
-        title = title_shape.text_frame.text.strip() if title_shape is not None else ""
+        title = " ".join(title_shape.text_frame.text.replace("\x0b", " ").split()) if title_shape is not None else ""
         heading = f"Slide {i}" + (f": {title}" if title else "")
         body = "".join(shape_html(sh, title_shape) for sh in sorted(slide.shapes, key=_pos))
         notes = ""

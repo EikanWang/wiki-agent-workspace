@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PDFDocumentProxy, PDFPageProxy } from "pdfjs-dist";
 import { Thread } from "../api";
+import { MinusIcon, PlusIcon } from "./Icons";
 
 /** What the user points at in a laid-out document (sent with the question). */
 export interface PageTarget {
@@ -60,6 +61,7 @@ export default function PdfView({ url, unit, threads, activeThreadId, onAsk, onO
   const [error, setError] = useState<string | null>(null);
   const [zoom, setZoom] = useState<number | "fit">("fit");
   const [width, setWidth] = useState(800);
+  const [height, setHeight] = useState(700);
   const [areaPage, setAreaPage] = useState<number | null>(null); // page in "select area" mode
   const [chip, setChip] = useState<{ x: number; y: number; quote: string; page: number } | null>(null);
   const U = unit === "slide" ? "Slide" : "Page";
@@ -96,12 +98,21 @@ export default function PdfView({ url, unit, threads, activeThreadId, onAsk, onO
   useEffect(() => {
     const el = box.current;
     if (!el) return;
-    const ro = new ResizeObserver(() => setWidth(Math.max(200, el.clientWidth - 40)));
+    const ro = new ResizeObserver(() => {
+      setWidth(Math.max(200, el.clientWidth - 40));
+      setHeight(Math.max(200, el.clientHeight - 60));
+    });
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
 
-  const scaleFor = (i: number) => (zoom === "fit" ? width / (sizes[i]?.w || 600) : zoom);
+  // "fit": pages fill the width; slides are fitted whole (width and height), like a presentation
+  const scaleFor = (i: number) => {
+    if (zoom !== "fit") return zoom;
+    const s = sizes[i] ?? { w: 600, h: 800 };
+    const byWidth = width / s.w;
+    return unit === "slide" ? Math.min(byWidth, height / s.h) : byWidth;
+  };
 
   // open a page/slide discussion: scroll to its page
   useEffect(() => {
@@ -144,9 +155,9 @@ export default function PdfView({ url, unit, threads, activeThreadId, onAsk, onO
       <div className="pdfjs-toolbar">
         <span className="muted small">{sizes.length ? `${sizes.length} ${U.toLowerCase()}${sizes.length === 1 ? "" : "s"}` : "Loading…"} · select text to ask about it, or use a {U.toLowerCase()}'s buttons</span>
         <span className="spacer" />
-        <button className="btn small" onClick={() => setZoom((z) => Math.max(0.3, (z === "fit" ? scaleFor(0) : z) / 1.2))} aria-label="Zoom out" title="Zoom out">−</button>
-        <button className={`btn small ${zoom === "fit" ? "toggle on" : ""}`} onClick={() => setZoom("fit")} title="Fit to width">Fit</button>
-        <button className="btn small" onClick={() => setZoom((z) => Math.min(5, (z === "fit" ? scaleFor(0) : z) * 1.2))} aria-label="Zoom in" title="Zoom in">＋</button>
+        <button className="btn small" onClick={() => setZoom((z) => Math.max(0.3, (z === "fit" ? scaleFor(0) : z) / 1.2))} aria-label="Zoom out" title="Zoom out"><MinusIcon /></button>
+        <button className={`btn small ${zoom === "fit" ? "toggle on" : ""}`} onClick={() => setZoom("fit")} title={unit === "slide" ? "Fit each slide to the window" : "Fit to width"}>Fit</button>
+        <button className="btn small" onClick={() => setZoom((z) => Math.min(5, (z === "fit" ? scaleFor(0) : z) * 1.2))} aria-label="Zoom in" title="Zoom in"><PlusIcon /></button>
       </div>
       <div className="pdfjs-pages" ref={box} onMouseUp={onMouseUp} onScroll={() => chip && setChip(null)}>
         {pdf &&
@@ -263,7 +274,7 @@ function PdfPage({ pdf, n, size, scale, unit, discussions, onOpenThread, onAskPa
         <span className="pdfjs-page-no">{unit} {n}</span>
         {discussions.length > 0 && (
           <button className="link-btn small" onClick={() => onOpenThread(discussions[discussions.length - 1].id)} title={`${discussions.length} discussion(s) about this ${unit.toLowerCase()}`} data-testid="pdfjs-page-threads">
-            💬 {discussions.length}
+            {discussions.length} discussion{discussions.length === 1 ? "" : "s"}
           </button>
         )}
         <span className="spacer" />

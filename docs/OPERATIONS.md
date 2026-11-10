@@ -34,7 +34,7 @@ workspace root … no longer exists; relocating …     # only after you moved t
 
 ## Backup
 
-**While running** — consistent snapshot via the API (also the **Backup** button in the UI):
+**While running** — consistent snapshot via the API (also **Download backup** in the account menu, top right):
 
 ```bash
 # log in once and keep the cookie jar

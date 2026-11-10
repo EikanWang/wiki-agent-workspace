@@ -139,11 +139,12 @@ discussion is flagged *orphaned* / *ambiguous* and keeps the original quote — 
 to the new text. **Mark reviewed** marks a passage reviewed; it turns *needs review* when that text changes.
 
 **Asking about text, a page, a slide or a picture (PDF, Word, PowerPoint, Visio).** PDFs and the *Layout* view
-of Office files are shown by the app's own viewer (zoom with − Fit ＋):
+of Office files are shown by the app's own viewer, which fills the reading area (zoom with − / Fit / +; *Fit*
+fits pages to the width and whole slides to the window):
 - **Select text** on a page → **Ask about selection** (the page number goes with the question).
 - **Ask about this page** / **Ask about this slide** above each page sends an image of it to the agent.
 - **Select area**, then drag a rectangle around a figure, diagram or table → only that part is sent as an image.
-- A page with discussions shows 💬 *n*; clicking a page/slide discussion in the panel scrolls to it. The panel
+- A page with discussions shows *n discussions* (click to open); clicking a page/slide discussion in the panel scrolls to it. The panel
   names them (*📑 Slide 3*, *🔲 Area of page 2*) and shows the attached image.
 
 In the *Text* view, hover a picture for **Ask about this image** and, in PowerPoint, a slide for **Ask about this

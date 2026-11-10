@@ -634,7 +634,7 @@ export default function Reader(props: ReaderProps) {
           <button className="icon-btn" onClick={() => setFragmentMissing(null)} aria-label="Dismiss">×</button>
         </div>
       )}
-      <div className="reader-body" ref={scrollRef} onMouseOver={onBodyMouseOver} onMouseLeave={() => setHoverHit(null)}>
+      <div className={`reader-body ${(layout || doc.format === "pdf") && !editing ? "fill" : ""}`} ref={scrollRef} onMouseOver={onBodyMouseOver} onMouseLeave={() => setHoverHit(null)}>
         {hoverHit && (
           <button
             className="btn small hover-ask"

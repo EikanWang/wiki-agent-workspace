@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ApiError, get } from "../api";
+import { UserIcon } from "./Icons";
 
 interface SetupInfo {
   enabled: boolean;
@@ -50,7 +51,7 @@ export default function AccountMenu({ identity, onSignOut, onNotify }: { identit
   return (
     <span className="ws-menu-anchor account-anchor" ref={box}>
       <button className={`btn small toggle ${open ? "on" : ""}`} onClick={() => setOpen((v) => !v)} data-testid="account-menu" aria-expanded={open} title={provider ? `Signed in with ${provider} as ${who}` : "Signed in with the access token"}>
-        <span aria-hidden="true">👤</span> {who || "Account"} <span aria-hidden="true">▾</span>
+        <UserIcon /> {who || "Account"} <span aria-hidden="true">▾</span>
       </button>
       {open && (
         <div className="ws-menu account-menu" role="menu" data-testid="account-menu-list">
@@ -70,6 +71,7 @@ export default function AccountMenu({ identity, onSignOut, onNotify }: { identit
             </div>
           )}
           <div className="ws-menu-sep" />
+          <a className="ws-menu-new" href="/api/v1/export" download title="Download a backup of the SQLite database and document snapshots" data-testid="backup">Download backup</a>
           <button className="ws-menu-new" onClick={onSignOut} data-testid="sign-out">{provider ? `Sign out ${who}` : "Sign out"}</button>
         </div>
       )}

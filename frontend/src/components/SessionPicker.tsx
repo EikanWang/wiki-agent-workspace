@@ -107,7 +107,7 @@ export default function SessionPicker({
               const cap = list?.capabilities[p];
               return (
                 <button key={p} className="btn" disabled={busy || (cap ? !cap.available : false)} onClick={() => void createNew(p)} title={cap?.error ?? cap?.version ?? ""} data-testid={`new-session-${p}`}>
-                  ＋ {p}{cap && !cap.available ? " (unavailable)" : ""}
+                  + {p}{cap && !cap.available ? " (unavailable)" : ""}
                 </button>
               );
             })}

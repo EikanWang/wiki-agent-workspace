@@ -4,6 +4,7 @@ import { AgentSession, ApiError, JobEvent, Message, Thread, get, subscribeJob } 
 import DiffView from "./DiffView";
 import MarkdownView from "./MarkdownView";
 import ModelPicker from "./ModelPicker";
+import { PlusIcon } from "./Icons";
 
 export interface LiveJob {
   jobId: string;
@@ -255,13 +256,13 @@ export default function DiscussionPanel({
       {resizer}
       <div className="panel-head">
         <button className="icon-btn" onClick={() => onSelectThread(null)} title="Back to the discussion list">‹</button>
-        <span>Discussion {idx + 1} / {threads.length}</span>
+        <span className="panel-title">Discussion {idx + 1}/{threads.length}</span>
         {onAskDocument && (
-          <button className="btn small" onClick={() => { onSelectThread(null); setFocusAsk((k) => k + 1); }} title="Ask a new question about this document" data-testid="new-doc-question">＋ New question</button>
+          <button className="icon-btn" onClick={() => { onSelectThread(null); setFocusAsk((k) => k + 1); }} title="New question about this document" aria-label="New question" data-testid="new-doc-question"><PlusIcon size={15} /></button>
         )}
         <span className="spacer" />
         {modeSwitch}
-        <button className="btn small" onClick={showDiff} title="Show the diff between the version this discussion was created on and the current file">View diff</button>
+        <button className="btn small nowrap" onClick={showDiff} title="Show the diff between the version this discussion was created on and the current file" data-testid="thread-diff">Diff</button>
         {onCollapse && <button className="icon-btn" onClick={onCollapse} title="Hide discussions panel" data-testid="panel-collapse">›</button>}
       </div>
       <div className="thread-body">
@@ -387,7 +388,7 @@ function AnchorBadge({ state }: { state: string }) {
 function MessageView({ m, session, live, onRetry, onCancel, onPermission, sessions }: { m: Message; session: AgentSession | undefined; live: LiveJob | null; onRetry: (sid: string | null) => Promise<void>; onCancel: (jobId: string) => Promise<void>; onPermission: (jobId: string, requestId: string, decision: string) => Promise<void>; sessions: AgentSession[] }) {
   const [retrySession, setRetrySession] = useState<string>("__same__");
   const status = live ? live.status : m.status;
-  const content = live && live.text ? live.text : m.content;
+  const content = stripAnsi(live && live.text ? live.text : m.content);
   const isAgent = m.role === "agent";
   const failed = status === "failed" || status === "cancelled" || status === "interrupted";
   return (
@@ -431,11 +432,11 @@ function MessageView({ m, session, live, onRetry, onCancel, onPermission, sessio
       {isAgent && failed && (
         <div className="fail-box">
           <div className="error-text">
-            {(live?.error?.code ?? m.error_code) && <code>{live?.error?.code ?? m.error_code}</code>} {live?.error?.message ?? m.error_message ?? (status === "cancelled" ? "cancelled" : "interrupted")}
+            {(live?.error?.code ?? m.error_code) && <code>{live?.error?.code ?? m.error_code}</code>} {stripAnsi(live?.error?.message ?? m.error_message ?? (status === "cancelled" ? "cancelled" : "interrupted"))}
           </div>
           {live?.error?.hint && <div className="muted small">{live.error.hint}</div>}
           <div className="row">
-            <select value={retrySession} onChange={(e) => setRetrySession(e.target.value)}>
+            <select className="retry-select" value={retrySession} onChange={(e) => setRetrySession(e.target.value)}>
               <option value="__same__">Retry with the same session</option>
               <option value="new">Retry with a new session</option>
               {sessions.filter((s) => s.origin !== "preview").map((s) => (
@@ -661,4 +662,10 @@ function AskDocument({ onAsk, format, focusKey = 0 }: { onAsk: (q: string) => Pr
       {error && <div className="error-text small" role="alert">{error}</div>}
     </div>
   );
+}
+
+/** Error text from agent CLIs may contain terminal colour codes ("\x1b[91mError:"); show plain text. */
+function stripAnsi(s: string): string {
+  // eslint-disable-next-line no-control-regex
+  return s.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b[@-_]/g, "");
 }

@@ -75,7 +75,7 @@ export default function WorkspaceMenu({ initial, onNew, beforeSwitch, onNotify }
             </div>
           ))}
           <div className="ws-menu-sep" />
-          <button className="ws-menu-new" onClick={() => { setOpen(false); onNew(); }} data-testid="ws-menu-new">＋ New workspace…</button>
+          <button className="ws-menu-new" onClick={() => { setOpen(false); onNew(); }} data-testid="ws-menu-new">+ New workspace…</button>
         </div>
       )}
     </span>

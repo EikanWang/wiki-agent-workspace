@@ -100,7 +100,7 @@ export default function AddFolderDialog({ start, onAdded, onClose, mode = "add",
           <>
             <div className="muted small">
               A workspace is a named set of folders with its own document tabs and terminals, like a VS Code window. Choose its first folder
-              (add more later with ＋ in the file tree). Discussions and history stay with each folder, whichever workspace shows it.
+              (add more later with + in the file tree). Discussions and history stay with each folder, whichever workspace shows it.
             </div>
             <div className="row">
               <input value={wsName} onChange={(e) => setWsName(e.target.value)} placeholder="Workspace name, e.g. Xe3 display" autoFocus data-testid="new-workspace-name" />
@@ -118,7 +118,7 @@ export default function AddFolderDialog({ start, onAdded, onClose, mode = "add",
         <div className="row">
           <input className="path-input" value={typed} onChange={(e) => { edited.current = true; setTyped(e.target.value); }} onKeyDown={(e) => { if (e.key === "Enter") go(typed); }} data-testid="add-folder-path" />
           <button className="btn small" onClick={() => go(typed)}>Go</button>
-          <button className="btn small" onClick={() => setNewDir((v) => (v === null ? "" : null))} disabled={!listing} title={listing ? `Create a folder in ${listing.path}` : undefined} data-testid="add-folder-newdir">＋ New folder</button>
+          <button className="btn small" onClick={() => setNewDir((v) => (v === null ? "" : null))} disabled={!listing} title={listing ? `Create a folder in ${listing.path}` : undefined} data-testid="add-folder-newdir">+ New folder</button>
           <label className="small"><input type="checkbox" checked={showHidden} onChange={(e) => setShowHidden(e.target.checked)} /> hidden</label>
         </div>
         {newDir !== null && listing && (

@@ -67,8 +67,7 @@ export default function OfficeView({ path, sha256, onShowText, unit, threads, ac
     return (
       <div className="pdf-view office-view" data-testid="office-view" data-state="ready">
         <div className="muted small office-note">
-          Original layout, rendered by LibreOffice. Select text, or ask about a whole {unit} or an area of it.{" "}
-          <a href={download} download={name}>Download the original</a>
+          Original layout (rendered by LibreOffice) · <a href={download} download={name}>Download the original</a>
         </div>
         <PdfView url={`/api/v1/office/pdf?${qs(path, { k: st.key ?? "" })}`} unit={unit} threads={threads} activeThreadId={activeThreadId} onAsk={onAsk} onOpenThread={onOpenThread} testId="office-pdf" />
       </div>

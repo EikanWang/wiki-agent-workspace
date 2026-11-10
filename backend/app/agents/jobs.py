@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import logging
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -21,6 +22,8 @@ log = logging.getLogger("waw.jobs")
 
 TERMINAL = {"completed", "failed", "cancelled", "interrupted"}
 
+
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b[@-_]")
 
 class JobManager:
     def __init__(self, db: Database, providers: ProviderRegistry, bus: EventBus, workspace: Path, codex_sandbox: str):
@@ -265,7 +268,7 @@ class JobManager:
             handle = await adapter.resume_turn(turn)
         except ProviderError as exc:
             self._finish(job_id, "failed", exc.code, exc.message, "")
-            self._emit(job_id, "failed", {"status": "failed", "code": exc.code, "message": exc.message, "thread_id": thread_id})
+            self._emit(job_id, "failed", {"status": "failed", "code": exc.code, "message": _ANSI.sub("", exc.message), "thread_id": thread_id})
             return
 
         self._handles[job_id] = handle
@@ -345,7 +348,7 @@ class JobManager:
             self._emit(job_id, "cancelled", {"status": "cancelled", "text": text, "thread_id": thread_id})
         else:
             code = final.payload.get("code", "PROVIDER_FAILED")
-            msg = final.payload.get("message", "provider failed")
+            msg = _ANSI.sub("", final.payload.get("message", "provider failed"))
             self._finish(job_id, "failed", code, msg, text)
             self._emit(job_id, "failed", {"status": "failed", "code": code, "message": msg, "text": text, "thread_id": thread_id,
                                          "hint": self._hint_for(code, provider)})
@@ -409,6 +412,8 @@ class JobManager:
                     sess.status = "missing"
 
     def _finish(self, job_id: str, status: str, code: str | None, message: str | None, text: str) -> None:
+        # CLIs colour their errors for terminals ("\x1b[91mError:"); store plain text
+        message = _ANSI.sub("", message) if message else message
         with self.db.write() as s:
             job = s.get(Job, job_id)
             if not job:

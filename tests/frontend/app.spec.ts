@@ -190,7 +190,7 @@ test("B8/D12: document change banner, user-authorized edit shows the diff and re
   await page.getByTestId("selection-send").click();
   await expect(page.locator('[data-testid="message-agent"][data-status="completed"]').last()).toContainText("edited docs/guide.md", { timeout: 20000 });
   await expect(page.getByTestId("doc-changed-banner")).toBeVisible({ timeout: 10000 });
-  await page.getByRole("button", { name: "View diff" }).click();
+  await page.getByTestId("thread-diff").click(); // diff of the version this discussion was created on
   await expect(page.getByTestId("diff-view")).toContainText("+- item ONE");
   await expect(page.getByTestId("anchor-state").first()).toHaveText("orphaned");
   await page.getByTestId("doc-refresh").click();
@@ -1708,7 +1708,7 @@ test("PDF (PDF.js): ask about selected text, a whole page, an area — pictures 
     await expect(page.locator('[data-testid="message-agent"][data-status="completed"]').last()).toContainText("Summarize this page", { timeout: 20000 });
     const thumb = page.getByTestId("thread-attachment");
     await expect.poll(() => thumb.evaluate((el: HTMLImageElement) => el.complete && el.naturalWidth > 100)).toBe(true);
-    await expect(p2.getByTestId("pdfjs-page-threads")).toHaveText("💬 1"); // the page shows its discussion
+    await expect(p2.getByTestId("pdfjs-page-threads")).toHaveText("1 discussion"); // the page shows its discussion
     // 3) an area of page 1
     const p1 = viewer.locator('[data-page="1"]');
     await p1.scrollIntoViewIfNeeded();

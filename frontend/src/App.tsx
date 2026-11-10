@@ -662,7 +662,6 @@ export default function App() {
           <button className="btn small" onClick={() => setShowFonts((v) => !v)} title="Font style and size" data-testid="font-button">Aa</button>
           {showFonts && <FontSettings prefs={prefs} onChange={updatePrefs} onClose={() => setShowFonts(false)} />}
         </span>
-        <a className="btn small hide-mobile" href="/api/v1/export" download title="Download a backup of the SQLite database and document snapshots">Backup</a>
         <AccountMenu identity={boot.identity} onSignOut={() => void logout()} onNotify={notify} />
       </header>
 
