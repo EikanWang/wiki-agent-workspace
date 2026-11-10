@@ -1839,7 +1839,7 @@ class CiIn(BaseModel):
 
 
 @router.post("/github/pr/{owner}/{repo}/{number}/ci-failures")
-async def ci_failures(owner: str, repo: str, number: int, body: CiIn, auth: tuple[AppContext, str] = Depends(require_owner)):
+async def ci_failures(owner: str, repo: str, number: int, body: CiIn, auth: tuple[AppContext, str] = Depends(require_owner_mutating)):
     """Download the logs of the PR's failing CI jobs (GitHub Actions) to the server for the agent, with excerpts
     around the errors; other failing checks (external CI) are listed with their links."""
     ctx, _ = auth
