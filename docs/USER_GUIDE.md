@@ -142,7 +142,9 @@ can see, grouped by repository (most PRs first):
     **Open on GitHub**; ↻ reloads. Below the description the **Conversation**: every reviewer's review
     (approved / changes requested / commented, with its summary and line comments with their code) and general
     comments, oldest first; replies are shown in the thread of the comment they answer, as on GitHub. The box at
-    the end posts a general comment on GitHub. `#123`, `owner/repo#123` and links to pull requests in the
+    the end posts a general comment on GitHub. **Ask agent…** under any review, comment or line comment asks the
+    agent about it — the comment (with its code and replies for a line comment) goes with your question, e.g.
+    "Is the reviewer right?"; the answer is in the discussions panel. Threads in **Files** have the same button. `#123`, `owner/repo#123` and links to pull requests in the
     description and comments **open as PR tabs here** (Ctrl/⌘-click: on GitHub; an issue number shows a note
     with a link to GitHub).
   - **Contributors** (Overview, right): the author, commit authors and co-authors with their commit count and a

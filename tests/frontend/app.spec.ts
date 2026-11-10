@@ -1999,6 +1999,14 @@ test("GitHub PR tab: overview, files, choose the wiki once, ask about the PR and
   await page.getByTestId("selection-send").click();
   await expect(page.locator('[data-testid="message-agent"][data-status="completed"]').last()).toContainText("Is the null check enough?", { timeout: 20000 });
   await expect(page.getByTestId("thread-whole-document")).toBeVisible();
+  // ask the agent about a reviewer's comment in the conversation (with its code and replies)
+  const lineComment = page.getByTestId("pr-conv-line").first();
+  await lineComment.getByTestId("pr-conv-ask").click();
+  await lineComment.getByTestId("pr-conv-ask-text").fill("Is bob right about ok?");
+  await lineComment.getByTestId("pr-conv-ask-send").click();
+  await expect(page.locator('[data-testid="message-agent"][data-status="completed"]').last()).toContainText("Is bob right about ok?", { timeout: 20000 });
+  await expect(page.getByTestId("thread-target").last()).toContainText("comment by bob on c10/xpu/stub.cpp:11");
+  await expect(page.getByTestId("thread-quote").last()).toContainText("Only without a driver."); // the reply goes with it
   // files: GitHub-style diff with the existing thread at its line
   await page.getByTestId("pr-tab-files").click();
   await expect(page.getByTestId("pr-file")).toHaveCount(2);

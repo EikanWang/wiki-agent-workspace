@@ -200,6 +200,9 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
     }
   };
   const draftsFor = (path: string) => review.drafts.filter((d) => d.path === path);
+  /** ask the agent about something said on the PR (a comment, a review, a line comment with its code) */
+  const askAbout = (quote: string, label: string, question: string) =>
+    onSend({ quote, prefix: "", suffix: "", start: 0, end: 0, heading: null, target: { kind: "text", page: null, unit: "page", label } }, question, null);
 
   if (error && !data) return <div className="pr-view"><div className="banner warn" data-testid="pr-error">{error} <button className="btn small" onClick={() => void load(true)}>Retry</button> <a className="btn small" href={`https://github.com/${repo}/issues/${number}`} target="_blank" rel="noreferrer">Open on GitHub</a></div></div>;
   if (!data) return <div className="pr-view"><div className="muted pad">Loading {repo}#{number} from GitHub…</div></div>;
@@ -298,6 +301,10 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
                       {c.url && <> · <a href={c.url} target="_blank" rel="noreferrer">GitHub</a></>}
                     </div>
                     {c.body.trim() && <div className="markdown-body gh-comment-body" dangerouslySetInnerHTML={{ __html: md(c.body) }} />}
+                    {c.body.trim() && (
+                      <AskComment canAsk={docReady} label={`${c.kind === "review" ? "review" : "comment"} by ${c.author ?? "?"}`} onAsk={askAbout}
+                        quote={`${c.author ?? "?"} (${c.kind === "review" ? REVIEW_LABEL[c.state ?? ""] ?? "reviewed" : "commented"}):\n${c.body}`} />
+                    )}
                     {(c.comments ?? []).map((lc) => (
                       <div key={lc.id} className="pr-conv-line" data-testid="pr-conv-line">
                         <button className="link-btn small pr-conv-where" onClick={() => jumpTo(lc.path)} title="Show in Files">
@@ -311,6 +318,8 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
                             <div className="markdown-body gh-comment-body" dangerouslySetInnerHTML={{ __html: md(r.body) }} />
                           </div>
                         ))}
+                        <AskComment canAsk={docReady} label={`comment by ${lc.author ?? c.author ?? "?"} on ${lc.path}${lc.line ? `:${lc.line}` : ""}`} onAsk={askAbout}
+                          quote={`${lc.hunk ? lc.hunk + "\n\n" : ""}${lc.author ?? c.author ?? "?"}: ${lc.body}${(conv.threads.get(lc.id) ?? []).map((r) => `\n\n${r.author}: ${r.body}`).join("")}`} />
                       </div>
                     ))}
                     {c.kind === "review" && (c.line_comments ?? 0) > (c.loaded ?? 0) && <div className="muted small">… {(c.line_comments ?? 0) - (c.loaded ?? 0)} more in Files</div>}
@@ -466,5 +475,43 @@ function Contributors({ apiBase }: { apiBase: string }) {
       </ul>
       {data && data.commits_total > data.commits_listed && <div className="muted small">From the first {data.commits_listed} of {data.commits_total} commits.</div>}
     </section>
+  );
+}
+
+/** "Ask agent…" under a comment: the question goes to the agent with the comment (and its code) as the quote. */
+function AskComment({ quote, label, canAsk, onAsk }: { quote: string; label: string; canAsk: boolean; onAsk: (quote: string, label: string, question: string) => Promise<void> }) {
+  const [text, setText] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const send = async () => {
+    if (!text?.trim()) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      await onAsk(quote.slice(0, 20000), label, text.trim());
+      setText(null);
+    } catch (e) {
+      setErr((e as ApiError).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (text === null) {
+    return (
+      <div className="row gh-thread-actions">
+        <button className="link-btn small" disabled={!canAsk} onClick={() => setText("")} title={canAsk ? "Ask the agent about this comment" : "Choose the agent's wiki first"} data-testid="pr-conv-ask">Ask agent…</button>
+      </div>
+    );
+  }
+  return (
+    <div className="gh-reply-box">
+      <textarea autoFocus rows={2} value={text} onChange={(e) => setText(e.target.value)} placeholder={`Ask the agent about this comment, e.g. "Is the reviewer right?" (${COMPOSER_HINT})`}
+        onKeyDown={(e) => composerKeyDown(e, () => void send(), setText, () => setText(null))} data-testid="pr-conv-ask-text" />
+      {err && <div className="small del">{err}</div>}
+      <div className="row">
+        <button className="btn small primary" disabled={busy || !text.trim()} onClick={() => void send()} data-testid="pr-conv-ask-send">Ask agent</button>
+        <button className="btn small" onClick={() => setText(null)}>Cancel</button>
+      </div>
+    </div>
   );
 }
