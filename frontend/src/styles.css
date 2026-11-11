@@ -1223,3 +1223,10 @@ body.resizing-h iframe { pointer-events: none; }
 .dev-commits .list-item { display: flex; gap: 6px; text-align: left; }
 .dev-commit-subject { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .dev-diff-files .diff-file-head input[type=checkbox] { margin: 0; }
+.branch-anchor { position: relative; display: inline-flex; }
+.branch-menu { position: absolute; top: 100%; left: 0; z-index: 60; margin-top: 4px; width: 340px; background: var(--bg); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,0.18); padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; }
+.branch-menu input { width: 100%; border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; background: var(--bg); color: var(--fg); }
+.branch-list { max-height: 240px; overflow: auto; display: flex; flex-direction: column; }
+.branch-list .list-item { text-align: left; }
+.dev-scope { display: inline-flex; align-items: center; gap: 4px; }
+.dev-file.out-of-scope { opacity: 0.55; }

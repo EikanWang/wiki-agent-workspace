@@ -270,7 +270,13 @@ write code with the agent — a new pull request, or changes to an existing one.
 - **Work on** — *New branch* (name, optional base, the GitHub repository for the PR — detected from `origin`) or an
   *Existing pull request* (`owner/repo#123` or its URL; its head is fetched and checked out on the local branch
   `waw/pr-123`; pushes go back to the PR's branch, also on a fork when it allows edits by maintainers). **Open in
-  Development** in a PR tab fills this in.
+  Development** in a PR tab fills this in. Or a *Local folder*: a Git checkout or any folder, used **as it is** — no
+  worktree of its own, so its files and branch change (optionally a branch to create there right away; a folder not
+  in a Git repository is made one with `git init` unless you untick it). Archiving never deletes that folder.
+- **Branches** — the branch chip in the workspace's toolbar (⎇ name ▾) creates a branch from the current one
+  (uncommitted changes go along) or switches to another; in a folder opened directly, a new branch is compared with
+  the one it was created from. A branch switched outside the app (a terminal) is followed. A pull request's
+  workspace keeps the PR's branch.
 - **Repository checkout** — your clone on that host (for a PR, the repository's connected local checkout is offered).
 - **Reference wiki** — a folder of this window; the agent reads the whole folder.
 - Optional: name, Python interpreter (a virtual environment's `python`), `compile_commands.json` folder, build and
@@ -284,7 +290,7 @@ Each workspace has one of two editors (switch with the **Web editor / VS Code** 
 **Web editor** (default) — a VS Code-like workbench in the page, nothing to install in the browser:
 
 - **Explorer** (the worktree, plus the reference wiki read-only; Git changes coloured; new file / folder, rename,
-  delete on hover), **Search** across the worktree or the wiki (`Ctrl+Shift+F`; match case, regex, file filter),
+  delete, and **±** — the changes (diff) of that file or folder — on hover; ± in its header: all changes), **Search** across the worktree or the wiki (`Ctrl+Shift+F`; match case, regex, file filter),
   **Problems** (`Ctrl+Shift+M`), editor **tabs** (● = unsaved; middle-click closes; reopened after a reload),
   **Go to file** (`Ctrl+P`), the command palette (`F1`), and a status bar (branch, errors/warnings, cursor,
   language, language server).
@@ -396,8 +402,9 @@ reference wiki, and for a PR tab the PR's connected local checkout. Skills are t
   agent** in a file's header asks about all of its changes. Tick the files to commit (in the list or in each file's
   header; build outputs and caches are unticked), **Draft with agent** writes the message from the diff of the ticked
   files, **Commit**, **Push** (to the branch's remote; for a PR, to its head branch; never forced). The branch's
-  commits are listed below: click one to see its changes. **⤢ Expand** (or **Changes** in the toolbar) shows the view
-  in the editor area; **Back to editor** returns it to the bottom panel.
+  commits are listed below: click one to see its changes. **Diff** in the toolbar (or **⤢ Expand**) shows all the
+  changes in the editor area; **±** on a file or folder of the explorer shows only its changes ("only <path>" — × for
+  all of them again). **Back to editor** returns the view to the bottom panel.
 - **Pull request** — for new work: title and description (**Draft with agent**, **Verify against wiki first**),
   **Create pull request** (pushes first; draft by default). For a PR: its checks, **Address review comments**, **Fix
   failing CI**, **Verify against wiki**.

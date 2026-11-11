@@ -159,7 +159,7 @@ def build_dev_prompt(*, row: DevWorkspace, host_label: str, wiki: str | None, qu
     cfg = settings_of(row)
     base = (row.base_ref or "").removeprefix("refs/waw/base/")
     p = [
-        f"You are a software engineer working in a development workspace: the Git worktree at {row.worktree_path} on "
+        f"You are a software engineer working in a development workspace: the {'folder' if row.mode == 'folder' else 'Git worktree'} at {row.worktree_path} on "
         f"{host_label} (your working directory), branch `{row.branch}`" + (f", based on `{base}`" if base else "") + ".",
     ]
     if row.pr_number and row.github_repo:

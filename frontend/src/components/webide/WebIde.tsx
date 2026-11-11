@@ -42,7 +42,9 @@ interface DiscussBox { anchor: CodeAnchor | null; top: number; left: number; ima
 
 const DISCUSS_KINDS = [["ask", "Ask"], ["explain", "Explain"], ["fix", "Fix"], ["tests", "Write tests"], ["implement", "Implement"]] as const;
 
-export default function WebIde({ dev, completionEnabled, refreshKey, onAsk, threads, reveal, onFiles, onOpenThread, discussSession }: {
+export default function WebIde({ dev, completionEnabled, refreshKey, onAsk, threads, reveal, onFiles, onOpenThread, discussSession, onDiff }: {
+  /** show the changes (diff) of this folder / file of the worktree ("" = all of it) */
+  onDiff?: (path: string | null) => void;
   /** the session a new discussion about this file / folder would use (for the model shown as default) */
   discussSession?: (a: CodeAnchor | null) => AgentSession | null;
   dev: DevWorkspace;
@@ -748,7 +750,7 @@ export default function WebIde({ dev, completionEnabled, refreshKey, onAsk, thre
         </nav>
         {sideOpen && (
           <aside className="webide-side" style={{ width: sidePane.size }}>
-            {side === "explorer" && roots && <Explorer devId={dev.id} roots={roots} git={gitStatus} activeUri={active} uriOf={uriOf} refreshKey={refreshKey}
+            {side === "explorer" && roots && <Explorer devId={dev.id} roots={roots} git={gitStatus} activeUri={active} uriOf={uriOf} refreshKey={refreshKey} onDiff={onDiff}
               picked={picked} onPick={setPicked} onDiscussPicked={() => openDiscuss(false)}
               onDiscussFolder={(r, p) => { setSelBtn(null); setDiscuss({ anchor: { root: r, file: p, quote: "", folder: true }, top: 70, left: 60 }); }}
               onOpen={(r, p) => void openFile(r, p)} onError={setErr}
@@ -888,7 +890,8 @@ export default function WebIde({ dev, completionEnabled, refreshKey, onAsk, thre
 
 // ---------------------------------------------------------------- explorer
 
-function Explorer({ devId, roots, git, activeUri, uriOf, refreshKey, picked, onPick, onDiscussPicked, onDiscussFolder, onOpen, onError, onRenamed, onDeleted }: {
+function Explorer({ devId, roots, git, activeUri, uriOf, refreshKey, picked, onPick, onDiscussPicked, onDiscussFolder, onOpen, onError, onRenamed, onDeleted, onDiff }: {
+  onDiff?: (path: string | null) => void;
   devId: string; roots: Record<string, Root>; git: Record<string, string>; activeUri: string | null; uriOf: (r: string, p: string) => string; refreshKey: number;
   picked: FileRef[]; onPick: (f: FileRef[]) => void; onDiscussPicked: () => void; onDiscussFolder: (root: string, path: string) => void;
   onOpen: (root: string, path: string) => void; onError: (m: string) => void;
@@ -997,6 +1000,7 @@ function Explorer({ devId, roots, git, activeUri, uriOf, refreshKey, picked, onP
               <span className="webide-row-actions">
                 {it.dir && <button className="icon-btn small" title="Discuss this folder with the agent" onClick={(e) => { e.stopPropagation(); onDiscussFolder(root, rel); }} data-testid="webide-discuss-folder">💬</button>}
                 {it.dir && <button className="icon-btn small" title="New file" onClick={(e) => { e.stopPropagation(); void create(rel, "file"); }}>+</button>}
+                {onDiff && <button className="icon-btn small" title={`View the changes (diff) of this ${it.dir ? "folder" : "file"}`} onClick={(e) => { e.stopPropagation(); onDiff(rel); }} data-testid="webide-diff">±</button>}
                 <button className="icon-btn small" title="Rename / move" onClick={(e) => { e.stopPropagation(); void rename(rel); }}>✎</button>
                 <button className="icon-btn small" title="Delete" onClick={(e) => { e.stopPropagation(); void remove(rel, it.dir); }}>🗑</button>
               </span>
@@ -1015,6 +1019,7 @@ function Explorer({ devId, roots, git, activeUri, uriOf, refreshKey, picked, onP
         <button className="icon-btn small" title="New file" onClick={() => void create("", "file")} data-testid="webide-new-file">+</button>
         <button className="icon-btn small" title="New folder" onClick={() => void create("", "dir")}>⊞</button>
         <button className="icon-btn small" title="Refresh" onClick={refreshAll}>↻</button>
+        {onDiff && <button className="icon-btn small" title="View all changes (diff)" onClick={() => onDiff(null)} data-testid="webide-diff-all">±</button>}
       </div>
       {picked.length > 0 && (
         <div className="webide-picked" data-testid="webide-picked">

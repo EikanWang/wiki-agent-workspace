@@ -34,7 +34,8 @@ class DevCreateIn(BaseModel):
     name: str | None = Field(None, max_length=200)
     host: str = Field("local", max_length=100)
     source_repo: str = Field(min_length=1, max_length=4096)
-    mode: str = Field(pattern="^(branch|pr)$")
+    mode: str = Field(pattern="^(branch|pr|folder)$")  # folder: work in the given checkout / folder itself
+    init_git: bool = True  # folder mode: make a folder that is not in a Git repository one (git init)
     branch: str | None = Field(None, max_length=200)
     base: str | None = Field(None, max_length=200)
     github_repo: str | None = Field(None, max_length=200)
@@ -441,6 +442,22 @@ async def git_compare(dev_id: str, base: str = Query("HEAD", max_length=250), ta
                       ctx: AppContext = Depends(require_auth)):
     """The Changes view: changed files between two states, each with its unified diff (see DevService.compare)."""
     return await _svc(ctx).compare(dev_id, base=base, target=target, commit=commit, path=path)
+
+
+class BranchIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    create: bool = True  # a new branch (from the current one, or `start`); false: switch to an existing one
+    start: str | None = Field(None, max_length=250)
+
+
+@router.get("/dev/workspaces/{dev_id}/branches")
+async def git_branches(dev_id: str, ctx: AppContext = Depends(require_auth)):
+    return await _svc(ctx).branches(dev_id)
+
+
+@router.post("/dev/workspaces/{dev_id}/branch")
+async def git_branch(dev_id: str, body: BranchIn, ctx: AppContext = Depends(require_auth_mutating)):
+    return await _svc(ctx).branch(dev_id, body.name, body.create, body.start)
 
 
 @router.get("/dev/workspaces/{dev_id}/refs")

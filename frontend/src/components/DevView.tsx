@@ -28,6 +28,7 @@ export default function DevView({ devId, workspaces, sessions, onSessionsChanged
   const [dev, setDev] = useState<DevWorkspace | null>(null);
   const [info, setInfo] = useState<DevInfo | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
   const [bottom, setBottom] = usePersistentState<Bottom>(`dev.bottom.${devId}`, "tasks");
   const [bottomOpen, setBottomOpen] = usePersistentState(`dev.bottomOpen`, true);
   // height of the bottom panel (Terminal, Build & test, Changes, Pull request) in px; null = the default (34%)
@@ -37,6 +38,9 @@ export default function DevView({ devId, workspaces, sessions, onSessionsChanged
   const setAgentOpen = (open: boolean) => agentPane.setFolded(!open);
   // the Changes view in the editor area (true) instead of the bottom panel
   const [changesWide, setChangesWide] = usePersistentState(`dev.changesWide.${devId}`, false);
+  // the Changes view shows only this folder / file (the ± of a row in the explorer); null: everything
+  const [changesScope, setChangesScope] = usePersistentState<string | null>(`dev.changesScope.${devId}`, null);
+  const [branchMenu, setBranchMenu] = useState(false);
   const [settings, setSettings] = useState(false);
   const [refresh, setRefresh] = useState(0);
   const [ext, setExt] = useState<{ state: string; log: string; failed?: string[] } | null>(null);
@@ -133,16 +137,18 @@ export default function DevView({ devId, workspaces, sessions, onSessionsChanged
     setChangesWide(false);
     setReveal({ anchor: { root: "wt", file: path, start_line: line ?? null, end_line: line ?? null, quote: "" }, at: Date.now() });
   } : undefined;
+  const showDiff = (path: string | null) => { setChangesScope(path); setChangesWide(true); };
   const changes = (wide: boolean) => (
     <DevChanges key={dev.id} dev={dev} refreshKey={refresh} onChanged={() => void load()} onAsk={askAbout} onOpenFile={openFile}
+      scope={changesScope} onScope={setChangesScope}
       wide={wide} onToggleWide={() => {
         setChangesWide(!wide);
         if (wide) { setBottom("changes"); setBottomOpen(true); } // back to the editor: the changes stay at hand below it
       }} />
   );
   const archive = async () => {
-    if (!(await confirmAction({ title: "Archive this development workspace?", message: "The editor stops and the workspace leaves the list; its branch and conversation are kept.", confirmLabel: "Archive" }))) return;
-    const remove = await confirmAction({ title: "Remove its Git worktree too?", message: `Deletes the folder ${dev.worktree_path} (refused when it has uncommitted or unpushed work). Choose Cancel to keep it.`, confirmLabel: "Remove worktree" });
+    if (!(await confirmAction({ title: "Archive this development workspace?", message: dev.mode === "folder" ? `The editor stops and the workspace leaves the list; the folder ${dev.worktree_path} is not touched.` : "The editor stops and the workspace leaves the list; its branch and conversation are kept.", confirmLabel: "Archive" }))) return;
+    const remove = dev.mode !== "folder" && await confirmAction({ title: "Remove its Git worktree too?", message: `Deletes the folder ${dev.worktree_path} (refused when it has uncommitted or unpushed work). Choose Cancel to keep it.`, confirmLabel: "Remove worktree" });
     try {
       await del(`/dev/workspaces/${dev.id}?remove_worktree=${remove ? "true" : "false"}`);
       onArchived();
@@ -155,7 +161,14 @@ export default function DevView({ devId, workspaces, sessions, onSessionsChanged
     <div className={`dev-view ${agentOpen ? "" : "agent-closed"}`} data-testid="dev-view">
       <div className="dev-toolbar">
         <b className="dev-title" title={dev.worktree_path}>{dev.name}</b>
-        <span className="chip mono" title={`worktree ${dev.worktree_path}`}>{dev.branch}</span>
+        <span className="branch-anchor">
+          {dev.mode === "pr" ? <span className="chip mono" title={`worktree ${dev.worktree_path}`}>{dev.branch}</span> : (
+            <button className="chip chip-btn mono" onClick={() => setBranchMenu((v) => !v)} disabled={dev.status !== "ready"}
+              title={`${dev.mode === "folder" ? "folder" : "worktree"} ${dev.worktree_path}\nCreate a branch or switch to another`} data-testid="dev-branch-button">⎇ {dev.branch} ▾</button>
+          )}
+          {branchMenu && <BranchMenu dev={dev} onClose={() => setBranchMenu(false)} onDone={(m) => { setBranchMenu(false); void load(); setRefresh((n) => n + 1); setErr(null); if (m) setNote(m); }} />}
+        </span>
+        {dev.mode === "folder" && <span className="chip" title={`Works directly in ${dev.worktree_path}`}>folder</span>}
         {dev.host !== "local" && <span className="chip" title="Runs on this SSH host">{dev.host}</span>}
         {dev.pr_number && dev.github_repo && (
           <button className="chip chip-btn" onClick={() => onOpenPrReview?.(dev.github_repo!, dev.pr_number!)} title="Open it in PR Review">#{dev.pr_number}</button>
@@ -178,8 +191,8 @@ export default function DevView({ devId, workspaces, sessions, onSessionsChanged
           <button className="btn small primary" disabled={editor.state === "starting"} onClick={() => void editorAction("start")} data-testid="dev-editor-start">{editor.state === "starting" ? "Starting editor…" : "Start editor"}</button>
         ))}
         {dev.status === "ready" && (
-          <button className={`btn small toggle ${changesWide ? "on" : ""}`} onClick={() => setChangesWide(!changesWide)} aria-pressed={changesWide}
-            title="Review the changes (diff) and commit them, in the editor area" data-testid="dev-changes-toggle">Changes</button>
+          <button className={`btn small toggle ${changesWide ? "on" : ""}`} onClick={() => (changesWide ? setChangesWide(false) : showDiff(null))} aria-pressed={changesWide}
+            title="View all changes (diff) and commit them, in the editor area; ± on a file or folder of the explorer shows only its changes" data-testid="dev-changes-toggle">Diff</button>
         )}
         <button className="btn small" onClick={() => setSettings(true)} data-testid="dev-settings">Settings</button>
         <button className={`btn small toggle ${agentOpen ? "on" : ""}`} onClick={() => setAgentOpen(!agentOpen)} aria-pressed={agentOpen}>Agent</button>
@@ -189,13 +202,14 @@ export default function DevView({ devId, workspaces, sessions, onSessionsChanged
       {dev.status === "failed" && <div className="banner warn" role="alert">{dev.error}</div>}
       {dev.status === "ready" && dev.error && <div className="banner warn small">{dev.error}</div>}
       {err && <div className="banner warn small" role="alert">{err}</div>}
+      {note && <div className="banner small" data-testid="dev-banner-note">{note} <button className="link-btn" onClick={() => setNote(null)}>ok</button></div>}
       <div className="dev-body">
         <div className="dev-main">
           {changesWide && dev.status === "ready" && <div className="dev-editor dev-changes-main">{changes(true)}</div>}
           <div className="dev-editor" style={changesWide && dev.status === "ready" ? { display: "none" } : undefined}>
             {web && dev.status === "ready" ? (
               <Suspense fallback={<div className="muted dev-hint">Loading the editor…</div>}>
-                <WebIde key={dev.id} dev={dev} completionEnabled={!!info?.completion.enabled} refreshKey={refresh} threads={threads} reveal={reveal}
+                <WebIde key={dev.id} dev={dev} completionEnabled={!!info?.completion.enabled} refreshKey={refresh} threads={threads} reveal={reveal} onDiff={showDiff}
                   onFiles={setFiles} onOpenThread={(id) => { setAgentOpen(true); setFocusThread({ id, at: Date.now() }); }}
                   discussSession={(a) => { const sid = a ? fileSessions[`${a.root}:${a.file}`] : undefined; return sid ? sessions.find((x) => x.id === sid) ?? null : null; }}
                   onAsk={async ({ kind, text, context, anchor, threadId, image, modelChoice }) => {
@@ -352,5 +366,54 @@ function BottomSplitter({ onHeight }: { onHeight: (h: number | null) => void }) 
         el.addEventListener("pointercancel", up);
         e.preventDefault();
       }} />
+  );
+}
+
+
+/** Create a branch from the current one (the uncommitted changes go along), or switch to another branch. */
+function BranchMenu({ dev, onClose, onDone }: { dev: DevWorkspace; onClose: () => void; onDone: (note: string | null) => void }) {
+  const [data, setData] = useState<{ current: string; branches: string[]; base_ref: string | null } | null>(null);
+  const [name, setName] = useState("");
+  const [filter, setFilter] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => { void get<NonNullable<typeof data>>(`/dev/workspaces/${dev.id}/branches`).then(setData).catch((e) => setErr((e as ApiError).message)); }, [dev.id]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  const go = async (branch: string, create: boolean) => {
+    setBusy(true);
+    setErr(null);
+    try {
+      await post(`/dev/workspaces/${dev.id}/branch`, { name: branch, create });
+      onDone(create ? `Created branch ${branch} from ${data?.current ?? "the current branch"} and switched to it.` : `Switched to ${branch}.`);
+    } catch (e) {
+      setErr((e as ApiError).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const shown = (data?.branches ?? []).filter((b) => b !== data?.current && (!filter || b.toLowerCase().includes(filter.toLowerCase())));
+  return (
+    <div className="branch-menu" data-testid="dev-branch-menu" onClick={(e) => e.stopPropagation()}>
+      <div className="muted small">On <b className="mono">{data?.current ?? dev.branch}</b>{data?.base_ref ? <> · compared with <span className="mono">{data.base_ref}</span></> : null}</div>
+      <form className="row nowrap" onSubmit={(e) => { e.preventDefault(); if (name.trim()) void go(name.trim(), true); }}>
+        <input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="new branch, e.g. feature/x" className="mono" data-testid="dev-branch-new" />
+        <button className="btn small primary" disabled={!name.trim() || busy} data-testid="dev-branch-create">Create</button>
+      </form>
+      <div className="muted small">Created from the current branch; uncommitted changes go along.</div>
+      {(data?.branches.length ?? 0) > 1 && <>
+        <input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="switch to…" className="mono" />
+        <div className="branch-list">
+          {shown.slice(0, 200).map((b) => (
+            <button key={b} className="list-item small mono" disabled={busy} onClick={() => void go(b, false)} data-testid="dev-branch-switch">{b}</button>
+          ))}
+        </div>
+      </>}
+      {err && <div className="error-text small" role="alert" data-testid="dev-branch-error">{err}</div>}
+      <div className="row"><span className="spacer" /><button className="btn small" onClick={onClose}>Close</button></div>
+    </div>
   );
 }

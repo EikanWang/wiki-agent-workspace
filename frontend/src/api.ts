@@ -544,7 +544,8 @@ export interface DevWorkspace {
   host: string;
   source_repo: string;
   worktree_path: string;
-  mode: "branch" | "pr";
+  /** folder: works in the given checkout / folder itself (no worktree of its own) */
+  mode: "branch" | "pr" | "folder";
   branch: string;
   base_ref: string | null;
   github_repo: string | null;

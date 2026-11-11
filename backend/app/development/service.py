@@ -26,6 +26,19 @@ from ..models import DevWorkspace, Document
 from . import DEV_PREFIX
 from .targets import LOCAL, Target, TargetError, target_for
 
+def in_scope(rel: str, scope: str | None) -> bool:
+    """`rel` is the file `scope` names or inside the folder it names (no scope: everything)."""
+    if not scope:
+        return True
+    scope = scope.strip("/")
+    return rel == scope or rel.startswith(scope + "/")
+
+
+def valid_branch(name: str) -> bool:
+    return bool(name) and not name.startswith("-") and bool(re.fullmatch(r"[\w./-]+", name)) and ".." not in name \
+        and not name.endswith((".lock", "/", ".")) and "//" not in name
+
+
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"  # git's empty tree: the "parent" of a root commit
 
 
@@ -292,17 +305,23 @@ class DevService:
     async def create(self, body: Any) -> dict[str, Any]:
         host = body.host or LOCAL
         target = self.target(host)
-        if body.mode not in ("branch", "pr"):
-            raise bad_request("mode must be branch or pr", "INVALID_MODE")
+        if body.mode not in ("branch", "pr", "folder"):
+            raise bad_request("mode must be branch, pr or folder", "INVALID_MODE")
         source = (body.source_repo or "").strip()
         if not source or source.startswith("-"):
             raise bad_request("give the path of a local Git checkout of the repository (on the chosen host)", "INVALID_PATH")
-        if body.mode == "pr":
+        if body.mode == "folder":
+            br = (body.branch or "").strip()
+            if br and not valid_branch(br):
+                raise bad_request("give a valid branch name (letters, digits, - _ . /)", "INVALID_BRANCH")
+            if body.github_repo and not _REPO.match(body.github_repo):
+                raise bad_request("repository must be owner/name", "INVALID_PR")
+        elif body.mode == "pr":
             if not body.github_repo or not _REPO.match(body.github_repo) or not body.pr_number or body.pr_number < 1:
                 raise bad_request("an existing pull request needs its repository (owner/name) and number", "INVALID_PR")
         else:
             br = (body.branch or "").strip()
-            if not br or br.startswith("-") or not re.fullmatch(r"[\w./-]+", br) or ".." in br or br.endswith((".lock", "/", ".")):
+            if not valid_branch(br):
                 raise bad_request("give a valid new branch name (letters, digits, - _ . /)", "INVALID_BRANCH")
             if body.github_repo and not _REPO.match(body.github_repo):
                 raise bad_request("repository must be owner/name", "INVALID_PR")
@@ -317,7 +336,9 @@ class DevService:
         except TargetError as exc:
             raise ApiError(400, exc.code, exc.message)
         dev_id = new_id()
-        name = (body.name or "").strip() or (f"{body.github_repo}#{body.pr_number}" if body.mode == "pr" else body.branch.strip())
+        name = (body.name or "").strip() or (f"{body.github_repo}#{body.pr_number}" if body.mode == "pr"
+                                              else source_abs.rstrip("/").rsplit("/", 1)[-1] or source_abs if body.mode == "folder"
+                                              else body.branch.strip())
         # the agent conversation: a hidden document of the reference wiki folder (or the primary folder)
         rt = self.ctx.workspaces.get(conv_ws) if self.ctx.workspaces else None
         docs = rt.docs if rt else self.ctx.documents
@@ -326,8 +347,9 @@ class DevService:
         stub = dev_snapshot_path(docs.snapshots_dir, norm)
         assert stub is not None
         stub.parent.mkdir(parents=True, exist_ok=True)
-        stub.write_text(f"# {name}\n\nPR Development workspace — the agent works in its Git worktree "
-                        f"({'existing pull request' if body.mode == 'pr' else 'new branch'}) with the wiki folder as reference.\n",
+        what = {"pr": "its Git worktree (existing pull request)", "branch": "its Git worktree (new branch)",
+                "folder": f"the folder {source_abs}"}[body.mode]
+        stub.write_text(f"# {name}\n\nPR Development workspace — the agent works in {what} with the wiki folder as reference.\n",
                         encoding="utf-8")
         doc = docs.get_or_create_document(norm)
         with self.ctx.db.write() as s:
@@ -336,11 +358,11 @@ class DevService:
                 d.hidden = True  # not in Recent / chats lists; it is shown inside PR Development
             s.add(DevWorkspace(
                 id=dev_id, name=name[:200], host=host, source_repo=source_abs, worktree_path="", mode=body.mode,
-                branch=(body.branch or "").strip() if body.mode == "branch" else f"waw/pr-{body.pr_number}",
+                branch=(body.branch or "").strip() if body.mode != "pr" else f"waw/pr-{body.pr_number}",
                 base_ref=(body.base or "").strip() or None, github_repo=body.github_repo or None, pr_number=body.pr_number if body.mode == "pr" else None,
                 wiki_workspace_id=body.wiki_workspace_id or None, document_id=doc.id,
                 settings_json=json.dumps(clean_settings(body.settings or {})), status="creating"))
-        self._start(dev_id, self._provision(dev_id))
+        self._start(dev_id, self._provision_folder(dev_id, body.init_git) if body.mode == "folder" else self._provision(dev_id))
         return dev_dict(self.get(dev_id), self.ctx)
 
     def _start(self, key: str, coro: Any) -> None:
@@ -415,7 +437,48 @@ class DevService:
                 github_repo = parse_github_repo(url) if rc == 0 else None
             remote = (origin_repo.get(github_repo.lower()) if github_repo else None) or ("origin" if "origin" in remotes.split() else None)
             fields.update(base_ref=base, github_repo=github_repo, push_remote=remote, push_branch=row.branch)
-        rc, ls, _ = await t.git(wt, ["ls-files", "--", "CMakeLists.txt", "pyproject.toml", "setup.py", "setup.cfg", "pytest.ini",
+        await self._finish(dev_id, t, wt, fields)
+
+    async def _provision_folder(self, dev_id: str, init_git: bool) -> None:
+        """Work in the given folder itself: a Git checkout (its top folder), or a folder made a repository (git init).
+        A requested branch is created there (or switched to) from the current one, which becomes its base."""
+        row = self.get(dev_id)
+        t = self.target(row)
+        path = row.source_repo
+        if not await t.is_dir(path):
+            raise ApiError(400, "FOLDER_NOT_FOUND", f"{path} is not a folder on {t.label()}")
+        rc, top, err = await t.git(path, ["rev-parse", "--show-toplevel"], timeout=60)
+        if rc != 0:
+            if not init_git:
+                raise ApiError(400, "NOT_A_GIT_REPO", f"{path} is not in a Git repository on {t.label()}")
+            rc, _, err = await t.git(path, ["init", "-q"], timeout=60)
+            if rc != 0:
+                raise ApiError(400, "GIT_INIT_FAILED", f"git init failed: {err.strip()[:300]}")
+            top = path
+        wt = top.strip()
+        _, cur, _ = await t.git(wt, ["symbolic-ref", "--quiet", "--short", "HEAD"])
+        current = cur.strip()
+        fields: dict[str, Any] = {"source_repo": wt, "worktree_path": wt, "branch": current or "HEAD"}
+        if row.branch and row.branch != current:
+            exists = (await t.git(wt, ["rev-parse", "--verify", "--quiet", f"refs/heads/{row.branch}"]))[0] == 0
+            rc, _, err = await t.git(wt, ["switch", *([] if exists else ["-c"]), row.branch], timeout=120)
+            if rc != 0:
+                raise ApiError(400, "GIT_SWITCH_FAILED", f"could not {'switch to' if exists else 'create'} branch {row.branch}: {err.strip()[-400:]}")
+            fields["branch"] = row.branch
+            if not exists and current:
+                fields["base_ref"] = current
+        github_repo = row.github_repo
+        _, remotes, _ = await t.git(wt, ["remote"])
+        if not github_repo and "origin" in remotes.split():
+            rc, url, _ = await t.git(wt, ["remote", "get-url", "origin"])
+            github_repo = parse_github_repo(url) if rc == 0 else None
+        fields.update(github_repo=github_repo, push_remote="origin" if "origin" in remotes.split() else None,
+                      push_branch=fields["branch"] if fields["branch"] != "HEAD" else None)
+        await self._finish(dev_id, t, wt, fields)
+
+    async def _finish(self, dev_id: str, t: Target, wt: str, fields: dict[str, Any]) -> None:
+        row = self.get(dev_id)
+        _, ls, _ = await t.git(wt, ["ls-files", "--cached", "--others", "--exclude-standard", "--", "CMakeLists.txt", "pyproject.toml", "setup.py", "setup.cfg", "pytest.ini",
                                      "tox.ini", "requirements.txt", "Makefile", "compile_commands.json"])
         detected = detect_settings({x.strip() for x in ls.splitlines() if x.strip()})
         merged = {**{k: v for k, v in detected.items() if v}, **settings_of(row)}
@@ -458,7 +521,7 @@ class DevService:
         if editor:
             await editor.stop(dev_id)
         removed = False
-        if remove_worktree and row.worktree_path:
+        if remove_worktree and row.worktree_path and row.mode != "folder":  # a folder opened directly is yours: never removed
             t = self.target(row)
             if not force:
                 st = await self.status(dev_id)
@@ -500,6 +563,7 @@ class DevService:
             kind = ("untracked" if e.startswith("??") else "deleted" if "D" in (x, y) else "added" if "A" in (x, y)
                     else "renamed" if "R" in (x, y) else "modified")
             files.append({"path": rel, "status": kind})
+        row = await self._follow_branch(row, t)
         _, head, _ = await t.git(wt, ["rev-parse", "--short", "HEAD"])
         _, subject, _ = await t.git(wt, ["log", "-1", "--format=%s"])
         ahead = None
@@ -510,24 +574,30 @@ class DevService:
         c, n, _ = await t.git(wt, ["rev-list", "--count", f"refs/waw/pushed/{row.branch}..HEAD"])
         if c == 0 and n.strip().isdigit():
             unpushed = int(n.strip())
-        elif ahead is not None:
-            unpushed = ahead  # never pushed: every commit of the branch
+        else:
+            c, n, _ = await t.git(wt, ["rev-list", "--count", "@{upstream}..HEAD"])  # a checkout's own upstream
+            if c == 0 and n.strip().isdigit():
+                unpushed = int(n.strip())
+            elif ahead is not None:
+                unpushed = ahead  # never pushed: every commit of the branch
         _, name, _ = await t.git(wt, ["config", "user.name"])
         _, email, _ = await t.git(wt, ["config", "user.email"])
         return {"branch": row.branch, "head": head.strip(), "subject": subject.strip(), "files": sorted(files, key=lambda f: f["path"]),
+                "mode": row.mode, "base_ref": row.base_ref,
                 "commits_on_branch": ahead, "unpushed": unpushed, "push_remote": row.push_remote, "push_branch": row.push_branch,
                 "identity": {"name": name.strip(), "email": email.strip(), "configured": bool(name.strip() and email.strip())}}
 
     async def diff(self, dev_id: str, path: str | None = None, max_bytes: int = 400_000) -> dict[str, Any]:
         row, t = self._ready(dev_id)
-        args = ["diff", "--no-color", "--no-ext-diff", "HEAD"]
+        has_head = (await t.git(row.worktree_path, ["rev-parse", "--verify", "--quiet", "HEAD"]))[0] == 0
+        args = ["diff", "--no-color", "--no-ext-diff", "HEAD" if has_head else EMPTY_TREE]
         if path:
             args += ["--", path]
         rc, out, err = await t.git(row.worktree_path, args)
         if rc != 0:
             raise ApiError(400, "GIT_ERROR", f"git diff failed: {err.strip()[:300]}")
         st = await self.status(dev_id)
-        untracked = [f["path"] for f in st["files"] if f["status"] == "untracked" and (not path or f["path"] == path)]
+        untracked = [f["path"] for f in st["files"] if f["status"] == "untracked" and in_scope(f["path"], path)]
         for rel in untracked[:50]:  # show new files like `git diff` would after `git add -N`
             c, text, _ = await t.run(["git", "-C", row.worktree_path, "diff", "--no-color", "--no-index", "--", "/dev/null", rel], timeout=60)
             if c in (0, 1):
@@ -565,11 +635,16 @@ class DevService:
             target_sha: str | None = sha
         else:
             base_sha = await self._merge_base(row, t) if base == "branch" else await self._commit_of(t, wt, base)
+            if not base_sha and base == "HEAD":
+                base_sha = EMPTY_TREE  # a repository without commits yet: everything is new
             if not base_sha:
                 raise bad_request(f"unknown base {base[:60]}", "INVALID_REF")
             target_sha = None if target == "worktree" else await self._commit_of(t, wt, target)
             if target != "worktree" and not target_sha:
                 raise bad_request(f"unknown target {target[:60]}", "INVALID_REF")
+        if path and (path.startswith(("-", "/")) or ".." in path.split("/")):
+            raise bad_request("invalid path", "INVALID_PATH")
+        path = path.strip("/") if path else None
         args = ["diff", "--no-color", "--no-ext-diff", "-M", base_sha, *([target_sha] if target_sha else [])]
         if path:
             args += ["--", path]
@@ -579,7 +654,7 @@ class DevService:
         files = split_diff(out)
         st = await self.status(dev_id) if target_sha is None else None
         if st is not None:
-            for rel in [f["path"] for f in st["files"] if f["status"] == "untracked" and (not path or f["path"] == path)][:200]:
+            for rel in [f["path"] for f in st["files"] if f["status"] == "untracked" and in_scope(f["path"], path)][:500]:
                 c, text, _ = await t.git(wt, ["diff", "--no-color", "--no-index", "--", "/dev/null", rel], timeout=60)
                 if c in (0, 1):
                     for f in split_diff(text):
@@ -591,7 +666,7 @@ class DevService:
             if size > max_bytes or len(f["unified"]) > 600_000:
                 f["unified"], f["too_large"] = "", True
         files.sort(key=lambda f: f["path"])
-        return {"base": base if not commit else f"{commit}^", "base_sha": base_sha, "target": commit or target,
+        return {"path": path, "base": base if not commit else f"{commit}^", "base_sha": base_sha, "target": commit or target,
                 "target_sha": target_sha, "worktree": target_sha is None, "files": files,
                 "summary": {"files": len(files), "additions": sum(f["additions"] for f in files),
                             "deletions": sum(f["deletions"] for f in files)}}
@@ -638,6 +713,57 @@ class DevService:
         if len(out) > max_bytes:
             raise ApiError(413, "FILE_TOO_LARGE", "the file is too large to show")
         return {"lines": out.split("\n")[:-1] if out.endswith("\n") else out.split("\n")}
+
+    # ------------------------------------------------------------------ branches
+    async def _follow_branch(self, row: DevWorkspace, t: Target) -> DevWorkspace:
+        """A folder opened directly (or a worktree) may switch branches outside the app: follow it."""
+        if row.mode == "pr":
+            return row
+        _, cur, _ = await t.git(row.worktree_path, ["symbolic-ref", "--quiet", "--short", "HEAD"])
+        cur = cur.strip() or "HEAD"
+        if cur != row.branch:
+            self._update(row.id, branch=cur, push_branch=cur if cur != "HEAD" else None)
+            row = self.get(row.id)
+        return row
+
+    async def branches(self, dev_id: str) -> dict[str, Any]:
+        row, t = self._ready(dev_id)
+        row = await self._follow_branch(row, t)
+        _, out, _ = await t.git(row.worktree_path, ["for-each-ref", "--sort=-committerdate", "--format=%(refname:short)", "refs/heads"])
+        return {"current": row.branch, "branches": [b for b in out.split() if b], "base_ref": row.base_ref, "mode": row.mode,
+                "can_switch": row.mode != "pr"}
+
+    async def branch(self, dev_id: str, name: str, create: bool, start: str | None) -> dict[str, Any]:
+        """Create a branch (from the current one, or `start`) and switch to it, or switch to an existing one. The
+        uncommitted changes go along (git refuses when they would be overwritten)."""
+        row, t = self._ready(dev_id)
+        if row.mode == "pr":
+            raise conflict("PR_WORKSPACE", "this workspace belongs to a pull request: its branch cannot be changed")
+        name = name.strip()
+        if not valid_branch(name):
+            raise bad_request("give a valid branch name (letters, digits, - _ . /)", "INVALID_BRANCH")
+        wt = row.worktree_path
+        row = await self._follow_branch(row, t)
+        exists = (await t.git(wt, ["rev-parse", "--verify", "--quiet", f"refs/heads/{name}"]))[0] == 0
+        if create and exists:
+            raise conflict("BRANCH_EXISTS", f"a branch {name} already exists: switch to it instead")
+        if not create and not exists:
+            raise not_found(f"no branch {name}", "BRANCH_NOT_FOUND")
+        start_sha = None
+        if create and start:
+            start_sha = await self._commit_of(t, wt, start)
+            if not start_sha:
+                raise bad_request(f"unknown start {start[:60]}", "INVALID_REF")
+        prev = row.branch
+        args = ["switch", "-c", name, *([start_sha] if start_sha else [])] if create else ["switch", name]
+        rc, out, err = await t.git(wt, args, timeout=180)
+        if rc != 0:
+            raise ApiError(409, "GIT_SWITCH_FAILED", f"git switch failed: {(err or out).strip()[-500:]}")
+        fields: dict[str, Any] = {"branch": name, "push_branch": name}
+        if create and row.mode == "folder":
+            fields["base_ref"] = start or (prev if prev != "HEAD" else None)  # compared against where it started
+        self._update(dev_id, **fields)
+        return {"branch": name, "created": create, "previous": prev}
 
     async def commit(self, dev_id: str, message: str, paths: list[str] | None) -> dict[str, Any]:
         row, t = self._ready(dev_id)

@@ -3,7 +3,7 @@ import { ApiError, DevInfo, DevWorkspace, WorkspaceInfo, get, post } from "../ap
 import FolderPicker from "./FolderPicker";
 
 export interface DevSetupPreset {
-  mode?: "branch" | "pr";
+  mode?: "branch" | "pr" | "folder";
   github_repo?: string;
   pr_number?: number;
   wiki_workspace_id?: string | null;
@@ -28,7 +28,8 @@ export default function DevSetupDialog({ info, workspaces, preset, onClose, onCr
   onCreated: (d: DevWorkspace) => void;
 }) {
   const [host, setHost] = useState(() => localStorage.getItem("waw.devHost") || "local");
-  const [mode, setMode] = useState<"branch" | "pr">(preset.mode ?? "branch");
+  const [mode, setMode] = useState<"branch" | "pr" | "folder">(preset.mode ?? "branch");
+  const [initGit, setInitGit] = useState(true);
   const [source, setSource] = useState("");
   const [branch, setBranch] = useState("");
   const [base, setBase] = useState("");
@@ -73,7 +74,8 @@ export default function DevSetupDialog({ info, workspaces, preset, onClose, onCr
       if (test.trim()) settings.test_command = test.trim();
       const d = await post<DevWorkspace>("/dev/workspaces", {
         host, source_repo: source.trim(), mode, name: name.trim() || undefined,
-        branch: mode === "branch" ? branch.trim() : undefined, base: mode === "branch" ? base.trim() || undefined : undefined,
+        branch: mode !== "pr" ? branch.trim() || undefined : undefined, base: mode === "branch" ? base.trim() || undefined : undefined,
+        init_git: mode === "folder" ? initGit : undefined,
         github_repo: mode === "pr" ? pr!.repo : repo.trim() || undefined, pr_number: mode === "pr" ? pr!.number : undefined,
         wiki_workspace_id: wiki || undefined, settings,
       });
@@ -88,14 +90,15 @@ export default function DevSetupDialog({ info, workspaces, preset, onClose, onCr
     }
   };
 
-  const ready = !!source.trim() && (mode === "pr" ? !!pr : !!branch.trim());
+  const ready = !!source.trim() && (mode === "pr" ? !!pr : mode === "folder" ? true : !!branch.trim());
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal dev-setup" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="New development workspace" data-testid="dev-setup">
         <div className="modal-head"><span>New development workspace</span><button className="icon-btn" onClick={onClose} aria-label="Close">×</button></div>
         <div className="muted small">
-          The app creates its own Git worktree (your checkout is not switched or changed), opens it in a VS Code editor and lets the
-          agent work there with the whole wiki folder as its reference.
+          {mode === "folder"
+            ? "The app works directly in this folder (its files and branch change; no separate worktree), opens it in the editor and lets the agent work there with the whole wiki folder as its reference."
+            : "The app creates its own Git worktree (your checkout is not switched or changed), opens it in a VS Code editor and lets the agent work there with the whole wiki folder as its reference."}
         </div>
         <label className="dev-field">
           <span className="label">Runs on</span>
@@ -109,9 +112,15 @@ export default function DevSetupDialog({ info, workspaces, preset, onClose, onCr
           <span className="mode-switch" role="tablist">
             <button role="tab" aria-selected={mode === "branch"} className={mode === "branch" ? "active" : ""} onClick={() => setMode("branch")} data-testid="dev-mode-branch">New branch</button>
             <button role="tab" aria-selected={mode === "pr"} className={mode === "pr" ? "active" : ""} onClick={() => setMode("pr")} data-testid="dev-mode-pr">Existing pull request</button>
+            <button role="tab" aria-selected={mode === "folder"} className={mode === "folder" ? "active" : ""} onClick={() => setMode("folder")} title="A Git checkout or any folder, used as it is" data-testid="dev-mode-folder">Local folder</button>
           </span>
         </div>
-        {mode === "pr" ? (
+        {mode === "folder" ? (
+          <label className="dev-field">
+            <span className="label">Branch to create there (optional)</span>
+            <input value={branch} onChange={(e) => setBranch(e.target.value)} placeholder="keep the current branch; you can create one later" data-testid="dev-branch" />
+          </label>
+        ) : mode === "pr" ? (
           <label className="dev-field">
             <span className="label">Pull request</span>
             <input value={prRef} onChange={(e) => setPrRef(e.target.value)} placeholder="owner/repo#123 or https://github.com/owner/repo/pull/123" data-testid="dev-pr" />
@@ -131,12 +140,17 @@ export default function DevSetupDialog({ info, workspaces, preset, onClose, onCr
           </>
         )}
         <label className="dev-field">
-          <span className="label">Repository checkout {host === "local" ? "on this server" : `on ${host}`}</span>
+          <span className="label">{mode === "folder" ? "Folder" : "Repository checkout"} {host === "local" ? "on this server" : `on ${host}`}</span>
           <span className="row nowrap">
-            <input value={source} onChange={(e) => setSource(e.target.value)} placeholder="/path/to/your/clone" className="mono" data-testid="dev-source" />
+            <input value={source} onChange={(e) => setSource(e.target.value)} placeholder={mode === "folder" ? "/path/to/a/checkout/or/folder" : "/path/to/your/clone"} className="mono" data-testid="dev-source" />
             {host === "local" && <button className="btn small" onClick={() => setBrowse(true)}>Browse…</button>}
           </span>
         </label>
+        {mode === "folder" && (
+          <label className="small" title="Git keeps track of the changes: the diff, commits and branches need it">
+            <input type="checkbox" checked={initGit} onChange={(e) => setInitGit(e.target.checked)} data-testid="dev-init-git" /> If the folder is not in a Git repository, make it one (git init)
+          </label>
+        )}
         <label className="dev-field">
           <span className="label">Reference wiki (the agent reads the whole folder)</span>
           <select value={wiki} onChange={(e) => setWiki(e.target.value)} data-testid="dev-wiki">
@@ -161,8 +175,9 @@ export default function DevSetupDialog({ info, workspaces, preset, onClose, onCr
           <button className="btn primary" disabled={!ready || busy} onClick={() => void create()} data-testid="dev-create">{busy ? "Creating…" : "Create"}</button>
         </div>
         {browse && (
-          <FolderPicker title="Repository checkout" hint="A Git clone on this server; the app adds a worktree to it." requireGit start={source || undefined}
-            confirmLabel="Use this checkout" onClose={() => setBrowse(false)} onChoose={(p) => { setBrowse(false); setSource(p); }} />
+          <FolderPicker title={mode === "folder" ? "Folder" : "Repository checkout"} requireGit={mode !== "folder"} start={source || undefined}
+            hint={mode === "folder" ? "A Git checkout or any folder on this server; the app works in it directly." : "A Git clone on this server; the app adds a worktree to it."}
+            confirmLabel={mode === "folder" ? "Use this folder" : "Use this checkout"} onClose={() => setBrowse(false)} onChoose={(p) => { setBrowse(false); setSource(p); }} />
         )}
       </div>
     </div>

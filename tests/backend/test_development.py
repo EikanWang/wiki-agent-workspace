@@ -1056,3 +1056,67 @@ def test_split_diff_renames_binary_and_quoted_paths(tmp_path):
     assert by["new name.txt"]["additions"] == 1 and by["new name.txt"]["deletions"] == 1
     assert by["pic.bin"]["binary"] is True and by["pic.bin"]["unified"] == ""
     assert by["é.txt"]["unified"] == "@@ -1 +1 @@\n-a\n+b\n"
+
+
+async def test_open_a_folder_directly_branches_and_diffs_per_folder(running_app, dev_settings, tmp_path, fake_env):
+    """A checkout opened directly (no worktree) and a plain folder made a repository; create and switch branches
+    there; the Changes view for one folder or file; archiving never removes the folder."""
+    h = await running_app(dev_settings)
+    api = h.api
+    src, _ = make_source(tmp_path)
+    r = await api.post("/api/v1/dev/workspaces", json={"source_repo": str(src / "."), "mode": "folder"})
+    assert r.status_code == 201, r.text
+    d = await wait_ready(api, r.json()["id"])
+    assert d["status"] == "ready", d
+    assert d["worktree_path"] == str(src) and d["branch"] == "main" and d["mode"] == "folder" and d["name"] == "src"
+    base = f"/api/v1/dev/workspaces/{d['id']}"
+    # a new branch, in the checkout itself; it is compared against where it started
+    r = await api.post(f"{base}/branch", json={"name": "feature/direct"})
+    assert r.status_code == 200, r.text
+    assert git(src, "symbolic-ref", "--short", "HEAD") == "feature/direct"
+    br = (await api.get(f"{base}/branches")).json()
+    assert br["current"] == "feature/direct" and set(br["branches"]) == {"main", "feature/direct"} and br["base_ref"] == "main"
+    assert (await api.post(f"{base}/branch", json={"name": "main"})).status_code == 409  # exists: switch instead
+    assert (await api.post(f"{base}/branch", json={"name": "-x"})).status_code == 400
+    # changes in a folder and elsewhere: the diff of the folder, of one file, of everything
+    (src / "pkg").mkdir()
+    (src / "pkg" / "a.py").write_text("A = 1\n")
+    (src / "pkg" / "b.py").write_text("B = 1\n")
+    (src / "lib.py").write_text("def add(a, b):\n    return b + a\n")
+    every = (await api.get(f"{base}/compare")).json()
+    assert {f["path"] for f in every["files"]} == {"lib.py", "pkg/a.py", "pkg/b.py"}
+    folder = (await api.get(f"{base}/compare", params={"path": "pkg"})).json()
+    assert {f["path"] for f in folder["files"]} == {"pkg/a.py", "pkg/b.py"} and folder["path"] == "pkg"
+    assert [f["path"] for f in (await api.get(f"{base}/compare", params={"path": "pkg/b.py"})).json()["files"]] == ["pkg/b.py"]
+    assert (await api.get(f"{base}/compare", params={"path": "../x"})).status_code == 400
+    c = await api.post(f"{base}/commit", json={"message": "pkg", "paths": ["pkg/a.py", "pkg/b.py"]})
+    assert c.status_code == 200, c.text
+    assert git(src, "log", "-1", "--format=%s", "feature/direct") == "pkg"
+    branch_diff = (await api.get(f"{base}/compare", params={"base": "branch", "target": "HEAD"})).json()
+    assert {f["path"] for f in branch_diff["files"]} == {"pkg/a.py", "pkg/b.py"}
+    # switching outside the app is followed
+    git(src, "stash", "-q")
+    git(src, "switch", "-q", "main")
+    assert (await api.get(f"{base}/status")).json()["branch"] == "main"
+    r = await api.post(f"{base}/branch", json={"name": "feature/direct", "create": False})
+    assert r.status_code == 200 and git(src, "symbolic-ref", "--short", "HEAD") == "feature/direct"
+    # archiving with "remove the worktree" leaves the folder alone
+    r = await api.delete(base, params={"remove_worktree": "true", "force": "true"})
+    assert r.status_code == 200 and r.json()["worktree_removed"] is False and (src / "lib.py").exists()
+
+    # a plain folder: made a Git repository; with no commit yet, everything shows as new
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    (plain / "main.py").write_text("print('hi')\n")
+    r = await api.post("/api/v1/dev/workspaces", json={"source_repo": str(plain), "mode": "folder", "branch": "work"})
+    d2 = await wait_ready(api, r.json()["id"])
+    assert d2["status"] == "ready", d2
+    assert (plain / ".git").is_dir() and d2["branch"] == "work"
+    files = (await api.get(f"/api/v1/dev/workspaces/{d2['id']}/compare")).json()["files"]
+    assert [(f["path"], f["status"]) for f in files] == [("main.py", "untracked")]
+    # without git init: refused
+    other = tmp_path / "other"
+    other.mkdir()
+    r = await api.post("/api/v1/dev/workspaces", json={"source_repo": str(other), "mode": "folder", "init_git": False})
+    d3 = await wait_ready(api, r.json()["id"])
+    assert d3["status"] == "failed" and "not in a Git repository" in d3["error"] and not (other / ".git").exists()

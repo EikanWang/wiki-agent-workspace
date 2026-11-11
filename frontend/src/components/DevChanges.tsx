@@ -40,7 +40,10 @@ function fingerprint(s: string): string {
  * commit, another branch), "Viewed" marks, questions to the agent about a file or some lines, and committing the
  * files you pick with a message the agent can draft, then pushing.
  */
-export default function DevChanges({ dev, refreshKey, onChanged, onAsk, onOpenFile, wide, onToggleWide }: {
+export default function DevChanges({ dev, refreshKey, onChanged, onAsk, onOpenFile, wide, onToggleWide, scope, onScope }: {
+  /** only this folder / file of the worktree; null: everything */
+  scope: string | null;
+  onScope: (p: string | null) => void;
   dev: DevWorkspace;
   refreshKey: number;
   onChanged: () => void;
@@ -77,7 +80,7 @@ export default function DevChanges({ dev, refreshKey, onChanged, onAsk, onOpenFi
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const q = new URLSearchParams(query(mode)).toString();
+      const q = new URLSearchParams({ ...query(mode), ...(scope ? { path: scope } : {}) }).toString();
       const [c, s, r] = await Promise.all([
         get<DevCompare>(`/dev/workspaces/${dev.id}/compare${q ? `?${q}` : ""}`),
         get<DevGitStatus>(`/dev/workspaces/${dev.id}/status`),
@@ -94,7 +97,7 @@ export default function DevChanges({ dev, refreshKey, onChanged, onAsk, onOpenFi
     } finally {
       setLoading(false);
     }
-  }, [dev.id, mode]);
+  }, [dev.id, mode, scope]);
   useEffect(() => { void load(); }, [load, refreshKey]);
   // the worktree changes behind our back (editor saves, the agent, the terminal): look again when coming back
   useEffect(() => {
@@ -157,11 +160,11 @@ export default function DevChanges({ dev, refreshKey, onChanged, onAsk, onOpenFi
           onChange={(e) => setExcluded(e.target.checked ? new Set() : new Set(uncommitted.map((f) => f.path)))} data-testid="dev-select-all" /> all</label>}</div>
       <div className="dev-files">
         {uncommitted.map((f) => (
-          <div key={f.path} className={`dev-file mono small ${excluded.has(f.path) ? "excluded" : ""}`} title={isArtifact(f.path) ? "Looks like a build output or cache" : f.path}>
+          <div key={f.path} className={`dev-file mono small ${excluded.has(f.path) ? "excluded" : ""} ${scope && !(f.path === scope || f.path.startsWith(scope.replace(/\/$/, "") + "/")) ? "out-of-scope" : ""}`} title={isArtifact(f.path) ? "Looks like a build output or cache" : f.path}>
             <input type="checkbox" checked={!excluded.has(f.path)} data-testid="dev-file" aria-label={`Commit ${f.path}`}
               onChange={(e) => setExcluded((x) => { const n = new Set(x); if (e.target.checked) n.delete(f.path); else n.add(f.path); return n; })} />
             <span className={`chip git ${f.status}`}>{f.status[0].toUpperCase()}</span>
-            <button className="link-btn dev-file-name" onClick={() => { if (mode !== "wt" && mode !== "branch" && !mode.startsWith("b:")) setMode("wt"); goTo(f.path); }} data-testid="dev-file-go">{f.path}</button>
+            <button className="link-btn dev-file-name" onClick={() => { if (mode !== "wt" && mode !== "branch" && !mode.startsWith("b:")) setMode("wt"); if (scope && !(f.path === scope || f.path.startsWith(scope + "/"))) onScope(null); goTo(f.path); }} data-testid="dev-file-go">{f.path}</button>
           </div>
         ))}
         {st && uncommitted.length === 0 && <div className="muted small">No uncommitted changes.</div>}
@@ -222,6 +225,12 @@ export default function DevChanges({ dev, refreshKey, onChanged, onAsk, onOpenFi
               </optgroup>
             )}
           </select>
+          {scope && (
+            <span className="chip dev-scope" title={`Only the changes of ${scope}`} data-testid="dev-diff-scope">
+              only <span className="mono">{scope}</span>
+              <button className="icon-btn small" onClick={() => onScope(null)} title="Show all changes" aria-label="Show all changes" data-testid="dev-diff-scope-clear">×</button>
+            </span>
+          )}
           {cmp && (
             <span className="diff-summary small" data-testid="dev-diff-summary">
               {cmp.summary.files} file{cmp.summary.files === 1 ? "" : "s"} <span className="add">+{cmp.summary.additions}</span> <span className="del">−{cmp.summary.deletions}</span>
@@ -239,7 +248,7 @@ export default function DevChanges({ dev, refreshKey, onChanged, onAsk, onOpenFi
           <button className="btn small" onClick={onToggleWide} title={wide ? "Back to the editor (the changes stay in the bottom panel)" : "Show the changes in the editor area"} data-testid="dev-changes-wide">{wide ? "Back to editor" : "⤢ Expand"}</button>
         </div>
         {err && <div className="error-text small pad" role="alert">{err}</div>}
-        {cmp && files.length === 0 && <div className="muted small dev-hint" data-testid="dev-diff-empty">{isWt && mode === "wt" ? "The worktree has no uncommitted changes." : "No differences."}</div>}
+        {cmp && files.length === 0 && <div className="muted small dev-hint" data-testid="dev-diff-empty">{scope ? `No changes in ${scope}. ` : ""}{!scope && isWt && mode === "wt" ? "The worktree has no uncommitted changes." : !scope ? "No differences." : ""}{scope && <button className="link-btn" onClick={() => onScope(null)}>Show all changes</button>}</div>}
         <div className="dev-diff-files">
           {files.map((f) => (
             <div key={f.path} ref={(el) => { fileRefs.current[f.path] = el; }}>

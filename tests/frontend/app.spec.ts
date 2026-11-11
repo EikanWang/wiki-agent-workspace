@@ -2872,6 +2872,76 @@ test("PR Development: resize the bottom panel; choose a model for a discussion a
   await page.getByTestId("view-document").click();
 });
 
+
+test("PR Development: open a local folder directly, create a branch there, view the diff of a folder, of a file, of everything", async ({ page }) => {
+  const cp = require("child_process") as typeof import("child_process");
+  const proj = path.join(path.dirname(workspaceDir()), "direct-proj");
+  fs.rmSync(proj, { recursive: true, force: true });
+  fs.mkdirSync(path.join(proj, "pkg"), { recursive: true });
+  fs.writeFileSync(path.join(proj, "top.py"), "TOP = 1\n");
+  fs.writeFileSync(path.join(proj, "pkg", "x.py"), "X = 1\n");
+  const g = (...a: string[]) => cp.execFileSync("git", ["-C", proj, "-c", "user.name=e2e", "-c", "user.email=e2e@x", ...a], { encoding: "utf-8" }).trim();
+  g("init", "-q", "-b", "main");
+  g("add", "-A");
+  g("commit", "-q", "-m", "init");
+  await login(page);
+  await page.getByTestId("activity-development").click();
+  await page.getByTestId("dev-new").click();
+  await page.getByTestId("dev-mode-folder").click();
+  await expect(page.getByTestId("dev-setup")).toContainText("works directly in this folder");
+  await page.getByTestId("dev-source").fill(proj);
+  await page.getByTestId("dev-create").click();
+  await expect(page.getByTestId("dev-view")).toBeVisible();
+  await expect(page.getByTestId("dev-branch-button")).toContainText("main", { timeout: 20000 });
+  await expect(page.getByTestId("webide")).toBeVisible({ timeout: 20000 });
+  // a branch, created in the folder itself
+  await page.getByTestId("dev-branch-button").click();
+  await page.getByTestId("dev-branch-new").fill("feature/direct");
+  await page.getByTestId("dev-branch-create").click();
+  await expect(page.getByTestId("dev-branch-button")).toContainText("feature/direct");
+  expect(g("symbolic-ref", "--short", "HEAD")).toBe("feature/direct");
+  // changes in a folder and outside it
+  fs.writeFileSync(path.join(proj, "pkg", "x.py"), "X = 2\n");
+  fs.writeFileSync(path.join(proj, "pkg", "new.py"), "NEW = 1\n");
+  fs.writeFileSync(path.join(proj, "top.py"), "TOP = 2\n");
+  // ± of the folder in the explorer: only its changes
+  const row = page.locator('[data-testid="webide-tree-item"][data-path="pkg"]');
+  await row.hover();
+  await row.getByTestId("webide-diff").click();
+  await expect(page.getByTestId("dev-diff-scope")).toContainText("pkg");
+  await expect(page.locator('[data-testid="dev-diff-file"][data-path="pkg/x.py"]')).toContainText("X = 2");
+  await expect(page.locator('[data-testid="dev-diff-file"][data-path="pkg/new.py"]')).toBeVisible();
+  await expect(page.locator('[data-testid="dev-diff-file"][data-path="top.py"]')).toHaveCount(0);
+  // all changes
+  await page.getByTestId("dev-diff-scope-clear").click();
+  await expect(page.locator('[data-testid="dev-diff-file"]')).toHaveCount(3);
+  // ± of one file
+  await page.getByTestId("dev-changes-toggle").click(); // back to the editor
+  const file = page.locator('[data-testid="webide-tree-item"][data-path="top.py"]');
+  await file.hover();
+  await file.getByTestId("webide-diff").click();
+  await expect(page.locator('[data-testid="dev-diff-file"]')).toHaveCount(1);
+  await expect(page.locator('[data-testid="dev-diff-file"][data-path="top.py"]')).toContainText("TOP = 2");
+  // the toolbar's Diff: everything again; commit and see the branch's changes against main
+  await page.getByTestId("dev-changes-toggle").click();
+  await page.getByTestId("dev-changes-toggle").click();
+  await expect(page.getByTestId("dev-diff-scope")).toHaveCount(0);
+  await expect(page.locator('[data-testid="dev-diff-file"]')).toHaveCount(3);
+  await page.getByTestId("dev-commit-msg").fill("Direct work");
+  await page.getByTestId("dev-commit").click();
+  await expect(page.getByTestId("dev-note")).toContainText("Committed 3 file(s)");
+  expect(g("log", "-1", "--format=%s", "feature/direct")).toBe("Direct work");
+  await page.getByTestId("dev-compare").selectOption("branch");
+  await expect(page.locator('[data-testid="dev-diff-file"]')).toHaveCount(3);
+  // archive: the folder stays
+  page.once("dialog", (d) => d.accept());
+  await page.locator(".dev-toolbar .icon-btn", { hasText: "⋯" }).click();
+  await expect(page.getByTestId("confirm-dialog")).toContainText("is not touched");
+  await page.getByTestId("confirm-ok").click();
+  await expect(page.getByTestId("dev-view")).toHaveCount(0, { timeout: 15000 });
+  expect(fs.existsSync(path.join(proj, "top.py"))).toBe(true);
+  await page.getByTestId("activity-files").click();
+});
 test("Local files: open a folder and a file, edit and save like a file manager; Wiki is the former Files", async ({ page }) => {
   await login(page);
   await expect(page.getByTestId("activity-files")).toHaveAttribute("title", /^Wiki/);
