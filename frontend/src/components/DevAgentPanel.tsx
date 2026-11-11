@@ -44,7 +44,9 @@ interface Skill { name: string; description: string; path: string; folder: strin
  * continues the chosen task or starts a new one, with the current file, all open files or the files selected in the
  * explorer as context. The agent gets the skills of every connected folder and project.
  */
-export default function DevAgentPanel({ dev, sessions, threads, fileSessions = {}, onReload, onSessionsChanged, onTurnFinished, files, focusThread, onRevealAnchor }: {
+export default function DevAgentPanel({ dev, sessions, threads, fileSessions = {}, onReload, onSessionsChanged, onTurnFinished, files, focusThread, onRevealAnchor, onFold }: {
+  /** fold the panel (a strip at the right edge shows it again) */
+  onFold?: () => void;
   dev: DevWorkspace;
   sessions: AgentSession[];
   threads: Thread[];
@@ -178,6 +180,7 @@ export default function DevAgentPanel({ dev, sessions, threads, fileSessions = {
           </button>
         )}
         {dev.wiki_workspace_id ? <span className="chip" title="The agent reads the whole wiki folder before it changes code">wiki reference</span> : <span className="chip warn" title="No reference wiki: set one in the workspace settings">no wiki</span>}
+        {onFold && <button className="icon-btn small" onClick={onFold} title="Fold the agent panel (the Agent strip at the right edge shows it again)" aria-label="Fold the agent panel" data-testid="dev-agent-fold">»</button>}
       </div>
       {showSkills && skills && (
         <div className="dev-skills" data-testid="dev-skills-list">

@@ -907,7 +907,7 @@ export default function App() {
           {sidebarView === "development" && (
             <div className="sidebar-content">
               <DevPanel activeId={view === "development" ? devId : null} workspaces={workspaces} onOpen={(id) => openDev(id)}
-                preset={devPreset} onPresetUsed={() => setDevPreset(null)} />
+                preset={devPreset} onPresetUsed={() => setDevPreset(null)} onFold={() => setSidebarOpen(() => false)} />
             </div>
           )}
           {sidebarOpen && <Resizer side="right" onResize={resizeSidebar} onEnd={persistPrefs} />}
@@ -1068,6 +1068,7 @@ export default function App() {
         <section className="center dev-center" style={{ display: view === "development" ? undefined : "none" }}>
           {devId && (
             <DevView key={devId} devId={devId} workspaces={workspaces} sessions={sessions} onSessionsChanged={() => void refreshSessions()}
+              projectsFolded={!sidebarOpen} onShowProjects={() => { updatePrefs({ sidebarOpen: true, sidebarView: "development" }); }}
               onArchived={() => openDev(null)}
               onOpenPrReview={hub?.available ? (r, n) => { updatePrefs({ sidebarView: "reviews" }); openPr(r, n); } : undefined} />
           )}

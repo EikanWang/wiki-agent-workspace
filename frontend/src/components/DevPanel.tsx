@@ -4,7 +4,9 @@ import DevSetupDialog, { DevSetupPreset } from "./DevSetupDialog";
 import { PlusIcon } from "./Icons";
 
 /** Sidebar of PR Development: the development workspaces (newest activity first) and "New". */
-export default function DevPanel({ activeId, workspaces, onOpen, preset, onPresetUsed }: {
+export default function DevPanel({ activeId, workspaces, onOpen, preset, onPresetUsed, onFold }: {
+  /** fold the list (the sidebar); the workspace's toolbar has » to show it again */
+  onFold?: () => void;
   activeId: string | null;
   workspaces: WorkspaceInfo[];
   onOpen: (id: string) => void;
@@ -47,6 +49,7 @@ export default function DevPanel({ activeId, workspaces, onOpen, preset, onPrese
         <button className="icon-btn" onClick={() => setSetup({})} title="New development workspace: a new branch or an existing pull request" aria-label="New development workspace" data-testid="dev-new">
           <PlusIcon />
         </button>
+        {onFold && <button className="icon-btn" onClick={onFold} title="Fold the list of workspaces (» in the workspace's toolbar shows it again)" aria-label="Fold the list of workspaces" data-testid="dev-panel-fold">«</button>}
       </div>
       {info && !info.editor.available && <div className="warn small dev-hint">{info.editor.install_hint}</div>}
       {err && <div className="error-text small">{err}</div>}

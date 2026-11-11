@@ -17,7 +17,10 @@ const WebIde = lazy(() => import("./webide/WebIde"));
  * A development workspace: the VS Code editor (code-server through the app) on the left, the agent on the right,
  * and below the editor: builds/tests, the worktree's changes (commit, push) and the pull request.
  */
-export default function DevView({ devId, workspaces, sessions, onSessionsChanged, onArchived, onOpenPrReview }: {
+export default function DevView({ devId, workspaces, sessions, onSessionsChanged, onArchived, onOpenPrReview, projectsFolded, onShowProjects }: {
+  /** the list of workspaces (the sidebar) is folded: » in the toolbar shows it */
+  projectsFolded?: boolean;
+  onShowProjects?: () => void;
   devId: string;
   workspaces: WorkspaceInfo[];
   sessions: AgentSession[];
@@ -160,6 +163,7 @@ export default function DevView({ devId, workspaces, sessions, onSessionsChanged
   return (
     <div className={`dev-view ${agentOpen ? "" : "agent-closed"}`} data-testid="dev-view">
       <div className="dev-toolbar">
+        {projectsFolded && onShowProjects && <button className="icon-btn" onClick={onShowProjects} title="Show the list of workspaces" aria-label="Show the list of workspaces" data-testid="dev-show-projects">»</button>}
         <b className="dev-title" title={dev.worktree_path}>{dev.name}</b>
         <span className="branch-anchor">
           {dev.mode === "pr" ? <span className="chip mono" title={`worktree ${dev.worktree_path}`}>{dev.branch}</span> : (
@@ -276,8 +280,13 @@ export default function DevView({ devId, workspaces, sessions, onSessionsChanged
           <aside className="dev-side" style={{ width: agentPane.size }}>
             <DevAgentPanel dev={dev} sessions={sessions} threads={threads} fileSessions={fileSessions} onReload={loadThreads} onSessionsChanged={onSessionsChanged}
               onTurnFinished={() => setRefresh((n) => n + 1)} files={web ? files : null} focusThread={focusThread}
-              onRevealAnchor={web ? (a) => setReveal({ anchor: a, at: Date.now() }) : undefined} />
+              onRevealAnchor={web ? (a) => setReveal({ anchor: a, at: Date.now() }) : undefined} onFold={() => setAgentOpen(false)} />
           </aside>
+        )}
+        {!agentOpen && dev.status === "ready" && (
+          <button className="dev-agent-strip" onClick={() => setAgentOpen(true)} title="Show the agent panel" aria-label="Show the agent panel" data-testid="dev-agent-strip">
+            <span>‹</span><span className="dev-agent-strip-label">Agent</span>
+          </button>
         )}
       </div>
       {settings && <DevSettingsDialog dev={dev} workspaces={workspaces} onClose={() => setSettings(false)} onSaved={(d) => { setDev(d); setSettings(false); }} />}

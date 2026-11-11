@@ -2898,6 +2898,17 @@ test("PR Development: open a local folder directly, create a branch there, view 
   await expect(page.getByTestId("dev-branch-button")).toContainText("main", { timeout: 20000 });
   await expect(page.getByTestId("webide")).toBeVisible({ timeout: 20000 });
   await expect(page.locator(".webide-explorer .webide-row.root").first()).toContainText("MAIN");
+  // the list of workspaces and the agent panel fold, and come back
+  await page.getByTestId("dev-panel-fold").click();
+  await expect(page.getByTestId("dev-panel")).toBeHidden();
+  await page.getByTestId("dev-show-projects").click();
+  await expect(page.getByTestId("dev-panel")).toBeVisible();
+  await expect(page.getByTestId("dev-show-projects")).toHaveCount(0);
+  await page.getByTestId("dev-agent-fold").click();
+  await expect(page.locator(".dev-side")).toHaveCount(0);
+  await page.getByTestId("dev-agent-strip").click();
+  await expect(page.locator(".dev-side")).toBeVisible();
+  await expect(page.getByTestId("dev-agent-strip")).toHaveCount(0);
   // a branch, created in the folder itself
   await page.getByTestId("dev-branch-button").click();
   await page.getByTestId("dev-branch-new").fill("feature/direct");
@@ -3042,7 +3053,7 @@ test("PR diff: copy the file path, expand hidden lines around a change, expand /
 test("Agents: find sessions in folders, add one by id, alarms, a session on stage, continue it", async ({ page }) => {
   await login(page);
   await openGuide(page);
-  await selectText(page, "TorchDynamo");
+  await selectText(page, "forms a graph");
   await page.getByTestId("ask-current-selection").click();
   await page.getByTestId("selection-question").fill("monitor question");
   await page.getByTestId("selection-send").click();

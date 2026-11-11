@@ -260,6 +260,8 @@ write code with the agent — a new pull request, or changes to an existing one.
   with the worktree and the reference wiki (read-only);
 - the **agent**, working in the worktree, with a whole **wiki folder as its reference**;
 - **Build & test**, **Changes** (commit, push) and **Pull request** below the editor.
+- **«** in the list of workspaces folds it (**»** at the start of the workspace's toolbar shows it again); **»** in the
+  agent panel folds it (the **Agent** strip at the right edge, or **Agent** in the toolbar, shows it again).
 
 ### Creating one
 
