@@ -1208,3 +1208,18 @@ body.resizing-h iframe { pointer-events: none; }
 .mon-pick { margin-top: 10px; flex: none; }
 .mon-card-actions { position: absolute; right: 6px; bottom: 4px; display: none; gap: 2px; }
 .mon-card-wrap:hover .mon-card-actions { display: inline-flex; }
+
+/* PR Development: the Changes view (diff + commit), in the bottom panel or the editor area */
+.dev-changes-main { display: flex; min-height: 0; }
+.dev-changes .dev-diff { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.dev-diff-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 4px 8px; border-bottom: 1px solid var(--border); }
+.dev-diff-bar select { max-width: 340px; padding: 2px 4px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--fg); }
+.dev-diff-files { flex: 1; overflow: auto; padding: 8px; min-height: 0; }
+.dev-changes .dev-files { max-height: none; flex: 0 1 auto; min-height: 40px; }
+.dev-file-name { text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; font-family: var(--mono); }
+.dev-select-all { margin-left: auto; font-weight: normal; }
+.dev-changes-side .label { display: flex; align-items: center; gap: 6px; }
+.dev-commits { display: flex; flex-direction: column; gap: 1px; min-height: 0; overflow: auto; flex: 0 1 auto; max-height: 40%; }
+.dev-commits .list-item { display: flex; gap: 6px; text-align: left; }
+.dev-commit-subject { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.dev-diff-files .diff-file-head input[type=checkbox] { margin: 0; }

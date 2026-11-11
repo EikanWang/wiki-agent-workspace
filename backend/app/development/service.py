@@ -26,6 +26,69 @@ from ..models import DevWorkspace, Document
 from . import DEV_PREFIX
 from .targets import LOCAL, Target, TargetError, target_for
 
+EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"  # git's empty tree: the "parent" of a root commit
+
+
+def _unquote(p: str) -> str:
+    """A path as git prints it in diff headers (C-quoted when it has special characters)."""
+    if len(p) >= 2 and p[0] == '"' and p[-1] == '"':
+        try:
+            return p[1:-1].encode("latin-1", "backslashreplace").decode("unicode_escape").encode("latin-1").decode("utf-8")
+        except (UnicodeDecodeError, UnicodeEncodeError):
+            return p[1:-1]
+    return p
+
+
+def split_diff(text: str) -> list[dict[str, Any]]:
+    """`git diff` output → one entry per file: path, previous path, status, +/- counts, its unified diff."""
+    files: list[dict[str, Any]] = []
+    chunks = re.split(r"(?m)^(?=diff --git )", text)
+    for ch in chunks:
+        if not ch.startswith("diff --git "):
+            continue
+        lines = ch.split("\n")
+        old = new = None
+        status = "modified"
+        binary = False
+        body_at = len(lines)
+        for i, ln in enumerate(lines[1:], 1):
+            if ln.startswith("@@"):
+                body_at = i
+                break
+            if ln.startswith(("--- ", "+++ ")):
+                v = ln[4:].rstrip("\t")  # git ends a path with spaces with a tab
+                v = None if v == "/dev/null" else _unquote(v)[2:]  # "a/…" / "b/…"
+                if ln[0] == "-":
+                    old = v
+                else:
+                    new = v
+            elif ln.startswith("new file mode"):
+                status = "added"
+            elif ln.startswith("deleted file mode"):
+                status = "deleted"
+            elif ln.startswith("rename from "):
+                old, status = _unquote(ln[12:]), "renamed"
+            elif ln.startswith("rename to "):
+                new = _unquote(ln[10:])
+            elif ln.startswith("copy to "):
+                new, status = _unquote(ln[8:]), "added"
+            elif ln.startswith("Binary files ") or ln.startswith("GIT binary patch"):
+                binary = True
+        if old is None and new is None:  # no ---/+++ (binary, mode change, pure rename): take them from the first line
+            m = re.match(r'diff --git (?:"?a/)(.+?)"? (?:"?b/)(.+?)"?$', lines[0])
+            if m:
+                old, new = m.group(1), m.group(2)
+        path = new or old or ""
+        body = lines[body_at:]
+        if body and body[-1] == "":
+            body = body[:-1]
+        adds = sum(1 for ln in body if ln.startswith("+"))
+        dels = sum(1 for ln in body if ln.startswith("-"))
+        files.append({"path": path, "previous_path": old if status == "renamed" else None, "status": status,
+                      "additions": adds, "deletions": dels, "binary": binary,
+                      "unified": "\n".join(body) + ("\n" if body else "")})
+    return files
+
 log = logging.getLogger("waw.development")
 
 DEV_NOT_FOUND = "DEV_WORKSPACE_NOT_FOUND"
@@ -471,6 +534,111 @@ class DevService:
                 out += text
         return {"diff": out[:max_bytes], "truncated": len(out) > max_bytes, "files": st["files"]}
 
+    # ------------------------------------------------------------------ compare (the Changes view)
+    async def _commit_of(self, t: Target, wt: str, ref: str | None) -> str | None:
+        """The full sha `ref` names (a commit), or None. Refuses option-like or odd refs (they reach git's argv)."""
+        if not ref or ref.startswith("-") or len(ref) > 250 or any(c in ref for c in " \t\r\n\0"):
+            return None
+        rc, out, _ = await t.git(wt, ["rev-parse", "--verify", "--quiet", "--end-of-options", f"{ref}^{{commit}}"])
+        return out.strip() if rc == 0 and out.strip() else None
+
+    async def _merge_base(self, row: DevWorkspace, t: Target) -> str:
+        if not row.base_ref:
+            raise conflict("NO_BASE", "this workspace has no base branch to compare with")
+        rc, out, err = await t.git(row.worktree_path, ["merge-base", "--end-of-options", row.base_ref, "HEAD"])
+        if rc != 0 or not out.strip():
+            raise ApiError(400, "GIT_ERROR", f"cannot find where the branch started from {row.base_ref}: {err.strip()[:200]}")
+        return out.strip()
+
+    async def compare(self, dev_id: str, *, base: str = "HEAD", target: str = "worktree", commit: str | None = None,
+                      path: str | None = None, max_bytes: int = 3_000_000) -> dict[str, Any]:
+        """Changed files between two states, each with its own unified diff. `base`: HEAD, `branch` (where the branch
+        started from its base), a commit or a branch name; `target`: `worktree` (uncommitted files included), HEAD or a
+        commit; `commit`: just that commit (its parent → it)."""
+        row, t = self._ready(dev_id)
+        wt = row.worktree_path
+        if commit:
+            sha = await self._commit_of(t, wt, commit)
+            if not sha:
+                raise bad_request(f"unknown commit {commit[:60]}", "INVALID_REF")
+            base_sha = await self._commit_of(t, wt, f"{sha}^") or EMPTY_TREE
+            target_sha: str | None = sha
+        else:
+            base_sha = await self._merge_base(row, t) if base == "branch" else await self._commit_of(t, wt, base)
+            if not base_sha:
+                raise bad_request(f"unknown base {base[:60]}", "INVALID_REF")
+            target_sha = None if target == "worktree" else await self._commit_of(t, wt, target)
+            if target != "worktree" and not target_sha:
+                raise bad_request(f"unknown target {target[:60]}", "INVALID_REF")
+        args = ["diff", "--no-color", "--no-ext-diff", "-M", base_sha, *([target_sha] if target_sha else [])]
+        if path:
+            args += ["--", path]
+        rc, out, err = await t.git(wt, args, timeout=180)
+        if rc != 0:
+            raise ApiError(400, "GIT_ERROR", f"git diff failed: {err.strip()[:300]}")
+        files = split_diff(out)
+        st = await self.status(dev_id) if target_sha is None else None
+        if st is not None:
+            for rel in [f["path"] for f in st["files"] if f["status"] == "untracked" and (not path or f["path"] == path)][:200]:
+                c, text, _ = await t.git(wt, ["diff", "--no-color", "--no-index", "--", "/dev/null", rel], timeout=60)
+                if c in (0, 1):
+                    for f in split_diff(text):
+                        f["status"] = "untracked"
+                        files.append(f)
+        size = 0
+        for f in files:
+            size += len(f["unified"])
+            if size > max_bytes or len(f["unified"]) > 600_000:
+                f["unified"], f["too_large"] = "", True
+        files.sort(key=lambda f: f["path"])
+        return {"base": base if not commit else f"{commit}^", "base_sha": base_sha, "target": commit or target,
+                "target_sha": target_sha, "worktree": target_sha is None, "files": files,
+                "summary": {"files": len(files), "additions": sum(f["additions"] for f in files),
+                            "deletions": sum(f["deletions"] for f in files)}}
+
+    async def refs(self, dev_id: str) -> dict[str, Any]:
+        """What the Changes view can compare: the branch's own commits, recent history, and branches."""
+        row, t = self._ready(dev_id)
+        wt = row.worktree_path
+        fmt = "--format=%H%x00%h%x00%s%x00%an%x00%cI"
+
+        def parse(text: str) -> list[dict[str, str]]:
+            out = []
+            for ln in text.splitlines():
+                p = ln.split("\0")
+                if len(p) == 5:
+                    out.append({"sha": p[0], "short": p[1], "subject": p[2], "author": p[3], "date": p[4]})
+            return out
+
+        mine: list[dict[str, str]] = []
+        if row.base_ref:
+            c, text, _ = await t.git(wt, ["log", "--max-count=100", fmt, f"{row.base_ref}..HEAD"])
+            mine = parse(text) if c == 0 else []
+        _, text, _ = await t.git(wt, ["log", "--max-count=50", fmt, "HEAD"])
+        _, br, _ = await t.git(wt, ["for-each-ref", "--count=300", "--sort=-committerdate", "--format=%(refname:short)", "refs/heads", "refs/remotes"])
+        base = (row.base_ref or "").removeprefix("refs/waw/base/")
+        return {"branch_commits": mine, "commits": parse(text), "branches": [b for b in br.split() if not b.endswith("/HEAD")],
+                "base_ref": row.base_ref, "base_label": base or None}
+
+    async def file_at(self, dev_id: str, path: str, ref: str = "worktree", max_bytes: int = 4_000_000) -> dict[str, Any]:
+        """The lines of a file in the worktree or at a commit (to show more context around a change)."""
+        row, t = self._ready(dev_id)
+        wt = row.worktree_path
+        if not path or path.startswith("/") or ".." in path.split("/"):
+            raise bad_request("invalid path", "INVALID_PATH")
+        if ref == "worktree":
+            rc, out, err = await t.run(["cat", "--", path], cwd=wt, timeout=60)
+        else:
+            sha = await self._commit_of(t, wt, ref)
+            if not sha:
+                raise bad_request(f"unknown commit {ref[:60]}", "INVALID_REF")
+            rc, out, err = await t.git(wt, ["show", f"{sha}:{path}"], timeout=60)
+        if rc != 0:
+            raise not_found(f"{path} not found: {err.strip()[:200]}", "FILE_NOT_FOUND")
+        if len(out) > max_bytes:
+            raise ApiError(413, "FILE_TOO_LARGE", "the file is too large to show")
+        return {"lines": out.split("\n")[:-1] if out.endswith("\n") else out.split("\n")}
+
     async def commit(self, dev_id: str, message: str, paths: list[str] | None) -> dict[str, Any]:
         row, t = self._ready(dev_id)
         msg = message.strip()
@@ -489,7 +657,7 @@ class DevService:
         rc, _, err = await t.git(row.worktree_path, ["add", "-A", "--", *sel])
         if rc != 0:
             raise ApiError(400, "GIT_ERROR", f"git add failed: {err.strip()[:300]}")
-        rc, out, err = await t.git(row.worktree_path, ["commit", "-q", "-m", msg, "--", *sel])
+        rc, out, err = await t.git(row.worktree_path, ["commit", "-q", "-F", "-", "--", *sel], stdin=msg.encode("utf-8"))
         if rc != 0:
             raise ApiError(400, "GIT_COMMIT_FAILED", f"git commit failed: {(err or out).strip()[:500]}")
         _, head, _ = await t.git(row.worktree_path, ["rev-parse", "--short", "HEAD"])

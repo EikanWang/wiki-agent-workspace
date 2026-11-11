@@ -1,5 +1,7 @@
 import { defineConfig } from "@playwright/test";
 
+const url = process.env.WAW_E2E_URL || "http://127.0.0.1:8799";
+
 // The e2e suite starts its own backend (tests/frontend/start_server.py) with fake agent
 // executables and a temporary workspace, then drives the production build in Chromium.
 export default defineConfig({
@@ -11,12 +13,14 @@ export default defineConfig({
   retries: 0,
   reporter: [["list"]],
   use: {
-    baseURL: process.env.WAW_E2E_URL || "http://127.0.0.1:8799",
+    baseURL: url,
     trace: "retain-on-failure",
   },
   webServer: {
     command: "../.venv/bin/python ../tests/frontend/start_server.py",
-    url: (process.env.WAW_E2E_URL || "http://127.0.0.1:8799") + "/api/v1/health",
+    url: url + "/api/v1/health",
+    // the server listens where the tests look (and names the files it leaves for them after this port)
+    env: { ...process.env, WAW_E2E_PORT: new URL(url).port || "80" } as Record<string, string>,
     reuseExistingServer: !!process.env.WAW_E2E_URL,
     timeout: 60_000,
     stdout: "pipe",

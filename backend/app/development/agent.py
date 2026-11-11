@@ -120,6 +120,10 @@ def _context_text(c: dict[str, Any] | None) -> str | None:
             parts.append(f"The user is in the editor at {loc}" + (f" ({c['language']})" if c.get("language") else "") + ".")
         if sel.get("text"):
             parts.append("Selected code:\n```\n" + str(sel["text"])[:20000] + "\n```")
+    if c.get("diff"):
+        what = c.get("diff_label") or "the change"
+        parts.append(f"The user is reviewing {what} in the Changes view. The diff they are asking about:\n```diff\n"
+                     + str(c["diff"])[:30000] + "\n```")
     diags = c.get("diagnostics") or []
     if diags:
         lines = [f"- {d.get('file', f or '')}:{d.get('line', '?')}: {d.get('severity', 'error')}: {str(d.get('message', ''))[:500]}"

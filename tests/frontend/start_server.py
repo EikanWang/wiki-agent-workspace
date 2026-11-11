@@ -362,7 +362,7 @@ def main() -> None:
     (src / "ci.yaml").write_text("jobs:\n  build:\n    runs-on: ubuntu\n  test:\n    needs: build\n")
     subprocess.run(["git", "add", "-A"], cwd=src, check=True)
     subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=src, check=True)
-    Path("/tmp/waw-e2e-devsrc").write_text(str(src))
+    Path(f"/tmp/waw-e2e-devsrc-{settings.port}").write_text(str(src))  # per port: runs side by side do not mix
     settings.frontend_dist = ROOT / "frontend" / "dist"
     # "Sign in with GitHub" against a fake GitHub served by this same server (routes below)
     base = f"http://127.0.0.1:{settings.port}/fake-github"
@@ -381,7 +381,7 @@ def main() -> None:
     add_fake_review_queue(app)
     print(f"E2E workspace: {ws}", flush=True)
     (tmp / "WORKSPACE").write_text(str(ws))
-    Path("/tmp/waw-e2e-workspace").write_text(str(ws))
+    Path(f"/tmp/waw-e2e-workspace-{settings.port}").write_text(str(ws))
     # uvicorn shuts down gracefully on SIGTERM, then re-raises the signal with the handler that was installed
     # before it started. With the default handler that kills the process before `finally` runs; this one exits
     # normally, so the cleanup below always happens.

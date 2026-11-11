@@ -86,7 +86,8 @@ export default function FolderPicker({ title, hint, start, requireGit = false, c
       .catch((e) => {
         if (!alive) return;
         setError((e as ApiError).message);
-        if (!listing && path !== "~") setPath("~"); // a start path that is gone: begin at home instead
+        // a start path that is gone: begin at home instead (unless another folder was asked for meanwhile)
+        if (!listing && path !== "~") setPath((cur) => (cur === path ? "~" : cur));
       })
       .finally(() => alive && setLoading(false));
     return () => { alive = false; };

@@ -583,6 +583,30 @@ export interface DevGitStatus {
   identity: { name: string; email: string; configured: boolean };
 }
 
+/** One changed file of the Changes view (PR Development). */
+export interface DevDiffFile {
+  path: string;
+  previous_path: string | null;
+  status: "modified" | "added" | "deleted" | "renamed" | "untracked";
+  additions: number;
+  deletions: number;
+  binary: boolean;
+  too_large?: boolean;
+  unified: string;
+}
+export interface DevCompare {
+  base: string;
+  base_sha: string;
+  target: string;
+  target_sha: string | null;
+  /** the target is the worktree: uncommitted files are included, and can be committed */
+  worktree: boolean;
+  files: DevDiffFile[];
+  summary: { files: number; additions: number; deletions: number };
+}
+export interface DevCommitRef { sha: string; short: string; subject: string; author: string; date: string }
+export interface DevRefs { branch_commits: DevCommitRef[]; commits: DevCommitRef[]; branches: string[]; base_ref: string | null; base_label: string | null }
+
 export interface DevTaskRun {
   id: string;
   dev_id: string;

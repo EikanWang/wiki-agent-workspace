@@ -72,8 +72,8 @@ class Target:
             return 124, "", f"{args[0]} timed out after {int(timeout)} s"
         return proc.returncode or 0, out.decode("utf-8", "replace"), err.decode("utf-8", "replace")
 
-    async def git(self, cwd: str, args: list[str], timeout: float = 120) -> tuple[int, str, str]:
-        return await self.run(["git", "-C", cwd, *args], timeout=timeout, env=_git_env())
+    async def git(self, cwd: str, args: list[str], timeout: float = 120, stdin: bytes | None = None) -> tuple[int, str, str]:
+        return await self.run(["git", "-C", cwd, *args], timeout=timeout, env=_git_env(), stdin=stdin)
 
     def spawn_argv(self, args: list[str], cwd: str | None, env: dict[str, str] | None,
                    ssh_opts: list[str] | None = None) -> tuple[list[str], str | None, dict[str, str] | None]:

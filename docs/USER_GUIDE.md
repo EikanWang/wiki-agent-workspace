@@ -387,9 +387,17 @@ reference wiki, and for a PR tab the PR's connected local checkout. Skills are t
 
 - **Build & test** — run the build, the tests or any command in the worktree; the output streams in; a failed run
   has **Fix with the agent** (the output goes with the request).
-- **Changes** — the worktree's diff (new files included), tick the files to commit (build outputs and caches are
-  unticked), **Draft with agent** writes the message from the diff, **Commit**, **Push** (to the branch's remote; for
-  a PR, to its head branch; never forced).
+- **Changes** — like the wiki's Diff view: every changed file with its own diff (new files included), **Unified** or
+  **Side by side**, ↑/↓/↕ and **Expand all** for more context, **Viewed** to fold a file you have checked (the mark
+  goes when its change changes). Choose what to compare: **Uncommitted changes** (default), **Everything on this
+  branch** or **Committed on this branch** (against where the branch started), one commit, or the worktree against
+  another branch. Click a line (drag or shift-click for several) to **Ask agent** about it — the discussion is anchored
+  on those lines and the agent gets the diff — or **Open in editor** (double-click a line does the same); **Ask
+  agent** in a file's header asks about all of its changes. Tick the files to commit (in the list or in each file's
+  header; build outputs and caches are unticked), **Draft with agent** writes the message from the diff of the ticked
+  files, **Commit**, **Push** (to the branch's remote; for a PR, to its head branch; never forced). The branch's
+  commits are listed below: click one to see its changes. **⤢ Expand** (or **Changes** in the toolbar) shows the view
+  in the editor area; **Back to editor** returns it to the bottom panel.
 - **Pull request** — for new work: title and description (**Draft with agent**, **Verify against wiki first**),
   **Create pull request** (pushes first; draft by default). For a PR: its checks, **Address review comments**, **Fix
   failing CI**, **Verify against wiki**.

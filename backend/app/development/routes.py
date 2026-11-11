@@ -74,6 +74,10 @@ class AskIn(BaseModel):
     image: str | None = Field(None, max_length=17_000_000)
 
 
+class DraftIn(BaseModel):
+    paths: list[str] | None = Field(None, max_length=2000)  # a commit message for these files only
+
+
 class CommitIn(BaseModel):
     message: str = Field(min_length=1, max_length=20_000)
     paths: list[str] | None = None
@@ -371,14 +375,20 @@ def conversation(dev_id: str, ctx: AppContext = Depends(require_auth)):
 
 
 @router.post("/dev/workspaces/{dev_id}/draft", status_code=202)
-async def draft(dev_id: str, what: str = Query(pattern="^(commit|pr)$"), ctx: AppContext = Depends(require_auth_mutating)):
+async def draft(dev_id: str, what: str = Query(pattern="^(commit|pr)$"), body: DraftIn | None = None,
+                ctx: AppContext = Depends(require_auth_mutating)):
     """Let the agent draft a commit message or a pull request description from the real diff (a job, no thread)."""
     from ..sessions import SessionService
 
     svc = _svc(ctx)
     row = svc.get(dev_id)
     if what == "commit":
-        d = await svc.diff(dev_id)
+        paths = (body.paths if body else None) or None
+        if paths:  # only the files that go into the commit
+            parts = [(await svc.diff(dev_id, p))["diff"] for p in paths[:200]]
+            d = {"diff": "".join(parts)}
+        else:
+            d = await svc.diff(dev_id)
         if not d["diff"].strip():
             raise ApiError(409, "NOTHING_TO_COMMIT", "there are no changes")
         prompt = ("Write a Git commit message for the following changes. Rules: first line a concise imperative subject of at most "
@@ -423,6 +433,26 @@ async def git_status(dev_id: str, ctx: AppContext = Depends(require_auth)):
 @router.get("/dev/workspaces/{dev_id}/diff")
 async def git_diff(dev_id: str, path: str | None = Query(None), ctx: AppContext = Depends(require_auth)):
     return await _svc(ctx).diff(dev_id, path)
+
+
+@router.get("/dev/workspaces/{dev_id}/compare")
+async def git_compare(dev_id: str, base: str = Query("HEAD", max_length=250), target: str = Query("worktree", max_length=250),
+                      commit: str | None = Query(None, max_length=250), path: str | None = Query(None, max_length=4096),
+                      ctx: AppContext = Depends(require_auth)):
+    """The Changes view: changed files between two states, each with its unified diff (see DevService.compare)."""
+    return await _svc(ctx).compare(dev_id, base=base, target=target, commit=commit, path=path)
+
+
+@router.get("/dev/workspaces/{dev_id}/refs")
+async def git_refs(dev_id: str, ctx: AppContext = Depends(require_auth)):
+    return await _svc(ctx).refs(dev_id)
+
+
+@router.get("/dev/workspaces/{dev_id}/compare/file")
+async def git_file_at(dev_id: str, path: str = Query(min_length=1, max_length=4096), ref: str = Query("worktree", max_length=250),
+                      ctx: AppContext = Depends(require_auth)):
+    """A file's lines in the worktree or at a commit: more context around a change."""
+    return await _svc(ctx).file_at(dev_id, path, ref)
 
 
 @router.post("/dev/workspaces/{dev_id}/commit")

@@ -4,8 +4,10 @@ import * as path from "path";
 
 const TOKEN = "test-access-token-0123456789abcdef";
 
+/** Port of the e2e server: the files it leaves for the tests are named after it (several runs can share /tmp). */
+const E2E_PORT = new URL(process.env.WAW_E2E_URL || "http://127.0.0.1:8799").port || "80";
 function workspaceDir(): string {
-  return fs.readFileSync("/tmp/waw-e2e-workspace", "utf-8").trim();
+  return fs.readFileSync(`/tmp/waw-e2e-workspace-${E2E_PORT}`, "utf-8").trim();
 }
 
 async function login(page: Page) {
@@ -372,11 +374,11 @@ test("a terminal whose shell exited is shown as exited and can be dismissed with
   await login(page);
   await page.getByTestId("view-terminal").click();
   // start from a clean slate: close terminals left over from earlier tests
-  while ((await page.getByTestId("terminal-tab").count()) > 0) {
+  for (let n = await page.getByTestId("terminal-tab").count(); n > 0; n = await page.getByTestId("terminal-tab").count()) {
     await page.getByTestId("terminal-tab").first().click();
     page.once("dialog", (d) => d.accept());
     await page.getByTestId("terminal-close").click();
-    await page.waitForTimeout(300);
+    await expect(page.getByTestId("terminal-tab")).toHaveCount(n - 1, { timeout: 15000 }); // closed before counting again
   }
   await page.getByTestId("terminal-new").click();
   await expect(page.getByTestId("terminal-tab")).toHaveCount(1);
@@ -2493,7 +2495,7 @@ test("a reload (or closing the browser) brings back what was shown: view, PR tab
 });
 
 test("PR Development: new branch workspace, the web editor and the VS Code option, the agent with the wiki, build/test, commit", async ({ page }) => {
-  const src = fs.readFileSync("/tmp/waw-e2e-devsrc", "utf-8").trim();
+  const src = fs.readFileSync(`/tmp/waw-e2e-devsrc-${E2E_PORT}`, "utf-8").trim();
   await login(page);
   await page.getByTestId("activity-development").click();
   await expect(page.getByTestId("dev-panel")).toBeVisible();
@@ -2730,7 +2732,7 @@ test("PR Development: chat about any type of file — text, image, binary", asyn
   await expect(page.getByTestId("dev-file-head")).toContainText("logo.png");
   await expect(page.locator('[data-testid="dev-task"] [data-testid="message-agent"][data-status="completed"]').last()).toContainText("What is in the logo?", { timeout: 20000 });
   // a PDF: shown with PDF.js; a page is discussed with its picture
-  const src = fs.readFileSync("/tmp/waw-e2e-devsrc", "utf-8").trim();
+  const src = fs.readFileSync(`/tmp/waw-e2e-devsrc-${E2E_PORT}`, "utf-8").trim();
   const wtRoot = path.join(src, "..", "worktrees");
   const devWt = fs.readdirSync(wtRoot).map((d) => path.join(wtRoot, d)).find((d) => fs.existsSync(path.join(d, "lib.py")))!;
   const cp = require("child_process") as typeof import("child_process");
@@ -2754,6 +2756,76 @@ test("PR Development: chat about any type of file — text, image, binary", asyn
   await page.getByTestId("webide-discuss-input").press("Enter");
   await expect(page.locator('[data-testid="dev-task"] [data-testid="message-agent"][data-status="completed"]').last()).toContainText("What model is this?", { timeout: 20000 });
   await expect(page.locator('[data-testid="webide-tab"][data-path="model.onnx"] [data-testid="webide-tab-discussions"]')).toContainText("1");
+  await page.getByTestId("activity-files").click();
+});
+
+test("PR Development: Changes view like the wiki's Diff: per-file diffs, side by side, more context, ask about lines, open in editor, commit picked files, a commit's changes", async ({ page }) => {
+  const src = fs.readFileSync(`/tmp/waw-e2e-devsrc-${E2E_PORT}`, "utf-8").trim();
+  const devWt = fs.readdirSync(path.join(src, "..", "worktrees")).map((d) => path.join(src, "..", "worktrees", d)).find((d) => fs.existsSync(path.join(d, "lib.py")))!;
+  const cp = require("child_process") as typeof import("child_process");
+  await login(page);
+  await page.getByTestId("activity-development").click();
+  await page.getByTestId("dev-item").first().click();
+  await expect(page.getByTestId("webide")).toBeVisible({ timeout: 20000 });
+  // changes made outside the app's commit panel: an edit in the middle of a longer file, a new file
+  const lib = fs.readFileSync(path.join(devWt, "lib.py"), "utf-8");
+  const pad = Array.from({ length: 40 }, (_, i) => `PAD_${i} = ${i}`).join("\n");
+  fs.writeFileSync(path.join(devWt, "lib.py"), `${lib}${pad}\n`);
+  cp.execFileSync("git", ["-C", devWt, "add", "lib.py"]);
+  cp.execFileSync("git", ["-C", devWt, "-c", "user.name=e2e", "-c", "user.email=e2e@x", "commit", "-q", "-m", "Pad lib.py"]);
+  fs.writeFileSync(path.join(devWt, "lib.py"), `${lib}${pad.replace("PAD_20 = 20", "PAD_20 = 'changed'")}\n`);
+  fs.writeFileSync(path.join(devWt, "notes_e2e.md"), "# notes\n");
+  // the Changes view in the editor area
+  await page.getByTestId("dev-changes-toggle").click();
+  await expect(page.locator(".dev-changes-main [data-testid=dev-changes]")).toBeVisible();
+  await expect(page.getByTestId("webide")).toBeHidden(); // still mounted, just hidden
+  const libDiff = page.locator('[data-testid="dev-diff-file"][data-path="lib.py"]');
+  await expect(libDiff).toBeVisible({ timeout: 15000 });
+  await expect(page.locator('[data-testid="dev-diff-file"][data-path="notes_e2e.md"]')).toContainText("untracked");
+  await expect(libDiff.getByTestId("dev-diff-unified")).toContainText("PAD_20 = 'changed'");
+  await expect(libDiff.getByTestId("dev-diff-unified")).not.toContainText("PAD_5 = 5"); // outside the hunk
+  // more context, side by side
+  await libDiff.getByTestId("dev-diff-expand-all").click();
+  await expect(libDiff.getByTestId("dev-diff-unified")).toContainText("PAD_5 = 5");
+  await page.getByTestId("dev-layout-split").click();
+  await expect(libDiff.getByTestId("dev-diff-split")).toContainText("PAD_20 = 'changed'");
+  await page.getByTestId("dev-layout-unified").click();
+  // ask the agent about the changed line: the discussion is anchored on it
+  await libDiff.locator('[data-testid="dev-diff-row"].add').first().click();
+  await page.getByTestId("dev-diff-question").fill("Why change PAD_20?");
+  await page.getByTestId("dev-diff-ask").click();
+  await expect(page.locator('[data-testid="dev-task"] [data-testid="message-agent"][data-status="completed"]').last()).toContainText("Why change PAD_20?", { timeout: 20000 });
+  // open that line in the editor
+  await libDiff.locator('[data-testid="dev-diff-row"].add').first().click();
+  await page.getByTestId("dev-diff-open-line").click();
+  await expect(page.getByTestId("webide")).toBeVisible();
+  await expect(page.locator('[data-testid="webide-tab"][data-path="lib.py"]')).toHaveAttribute("aria-selected", "true");
+  // back to the changes: mark lib.py viewed (it folds), commit only lib.py
+  await page.getByTestId("dev-changes-toggle").click();
+  await libDiff.getByTestId("dev-diff-viewed").check();
+  await expect(libDiff).toHaveAttribute("data-viewed", "1");
+  await expect(libDiff.getByTestId("dev-diff-unified")).toHaveCount(0);
+  await page.getByTestId("dev-select-all").uncheck(); // (earlier tests leave other files around)
+  await libDiff.getByTestId("dev-diff-in-commit").check(); // picked from the diff itself
+  await expect(page.getByTestId("dev-commit")).toHaveText("Commit 1 file(s)");
+  await page.getByTestId("dev-commit-msg").fill("Change PAD_20");
+  await page.getByTestId("dev-commit").click();
+  await expect(page.getByTestId("dev-note")).toContainText("Committed 1 file(s)");
+  await expect(libDiff).toHaveCount(0); // committed: no longer an uncommitted change
+  await expect(page.locator('[data-testid="dev-diff-file"][data-path="notes_e2e.md"]')).toBeVisible();
+  // the commit's own changes, then everything on the branch
+  await page.getByTestId("dev-branch-commit").filter({ hasText: "Change PAD_20" }).click();
+  await expect(page.locator('[data-testid="dev-diff-file"][data-path="lib.py"]')).toBeVisible();
+  await expect(page.locator('[data-testid="dev-diff-file"][data-path="notes_e2e.md"]')).toHaveCount(0);
+  await page.getByTestId("dev-compare").selectOption("branch");
+  await expect(page.locator('[data-testid="dev-diff-file"][data-path="test_lib.py"]')).toBeVisible(); // committed earlier on the branch
+  await expect(page.locator('[data-testid="dev-diff-file"][data-path="notes_e2e.md"]')).toBeVisible();
+  await page.getByTestId("dev-compare").selectOption("wt");
+  // the bottom panel shows the same view when it is not expanded
+  await page.getByTestId("dev-changes-wide").click();
+  await expect(page.getByTestId("webide")).toBeVisible();
+  await expect(page.locator(".dev-bottom [data-testid=dev-changes]")).toBeVisible();
+  fs.rmSync(path.join(devWt, "notes_e2e.md"));
   await page.getByTestId("activity-files").click();
 });
 

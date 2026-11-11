@@ -3,7 +3,8 @@ import { Suspense, lazy, useCallback, useEffect, useState } from "react";
 import { AgentSession, ApiError, DevInfo, DevSettings, DevWorkspace, Thread, WorkspaceInfo, del, get, patch, post, subscribeGlobal } from "../api";
 import DevAgentPanel, { CodeAnchor, EditorFiles } from "./DevAgentPanel";
 import DevTerminal from "./DevTerminal";
-import { ChangesTab, PrTab, TasksTab } from "./DevTabs";
+import { PrTab, TasksTab } from "./DevTabs";
+import DevChanges, { ChangesAsk } from "./DevChanges";
 import { confirmAction } from "./Confirm";
 import { usePersistentState } from "../persist";
 
@@ -34,6 +35,8 @@ export default function DevView({ devId, workspaces, sessions, onSessionsChanged
   const agentPane = usePane("dev.agent", 380, 240, 1400);
   const agentOpen = !agentPane.folded;
   const setAgentOpen = (open: boolean) => agentPane.setFolded(!open);
+  // the Changes view in the editor area (true) instead of the bottom panel
+  const [changesWide, setChangesWide] = usePersistentState(`dev.changesWide.${devId}`, false);
   const [settings, setSettings] = useState(false);
   const [refresh, setRefresh] = useState(0);
   const [ext, setExt] = useState<{ state: string; log: string; failed?: string[] } | null>(null);
@@ -119,6 +122,24 @@ export default function DevView({ devId, workspaces, sessions, onSessionsChanged
       setErr((e as ApiError).message);
     }
   };
+  const askAbout = async ({ text, anchor, context }: ChangesAsk) => {
+    const r = await post<{ thread_id: string }>(`/dev/workspaces/${dev.id}/ask`, { text, kind: "ask", context, anchor });
+    setAgentOpen(true);
+    onSessionsChanged();
+    await loadThreads();
+    setFocusThread({ id: r.thread_id, at: Date.now() });
+  };
+  const openFile = web ? (path: string, line?: number) => {
+    setChangesWide(false);
+    setReveal({ anchor: { root: "wt", file: path, start_line: line ?? null, end_line: line ?? null, quote: "" }, at: Date.now() });
+  } : undefined;
+  const changes = (wide: boolean) => (
+    <DevChanges key={dev.id} dev={dev} refreshKey={refresh} onChanged={() => void load()} onAsk={askAbout} onOpenFile={openFile}
+      wide={wide} onToggleWide={() => {
+        setChangesWide(!wide);
+        if (wide) { setBottom("changes"); setBottomOpen(true); } // back to the editor: the changes stay at hand below it
+      }} />
+  );
   const archive = async () => {
     if (!(await confirmAction({ title: "Archive this development workspace?", message: "The editor stops and the workspace leaves the list; its branch and conversation are kept.", confirmLabel: "Archive" }))) return;
     const remove = await confirmAction({ title: "Remove its Git worktree too?", message: `Deletes the folder ${dev.worktree_path} (refused when it has uncommitted or unpushed work). Choose Cancel to keep it.`, confirmLabel: "Remove worktree" });
@@ -156,6 +177,10 @@ export default function DevView({ devId, workspaces, sessions, onSessionsChanged
         ) : (
           <button className="btn small primary" disabled={editor.state === "starting"} onClick={() => void editorAction("start")} data-testid="dev-editor-start">{editor.state === "starting" ? "Starting editor…" : "Start editor"}</button>
         ))}
+        {dev.status === "ready" && (
+          <button className={`btn small toggle ${changesWide ? "on" : ""}`} onClick={() => setChangesWide(!changesWide)} aria-pressed={changesWide}
+            title="Review the changes (diff) and commit them, in the editor area" data-testid="dev-changes-toggle">Changes</button>
+        )}
         <button className="btn small" onClick={() => setSettings(true)} data-testid="dev-settings">Settings</button>
         <button className={`btn small toggle ${agentOpen ? "on" : ""}`} onClick={() => setAgentOpen(!agentOpen)} aria-pressed={agentOpen}>Agent</button>
         <button className="icon-btn" onClick={() => void archive()} title="Archive">⋯</button>
@@ -166,7 +191,8 @@ export default function DevView({ devId, workspaces, sessions, onSessionsChanged
       {err && <div className="banner warn small" role="alert">{err}</div>}
       <div className="dev-body">
         <div className="dev-main">
-          <div className="dev-editor">
+          {changesWide && dev.status === "ready" && <div className="dev-editor dev-changes-main">{changes(true)}</div>}
+          <div className="dev-editor" style={changesWide && dev.status === "ready" ? { display: "none" } : undefined}>
             {web && dev.status === "ready" ? (
               <Suspense fallback={<div className="muted dev-hint">Loading the editor…</div>}>
                 <WebIde key={dev.id} dev={dev} completionEnabled={!!info?.completion.enabled} refreshKey={refresh} threads={threads} reveal={reveal}
@@ -222,7 +248,9 @@ export default function DevView({ devId, workspaces, sessions, onSessionsChanged
                     <DevTerminal key={dev.id} dev={dev} visible={bottom === "terminal" && bottomOpen} />
                   </div>
                   {bottom === "tasks" && <TasksTab key={dev.id} dev={dev} onAsked={() => setAgentOpen(true)} />}
-                  {bottom === "changes" && <ChangesTab key={dev.id} dev={dev} refreshKey={refresh} onChanged={() => void load()} />}
+                  {bottom === "changes" && (changesWide
+                    ? <div className="muted small dev-hint">The changes are shown in the editor area. <button className="link-btn" onClick={() => setChangesWide(false)}>Show them here</button></div>
+                    : changes(false))}
                   {bottom === "pr" && <PrTab key={dev.id} dev={dev} onAsk={ask} onChanged={() => void load()} />}
                 </div>
               )}

@@ -967,3 +967,92 @@ async def test_model_choice_per_discussion(running_app, dev_settings, tmp_path, 
     assert (fake_env / "opencode_last_model").read_text() == "fake/beta"
     fs = (await api.get(f"/api/v1/dev/workspaces/{dv['id']}/conversation")).json()["file_sessions"]
     assert fs["wt:lib.py"] == r.json()["session_id"]
+
+
+async def test_changes_view_compare_refs_file_and_commit(running_app, dev_settings, tmp_path, fake_env):
+    """The Changes view: per-file diffs of uncommitted work, of the whole branch and of one commit; refs; file lines
+    for more context; drafting a message for some files; committing a message that starts with '-'."""
+    h = await running_app(dev_settings)
+    api = h.api
+    src, _ = make_source(tmp_path)
+    d = await new_branch_ws(api, src, None)
+    base = f"/api/v1/dev/workspaces/{d['id']}"
+    wt = Path(d["worktree_path"])
+    (wt / "lib.py").write_text("def add(a, b):\n    return a + b\n\n\ndef sub(a, b):\n    return a - b\n")
+    (wt / "notes.txt").write_text("hello\n")
+    (wt / "pyproject.toml").unlink()
+    c = (await api.get(f"{base}/compare")).json()
+    by = {f["path"]: f for f in c["files"]}
+    assert set(by) == {"lib.py", "notes.txt", "pyproject.toml"} and c["worktree"] is True
+    assert by["lib.py"]["status"] == "modified" and by["lib.py"]["additions"] == 4 and by["lib.py"]["deletions"] == 0
+    assert by["lib.py"]["unified"].startswith("@@ ") and "+def sub(a, b):" in by["lib.py"]["unified"]
+    assert by["notes.txt"]["status"] == "untracked" and by["pyproject.toml"]["status"] == "deleted"
+    assert c["summary"] == {"files": 3, "additions": 5, "deletions": 2}
+    # one file only; lines of the worktree file for more context
+    assert [f["path"] for f in (await api.get(f"{base}/compare", params={"path": "lib.py"})).json()["files"]] == ["lib.py"]
+    assert (await api.get(f"{base}/compare/file", params={"path": "lib.py"})).json()["lines"][4] == "def sub(a, b):"
+    assert (await api.get(f"{base}/compare/file", params={"path": "../x"})).status_code == 400
+    # a commit message drafted for the selected files only
+    r = await api.post(f"{base}/draft?what=commit", json={"paths": ["notes.txt"]})
+    assert r.status_code == 202, r.text
+    await api.wait_job(r.json()["job_id"])
+    prompt = (fake_env / "opencode_last_prompt").read_text()
+    assert "+hello" in prompt and "def sub" not in prompt
+    # commit lib.py with a message starting with "-" (not taken as an option)
+    r = await api.post(f"{base}/commit", json={"message": "-Add sub", "paths": ["lib.py"]})
+    assert r.status_code == 200, r.text
+    assert git(wt, "log", "-1", "--format=%s") == "-Add sub"
+    refs = (await api.get(f"{base}/refs")).json()
+    assert [x["subject"] for x in refs["branch_commits"]] == ["-Add sub"] and refs["commits"][1]["subject"] == "init"
+    assert "main" in refs["branches"] or "origin/main" in refs["branches"]
+    sha = refs["branch_commits"][0]["sha"]
+    # just that commit; the whole branch (committed + uncommitted); committed only (HEAD as the target)
+    one = (await api.get(f"{base}/compare", params={"commit": sha})).json()
+    assert [f["path"] for f in one["files"]] == ["lib.py"] and one["worktree"] is False
+    assert (await api.get(f"{base}/compare/file", params={"path": "lib.py", "ref": sha})).json()["lines"][-1] == "    return a - b"
+    br = (await api.get(f"{base}/compare", params={"base": "branch"})).json()
+    assert {f["path"] for f in br["files"]} == {"lib.py", "notes.txt", "pyproject.toml"}
+    committed = (await api.get(f"{base}/compare", params={"base": "branch", "target": "HEAD"})).json()
+    assert [f["path"] for f in committed["files"]] == ["lib.py"]
+    # the root commit (no parent): everything added
+    root = refs["commits"][-1]["sha"]
+    assert {f["status"] for f in (await api.get(f"{base}/compare", params={"commit": root})).json()["files"]} == {"added"}
+    for bad in ({"base": "--output=/tmp/x"}, {"target": "nope-ref"}, {"commit": "-p"}, {"base": "a b"}):
+        assert (await api.get(f"{base}/compare", params=bad)).status_code == 400, bad
+    # asking about lines of a change: the agent gets the diff and the discussion sits on those lines
+    r = await api.post(f"{base}/ask", json={"text": "Why sub?", "kind": "ask",
+                                            "anchor": {"root": "wt", "file": "lib.py", "start_line": 5, "end_line": 6, "quote": "def sub(a, b):\n    return a - b"},
+                                            "context": {"diff": "+def sub(a, b):\n+    return a - b", "diff_label": "lines of lib.py in the uncommitted changes"}})
+    assert r.status_code == 201, r.text
+    await api.wait_job(r.json()["job_id"])
+    prompt = (fake_env / "opencode_last_prompt").read_text()
+    assert "reviewing lines of lib.py in the uncommitted changes in the Changes view" in prompt and "```diff\n+def sub(a, b):" in prompt
+    t = (await api.get(f"{base}/conversation")).json()["threads"][-1]
+    assert t["target"]["file"] == "lib.py" and t["target"]["start_line"] == 5
+
+
+def test_split_diff_renames_binary_and_quoted_paths(tmp_path):
+    from backend.app.development.service import split_diff
+
+    r = tmp_path / "r"
+    r.mkdir()
+    git(r, "init", "-q", "-b", "main")
+    git(r, "config", "user.email", "d@e.com")
+    git(r, "config", "user.name", "D")
+    (r / "old name.txt").write_text("".join(f"line {i}\n" for i in range(20)))
+    (r / "pic.bin").write_bytes(b"\x00\x01\x02")
+    (r / "é.txt").write_text("a\n")
+    git(r, "add", "-A")
+    git(r, "commit", "-q", "-m", "a")
+    git(r, "mv", "old name.txt", "new name.txt")
+    (r / "new name.txt").write_text("".join(f"line {i}\n" for i in range(19)) + "changed\n")
+    (r / "pic.bin").write_bytes(b"\x00\x09")
+    (r / "é.txt").write_text("b\n")
+    git(r, "add", "-A")
+    out = subprocess.run(["git", "diff", "--no-color", "-M", "--cached"], cwd=r, capture_output=True, text=True).stdout
+    by = {f["path"]: f for f in split_diff(out)}
+    assert set(by) == {"new name.txt", "pic.bin", "é.txt"}
+    assert by["new name.txt"]["status"] == "renamed" and by["new name.txt"]["previous_path"] == "old name.txt"
+    assert by["new name.txt"]["additions"] == 1 and by["new name.txt"]["deletions"] == 1
+    assert by["pic.bin"]["binary"] is True and by["pic.bin"]["unified"] == ""
+    assert by["é.txt"]["unified"] == "@@ -1 +1 @@\n-a\n+b\n"

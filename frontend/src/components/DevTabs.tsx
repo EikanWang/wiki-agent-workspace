@@ -1,8 +1,7 @@
 import { Splitter, usePane } from "./Split";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ApiError, DevGitStatus, DevTaskRun, DevWorkspace, get, post } from "../api";
+import { ApiError, DevTaskRun, DevWorkspace, get, post } from "../api";
 import { useJobStream } from "./DiscussionPanel";
-import DiffView from "./DiffView";
 import { confirmAction } from "./Confirm";
 
 /** Build outputs and caches: left out of a commit unless you tick them (the checkout may lack a .gitignore for them). */
@@ -101,88 +100,6 @@ export function TasksTab({ dev, onAsked }: { dev: DevWorkspace; onAsked: () => v
         )}
         <pre ref={pre} className="dev-log-text" data-testid="dev-log">{log || (cur ? "" : "Run the build or the tests; the output appears here.")}</pre>
       </div>
-    </div>
-  );
-}
-
-const f0 = (s: DevGitStatus, p: string) => s.files.find((f) => f.path === p)?.status;
-
-/** Uncommitted changes of the worktree: diff, commit (message drafted by the agent if you like) and push. */
-export function ChangesTab({ dev, refreshKey, onChanged }: { dev: DevWorkspace; refreshKey: number; onChanged: () => void }) {
-  const changesPane = usePane("dev.changes", 320, 180, 900);
-  const [st, setSt] = useState<DevGitStatus | null>(null);
-  const [diff, setDiff] = useState("");
-  const [msg, setMsg] = useState("");
-  const [busy, setBusy] = useState<string | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const [note, setNote] = useState<string | null>(null);
-  const [draftJob, setDraftJob] = useState<string | null>(null);
-  const [excluded, setExcluded] = useState<Set<string>>(new Set());
-  const load = useCallback(async () => {
-    try {
-      const [s, d] = await Promise.all([get<DevGitStatus>(`/dev/workspaces/${dev.id}/status`), get<{ diff: string }>(`/dev/workspaces/${dev.id}/diff`)]);
-      setSt(s);
-      setExcluded((prev) => new Set(s.files.map((f) => f.path).filter((p) => prev.has(p) || (f0(s, p) === "untracked" && isArtifact(p)))));
-      setDiff(d.diff);
-      setErr(null);
-    } catch (e) {
-      setErr((e as ApiError).message);
-    }
-  }, [dev.id]);
-  useEffect(() => { void load(); }, [load, refreshKey]);
-  useJobStream(draftJob, (job) => {
-    setDraftJob(null);
-    if (job.status === "completed" && job.text) setMsg(job.text.trim().replace(/^```\w*\n?|```$/g, "").trim());
-    else if (job.error) setErr(job.error.message);
-  });
-  const run = async (name: string, fn: () => Promise<void>) => {
-    setBusy(name);
-    setErr(null);
-    setNote(null);
-    try {
-      await fn();
-    } catch (e) {
-      setErr((e as ApiError).message);
-    } finally {
-      setBusy(null);
-    }
-  };
-  const selected = (st?.files ?? []).map((f) => f.path).filter((p) => !excluded.has(p));
-  return (
-    <div className="dev-changes" data-testid="dev-changes">
-      {changesPane.folded ? null : <div className="dev-changes-side" style={{ width: changesPane.size }}>
-        {st && (
-          <div className="muted small">
-            <b className="mono">{st.branch}</b> at {st.head} — {st.subject}
-            <br />{st.commits_on_branch ?? "?"} commit(s) on the branch · {st.unpushed ? <span className="warn">{st.unpushed} not pushed</span> : "all pushed"}
-            {st.push_remote && <><br />push → <span className="mono">{st.push_branch}</span></>}
-          </div>
-        )}
-        <div className="dev-files">
-          {st?.files.map((f) => (
-            <label key={f.path} className={`dev-file mono small ${excluded.has(f.path) ? "excluded" : ""}`} title={isArtifact(f.path) ? "Looks like a build output or cache" : undefined}>
-              <input type="checkbox" checked={!excluded.has(f.path)} data-testid="dev-file"
-                onChange={(e) => setExcluded((x) => { const n = new Set(x); if (e.target.checked) n.delete(f.path); else n.add(f.path); return n; })} />
-              <span className={`chip git ${f.status}`}>{f.status[0].toUpperCase()}</span> {f.path}
-            </label>
-          ))}
-          {st && st.files.length === 0 && <div className="muted small">No uncommitted changes.</div>}
-        </div>
-        <textarea value={msg} onChange={(e) => setMsg(e.target.value)} rows={4} placeholder="Commit message" data-testid="dev-commit-msg" />
-        <div className="row">
-          <button className="btn small" disabled={!st?.files.length || !!draftJob} onClick={() => void run("draft", async () => { setDraftJob((await post<{ job_id: string }>(`/dev/workspaces/${dev.id}/draft?what=commit`)).job_id); })}>{draftJob ? "Drafting…" : "Draft with agent"}</button>
-          <button className="btn small primary" disabled={!selected.length || !msg.trim() || !!busy} data-testid="dev-commit"
-            onClick={() => void run("commit", async () => { const r = await post<{ commit: string; files: number }>(`/dev/workspaces/${dev.id}/commit`, { message: msg, paths: selected }); setMsg(""); setNote(`Committed ${r.files} file(s) as ${r.commit}.`); await load(); onChanged(); })}>Commit {selected.length === st?.files.length ? "all" : `${selected.length} file(s)`}</button>
-          <button className="btn small" disabled={!st?.unpushed || !!busy || !st?.push_remote} data-testid="dev-push"
-            onClick={() => void run("push", async () => { await post(`/dev/workspaces/${dev.id}/push`); setNote(`Pushed to ${st?.push_branch}.`); await load(); onChanged(); })}>{busy === "push" ? "Pushing…" : "Push"}</button>
-          <button className="icon-btn small" onClick={() => void load()} title="Refresh">↻</button>
-        </div>
-        {st && !st.identity.configured && <div className="warn small">Set git user.name and user.email on the host to commit.</div>}
-        {note && <div className="small" data-testid="dev-note">{note}</div>}
-        {err && <div className="error-text small" role="alert">{err}</div>}
-      </div>}
-      <Splitter dir="x" side="before" pane={changesPane} label="file list" testId="dev-changes-splitter" />
-      <div className="dev-diff">{diff ? <DiffView unified={diff} /> : <div className="muted small dev-hint">The worktree has no uncommitted changes.</div>}</div>
     </div>
   );
 }
