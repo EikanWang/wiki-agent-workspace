@@ -2894,12 +2894,14 @@ test("PR Development: open a local folder directly, create a branch there, view 
   await expect(page.getByTestId("dev-view")).toBeVisible();
   await expect(page.getByTestId("dev-branch-button")).toContainText("main", { timeout: 20000 });
   await expect(page.getByTestId("webide")).toBeVisible({ timeout: 20000 });
+  await expect(page.locator(".webide-explorer .webide-row.root").first()).toContainText("MAIN");
   // a branch, created in the folder itself
   await page.getByTestId("dev-branch-button").click();
   await page.getByTestId("dev-branch-new").fill("feature/direct");
   await page.getByTestId("dev-branch-create").click();
   await expect(page.getByTestId("dev-branch-button")).toContainText("feature/direct");
   expect(g("symbolic-ref", "--short", "HEAD")).toBe("feature/direct");
+  await expect(page.locator(".webide-explorer .webide-row.root").first()).toContainText("FEATURE/DIRECT"); // the explorer follows
   // changes in a folder and outside it
   fs.writeFileSync(path.join(proj, "pkg", "x.py"), "X = 2\n");
   fs.writeFileSync(path.join(proj, "pkg", "new.py"), "NEW = 1\n");

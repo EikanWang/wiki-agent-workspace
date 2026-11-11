@@ -62,6 +62,8 @@ export default function WebIde({ dev, completionEnabled, refreshKey, onAsk, thre
   const host = useRef<HTMLDivElement>(null);
   const editorRef = useRef<M.editor.IStandaloneCodeEditor | null>(null);
   const [roots, setRoots] = useState<Record<string, Root> | null>(null);
+  // the worktree is named after its branch: follow a branch switch (the roots are read once)
+  const shownRoots = useMemo(() => (roots?.wt ? { ...roots, wt: { ...roots.wt, name: dev.branch } } : roots), [roots, dev.branch]);
   const rootsRef = useRef<Record<string, Root> | null>(null);
   const [tabs, setTabs] = useState<Tab[]>([]);
   const tabsRef = useRef<Tab[]>([]);
@@ -750,7 +752,7 @@ export default function WebIde({ dev, completionEnabled, refreshKey, onAsk, thre
         </nav>
         {sideOpen && (
           <aside className="webide-side" style={{ width: sidePane.size }}>
-            {side === "explorer" && roots && <Explorer devId={dev.id} roots={roots} git={gitStatus} activeUri={active} uriOf={uriOf} refreshKey={refreshKey} onDiff={onDiff}
+            {side === "explorer" && shownRoots && <Explorer devId={dev.id} roots={shownRoots} git={gitStatus} activeUri={active} uriOf={uriOf} refreshKey={refreshKey} onDiff={onDiff}
               picked={picked} onPick={setPicked} onDiscussPicked={() => openDiscuss(false)}
               onDiscussFolder={(r, p) => { setSelBtn(null); setDiscuss({ anchor: { root: r, file: p, quote: "", folder: true }, top: 70, left: 60 }); }}
               onOpen={(r, p) => void openFile(r, p)} onError={setErr}
@@ -883,7 +885,7 @@ export default function WebIde({ dev, completionEnabled, refreshKey, onAsk, thre
           title="Discuss the selected code with the agent (Ctrl+Alt+D)" data-testid="webide-discuss-btn">💬 Discuss</button>
       )}
       {discuss && <DiscussComposer box={discuss} files={filesNow()} session={discussSession ? discussSession(discuss.anchor) : null} onCancel={() => { setDiscuss(null); editorRef.current?.focus(); }} onSend={sendDiscuss} />}
-      {quick && <QuickOpen devId={dev.id} roots={roots} onClose={() => { setQuick(false); editorRef.current?.focus(); }} onOpen={(r, p) => { setQuick(false); void openFile(r, p); }} />}
+      {quick && <QuickOpen devId={dev.id} roots={shownRoots} onClose={() => { setQuick(false); editorRef.current?.focus(); }} onOpen={(r, p) => { setQuick(false); void openFile(r, p); }} />}
     </div>
   );
 }
