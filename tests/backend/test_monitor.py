@@ -178,3 +178,35 @@ async def test_rename_and_delete_sessions(running_app, settings, homes, tmp_path
     assert not cl.exists() and not list(homes["codex"].rglob("*cx-del*"))
     assert oc not in (fake_env / "opencode_sessions.json").read_text()
     assert (await api.get("/api/v1/monitor/watched")).json()["sessions"] == []
+
+
+async def test_opencode_listing_shares_runs_keeps_last_good_and_never_blocks_on_refresh(monkeypatch, tmp_path):
+    """Slow `opencode session list` (many sessions, a busy host): concurrent callers share one run per folder, a
+    failed run keeps the last good listing, and a stale listing is returned while it is refreshed."""
+    import asyncio
+
+    from backend.app import monitor
+
+    calls: list[str] = []
+    result: dict = {"value": {"ses_1": {"id": "ses_1"}}, "delay": 0.2}
+
+    async def fake_list(exe, cwd):
+        calls.append(str(cwd))
+        await asyncio.sleep(result["delay"])
+        return result["value"]
+
+    monkeypatch.setattr(monitor, "_opencode_list_in", fake_list)
+    monkeypatch.setattr(monitor, "_oc_dir", {})
+    monkeypatch.setattr(monitor, "_oc_running", {})
+    d = str(tmp_path)
+    a, b = await asyncio.gather(monitor._oc_folder("oc", d), monitor._oc_folder("oc", d))
+    assert a == b == {"ses_1": {"id": "ses_1"}} and calls == [d]  # one run for both
+    # fresh: no new run
+    assert await monitor._oc_folder("oc", d) == a and calls == [d]
+    # stale: the old listing comes back at once, a refresh runs in the background
+    monitor._oc_dir[d] = (monitor._oc_dir[d][0] - monitor.OC_FRESH - 1, monitor._oc_dir[d][1])
+    result.update(value=None, delay=0.5)  # ... and it fails
+    t0 = asyncio.get_running_loop().time()
+    assert await monitor._oc_folder("oc", d) == a and asyncio.get_running_loop().time() - t0 < 0.3
+    await asyncio.sleep(0.7)
+    assert len(calls) == 2 and monitor._oc_dir[d][1] == a  # failed: the last good listing is kept

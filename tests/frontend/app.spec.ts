@@ -2625,6 +2625,7 @@ test("PR Development: discuss a selection (marked in the margin), selected files
   await expect(page.getByTestId("dev-terminal-tab")).toHaveCount(1, { timeout: 15000 });
   const term = page.locator('[data-testid="dev-terminal"] .xterm');
   await expect(term).toBeVisible();
+  await expect(page.locator('[data-testid="dev-terminal"] .xterm-rows')).toContainText("$", { timeout: 15000 }); // the shell is ready
   await term.click();
   await page.keyboard.type("echo DEV_TERM_$((40+2))\n");
   await expect(page.locator('[data-testid="dev-terminal"] .xterm-rows')).toContainText("DEV_TERM_42", { timeout: 15000 });

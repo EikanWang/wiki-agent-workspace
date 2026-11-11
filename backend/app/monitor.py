@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import time
 from datetime import datetime, timezone
@@ -30,12 +31,13 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 
-from .agents.base import agent_env, resolve_executable, run_capture
+from .agents.base import ProviderError, agent_env, resolve_executable, run_capture
 from .agents.codex import codex_home
 from .deps import AppContext, require_auth, require_auth_mutating
 from .errors import ApiError, bad_request, conflict, not_found
 from .kv import kv_get, kv_put
 
+log = logging.getLogger("waw.monitor")
 router = APIRouter()
 PROVIDERS = ("opencode", "codex", "claude")
 WORKING_FRESH = 15 * 60       # an open turn with activity within this many seconds is "working"
@@ -126,8 +128,16 @@ async def _export(exe: str, sid: str) -> tuple[int, str]:
         try:
             proc = await asyncio.create_subprocess_exec(exe, "export", sid, stdout=fh, stderr=asyncio.subprocess.DEVNULL,
                                                         stdin=asyncio.subprocess.DEVNULL, env=agent_env(None), cwd=str(Path.home()))
+        except OSError:
+            return 1, ""
+        try:
             rc = await asyncio.wait_for(proc.wait(), 180)
-        except (OSError, TimeoutError):
+        except TimeoutError:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+            await proc.wait()
             return 1, ""
         fh.seek(0)
         return rc, fh.read().decode("utf-8", "replace")
@@ -356,18 +366,52 @@ def read_claude(sid: str) -> Snapshot:
 # ---------------------------------------------------------------------- discovery
 
 
-async def _opencode_list_in(exe: str, cwd: Path) -> dict[str, dict[str, Any]]:
-    rc, out, _ = await run_capture([exe, "session", "list", "--format", "json", "-n", "1000"], cwd=cwd, timeout=90)
+async def _opencode_list_in(exe: str, cwd: Path) -> dict[str, dict[str, Any]] | None:
+    """The sessions OpenCode lists in `cwd`; None when it failed (timed out, crashed, unreadable output)."""
+    try:
+        rc, out, _ = await run_capture([exe, "session", "list", "--format", "json", "-n", "1000"], cwd=cwd, timeout=120)
+    except (ProviderError, OSError) as exc:
+        log.warning("opencode session list in %s failed: %s", cwd, exc)
+        return None
     start = out.find("[")
     if rc != 0 or start < 0:
-        return {}
+        return None
     try:
         return {x["id"]: x for x in json.loads(out[start:]) if isinstance(x, dict) and x.get("id")}
     except json.JSONDecodeError:
-        return {}
+        return None
 
 
-_oc_cache: dict[tuple[str, ...], tuple[float, dict[str, dict[str, Any]]]] = {}
+# Listing is slow with many sessions (one `opencode session list` per folder): results are kept per folder, every
+# caller shares the run in progress, and a result older than OC_FRESH is refreshed in the background while the
+# previous one is returned (OC_MAX_AGE: too old to return, wait for the new one).
+OC_FRESH = 4.0
+OC_MAX_AGE = 600.0
+_oc_dir: dict[str, tuple[float, dict[str, dict[str, Any]]]] = {}
+_oc_running: dict[str, asyncio.Task] = {}
+_oc_cache = _oc_dir  # cleared when sessions are deleted
+
+
+async def _oc_folder(exe: str, d: str) -> dict[str, dict[str, Any]]:
+    hit = _oc_dir.get(d)
+    age = time.time() - hit[0] if hit else None
+    task = _oc_running.get(d)
+    if task is None and (age is None or age >= OC_FRESH):
+        async def refresh() -> dict[str, dict[str, Any]]:
+            try:
+                got = await _opencode_list_in(exe, Path(d))
+                if got is not None:
+                    _oc_dir[d] = (time.time(), got)
+                elif d in _oc_dir:  # failed: keep the last good listing, try again later
+                    _oc_dir[d] = (time.time(), _oc_dir[d][1])
+                return _oc_dir[d][1] if d in _oc_dir else {}
+            finally:
+                _oc_running.pop(d, None)
+
+        task = _oc_running[d] = asyncio.ensure_future(refresh())
+    if hit and age is not None and age < OC_MAX_AGE:
+        return hit[1]  # (being refreshed in the background if stale)
+    return await asyncio.shield(task) if task else {}
 
 
 async def opencode_listing(ctx: AppContext, folders: list[str] | None = None) -> dict[str, dict[str, Any]]:
@@ -379,15 +423,11 @@ async def opencode_listing(ctx: AppContext, folders: list[str] | None = None) ->
     dirs = {str(Path.home()), *(folders or []), *_folders(ctx)}
     if getattr(ctx, "workspaces", None) is not None:
         dirs |= {w["root"] for w in ctx.workspaces.list()}
-    key = tuple(sorted(d for d in dirs if Path(d).is_dir()))
-    hit = _oc_cache.get(key)
-    if hit and time.time() - hit[0] < 2:
-        return hit[1]
-    parts = await asyncio.gather(*(_opencode_list_in(exe, Path(d)) for d in key))
+    key = sorted(d for d in dirs if Path(d).is_dir())
+    parts = await asyncio.gather(*(_oc_folder(exe, d) for d in key))
     out: dict[str, dict[str, Any]] = {}
     for p in parts:
         out.update(p)
-    _oc_cache[key] = (time.time(), out)
     return out
 
 

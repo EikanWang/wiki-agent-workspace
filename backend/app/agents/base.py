@@ -228,9 +228,12 @@ async def run_capture(args: list[str], cwd: Path | None = None, timeout: float =
     try:
         out, err = await asyncio.wait_for(proc.communicate(stdin), timeout=timeout)
     except TimeoutError:
-        proc.kill()
+        try:
+            proc.kill()
+        except ProcessLookupError:  # it ended just now
+            pass
         await proc.wait()
-        raise ProviderError("PROVIDER_UNAVAILABLE", f"{args[0]} timed out after {timeout}s")
+        raise ProviderError("PROVIDER_UNAVAILABLE", f"{args[0]} timed out after {timeout}s") from None
     return proc.returncode or 0, out.decode("utf-8", "replace"), err.decode("utf-8", "replace")
 
 
