@@ -118,7 +118,7 @@ class TerminalManager:
             rows = self._in_scope(s.query(Terminal).filter(Terminal.state != "closed")).order_by(Terminal.tab_order, Terminal.created_at).all()
             return [terminal_dict(t) for t in rows]
 
-    def create(self, cwd: str | None, label: str | None) -> dict[str, Any]:
+    def create(self, cwd: str | None, label: str | None, command: list[str] | None = None) -> dict[str, Any]:
         if not self.tmux.available:
             raise ApiError(503, "TMUX_UNAVAILABLE", "tmux is not installed on the server; install tmux 3.2+ (e.g. `sudo apt install tmux`) and restart")
         start = Path(cwd).expanduser() if cwd else self.default_cwd
@@ -129,7 +129,7 @@ class TerminalManager:
         tid = str(uuid.uuid4())
         name = f"{SESSION_PREFIX}{tid[:8]}"
         try:
-            self.tmux.new_session(name, start)
+            self.tmux.new_session(name, start, command=command)
         except TmuxError as exc:
             raise ApiError(503, "TMUX_ERROR", str(exc))
         with self.db.write() as s:

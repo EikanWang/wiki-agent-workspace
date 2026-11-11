@@ -262,6 +262,16 @@ class DocumentService:
             if p is None or not p.is_file():
                 raise not_found(f"{norm} not found", "FILE_NOT_FOUND")
             return norm, p.read_bytes()
+        from .development import is_dev_path
+
+        if is_dev_path(rel):  # a PR Development workspace's agent conversation (never a file in the wiki)
+            from .development.service import dev_snapshot_path
+
+            norm = self.normalize_rel(rel)
+            p = dev_snapshot_path(self.snapshots_dir, norm)
+            if p is None or not p.is_file():
+                raise not_found(f"{norm} not found", "FILE_NOT_FOUND")
+            return norm, p.read_bytes()
         norm, path = self.resolve(rel)
         if not path.is_file():
             raise not_found(f"{norm} is not a file", "FILE_NOT_FOUND")

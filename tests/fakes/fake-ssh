@@ -1,0 +1,68 @@
+#!/usr/bin/env python3
+"""Fake `ssh` for tests: runs the remote command locally (the "host" is this machine).
+
+Options are parsed like OpenSSH's; `-L <local socket>:<remote socket>` becomes a symlink (connecting to a symlink of
+a Unix socket reaches the socket), `-R` is recorded only. Destination "unreachable…" fails with exit 255.
+Calls are logged to $FAKE_AGENT_STATE/ssh_calls.log.
+"""
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+STATE = Path(os.environ.get("FAKE_AGENT_STATE", "/tmp/fake-agent-state"))
+STATE.mkdir(parents=True, exist_ok=True)
+WITH_VALUE = set("bcDEeFIiJLlmOoPpQRSWw")
+
+
+def main(argv):
+    with (STATE / "ssh_calls.log").open("a") as fh:
+        fh.write(json.dumps(argv) + "\n")
+    i = 0
+    forwards = []
+    while i < len(argv):
+        a = argv[i]
+        if a == "--":
+            i += 1
+            break
+        if a.startswith("-") and len(a) >= 2:
+            letter = a[1]
+            if letter in WITH_VALUE:
+                val = a[2:] if len(a) > 2 else argv[i + 1]
+                if letter == "L":
+                    forwards.append(val)
+                i += 1 if len(a) > 2 else 2
+                continue
+            i += 1
+            continue
+        break
+    dest = argv[i]
+    cmd = " ".join(argv[i + 1:])
+    if dest.startswith("unreachable"):
+        print(f"ssh: connect to host {dest}: Connection refused", file=sys.stderr)
+        return 255
+    for fw in forwards:
+        local, remote = fw.split(":", 1)
+        if os.path.lexists(local):
+            os.unlink(local)
+        if not cmd:
+            continue
+        # the remote socket appears once the remote command started listening: link it (in the background)
+        if os.fork() == 0:
+            for _ in range(400):
+                if os.path.exists(remote):
+                    try:
+                        os.symlink(remote, local)
+                    except FileExistsError:
+                        pass
+                    break
+                time.sleep(0.05)
+            os._exit(0)
+    if not cmd:
+        return 0
+    os.execvp("sh", ["sh", "-c", cmd])
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

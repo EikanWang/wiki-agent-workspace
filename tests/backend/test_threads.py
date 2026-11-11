@@ -441,6 +441,56 @@ async def test_model_switch_per_session_is_passed_to_both_providers(api: Api, fa
     assert (fake_env / "codex_last_model").read_text() == "gpt-5" and (fake_env / "codex_last_effort").read_text() == "low"
 
 
+async def test_provider_default_model_is_reported(api: Api, fake_env: Path, tmp_path: Path):
+    # opencode: the merged config's model (the --agent profile's own model would win)
+    oc = (await api.get("/api/v1/providers/opencode/models")).json()
+    assert oc["default_model"] == "fake/alpha" and oc["default_variant"] is None
+    assert [m["id"] for m in oc["models"] if m.get("default")] == ["fake/alpha"]
+    (fake_env / "opencode_config.json").write_text(json.dumps({"model": "custom/zeta"}))
+    oc = (await api.get("/api/v1/providers/opencode/models")).json()
+    assert oc["default_model"] == "custom/zeta" and oc["models"][0] == {"id": "custom/zeta", "label": "custom/zeta", "default": True}
+    # codex: config.toml model / effort, overridden by the selected profile
+    cx = (await api.get("/api/v1/providers/codex/models")).json()
+    assert cx["default_model"] is None
+    (tmp_path / "codex-home" / "config.toml").write_text(
+        'model = "gpt-5"\nmodel_reasoning_effort = "high"\nprofile = "fast"\n[profiles.fast]\nmodel = "o4-mini"\n')
+    cx = (await api.get("/api/v1/providers/codex/models")).json()
+    assert cx["default_model"] == "o4-mini" and cx["default_variant"] == "high"
+    assert [m["id"] for m in cx["models"] if m.get("default")] == ["o4-mini"]
+
+
+async def test_new_sessions_inherit_the_current_model(api: Api, fake_env: Path):
+    doc = await api.open_doc()
+    did = doc["document_id"]
+    a = anchor_for(doc["text"], "TorchDynamo")
+    r = await api.post(f"/api/v1/documents/{did}/threads", json={**a, "version_sha256": doc["sha256"], "question": "one"})
+    await api.wait_job(r.json()["job_id"])
+    sid, tid = r.json()["session_id"], r.json()["thread_id"]
+    await api.put(f"/api/v1/agent-sessions/{sid}/model", json={"model": "fake/beta", "variant": "high"})
+    # explicit creation (session picker): inherit_from copies model + variant for the same provider ...
+    s = (await api.post("/api/v1/agent-sessions", json={"provider": "opencode", "inherit_from": sid})).json()
+    assert (s["model"], s["variant"]) == ("fake/beta", "high")
+    # ... an explicit model wins, a different provider does not take over a foreign model id
+    s = (await api.post("/api/v1/agent-sessions", json={"provider": "opencode", "inherit_from": sid, "model": "other/gamma"})).json()
+    assert (s["model"], s["variant"]) == ("other/gamma", None)
+    s = (await api.post("/api/v1/agent-sessions", json={"provider": "codex", "inherit_from": sid})).json()
+    assert s["model"] is None
+    assert (await api.post("/api/v1/agent-sessions", json={"provider": "opencode", "model": "--x"})).status_code == 400
+    # "new" session for a reply starts on the thread's current model, and the turn uses it
+    r2 = await api.post(f"/api/v1/threads/{tid}/messages", json={"text": "two", "session_id": "new"})
+    await api.wait_job(r2.json()["job_id"])
+    new_sid = r2.json()["session_id"]
+    assert new_sid != sid
+    new = (await api.get(f"/api/v1/agent-sessions/{new_sid}")).json()
+    assert (new["model"], new["variant"]) == ("fake/beta", "high")
+    assert (fake_env / "opencode_last_model").read_text() == "fake/beta"
+    # "new" session for a new discussion starts on the document session's model
+    b = anchor_for(doc["text"], "TorchDynamo")
+    r3 = await api.post(f"/api/v1/documents/{did}/threads", json={**b, "version_sha256": doc["sha256"], "question": "three", "session_id": "new"})
+    await api.wait_job(r3.json()["job_id"])
+    assert (await api.get(f"/api/v1/agent-sessions/{r3.json()['session_id']}")).json()["model"] == "fake/beta"
+
+
 async def test_question_about_the_whole_document(api, workspace):
     """A discussion about the document as a whole, for any format (Markdown, PDF, layout-only Office files)."""
     from backend.app.annotations import build_prompt
@@ -577,3 +627,31 @@ def test_prompt_names_the_page_or_slide():
     p = build_prompt(question="q", quote="Hello", document_path="a/x.pdf", sha256="x", heading=None, prior=None, versions=None,
                      whole_document=True, target={"kind": "text", "page": 2, "unit": "page"})
     assert "text on page 2" in p and "<<<SELECTED_PASSAGE\nHello" in p
+
+
+async def test_agent_env_script_is_sourced_for_agent_processes(running_app, settings, tmp_path, fake_env):
+    script = tmp_path / "tokens.sh"
+    script.write_text("export WAW_TEST_TOKEN=first\n")
+    settings.agent_env_script = str(script)
+    h = await running_app(settings)
+    api = h.api
+    from backend.app.agents.base import agent_env
+
+    assert agent_env()["WAW_TEST_TOKEN"] == "first"
+    import os
+    import time
+
+    time.sleep(0.01)
+    script.write_text("export WAW_TEST_TOKEN=second-rotated\n")
+    os.utime(script, (time.time() + 5, time.time() + 5))
+    assert agent_env()["WAW_TEST_TOKEN"] == "second-rotated"  # re-read on change, no restart
+    assert "WAW_TEST_TOKEN" not in os.environ  # the server's own environment is untouched
+    doc = await api.open_doc()
+    a = anchor_for(doc["text"], "TorchDynamo")
+    r = await api.post(f"/api/v1/documents/{doc['document_id']}/threads", json={**a, "version_sha256": doc["sha256"], "question": "q"})
+    ev = await api.wait_job(r.json()["job_id"])
+    assert ev[-1]["type"] == "completed"
+    assert (fake_env / "opencode_last_token").read_text() == "second-rotated"  # the agent process got it
+    from backend.app.agents.base import configure_env_script
+
+    configure_env_script(None)

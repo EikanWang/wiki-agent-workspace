@@ -98,6 +98,10 @@ class TurnContext:
     model: str | None = None     # provider model id; None = provider default
     variant: str | None = None   # reasoning effort / variant; None = default
     attachments: list[Path] = field(default_factory=list)  # images attached to the prompt (e.g. the image discussed)
+    # run the provider's CLI on an SSH host (PR Development on a remote host): development.targets.RemoteExec
+    remote: Any = None
+    # skill folders of the connected folders / projects (OpenCode loads them via its config for the turn)
+    skill_roots: list[Path] = field(default_factory=list)
 
 
 class TurnHandle(ABC):
@@ -137,6 +141,11 @@ class AgentAdapter(ABC):
         """Reasoning-effort / variant names the provider accepts (empty when unsupported)."""
         return []
 
+    async def default_model(self, workspace: Path | None = None) -> dict[str, str | None]:
+        """The model (and variant) the provider uses when the app passes none — read from the provider's own
+        configuration. `{"model": id | None, "variant": name | None}`; None values when it cannot be determined."""
+        return {"model": None, "variant": None}
+
     async def session_exists(self, workspace: Path, native_id: str) -> bool | None:
         """True/False when determinable, None when the provider cannot tell."""
         try:
@@ -156,6 +165,55 @@ def resolve_executable(configured: str | None, default_name: str) -> str | None:
     return shutil.which(cand)
 
 
+# ---------------------------------------------------------------------- agent environment script
+
+_env_script: str | None = None
+_env_cache: tuple[tuple[float, int] | None, dict[str, str]] = (None, {})
+
+
+def configure_env_script(path: str | None) -> None:
+    """[agents] env_script: a shell script sourced for every agent process (e.g. one that exports API tokens)."""
+    global _env_script, _env_cache
+    _env_script = str(Path(path).expanduser()) if path else None
+    _env_cache = (None, {})
+
+
+def _script_vars() -> dict[str, str]:
+    """Variables the script sets or changes, re-read whenever the script file changes (tokens can be rotated
+    without restarting the server)."""
+    global _env_cache
+    if not _env_script:
+        return {}
+    try:
+        st = os.stat(_env_script)
+    except OSError:
+        return {}
+    stamp = (st.st_mtime, st.st_size)
+    if _env_cache[0] == stamp:
+        return _env_cache[1]
+    try:
+        p = subprocess.run(["bash", "-c", 'set -a; . "$1" >/dev/null 2>&1; env -0', "_", _env_script],
+                           capture_output=True, timeout=30, check=False, env=dict(os.environ))
+    except (OSError, subprocess.TimeoutExpired):
+        return _env_cache[1]
+    out: dict[str, str] = {}
+    for item in p.stdout.split(b"\0"):
+        k, sep, v = item.decode("utf-8", "replace").partition("=")
+        if sep and k and k not in ("_", "SHLVL", "PWD", "OLDPWD") and os.environ.get(k) != v:
+            out[k] = v
+    _env_cache = (stamp, out)
+    return out
+
+
+def agent_env(base: dict[str, str] | None = None) -> dict[str, str] | None:
+    """The environment for an agent process: `base` (default: the server's) plus the env script's variables.
+    None when there is nothing to add (inherit)."""
+    extra = _script_vars()
+    if not extra:
+        return base
+    return {**(base if base is not None else os.environ), **extra}
+
+
 async def run_capture(args: list[str], cwd: Path | None = None, timeout: float = 30, stdin: bytes | None = None,
                       env: dict[str, str] | None = None) -> tuple[int, str, str]:
     """Run a process with an argv array; never a shell string."""
@@ -165,7 +223,7 @@ async def run_capture(args: list[str], cwd: Path | None = None, timeout: float =
         stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        env=env,
+        env=agent_env(env),
     )
     try:
         out, err = await asyncio.wait_for(proc.communicate(stdin), timeout=timeout)
@@ -179,7 +237,11 @@ async def run_capture(args: list[str], cwd: Path | None = None, timeout: float =
 class SubprocessTurn(TurnHandle):
     """Common machinery for JSONL-emitting CLI turns."""
 
-    def __init__(self, args: list[str], cwd: Path, stdin_data: bytes | None = None, env: dict[str, str] | None = None):
+    def __init__(self, args: list[str], cwd: Path, stdin_data: bytes | None = None, env: dict[str, str] | None = None,
+                 remote: Any = None, provider: str | None = None):
+        if remote is not None:  # the same command line, run on the SSH host in remote.cwd (stdin/stdout go through ssh)
+            args = remote.wrap(args, provider)
+            cwd = Path.home()
         self.args = args
         self.cwd = cwd
         self.stdin_data = stdin_data
@@ -196,7 +258,7 @@ class SubprocessTurn(TurnHandle):
             stdin=subprocess.PIPE if self.stdin_data is not None else subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            env=self.env,
+            env=agent_env(self.env),
             start_new_session=True,
         )
         if self.stdin_data is not None:

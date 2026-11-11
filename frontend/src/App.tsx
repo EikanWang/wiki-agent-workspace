@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AgentSession,
   ApiError,
@@ -30,7 +30,14 @@ import { ConfirmHost, confirmAction } from "./components/Confirm";
 import WorkspaceMenu from "./components/WorkspaceMenu";
 import AccountMenu from "./components/AccountMenu";
 import ReviewsPanel, { loadReviews, reviewBadge, useReviews } from "./components/ReviewsPanel";
-import { FilesIcon, PullRequestIcon } from "./components/Icons";
+import { CodeIcon, DashboardIcon, FilesIcon, PullRequestIcon, WikiIcon } from "./components/Icons";
+import AgentMonitor, { AgentsPanel, Provider } from "./components/AgentMonitor";
+import LocalPanel from "./components/LocalPanel";
+const LocalEditor = lazy(() => import("./components/LocalEditor"));
+import DevPanel from "./components/DevPanel";
+import { ModelChoiceValue } from "./components/ModelChoice";
+import DevView from "./components/DevView";
+import { DevSetupPreset } from "./components/DevSetupDialog";
 import Reader from "./components/Reader";
 import DiscussionPanel, { LiveJob, SessionChip, useJobStream } from "./components/DiscussionPanel";
 import SessionPicker from "./components/SessionPicker";
@@ -42,7 +49,9 @@ import AddFolderDialog from "./components/AddFolderDialog";
 import { SelectionAnchor, wholeDocument } from "./textmodel";
 import { FONT_STACKS, FontSettings, Prefs, Resizer, loadPrefs, savePrefs } from "./components/Layout";
 
-type View = "document" | "terminal" | "diff" | "chats";
+const ACTIVITY_BAR_PX = 45;
+
+type View = "document" | "terminal" | "diff" | "chats" | "development" | "local" | "agents";
 
 export default function App() {
   const [boot, setBoot] = useState<Bootstrap | null>(null);
@@ -103,6 +112,36 @@ export default function App() {
   const restoreThreadRef = useRef<string | null>(null);
   const [diffTarget, setDiffTarget] = useState<{ path: string; isDir: boolean } | null>(null);
   const [chatTarget, setChatTarget] = useState<ChatTarget | null>(null);
+  // PR Development: the development workspace shown in the center (its editor stays loaded while you look elsewhere)
+  const [devId, setDevId] = useState<string | null>(() => localStorage.getItem("waw.devActive"));
+  const [devPreset, setDevPreset] = useState<DevSetupPreset | null>(null);
+  // Local files: any folder / file of the server, browsed and edited like a file manager
+  const [localOpen, setLocalOpen] = useState<{ path: string; at: number } | null>(null);
+  const [localRenamed, setLocalRenamed] = useState<{ from: string; to: string | null; at: number } | null>(null);
+  const [localActive, setLocalActive] = useState<string | null>(null);
+  const [localUsed, setLocalUsed] = useState(false);
+  // Agents dashboard: the monitored sessions
+  const [watched, setWatchedState] = useState<{ provider: Provider; id: string; label?: string }[]>([]);
+  const [alarms, setAlarms] = useState(0);
+  const [autoVersion, setAutoVersion] = useState(0);
+  useEffect(() => {
+    if (!authed) return;
+    void get<{ sessions: { provider: Provider; id: string; label?: string }[] }>("/monitor/watched").then((r) => setWatchedState(r.sessions)).catch(() => undefined);
+  }, [authed]);
+  const setWatched = useCallback((w: { provider: Provider; id: string; label?: string }[]) => {
+    setWatchedState(w);
+    void put("/monitor/watched", { sessions: w }).catch(() => undefined);
+  }, []);
+  useEffect(() => {
+    const base = document.title.replace(/^\(\d+\) /, "");
+    document.title = alarms > 0 ? `(${alarms}) ${base}` : base;
+  }, [alarms]);
+  const openDev = useCallback((id: string | null) => {
+    setDevId(id);
+    if (id) localStorage.setItem("waw.devActive", id);
+    else localStorage.removeItem("waw.devActive");
+    setView(id ? "development" : "document");
+  }, []);
   /** the Chats page: talk with a project (folder) directly; a chat document opens there, never as a tab */
   const openChats = useCallback((t: ChatTarget) => {
     setChatTarget(t);
@@ -333,6 +372,9 @@ export default function App() {
       const ui = savedUi.current ?? {};
       if (ui.view === "terminal") setView("terminal");
       else if (ui.view === "chats") openChats(ui.chat ?? { ws: getWorkspace() ?? "", path: null });
+      else if (ui.view === "development" && localStorage.getItem("waw.devActive")) setView("development");
+      else if (ui.view === "local") { setLocalUsed(true); setView("local"); }
+      else if (ui.view === "agents") setView("agents");
       else if (ui.view === "diff" && ui.diff && (!ui.diff.ws || ui.diff.ws === getWorkspace())) openDiff(ui.diff.path, ui.diff.isDir);
       setUiRestored(true);
     })();
@@ -460,7 +502,7 @@ export default function App() {
     return () => window.clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authed, !!boot]);
-  const sidebarView = hub?.available ? prefs.sidebarView ?? "files" : "files";
+  const sidebarView = (prefs.sidebarView === "reviews" && !hub?.available) ? "files" : prefs.sidebarView ?? "files";
 
   // ---------------------------------------------------------------- global events
   useEffect(() => {
@@ -522,11 +564,11 @@ export default function App() {
   }, [threads, activeThread, liveJobId]);
 
   const createThread = useCallback(
-    async (anchor: SelectionAnchor, question: string, sessionChoice: string | null) => {
+    async (anchor: SelectionAnchor, question: string, sessionChoice: string | null, modelChoice?: ModelChoiceValue | null) => {
       if (!doc) return;
       const r = await post<{ thread_id: string; job_id: string }>(
         `/documents/${doc.document_id}/threads`,
-        { ...anchor, version_sha256: doc.sha256, question, session_id: sessionChoice ?? undefined },
+        { ...anchor, version_sha256: doc.sha256, question, session_id: sessionChoice ?? undefined, model_choice: modelChoice ?? undefined },
         { idempotencyKey: newIdempotencyKey() },
       );
       pendingSelection.current = null;
@@ -723,7 +765,8 @@ export default function App() {
         ["--reader-font" as string]: FONT_STACKS[prefs.readerFont],
         ["--reader-size" as string]: `${prefs.readerSize}px`,
         ["--reader-width" as string]: prefs.readerWidth ? `${prefs.readerWidth}px` : "none",
-        ["--sidebar-width" as string]: sidebarOpen ? `${prefs.sidebarWidth}px` : "0px",
+        // the activity bar (Files · PR Review · PR Development) comes on top of the tree's own width
+        ["--sidebar-width" as string]: sidebarOpen ? `${prefs.sidebarWidth + ACTIVITY_BAR_PX}px` : "0px",
         ["--panel-width" as string]: panelOpen ? `${prefs.panelWidth}px` : "36px",
       }}
     >
@@ -731,12 +774,12 @@ export default function App() {
         <button
           className={`btn small toggle files-toggle ${sidebarOpen ? "on" : ""}`}
           onClick={() => setSidebarOpen((s) => !s)}
-          title={sidebarOpen ? "Hide the file tree" : "Show the file tree"}
+          title={sidebarOpen ? "Hide the sidebar (Wiki, Local files, Reviews, PR Development)" : "Show the sidebar (Wiki, Local files, Reviews, PR Development)"}
           aria-pressed={sidebarOpen}
           data-testid="toggle-sidebar"
           data-state={sidebarOpen ? "open" : "closed"}
         >
-          <span className="toggle-glyph" aria-hidden="true">{sidebarOpen ? "◧" : "◨"}</span> Files
+          <span className="toggle-glyph" aria-hidden="true">{sidebarOpen ? "◧" : "◨"}</span> Sidebar
         </button>
         <span className="brand-mark">W</span>
         <span className="brand-title">Wiki Reader</span>
@@ -789,19 +832,29 @@ export default function App() {
       {boot.settings.watcher_error && <div className="banner warn">{boot.settings.watcher_error}</div>}
       {!watcherReady && <div className="banner">The file watcher is still indexing this workspace; until it finishes, use the ↻ button in the file tree to see new files and changes.</div>}
 
-      <main className={`layout view-${view === "diff" || view === "chats" ? "terminal" : view} ${view === "diff" ? "view-diff" : ""} ${view === "chats" ? "view-chats" : ""}`}>
-        <aside className={`sidebar ${hub?.available ? "with-activity" : ""}`}>
-          {hub?.available && (
-            <nav className="activity-bar" aria-label="Sidebar views">
-              <button className={sidebarView === "files" ? "active" : ""} onClick={() => updatePrefs({ sidebarView: "files" })} title="Files" aria-label="Files" aria-pressed={sidebarView === "files"} data-testid="activity-files">
-                <FilesIcon size={20} />
-              </button>
-              <button className={sidebarView === "reviews" ? "active" : ""} onClick={() => updatePrefs({ sidebarView: "reviews" })} title="Pull requests waiting for your review" aria-label="Reviews" aria-pressed={sidebarView === "reviews"} data-testid="activity-reviews">
+      <main className={`layout view-${view === "diff" || view === "chats" || view === "development" || view === "local" || view === "agents" ? "terminal" : view} ${view === "diff" ? "view-diff" : ""} ${view === "chats" ? "view-chats" : ""}`}>
+        <aside className="sidebar with-activity">
+          <nav className="activity-bar" aria-label="Sidebar views">
+            <button className={sidebarView === "files" ? "active" : ""} onClick={() => { updatePrefs({ sidebarView: "files" }); if (view === "development" || view === "local" || view === "agents") setView("document"); }} title="Wiki: read, discuss and edit the wiki folders with the agent" aria-label="Wiki" aria-pressed={sidebarView === "files"} data-testid="activity-files">
+              <WikiIcon size={20} />
+            </button>
+            <button className={sidebarView === "local" ? "active" : ""} onClick={() => { updatePrefs({ sidebarView: "local" }); setLocalUsed(true); setView("local"); }} title="Local files: browse and edit any folder or file on the server, like a file manager" aria-label="Local files" aria-pressed={sidebarView === "local"} data-testid="activity-local">
+              <FilesIcon size={20} />
+            </button>
+            {hub?.available && (
+              <button className={sidebarView === "reviews" ? "active" : ""} onClick={() => { updatePrefs({ sidebarView: "reviews" }); if (view === "development" || view === "local" || view === "agents") setView("document"); }} title="Pull requests waiting for your review" aria-label="Reviews" aria-pressed={sidebarView === "reviews"} data-testid="activity-reviews">
                 <PullRequestIcon size={20} />
                 {reviewBadge(reviews.queue) > 0 && <span className="activity-badge" data-testid="activity-reviews-badge">{reviewBadge(reviews.queue)}</span>}
               </button>
-            </nav>
-          )}
+            )}
+            <button className={sidebarView === "development" ? "active" : ""} onClick={() => { updatePrefs({ sidebarView: "development" }); if (devId) setView("development"); }} title="PR Development: develop new or existing pull requests with an editor and the agent" aria-label="PR Development" aria-pressed={sidebarView === "development"} data-testid="activity-development">
+              <CodeIcon size={20} />
+            </button>
+            <button className={sidebarView === "agents" ? "active" : ""} onClick={() => { updatePrefs({ sidebarView: "agents" }); setView("agents"); }} title="Agents: monitor the status and health of agent sessions" aria-label="Agents" aria-pressed={sidebarView === "agents"} data-testid="activity-agents">
+              <DashboardIcon size={20} />
+              {alarms > 0 && <span className="activity-badge alarm" data-testid="activity-agents-badge" title={`${alarms} session(s) need you`}>{alarms}</span>}
+            </button>
+          </nav>
           <div className="sidebar-content" style={{ display: sidebarView === "files" ? undefined : "none" }}>
             <FileTree
               workspaces={workspaces.length ? workspaces : [{ id: boot.workspace.id, name: boot.workspace.name, root: boot.workspace.root, primary: true, configured: true, available: true, git: boot.workspace.git, watcher: null }]}
@@ -818,7 +871,7 @@ export default function App() {
               onToggleLock={(ws, p, l) => void toggleLock(p, l, ws)}
               onAddFolder={() => setShowAddFolder(true)}
               onRemoveFolder={(w) => void removeFolder(w)}
-              onOpenChats={(ws) => openChats({ ws, path: null })}
+              onOpenChats={(ws, about) => openChats({ ws, path: null, about: about ?? null })}
               onCreated={(ws, p, kind, openable) => {
                 if (kind !== "file") return notify(`Created folder ${p}.`);
                 if (!openable) return notify(`Created ${p}.`);
@@ -832,6 +885,23 @@ export default function App() {
           {sidebarView === "reviews" && (
             <div className="sidebar-content">
               <ReviewsPanel onOpen={(pr) => openPr(pr.repo, pr.number, `#${pr.number} ${pr.title}`)} />
+            </div>
+          )}
+          {sidebarView === "local" && (
+            <div className="sidebar-content">
+              <LocalPanel activePath={view === "local" ? localActive : null} onOpen={(p) => { setLocalUsed(true); setView("local"); setLocalOpen({ path: p, at: Date.now() }); }}
+                onClosedFile={(from, to) => setLocalRenamed({ from, to, at: Date.now() })} />
+            </div>
+          )}
+          {sidebarView === "agents" && (
+            <div className="sidebar-content">
+              <AgentsPanel workspaces={workspaces} watched={watched} onWatched={setWatched} onAutoChanged={() => setAutoVersion((n) => n + 1)} />
+            </div>
+          )}
+          {sidebarView === "development" && (
+            <div className="sidebar-content">
+              <DevPanel activeId={view === "development" ? devId : null} workspaces={workspaces} onOpen={(id) => openDev(id)}
+                preset={devPreset} onPresetUsed={() => setDevPreset(null)} />
             </div>
           )}
           {sidebarOpen && <Resizer side="right" onResize={resizeSidebar} onEnd={persistPrefs} />}
@@ -877,6 +947,7 @@ export default function App() {
               onOpenPr={(r, n) => openPr(r, n)}
               onDiscussionsChanged={() => { if (doc) void refreshThreads(doc.document_id); }}
               onOpenChat={(ws, p) => openChats({ ws, path: p })}
+              onDevelop={(r, n, wiki) => { updatePrefs({ sidebarView: "development" }); setDevPreset({ mode: "pr", github_repo: r, pr_number: n, wiki_workspace_id: wiki }); }}
             />
           ) : doc ? (
             <Reader
@@ -976,6 +1047,27 @@ export default function App() {
           )}
         </section>
 
+        <section className="center agents-center" style={{ display: view === "agents" ? undefined : "none" }}>
+          {authed && <AgentMonitor watched={watched} onWatched={setWatched} visible={view === "agents"} onAlarms={setAlarms} autoVersion={autoVersion} />}
+        </section>
+
+        <section className="center local-center" style={{ display: view === "local" ? undefined : "none" }}>
+          {localUsed && (
+            <Suspense fallback={<div className="muted dev-hint">Loading the editor…</div>}>
+              <LocalEditor openRequest={localOpen} renamed={localRenamed} onActive={setLocalActive} />
+            </Suspense>
+          )}
+        </section>
+
+        <section className="center dev-center" style={{ display: view === "development" ? undefined : "none" }}>
+          {devId && (
+            <DevView key={devId} devId={devId} workspaces={workspaces} sessions={sessions} onSessionsChanged={() => void refreshSessions()}
+              onArchived={() => openDev(null)}
+              onOpenPrReview={hub?.available ? (r, n) => { updatePrefs({ sidebarView: "reviews" }); openPr(r, n); } : undefined} />
+          )}
+          {!devId && view === "development" && <div className="empty"><h2>PR Development</h2><p className="muted">Create or pick a development workspace in the sidebar.</p></div>}
+        </section>
+
         <section className="center terminal-center" style={{ display: view === "terminal" ? undefined : "none" }}>
           <TerminalPanel terminals={terminals} info={boot.terminal_info} activeId={activeTerminal} onActive={setActiveTerminal} onChanged={refreshTerminals} visible={view === "terminal"} workspaceRoot={activeWsInfo?.root ?? boot.workspace.root} fontSize={prefs.terminalSize} />
         </section>
@@ -1021,7 +1113,7 @@ export default function App() {
       </main>
 
       <nav className="mobile-nav">
-        <button className={mobilePane === "tree" ? "active" : ""} onClick={() => { setView("document"); setMobilePane("tree"); }}>Files</button>
+        <button className={mobilePane === "tree" ? "active" : ""} onClick={() => { setView("document"); setMobilePane("tree"); }}>Wiki</button>
         <button className={mobilePane === "doc" && view === "document" ? "active" : ""} onClick={() => { setView("document"); setMobilePane("doc"); }}>Document</button>
         <button className={mobilePane === "chat" ? "active" : ""} onClick={() => { setView("document"); setMobilePane("chat"); }}>Discussion</button>
         <button className={view === "terminal" ? "active" : ""} onClick={() => setView("terminal")}>Terminal</button>

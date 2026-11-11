@@ -43,6 +43,22 @@ def _ms_to_iso(ms: Any) -> str | None:
         return None
 
 
+def _default_from_config(cfg: Any, profile: str | None) -> dict[str, str | None]:
+    """The model OpenCode uses without `--model`: the agent's own model (when the app runs with `--agent`),
+    else the top-level `model` of the merged config."""
+    out: dict[str, str | None] = {"model": None, "variant": None}
+    if not isinstance(cfg, dict):
+        return out
+    agent = ((cfg.get("agent") or {}).get(profile) if profile else None) or {}
+    for src in (agent, cfg):
+        if isinstance(src, dict) and isinstance(src.get("model"), str) and src["model"].strip():
+            out["model"] = src["model"].strip()
+            if isinstance(src.get("variant"), str) and src["variant"].strip():
+                out["variant"] = src["variant"].strip()
+            break
+    return out
+
+
 class OpenCodeCliTurn(SubprocessTurn):
     async def events(self) -> AsyncIterator[AgentEvent]:
         await self.start()
@@ -188,7 +204,12 @@ class OpenCodeCliAdapter(AgentAdapter):
         # is always the message — also when it starts with "-".
         args += [f"--file={p}" for p in ctx.attachments]
         args += ["--", ctx.prompt]
-        return OpenCodeCliTurn(args, cwd=ctx.cwd or ctx.workspace)
+        env = None
+        if ctx.skill_roots and ctx.remote is None:
+            from ..skills import opencode_env
+
+            env = opencode_env(ctx.skill_roots)
+        return OpenCodeCliTurn(args, cwd=ctx.cwd or ctx.workspace, env=env, remote=ctx.remote, provider="opencode")
 
     async def list_models(self) -> list[dict[str, Any]]:
         if not self.exe:
@@ -203,6 +224,23 @@ class OpenCodeCliAdapter(AgentAdapter):
 
     def variants(self) -> list[str]:
         return ["minimal", "low", "medium", "high", "max"]
+
+    async def default_model(self, workspace: Path | None = None) -> dict[str, str | None]:
+        """`opencode debug config` prints the merged (global + project) config; only its model keys are read."""
+        none: dict[str, str | None] = {"model": None, "variant": None}
+        if not self.exe:
+            return none
+        try:
+            rc, out, _err = await run_capture([self.exe, "debug", "config"], cwd=workspace, timeout=30)
+        except (ProviderError, OSError):
+            return none
+        start = out.find("{")
+        if rc != 0 or start < 0:
+            return none
+        try:
+            return _default_from_config(json.loads(out[start:]), self.cfg.profile)
+        except json.JSONDecodeError:
+            return none
 
 
 # ---------------------------------------------------------------------- server mode
@@ -507,3 +545,16 @@ class OpenCodeServerAdapter(AgentAdapter):
 
     def variants(self) -> list[str]:
         return ["minimal", "low", "medium", "high", "max"]
+
+    async def default_model(self, workspace: Path | None = None) -> dict[str, str | None]:
+        none: dict[str, str | None] = {"model": None, "variant": None}
+        try:
+            r = await self.client().get(self.api("/config"), params={"directory": str(workspace)} if workspace else None, timeout=20)
+        except httpx.HTTPError:
+            return none
+        if r.status_code != 200:
+            return none
+        try:
+            return _default_from_config(self._unwrap(r), self.cfg.profile)
+        except ValueError:
+            return none

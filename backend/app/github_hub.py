@@ -2113,3 +2113,74 @@ async def trigger_ci(owner: str, repo: str, number: int, body: CiTriggerIn, auth
         raise ApiError(400, "INVALID_ACTION", "action must be rerun_failed, rerun, cancel, dispatch, label or unlabel")
     _pr_cache.pop(f"{owner}/{repo}#{number}".lower(), None)
     return {"ok": True, "action": a}
+
+
+# ---------------------------------------------------------------------- whole file content (expand context in diffs)
+
+_content_cache: dict[tuple[str, str, str], str] = {}
+MAX_EXPAND_BYTES = 5 * 1024 * 1024
+
+
+def _file_at(ctx: AppContext, repo: str, number: int, sha: str, path: str) -> str:
+    """The file at the PR's head commit: from the connected local checkout when it has the PR fetched, else GitHub."""
+    key = (repo.lower(), sha, path)
+    if key in _content_cache:
+        return _content_cache[key]
+    text: str | None = None
+    from .local_repos import get_link, sync_state
+
+    link = get_link(ctx, repo)
+    st = sync_state(repo, number) or {}
+    if link and st.get("state") == "done" and st.get("sha") == sha:
+        try:
+            p = subprocess.run(["git", "-C", link["path"], "show", f"{sha}:{path}"], capture_output=True, timeout=60, check=False)
+            if p.returncode == 0 and b"\0" not in p.stdout[:8000] and len(p.stdout) <= MAX_EXPAND_BYTES:
+                text = p.stdout.decode("utf-8", "replace")
+        except (OSError, subprocess.TimeoutExpired):
+            text = None
+    if text is None:
+        import base64
+        from urllib.parse import quote
+
+        rest = _rest(ctx)
+        meta = rest("GET", f"repos/{repo}/contents/{quote(path)}?ref={sha}")
+        if isinstance(meta, list):
+            raise ApiError(400, "NOT_A_FILE", f"{path} is a folder")
+        if not isinstance(meta, dict):
+            raise ApiError(404, "FILE_NOT_FOUND", f"{path} not found at {sha[:12]}")
+        if (meta.get("size") or 0) > MAX_EXPAND_BYTES:
+            raise ApiError(413, "FILE_TOO_LARGE", f"{path} is too large to expand here")
+        raw = meta.get("content") or ""
+        if not raw and meta.get("sha"):  # > 1 MB: the contents API leaves it out; the blob has it
+            blob = rest("GET", f"repos/{repo}/git/blobs/{meta['sha']}")
+            raw = (blob or {}).get("content") or ""
+        data = base64.b64decode(raw)
+        if b"\0" in data[:8000]:
+            raise ApiError(415, "BINARY_FILE", f"{path} is binary")
+        text = data.decode("utf-8", "replace")
+    if len(_content_cache) > 200:
+        _content_cache.clear()
+    _content_cache[key] = text
+    return text
+
+
+@router.get("/github/pr/{owner}/{repo}/{number}/file")
+async def pr_file_content(owner: str, repo: str, number: int, path: str = Query(..., min_length=1, max_length=4096),
+                          auth: tuple[AppContext, str] = Depends(require_owner)):
+    """A changed file's content at the PR's head, so the diff can show more context lines (as on GitHub)."""
+    ctx, _ = auth
+    _check_names(owner, repo)
+    if path.startswith("/") or ".." in path.split("/"):
+        raise ApiError(400, "INVALID_PATH", "invalid path")
+    hit = _pr_cache.get(f"{owner}/{repo}#{number}".lower())
+    data = hit[1] if hit else await asyncio.to_thread(fetch_pr, owner, repo, number, _hooks(ctx)[0], ctx.extra.get("gh_pr_files", _gh_files))
+    sha = data["pr"].get("head_sha")
+    if not sha:
+        raise ApiError(409, "NO_HEAD", "the PR's head commit is unknown")
+    if not any(f["path"] == path for f in data["files"]):
+        raise ApiError(404, "FILE_NOT_IN_PR", f"{path} is not a file of this pull request")
+    text = await asyncio.to_thread(_file_at, ctx, f"{owner}/{repo}", number, sha, path)
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    return {"path": path, "sha": sha, "lines": lines}

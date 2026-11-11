@@ -222,6 +222,14 @@ class AuthManager:
                     return p
         raise forbidden("WebSocket CSRF subprotocol missing or invalid", "CSRF_INVALID")
 
+    def authenticate_websocket_cookie(self, ws: WebSocket) -> None:
+        """Cookie + Origin only, for WebSockets opened by a third-party page the app proxies (the editor), which
+        cannot add the CSRF subprotocol. The required same-origin Origin header is what stops cross-site use."""
+        client_host = ws.client.host if ws.client else None
+        self.check_origin(ws.headers, client_host, required=True)
+        if self._lookup(ws.cookies.get(COOKIE_NAME)) is None and not self._gateway_authenticated(ws.headers, client_host):
+            raise unauthorized()
+
     def identity_for_request(self, request: Request) -> str | None:
         row = self._lookup(request.cookies.get(COOKIE_NAME))
         return row.identity if row else None

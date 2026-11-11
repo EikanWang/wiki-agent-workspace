@@ -1,0 +1,47 @@
+{
+  "name": "waw-dev",
+  "publisher": "wiki-agent-workspace",
+  "displayName": "Wiki Agent Workspace — PR Development",
+  "description": "Connects the editor to the Wiki Agent Workspace agent: ask about, fix, test and implement code with the reference wiki; AI inline completion.",
+  "version": "0.1.0",
+  "license": "MIT",
+  "engines": { "vscode": "^1.80.0" },
+  "categories": ["Other"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      { "command": "waw.ask", "title": "Ask the agent…", "category": "Agent" },
+      { "command": "waw.explain", "title": "Explain this code", "category": "Agent" },
+      { "command": "waw.fix", "title": "Fix problems here", "category": "Agent" },
+      { "command": "waw.tests", "title": "Write tests for this code", "category": "Agent" },
+      { "command": "waw.implement", "title": "Implement a change…", "category": "Agent" },
+      { "command": "waw.verify", "title": "Verify the branch against the wiki", "category": "Agent" },
+      { "command": "waw.review", "title": "Address the PR's review comments", "category": "Agent" },
+      { "command": "waw.ci", "title": "Fix the PR's failing CI", "category": "Agent" },
+      { "command": "waw.showAnswer", "title": "Show the last answer", "category": "Agent" },
+      { "command": "waw.toggleInline", "title": "Toggle AI inline completion", "category": "Agent" }
+    ],
+    "menus": {
+      "editor/context": [
+        { "command": "waw.ask", "group": "0_agent@1" },
+        { "command": "waw.explain", "group": "0_agent@2" },
+        { "command": "waw.fix", "group": "0_agent@3" },
+        { "command": "waw.tests", "group": "0_agent@4" }
+      ]
+    },
+    "keybindings": [
+      { "command": "waw.ask", "key": "ctrl+alt+a", "mac": "cmd+alt+a" },
+      { "command": "waw.fix", "key": "ctrl+alt+f", "mac": "cmd+alt+f", "when": "editorTextFocus" }
+    ],
+    "configuration": {
+      "title": "Agent (Wiki Agent Workspace)",
+      "properties": {
+        "waw.saveBeforeAsk": { "type": "boolean", "default": true, "description": "Save all editors before sending a request, so the agent works on what you see (otherwise unsaved buffers are sent as context)." },
+        "waw.inlineCompletion.enabled": { "type": "boolean", "default": true, "description": "AI inline completion (when the server has a completion model configured)." },
+        "waw.inlineCompletion.languages": { "type": "array", "items": { "type": "string" }, "default": ["c", "cpp", "cuda-cpp", "python", "cmake"], "description": "Languages with AI inline completion." },
+        "waw.inlineCompletion.debounceMs": { "type": "number", "default": 300 }
+      }
+    }
+  }
+}

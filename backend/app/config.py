@@ -39,6 +39,58 @@ class ProviderConfig:
 
 
 @dataclass
+class DevHost:
+    """[[development.hosts]] — an SSH host that PR Development workspaces can run on (editor, agent, builds)."""
+
+    name: str
+    ssh: str                                   # ssh destination, e.g. "me@build-box" or a ~/.ssh/config alias
+    ssh_args: list[str] = field(default_factory=list)  # extra ssh options, e.g. ["-p", "2222"]
+    work_dir: str = "~/.cache/wiki-agent-workspace"     # remote folder for worktrees, sockets and wiki snapshots
+    code_server: str = "code-server"           # remote editor executable
+    opencode: str = "opencode"                 # remote agent executables
+    codex: str = "codex"
+
+
+@dataclass
+class DevCompletion:
+    """[development.completion] — AI inline completion through an OpenAI-compatible chat endpoint (off when unset)."""
+
+    base_url: str = ""
+    model: str = ""
+    api_key_env: str = ""                      # name of the environment variable holding the key (never the key itself)
+    max_tokens: int = 128
+    timeout: float = 8.0
+
+
+@dataclass
+class DevSettings:
+    """[development] — PR Development: VS Code-compatible editor (code-server) per development workspace."""
+
+    code_server: str | None = None             # local code-server executable; default: found on PATH
+    worktrees_dir: Path | None = None          # default: <state_dir>/dev/worktrees
+    extensions: list[str] = field(default_factory=lambda: list(DEFAULT_DEV_EXTENSIONS))  # Open VSX ids installed on request
+    ssh: str = "ssh"                           # ssh client executable
+    hosts: list[DevHost] = field(default_factory=list)
+    completion: DevCompletion = field(default_factory=DevCompletion)
+    # web editor: language servers per language key (yaml, starlark, cmake, json, …): argv, e.g. ["starpls", "server"]
+    language_servers: dict[str, list[str]] = field(default_factory=dict)
+
+    def host(self, name: str | None) -> DevHost | None:
+        return next((h for h in self.hosts if h.name == name), None) if name else None
+
+
+# C/C++ (clangd, CodeLLDB debugger) and Python (language server, debugger, Ruff) from Open VSX
+DEFAULT_DEV_EXTENSIONS = (
+    "llvm-vs-code-extensions.vscode-clangd",
+    "vadimcn.vscode-lldb",
+    "ms-python.python",
+    "ms-python.debugpy",
+    "detachhead.basedpyright",
+    "charliermarsh.ruff",
+)
+
+
+@dataclass
 class Settings:
     config_path: Path
     bind: str = "127.0.0.1"
@@ -48,6 +100,7 @@ class Settings:
     # extra root folders opened in the same window: [{"root": "/path", "name": "optional"}]
     workspaces: list[dict[str, str]] = field(default_factory=list)
     default_provider: str | None = None
+    agent_env_script: str | None = None  # [agents] env_script: sourced for every agent process
     providers: dict[str, ProviderConfig] = field(default_factory=dict)
     access_token: str = ""
     server_secret: str = ""
@@ -84,6 +137,7 @@ class Settings:
     session_days: int = 30
     frontend_dist: Path | None = None
     log_level: str = "INFO"
+    development: DevSettings = field(default_factory=DevSettings)
 
     # ------------------------------------------------------------------ helpers
     @property
@@ -157,7 +211,7 @@ class Settings:
                 "access_token": self.access_token,
                 "server_secret": self.server_secret,
             },
-            "agents": {"default_provider": self.default_provider or ""},
+            "agents": {"default_provider": self.default_provider or "", **({"env_script": self.agent_env_script} if self.agent_env_script else {})},
         }
         if self.shell:
             d["terminal"]["shell"] = self.shell
@@ -181,6 +235,24 @@ class Settings:
             d["workspaces"] = [{k: v for k, v in w.items() if v} for w in self.workspaces]
         if self.frontend_dist:
             d["server"]["frontend_dist"] = str(self.frontend_dist)
+        dev = self.development
+        dd: dict[str, Any] = {}
+        if dev.code_server:
+            dd["code_server"] = dev.code_server
+        if dev.worktrees_dir:
+            dd["worktrees_dir"] = str(dev.worktrees_dir)
+        if list(dev.extensions) != list(DEFAULT_DEV_EXTENSIONS):
+            dd["extensions"] = list(dev.extensions)
+        if dev.ssh != "ssh":
+            dd["ssh"] = dev.ssh
+        if dev.hosts:
+            dd["hosts"] = [{k: v for k, v in h.__dict__.items() if v not in (None, [], "")} for h in dev.hosts]
+        if dev.completion.base_url:
+            dd["completion"] = dict(dev.completion.__dict__)
+        if dev.language_servers:
+            dd["language_servers"] = dict(dev.language_servers)
+        if dd:
+            d["development"] = dd
         for name, p in self.providers.items():
             entry: dict[str, Any] = {"enabled": p.enabled, "mode": p.mode, "sandbox": p.sandbox,
                                      "extra_args": p.extra_args}
@@ -203,6 +275,37 @@ def _provider_from(d: dict[str, Any]) -> ProviderConfig:
         sandbox=str(d.get("sandbox", "workspace-write")),
         extra_args=list(d.get("extra_args", []) or []),
         profile=d.get("profile") or None,
+    )
+
+
+def _dev_from(d: dict[str, Any]) -> DevSettings:
+    hosts: list[DevHost] = []
+    for h in d.get("hosts") or []:
+        if not isinstance(h, dict) or not h.get("name") or not h.get("ssh"):
+            continue
+        name = str(h["name"])
+        if not name.replace("-", "").replace("_", "").replace(".", "").isalnum() or name == "local":
+            print_config_warning(f"development.hosts: ignoring host with invalid name {name!r} (letters, digits, - _ .)")
+            continue
+        hosts.append(DevHost(
+            name=name, ssh=str(h["ssh"]), ssh_args=[str(a) for a in h.get("ssh_args") or []],
+            work_dir=str(h.get("work_dir") or "~/.cache/wiki-agent-workspace"),
+            code_server=str(h.get("code_server") or "code-server"),
+            opencode=str(h.get("opencode") or "opencode"), codex=str(h.get("codex") or "codex"),
+        ))
+    c = d.get("completion") or {}
+    wt = d.get("worktrees_dir")
+    return DevSettings(
+        code_server=str(d.get("code_server") or "") or None,
+        worktrees_dir=Path(str(wt)).expanduser() if wt else None,
+        extensions=[str(x) for x in d["extensions"]] if isinstance(d.get("extensions"), list) else list(DEFAULT_DEV_EXTENSIONS),
+        ssh=str(d.get("ssh") or "ssh"),
+        hosts=hosts,
+        language_servers={str(k): [str(x) for x in v] for k, v in (d.get("language_servers") or {}).items() if isinstance(v, list) and v},
+        completion=DevCompletion(
+            base_url=str(c.get("base_url") or ""), model=str(c.get("model") or ""), api_key_env=str(c.get("api_key_env") or ""),
+            max_tokens=int(c.get("max_tokens", 128)), timeout=float(c.get("timeout", 8.0)),
+        ),
     )
 
 
@@ -232,10 +335,11 @@ def load_settings(path: Path | None = None, env: dict[str, str] | None = None) -
     agents = raw.get("agents", {})
 
     providers: dict[str, ProviderConfig] = {}
-    for name in ("opencode", "codex"):
+    for name in ("opencode", "codex", "claude"):  # claude: only used by the agent monitor (bin)
         providers[name] = _provider_from(agents.get(name, {}) or {})
 
     default_provider = agents.get("default_provider") or None
+    agent_env_script = agents.get("env_script") or None
     if not default_provider:
         default_provider = detect_default_provider(providers)
 
@@ -261,6 +365,7 @@ def load_settings(path: Path | None = None, env: dict[str, str] | None = None) -
         state_dir=state_dir,
         workspace_root=workspace_root,
         default_provider=default_provider,
+        agent_env_script=agent_env_script,
         providers=providers,
         access_token=access_token,
         server_secret=server_secret,
@@ -288,6 +393,7 @@ def load_settings(path: Path | None = None, env: dict[str, str] | None = None) -
         session_days=int(server.get("session_days", 30)),
         frontend_dist=Path(frontend_dist).expanduser() if frontend_dist else None,
         log_level=str(server.get("log_level", "INFO")),
+        development=_dev_from(raw.get("development", {}) or {}),
     )
 
 

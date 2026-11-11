@@ -1,3 +1,5 @@
+import { Splitter, usePane } from "./Split";
+import { ModelChoiceValue } from "./ModelChoice";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { confirmAction } from "./Confirm";
 import { AgentSession, ApiError, WorkspaceInfo, get, post, put } from "../api";
@@ -75,8 +77,10 @@ const REVIEW_LABEL: Record<string, string> = { APPROVED: "approved", CHANGES_REQ
  * A pull request as a tab: Overview (description, checks, reviews) and Files (diff). Questions go to the agent in
  * the repository's wiki (chosen once per repository): about the whole PR, or about lines selected in the diff.
  */
-export default function PrView({ repo, number, workspaces, docReady, onReady, onSend, sessions, defaultSessionId, defaultProvider, githubLogin = null, onOpenPr, onDiscussionsChanged, onOpenChat }: {
+export default function PrView({ repo, number, workspaces, docReady, onReady, onSend, sessions, defaultSessionId, defaultProvider, githubLogin = null, onOpenPr, onDiscussionsChanged, onOpenChat, onDevelop }: {
   repo: string;
+  /** PR Development: check this pull request out in a development workspace (editor + agent) */
+  onDevelop?: (repo: string, number: number, wikiWorkspaceId: string | null) => void;
   /** open another pull request (a link in a description or comment) as a tab of this app */
   onOpenPr?: (repo: string, number: number) => void;
   /** the discussions changed on the server (an agent review's answer was rewritten): reload them */
@@ -91,7 +95,7 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
   docReady: boolean;
   /** data loaded and a wiki is chosen: open the PR's discussion document in that folder */
   onReady: (workspaceId: string, docPath: string, title: string) => void;
-  onSend: (anchor: SelectionAnchor, question: string, sessionChoice: string | null) => Promise<void>;
+  onSend: (anchor: SelectionAnchor, question: string, sessionChoice: string | null, modelChoice?: ModelChoiceValue | null) => Promise<void>;
   sessions: AgentSession[];
   defaultSessionId: string | null;
   defaultProvider: string | null;
@@ -99,7 +103,7 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
   const [data, setData] = useState<PrData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = usePersistentState<"overview" | "files">(`pr.tab.${repo}#${number}`, "overview");
-  const [sheet, setSheet] = useState<(SelectionAnchor & { pr_review?: boolean }) | null>(null);
+  const [sheet, setSheet] = useState<(SelectionAnchor & { pr_review?: boolean; about?: string }) | null>(null);
   const [pick, setPick] = useState("");
   const [layout, setLayout] = useState<"unified" | "split">(() => (localStorage.getItem("waw.prDiffLayout") as "unified" | "split") || "unified");
   useEffect(() => localStorage.setItem("waw.prDiffLayout", layout), [layout]);
@@ -108,6 +112,7 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
   const [convBusy, setConvBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [refs, setRefs] = useState(false);
+  const sidePane = usePane("pr.side", 260, 180, 700);
   const [owner, name] = repo.split("/");
   const apiBase = `/github/pr/${owner}/${name}/${number}`;
   const [loadedComments, setLoadedComments] = useState(false);
@@ -140,6 +145,13 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
   }, [repo, number]);
 
   const available = workspaces.filter((w) => w.available);
+  // folders (with a trailing /) and files of the PR, for "ask about a folder / file"
+  const prFolders = useMemo(() => {
+    const paths = (data?.files ?? []).map((f) => f.path).filter(Boolean);
+    const dirs = new Set<string>();
+    for (const p of paths) { const parts = p.split("/"); for (let i = 1; i < parts.length; i++) dirs.add(parts.slice(0, i).join("/") + "/"); }
+    return [...[...dirs].sort(), ...paths.sort()];
+  }, [data?.files]);
   useEffect(() => setPick((p) => p || available[0]?.id || ""), [available.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const chooseWiki = async () => {
@@ -258,6 +270,11 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
             onDone={async (url) => { setNotice(url ? `Review published on GitHub.` : "Review published."); await loadComments(); await load(true); }}
             onError={(m) => setError(m)} />
           <span className="spacer" />
+          {onDevelop && p.state === "OPEN" && (
+            <button className="btn small" onClick={() => onDevelop(p.repo, p.number, data.wiki_workspace_id)} title="Check this pull request out in a development workspace: edit, build, test and fix it with the agent, then push to its branch" data-testid="pr-develop">
+              Open in Development
+            </button>
+          )}
           <LocalRepo repo={p.repo} apiBase={apiBase} onOpenChat={onOpenChat} />
           {data.wiki_workspace_id && (
             <span className="muted small" title="The agent works in this wiki for this repository's pull requests">
@@ -269,6 +286,13 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
             </span>
           )}
           <button className="btn small primary" disabled={!docReady} onClick={() => setSheet(wholeDocument())} title={docReady ? "Ask the agent about this pull request" : "Choose the agent's wiki first"} data-testid="pr-ask">Ask about this PR</button>
+          {prFolders.length > 0 && (
+            <select value="" disabled={!docReady} onChange={(e) => { if (e.target.value) setSheet({ ...wholeDocument(), about: e.target.value }); }}
+              title="Ask the agent about a folder or a file of this PR" data-testid="pr-ask-about">
+              <option value="">Ask about a folder / file…</option>
+              {prFolders.map((f) => <option key={f} value={f}>{f.endsWith("/") ? `📁 ${f}` : f}</option>)}
+            </select>
+          )}
           <button className="btn small" disabled={!docReady || reviewing} onClick={() => setSheet({ ...wholeDocument(), pr_review: true })}
             title={docReady ? "The agent reviews the PR; its line comments appear in Files as suggestions you apply or discard (nothing is posted until you finish the review)" : "Choose the agent's wiki first"} data-testid="pr-agent-review">
             {reviewing ? "Agent reviewing…" : "Agent review"}
@@ -301,7 +325,7 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
       {notice && <div className="banner" data-testid="pr-notice">{notice} <a href={`${p.url}/files`} target="_blank" rel="noreferrer">See it on GitHub</a> <button className="icon-btn" onClick={() => setNotice(null)} aria-label="Dismiss">×</button></div>}
       {tab === "overview" ? (
         <div className="pr-body" data-testid="pr-overview" ref={overviewScroll}>
-          <div className="pr-overview-grid">
+          <div className={`pr-overview-grid ${sidePane.folded ? "side-folded" : ""}`} style={{ ["--pr-side" as string]: `${sidePane.size}px` }}>
             <div className="pr-main-col">
               <article className="markdown-body pr-description" dangerouslySetInnerHTML={{ __html: body }} data-testid="pr-description" />
               <section className="pr-conversation" data-testid="pr-conversation">
@@ -352,7 +376,8 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
                 </div>
               </section>
             </div>
-            <aside className="pr-side">
+            <Splitter dir="x" side="after" pane={sidePane} label="side column" className="pr-side-splitter" testId="pr-side-splitter" />
+            {!sidePane.folded && <aside className="pr-side">
               <Contributors apiBase={apiBase} />
               <Reviewers apiBase={apiBase} reviews={p.reviews} requested={p.requested.filter(Boolean) as string[]} onChanged={() => void load(true)} onError={setError} />
               <section>
@@ -381,7 +406,7 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
                   <div>{p.labels.map((l) => <span key={l.name} className="review-label" style={l.color ? { borderColor: `#${l.color}` } : undefined}>{l.name}</span>)}</div>
                 </section>
               )}
-            </aside>
+            </aside>}
           </div>
         </div>
       ) : (
@@ -411,8 +436,8 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
       {sheet && (
         <div className="sheet-backdrop" onClick={() => setSheet(null)}>
           <div onClick={(e) => e.stopPropagation()}>
-            <SelectionPopover anchor={sheet} style={{}} sessions={sessions} initialQuestion={sheet.pr_review ? AGENT_REVIEW_QUESTION : undefined} defaultSessionId={defaultSessionId} defaultProvider={defaultProvider} className="sheet"
-              onSend={async (q, sid) => { await onSend(sheet, q, sid); setSheet(null); if (sheet.pr_review) await loadComments(); }} onMark={() => setSheet(null)} onReanchor={null} onClose={() => setSheet(null)} />
+            <SelectionPopover anchor={sheet} style={{}} sessions={sessions} initialQuestion={sheet.pr_review ? AGENT_REVIEW_QUESTION : sheet.about ? `About ${sheet.about.endsWith("/") ? "the folder" : "the file"} \`${sheet.about}\` of this PR (its changes and the code around them): ` : undefined} defaultSessionId={defaultSessionId} defaultProvider={defaultProvider} className="sheet"
+              onSend={async (q, sid, mc) => { await onSend(sheet, q, sid, mc); setSheet(null); if (sheet.pr_review) await loadComments(); }} onMark={() => setSheet(null)} onReanchor={null} onClose={() => setSheet(null)} />
           </div>
         </div>
       )}

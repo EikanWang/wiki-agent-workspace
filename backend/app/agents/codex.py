@@ -220,6 +220,29 @@ class CodexAdapter(AgentAdapter):
     def variants(self) -> list[str]:
         return ["minimal", "low", "medium", "high"]
 
+    async def default_model(self, workspace: Path | None = None) -> dict[str, str | None]:
+        """`$CODEX_HOME/config.toml`: `model` / `model_reasoning_effort`, overridden by the active profile
+        (`agents.codex.profile`, else the config's own `profile` key)."""
+        out: dict[str, str | None] = {"model": None, "variant": None}
+        try:
+            import tomllib
+
+            cfg = tomllib.loads((codex_home() / "config.toml").read_text("utf-8"))
+        except (OSError, ValueError):
+            return out
+        layers: list[Any] = [cfg]
+        profile = self.cfg.profile or cfg.get("profile")
+        if isinstance(profile, str):
+            layers.append((cfg.get("profiles") or {}).get(profile))
+        for layer in layers:
+            if not isinstance(layer, dict):
+                continue
+            if isinstance(layer.get("model"), str) and layer["model"].strip():
+                out["model"] = layer["model"].strip()
+            if isinstance(layer.get("model_reasoning_effort"), str) and layer["model_reasoning_effort"].strip():
+                out["variant"] = layer["model_reasoning_effort"].strip()
+        return out
+
     def _sandbox(self, ctx: TurnContext) -> str:
         sb = ctx.sandbox or self.cfg.sandbox or "workspace-write"
         if sb not in VALID_SANDBOXES:
@@ -245,4 +268,4 @@ class CodexAdapter(AgentAdapter):
             args = [self.exe, "exec", "resume", *common, "-c", f'sandbox_mode="{sandbox}"', ctx.native_session_id, "-"]
         else:
             args = [self.exe, "exec", *common, "-C", str(cwd), "-s", sandbox, "-"]
-        return CodexTurn(args, cwd=cwd, stdin_data=ctx.prompt.encode("utf-8"))
+        return CodexTurn(args, cwd=cwd, stdin_data=ctx.prompt.encode("utf-8"), remote=ctx.remote, provider="codex")

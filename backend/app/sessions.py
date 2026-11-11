@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .agents.base import ProviderError
 from .db import iso, new_id
@@ -24,6 +25,31 @@ def session_dict(s: AgentSession) -> dict[str, Any]:
         "short_id": (s.native_id[-8:] if s.native_id else None),
         "created_at": iso(s.created_at), "updated_at": iso(s.updated_at),
     }
+
+
+def clean_model(model: str | None, variant: str | None) -> tuple[str | None, str | None]:
+    """Normalise ("" -> None) and validate a model id / variant; they become CLI arguments."""
+    model = (model or "").strip() or None
+    if model and (model.startswith("-") or any(c in model for c in " \t\n")):
+        raise bad_request("invalid model id", "INVALID_MODEL")
+    variant = (variant or "").strip() or None
+    if variant and (variant.startswith("-") or not variant.replace("-", "").replace("_", "").isalnum()):
+        raise bad_request("invalid variant", "INVALID_MODEL")
+    return model, variant
+
+
+def inherited_model(source: AgentSession | None, provider: str) -> tuple[str | None, str | None]:
+    """Model/variant a new `provider` session takes over from `source` (model ids are provider-specific)."""
+    if source is None or source.provider != provider:
+        return None, None
+    return source.model, source.variant
+
+
+class ModelChoiceIn(BaseModel):
+    """A model / reasoning level chosen for one discussion (empty values: the provider's default)."""
+    provider: str | None = Field(None, max_length=40)
+    model: str | None = Field(None, max_length=300)
+    variant: str | None = Field(None, max_length=40)
 
 
 class SessionService:
@@ -55,9 +81,42 @@ class SessionService:
             s.flush()
             return row
 
-    async def create_for_provider(self, provider: str, display_name: str | None) -> AgentSession:
+    async def create_for_provider(self, provider: str, display_name: str | None, *,
+                                  inherit_from: AgentSession | None = None) -> AgentSession:
         """Create a session with the provider when it supports eager ids; otherwise a local
-        `uninitialized` record bound on the first turn."""
+        `uninitialized` record bound on the first turn. With `inherit_from` (the session the user is
+        currently working with), the new session starts on the same model/variant when the provider matches."""
+        row = await self._create_for_provider(provider, display_name)
+        model, variant = inherited_model(inherit_from, provider)
+        if model or variant:
+            row = self.set_model(row.id, model, variant)
+        return row
+
+    def set_model(self, session_id: str, model: str | None, variant: str | None) -> AgentSession:
+        model, variant = clean_model(model, variant)
+        with self.ctx.db.write() as s:
+            row = s.get(AgentSession, session_id)
+            if row is None:
+                raise not_found("agent session not found", SESSION_NOT_FOUND)
+            row.model = model
+            row.variant = variant
+            return row
+
+    async def session_for_model(self, base: AgentSession | None, choice: "ModelChoiceIn", display_name: str | None) -> AgentSession:
+        """A session that runs with the chosen model: `base` when it already does, else a new one (other discussions
+        of `base` keep their model)."""
+        assert self.ctx.providers is not None
+        model, variant = clean_model(choice.model, choice.variant)
+        provider = choice.provider or (base.provider if base else None) or self.ctx.providers.default_provider()
+        if not provider:
+            raise ApiError(503, "PROVIDER_UNAVAILABLE", "no default agent provider configured")
+        self.ctx.providers.get(provider)
+        if base is not None and base.provider == provider and base.model == model and base.variant == variant:
+            return base
+        row = await self._create_for_provider(provider, display_name or (base.display_name if base else None))
+        return self.set_model(row.id, model, variant)
+
+    async def _create_for_provider(self, provider: str, display_name: str | None) -> AgentSession:
         assert self.ctx.providers is not None
         adapter = self.ctx.providers.get(provider)
         caps = await self.ctx.providers.capabilities(provider)
@@ -133,6 +192,7 @@ class SessionCreateIn(BaseModel):
     native_id: str | None = None  # when set: link an existing provider session
     model: str | None = None
     variant: str | None = None
+    inherit_from: str | None = None  # session id: copy its model/variant (same provider) unless model/variant are given
 
 
 class SessionModelIn(BaseModel):
@@ -148,27 +208,26 @@ async def list_models(provider: str, ctx: AppContext = Depends(require_auth)):
     except ProviderError as exc:
         raise ApiError(404, exc.code, exc.message)
     caps = await ctx.providers.capabilities(provider)
-    models = await adapter.list_models() if caps.available else []
+    models: list[dict[str, Any]] = []
+    default: dict[str, str | None] = {"model": None, "variant": None}
+    if caps.available:
+        models, default = await asyncio.gather(adapter.list_models(),
+                                               adapter.default_model(ctx.workspace_root or ctx.settings.workspace_root))
+    if default.get("model"):
+        # flag the provider's configured default in the list (and offer it even when the list lacks it)
+        models = [dict(m, default=True) if m.get("id") == default["model"] else {k: v for k, v in m.items() if k != "default"}
+                  for m in models]
+        if not any(m.get("id") == default["model"] for m in models):
+            models.insert(0, {"id": default["model"], "label": default["model"], "default": True})
     return {"provider": provider, "models": models, "variants": adapter.variants(), "can_select_model": caps.can_select_model,
+            "default_model": default.get("model"), "default_variant": default.get("variant"),
             "note": None if models else "The provider did not return a model list; type a model id manually."}
 
 
 @router.put("/agent-sessions/{session_id}/model")
 def set_session_model(session_id: str, body: SessionModelIn, ctx: AppContext = Depends(require_auth_mutating)):
     """Change the model used for future app-driven turns in this session. Past messages are unchanged."""
-    with ctx.db.write() as s:
-        row = s.get(AgentSession, session_id)
-        if row is None:
-            raise not_found("agent session not found", SESSION_NOT_FOUND)
-        model = (body.model or "").strip() or None
-        if model and (model.startswith("-") or any(c in model for c in " \t\n")):
-            raise bad_request("invalid model id", "INVALID_MODEL")
-        variant = (body.variant or "").strip() or None
-        if variant and (variant.startswith("-") or not variant.replace("-", "").replace("_", "").isalnum()):
-            raise bad_request("invalid variant", "INVALID_MODEL")
-        row.model = model
-        row.variant = variant
-        return session_dict(row)
+    return session_dict(SessionService(ctx).set_model(session_id, body.model, body.variant))
 
 
 @router.get("/agent-sessions")
@@ -181,6 +240,8 @@ async def create_session(body: SessionCreateIn, ctx: AppContext = Depends(requir
     svc = SessionService(ctx)
     if body.workspace_id and body.workspace_id != ctx.workspace_id:
         raise bad_request("unknown workspace", "WORKSPACE_NOT_FOUND")
+    clean_model(body.model, body.variant)  # reject bad ids before creating anything
+    source = svc.get(body.inherit_from) if body.inherit_from else None
     try:
         if body.native_id:
             row = await svc.link_existing(body.provider, body.native_id, body.display_name)
@@ -188,13 +249,10 @@ async def create_session(body: SessionCreateIn, ctx: AppContext = Depends(requir
             row = await svc.create_for_provider(body.provider, body.display_name)
     except ProviderError as exc:
         raise ApiError(502, exc.code, exc.message)
-    if body.model or body.variant:
-        with ctx.db.write() as s:
-            r = s.get(AgentSession, row.id)
-            if r is not None:
-                r.model = (body.model or "").strip() or None
-                r.variant = (body.variant or "").strip() or None
-                row = r
+    # an explicit model/variant wins; otherwise take over the one of the session the user came from
+    model, variant = (body.model, body.variant) if (body.model or body.variant) else inherited_model(source, body.provider)
+    if model or variant:
+        row = svc.set_model(row.id, model, variant)
     return session_dict(row)
 
 

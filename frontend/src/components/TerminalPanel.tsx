@@ -4,7 +4,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { ApiError, Bootstrap, TerminalInfo, del, get, getCsrf, patch, post } from "../api";
 import { decodeBase64Utf8, writeClipboard } from "../clipboard";
 
-type ConnState = "connecting" | "connected" | "detached" | "exited" | "error" | "closed";
+export type ConnState = "connecting" | "connected" | "detached" | "exited" | "error" | "closed";
 
 /** Live terminal views, so the toolbar can send keys the browser would otherwise swallow (Ctrl+T, Ctrl+W, …). */
 interface TermHandle {
@@ -15,7 +15,7 @@ interface TermHandle {
 }
 
 /** Where copied terminal text came from: the browser-side xterm selection, or tmux / a program via OSC 52. */
-type CopySource = "selection" | "tmux";
+export type CopySource = "selection" | "tmux";
 
 const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 const handles = new Map<string, TermHandle>();
@@ -364,7 +364,7 @@ function b64decode(s: string): Uint8Array {
   return out;
 }
 
-function TerminalView({ terminal, active, onState, onExited, onDismiss, fontSize, modsRef, onModsUsed, onCopy }: { terminal: TerminalInfo; active: boolean; onState: (s: ConnState) => void; onExited: () => void; onDismiss: () => void; fontSize: number; modsRef: React.MutableRefObject<StickyMods>; onModsUsed: () => void; onCopy: (text: string, source: CopySource) => void }) {
+export function TerminalView({ terminal, active, onState, onExited, onDismiss, fontSize, modsRef, onModsUsed, onCopy }: { terminal: TerminalInfo; active: boolean; onState: (s: ConnState) => void; onExited: () => void; onDismiss: () => void; fontSize: number; modsRef: React.MutableRefObject<StickyMods>; onModsUsed: () => void; onCopy: (text: string, source: CopySource) => void }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -482,6 +482,20 @@ function TerminalView({ terminal, active, onState, onExited, onDismiss, fontSize
       }
       // Ctrl+Shift+V / ⌘V: let the browser paste (xterm.js receives the paste event) instead of sending ^V
       if ((ev.ctrlKey && ev.shiftKey && k === "v") || (isMac && ev.metaKey && k === "v")) return false;
+      // Home / End. xterm.js sends them for the Home/End keys (and Fn+←/→ on a Mac), but sends nothing for ⌘← / ⌘→,
+      // which is how macOS moves to the start / end of a line: send Home / End for those too.
+      if (isMac && ev.metaKey && !ev.ctrlKey && !ev.altKey && !ev.shiftKey && (ev.key === "ArrowLeft" || ev.key === "ArrowRight")) {
+        const app = term.modes.applicationCursorKeysMode;
+        sendBytes(encoder.current.encode(ev.key === "ArrowLeft" ? (app ? "\x1bOH" : "\x1b[H") : (app ? "\x1bOF" : "\x1b[F")));
+        ev.preventDefault();
+        return false;
+      }
+      // ⌘⌫ on a Mac deletes to the start of the line (Ctrl+U), like in a text box
+      if (isMac && ev.metaKey && !ev.ctrlKey && !ev.altKey && ev.key === "Backspace") {
+        sendBytes(encoder.current.encode("\x15"));
+        ev.preventDefault();
+        return false;
+      }
       return true;
     });
     // Like a desktop terminal: releasing a Shift+drag browser selection copies it.

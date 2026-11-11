@@ -71,7 +71,8 @@ export default function FileTree({
   onAddFolder?: () => void;
   onRemoveFolder?: (workspace: WorkspaceInfo) => void;
   /** open the Chats page for this project (folder) */
-  onOpenChats?: (workspaceId: string) => void;
+  /** chat with the agent about the project, or one of its folders / files */
+  onOpenChats?: (workspaceId: string, about?: string) => void;
   /** a file or folder was created from the tree (open new files, …) */
   onCreated?: (workspace: string, path: string, kind: "file" | "dir", openable: boolean) => void;
   /** bumped for changes that can affect any folder (commit, lock, agent turn finished): reload what is shown */
@@ -344,6 +345,7 @@ export default function FileTree({
       const r = await post<{ path: string; kind: "file" | "dir"; openable: boolean }>("/files", { path: rel, kind: creating.kind }, { workspace: creating.ws });
       const { ws, kind } = creating;
       setCreating(null);
+      setNewBusy(false); // created: a next name box can be submitted while the folder is re-read
       // show it: expand the folders on the way, then re-read the folder it was created in
       const parts = r.path.split("/");
       setExpanded((s) => {
@@ -443,6 +445,7 @@ export default function FileTree({
               {it.git_status && it.git_status !== "clean" && <span className={`git-badge ${it.git_status}`}>{gitLabel(it.git_status)}</span>}
               <span className="tree-actions">
                 {newButtons(ws.id, it.path, first ? `-${it.path}` : undefined)}
+                {onOpenChats && <button className="tree-action" onClick={() => onOpenChats(ws.id, it.path)} title={`Chat with the agent about the folder ${it.path}`} data-testid={first ? `tree-chat-${it.path}` : undefined}>💬</button>}
                 <RefreshButton className="tree-action" onRefresh={() => refreshFolder(ws.id, it.path)} title={`Refresh ${it.name}`} testId={first ? `tree-refresh-${it.path}` : undefined} />
                 {onOpenDiff && it.git_status && it.git_status !== "clean" && (
                   <button className="tree-action" onClick={() => onOpenDiff(ws.id, it.path, true)} title="Review all changes in this folder" data-testid={first ? `tree-diff-${it.path}` : undefined}>±</button>
@@ -466,8 +469,9 @@ export default function FileTree({
           </button>
           {it.locked && <span className={`lock-badge ${it.lock_inherited ? "inherited" : ""}`} title={it.lock_inherited ? "Locked by a parent folder" : "Locked"}>🔒</span>}
           {it.git_status && <span className={`git-badge ${it.git_status}`}>{gitLabel(it.git_status)}</span>}
-          {((onOpenDiff && it.git_status && it.git_status !== "clean" && it.git_status !== "untracked") || (onToggleLock && !it.lock_inherited)) && (
+          {((onOpenDiff && it.git_status && it.git_status !== "clean" && it.git_status !== "untracked") || (onToggleLock && !it.lock_inherited) || onOpenChats) && (
             <span className="tree-actions">
+              {onOpenChats && <button className="tree-action" onClick={() => onOpenChats(ws.id, it.path)} title={`Chat with the agent about ${it.path}`} data-testid={first ? `tree-chat-${it.path}` : undefined}>💬</button>}
               {onOpenDiff && it.git_status && it.git_status !== "clean" && it.git_status !== "untracked" && (
                 <button className="tree-action" onClick={() => onOpenDiff(ws.id, it.path, false)} title="Review changes in this file" data-testid={first ? `tree-diff-${it.path}` : undefined}>±</button>
               )}

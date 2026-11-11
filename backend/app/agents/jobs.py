@@ -261,10 +261,27 @@ class JobManager:
                     pre_sha = self._sha_of(doc_path, root)
                 except Exception:
                     pre_sha = None
+            skill_roots: list[Path] = []
+            if kind in ("turn", "review", "preview"):
+                prompt, skill_roots = self._with_skills(prompt, root, cwd, context)
+            remote = None
+            if context.get("_remote"):  # PR Development on an SSH host: the provider CLI runs there, in the worktree
+                from ..development.targets import RemoteExec
+
+                if caps.mode == "server":
+                    raise ProviderError("PROVIDER_UNAVAILABLE", "OpenCode server mode cannot run turns on an SSH host; "
+                                        "use agents.opencode.mode = \"cli\" (or Codex) for remote development workspaces")
+                r = context["_remote"]
+                remote = RemoteExec(list(r["ssh_prefix"]), dict(r.get("bins") or {}), str(r.get("cwd") or ""))
+                if provider == "opencode" and r.get("skill_dirs"):
+                    from ..skills import opencode_env
+
+                    remote.env = {"OPENCODE_CONFIG_CONTENT": opencode_env([Path(x) for x in r["skill_dirs"]], {})["OPENCODE_CONFIG_CONTENT"]}
             turn = TurnContext(prompt=prompt, workspace=root, native_session_id=native_id,
                                title=display_name or (doc_path and f"Wiki: {doc_path}"),
                                cwd=cwd, sandbox=sandbox, model=model, variant=variant,
-                               attachments=[Path(p) for p in context.get("attachments", []) if Path(p).is_file()])
+                               attachments=[] if remote else [Path(p) for p in context.get("attachments", []) if Path(p).is_file()],
+                               remote=remote, skill_roots=[] if remote else skill_roots)
             handle = await adapter.resume_turn(turn)
         except ProviderError as exc:
             self._finish(job_id, "failed", exc.code, exc.message, "")
@@ -353,6 +370,41 @@ class JobManager:
             self._emit(job_id, "failed", {"status": "failed", "code": code, "message": msg, "text": text, "thread_id": thread_id,
                                          "hint": self._hint_for(code, provider)})
             self._mark_session_from_failure(job_id, code)
+
+    def skill_folders(self, root: Path | None, cwd: Path | None, context: dict[str, Any]) -> list[Path]:
+        """Folders whose skills a turn should have: its working folder and session folder, the projects the request
+        names (`_skill_folders`: the file / folder a chat is about, dev worktree / checkout / wiki, a PR's local
+        checkout — each with its project root), every open folder and every connected folder (reference folders,
+        repositories' local checkouts, PR repositories' wikis)."""
+        from ..skills import connected_folders
+
+        folders: list[Path] = []
+        for p in [*[Path(x) for x in context.get("_skill_folders") or []], cwd, root,
+                  *([rt.root for rt in self.registry.runtimes.values()] if self.registry is not None else []),
+                  *connected_folders(self.db)]:
+            if p is not None and p not in folders:
+                folders.append(p)
+        return folders
+
+    def _with_skills(self, prompt: str, root: Path | None, cwd: Path | None, context: dict[str, Any]) -> tuple[str, list[Path]]:
+        from .. import skills as sk
+
+        remote = context.get("_remote")
+        if remote:
+            # on an SSH host: the skills of every connected folder were copied there (`skill_map`: local skill folder →
+            # its copy); the worktree's own skills load natively
+            mapping = remote.get("skill_map") or {}
+            found = sk.discover_in_roots([Path(x) for x in mapping])
+            section = sk.prompt_section(found, mapping)
+            return (prompt + "\n\n" + section if section else prompt), []
+        folders = self.skill_folders(root, cwd, context)
+        try:
+            found = sk.discover(folders)
+        except Exception:  # pragma: no cover - never fail a turn over skill discovery
+            log.exception("skill discovery failed")
+            return prompt, []
+        section = sk.prompt_section(found)
+        return (prompt + "\n\n" + section if section else prompt), sk.skill_roots(folders)
 
     def _root_and_locks(self, workspace_id: str | None):
         """Root folder and lock service of the session's workspace (multi-root windows)."""

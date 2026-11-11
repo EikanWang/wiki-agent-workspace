@@ -1,5 +1,7 @@
+import ModelChoice, { ModelChoiceValue } from "./ModelChoice";
+import SkillsChip from "./SkillsChip";
 import { useEffect, useRef, useState } from "react";
-import { AgentSession, ApiError, OpenDocument, Thread, del } from "../api";
+import { AgentSession, ApiError, OpenDocument, Thread, del, getWorkspace } from "../api";
 import { LiveJob, MessageView } from "./DiscussionPanel";
 import { confirmAction } from "./Confirm";
 import { usePersistentState } from "../persist";
@@ -21,8 +23,8 @@ export default function ChatView({ doc, folderName, threads, sessions, liveJob, 
   threads: Thread[];
   sessions: AgentSession[];
   liveJob: LiveJob | null;
-  onStart: (question: string) => Promise<void>;
-  onSend: (threadId: string, text: string) => Promise<void>;
+  onStart: (question: string, modelChoice?: ModelChoiceValue | null) => Promise<void>;
+  onSend: (threadId: string, text: string, modelChoice?: ModelChoiceValue | null) => Promise<void>;
   onAction: (threadId: string, action: Action, target: string | null, note: string) => Promise<void>;
   onRetry: (threadId: string, messageId: string, sessionChoice: string | null) => Promise<void>;
   onCancel: (jobId: string) => Promise<void>;
@@ -72,12 +74,15 @@ export default function ChatView({ doc, folderName, threads, sessions, liveJob, 
       setBusy(false);
     }
   };
+  const [modelChoice, setModelChoice] = useState<ModelChoiceValue | null>(null);
+  const chatSession = thread?.last_session_id ? sessions.find((x) => x.id === thread.last_session_id) ?? null : null;
   const send = () => {
     const q = text.trim();
     if (!q || running) return;
     void run(async () => {
-      if (thread) await onSend(thread.id, q);
-      else await onStart(q);
+      if (thread) await onSend(thread.id, q, modelChoice);
+      else await onStart(q, modelChoice);
+      setModelChoice(null);
       setText("");
     });
   };
@@ -106,6 +111,7 @@ export default function ChatView({ doc, folderName, threads, sessions, liveJob, 
           <div className="muted small">Chat with the agent about <b>{folderName}</b> — it searches and reads the wiki to answer.</div>
         </div>
         <span className="spacer" />
+        <SkillsChip workspace={workspaceId ?? getWorkspace()} docId={doc.document_id} />
         <button className="btn small" onClick={onReviewChanges} title="Review the folder's uncommitted changes (what a distill / update wrote)" data-testid="chat-review-changes">Review changes</button>
         <button className="btn small" onClick={archive} disabled={busy} data-testid="chat-archive">Archive</button>
       </header>
@@ -146,6 +152,7 @@ export default function ChatView({ doc, folderName, threads, sessions, liveJob, 
         <textarea rows={3} value={text} onChange={(e) => setText(e.target.value)} disabled={busy}
           placeholder={`${thread ? "Continue the conversation" : `Ask about ${folderName}`} (${COMPOSER_HINT})`}
           onKeyDown={(e) => composerKeyDown(e, send, setText, () => setText(""))} data-testid="chat-input" autoFocus />
+        <ModelChoice value={modelChoice} onChange={setModelChoice} session={chatSession} />
         <button className="btn primary" disabled={busy || running || !text.trim()} onClick={send} data-testid="chat-send">{running ? "Agent is answering…" : "Send"}</button>
       </div>
     </div>

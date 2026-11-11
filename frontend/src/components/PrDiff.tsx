@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { ApiError, del, patch, post } from "../api";
+import { ApiError, del, get, patch, post } from "../api";
+import { writeClipboard } from "../clipboard";
 import { renderGithubMarkdown } from "../markdown";
 import { COMPOSER_HINT, composerKeyDown } from "./keys";
 import MentionTextarea from "./MentionTextarea";
@@ -21,6 +22,57 @@ export interface GhDraft {
 export interface PrFile { path: string; previous_path: string | null; status: string; additions: number; deletions: number; unified: string; binary_or_large: boolean; viewed: "VIEWED" | "UNVIEWED" | "DISMISSED" }
 
 type Sel = { from: number; to: number }; // indices into the parsed lines, inclusive
+
+const EXPAND_STEP = 20; // lines per click, as on GitHub
+const TRAILING = -1; // the gap after the last hunk (its end is known once the file is loaded)
+const ALL: Record<number, { top: number; bottom: number }> = new Proxy({}, { get: () => ({ top: Number.MAX_SAFE_INTEGER, bottom: 0 }) });
+/** Hidden lines before hunk `k` (new-file line numbers from..to; old = new + delta), or after the last one. */
+export interface Gap { k: number; from: number; to: number; delta: number }
+
+/**
+ * The diff's lines with the revealed parts of each gap inserted (context lines from the file at the PR's head).
+ * Each gap's expander takes the place of the hunk header that follows it; a fully revealed gap has none.
+ */
+export function expandLines(base: Line[], content: string[] | null, reveal: Record<number, { top: number; bottom: number }>, trailing = true): { lines: Line[]; expanders: Map<number, Gap> } {
+  const out: Line[] = [];
+  const expanders = new Map<number, Gap>();
+  let k = 0;
+  let newEnd = 1;
+  let oldEnd = 1;
+  const ctx = (n: number, delta: number): Line => ({ kind: "ctx", text: content![n - 1] ?? "", raw: " " + (content![n - 1] ?? ""), oldNo: n + delta, newNo: n, hunkIndex: -1, expanded: true });
+  const gap = (g: Gap, header: Line | null) => {
+    const r = reveal[g.k] ?? { top: 0, bottom: 0 };
+    const to = g.k === TRAILING ? (content ? content.length : Number.MAX_SAFE_INTEGER) : g.to;
+    const len = Math.max(0, to - g.from + 1);
+    const top = content ? Math.min(r.top, len) : 0;
+    const bottom = content ? Math.min(r.bottom, len - top) : 0;
+    for (let n = g.from; n < g.from + top; n++) out.push(ctx(n, g.delta));
+    const rest = len - top - bottom;
+    if (rest > 0) {
+      const marker: Line = header ?? { kind: "hunk", text: "", raw: "", oldNo: null, newNo: null, hunkIndex: -1 };
+      expanders.set(out.length, { k: g.k, from: g.from + top, to: g.k === TRAILING ? to : to - bottom, delta: g.delta });
+      out.push(marker);
+    } else if (header && len === 0) out.push(header); // nothing hidden here: the plain hunk header
+    for (let n = to - bottom + 1; n <= to; n++) out.push(ctx(n, g.delta));
+  };
+  for (const ln of base) {
+    if (ln.kind === "hunk") {
+      const m = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(ln.raw);
+      const oldStart = m ? Number(m[1]) : oldEnd;
+      const newStart = m ? Number(m[2]) : newEnd;
+      gap({ k, from: k === 0 ? 1 : newEnd, to: newStart - 1, delta: oldStart - newStart }, ln);
+      k++;
+      newEnd = newStart;
+      oldEnd = oldStart;
+      continue;
+    }
+    if (ln.kind === "add" || ln.kind === "ctx") newEnd = (ln.newNo ?? newEnd) + 1;
+    if (ln.kind === "del" || ln.kind === "ctx") oldEnd = (ln.oldNo ?? oldEnd) + 1;
+    out.push(ln);
+  }
+  if (k > 0 && trailing) gap({ k: TRAILING, from: newEnd, to: 0, delta: oldEnd - newEnd }, null);
+  return { lines: out, expanders };
+}
 
 const side = (ln: Line): "LEFT" | "RIGHT" => (ln.kind === "del" ? "LEFT" : "RIGHT");
 const lineNo = (ln: Line): number => (ln.kind === "del" ? ln.oldNo! : ln.newNo!);
@@ -51,10 +103,62 @@ export function PrFileDiff({ file, layout, threads, drafts, apiBase, canAsk, col
   useEffect(() => { if (file.viewed === "VIEWED") setCollapsed(true); }, [file.viewed]);
   const [fileComposer, setFileComposer] = useState(false);
   const [fileText, setFileText] = useState("");
-  const { lines } = useMemo(() => parseUnified(file.unified), [file.unified]);
+  const base = useMemo(() => parseUnified(file.unified).lines, [file.unified]);
+  // expanding context, as on GitHub: the file at the PR's head fills the gaps between (and around) the hunks
+  const [content, setContent] = useState<string[] | null>(null);
+  const [reveal, setReveal] = useState<Record<number, { top: number; bottom: number }>>({});
+  const [loadingContent, setLoadingContent] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const canExpand = !file.binary_or_large && !["added", "removed"].includes(file.status);
+  const { lines, expanders } = useMemo(() => expandLines(base, content, reveal, canExpand), [base, content, reveal, canExpand]);
+  const fullyExpanded = !!content && expanders.size === 0;
+  const loadContent = async (): Promise<string[] | null> => {
+    if (content) return content;
+    setLoadingContent(true);
+    try {
+      const r = await get<{ lines: string[] }>(`${apiBase}/file?path=${encodeURIComponent(file.path)}`);
+      setContent(r.lines);
+      return r.lines;
+    } catch (e) {
+      onError((e as ApiError).message);
+      return null;
+    } finally {
+      setLoadingContent(false);
+    }
+  };
+  const expand = async (g: Gap, how: "up" | "down" | "all") => {
+    const c = await loadContent();
+    if (!c) return;
+    setReveal((r) => {
+      const cur = r[g.k] ?? { top: 0, bottom: 0 };
+      const to = g.k === TRAILING ? c.length : g.to;
+      const remaining = Math.max(0, to - g.from + 1);
+      if (how === "all" || remaining <= EXPAND_STEP) return { ...r, [g.k]: { top: cur.top + remaining, bottom: cur.bottom } };
+      return { ...r, [g.k]: how === "down" ? { ...cur, top: cur.top + EXPAND_STEP } : { ...cur, bottom: cur.bottom + EXPAND_STEP } };
+    });
+  };
+  const expandAll = async () => {
+    const c = await loadContent();
+    if (c) setReveal(ALL);
+  };
   const rows = useMemo(() => (layout === "split" ? buildSplitRows(lines) : []), [layout, lines]);
   const [sel, setSel] = useState<Sel | null>(null);
   const [composer, setComposer] = useState<Sel | null>(null);
+  // expanding inserts lines: keep a selection / an open composer on the same lines
+  const prevLines = useRef(lines);
+  useEffect(() => {
+    const prev = prevLines.current;
+    prevLines.current = lines;
+    if (prev === lines) return;
+    const map = (x: Sel | null) => {
+      if (!x) return x;
+      const a = lines.indexOf(prev[x.from]);
+      const b = lines.indexOf(prev[x.to]);
+      return a >= 0 && b >= 0 ? { from: a, to: b } : null;
+    };
+    setSel(map);
+    setComposer(map);
+  }, [lines]);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const anchor = useRef<number | null>(null);
@@ -232,17 +336,37 @@ export function PrFileDiff({ file, layout, threads, drafts, apiBase, canAsk, col
       </tr>
     );
   };
-  const cell = (i: number) => ({
+  const cell = (i: number) => (lines[i]?.expanded ? {} : {
     onPointerDown: (e: React.PointerEvent) => { if (e.button !== 0) return; e.preventDefault(); start(i, e.shiftKey); },
     onPointerEnter: () => extend(i),
   });
   const has = (ln: Line) => { const x = at(ln); return x.threads.length + x.drafts.length > 0; };
+  const expanderButtons = (g: Gap | undefined) => {
+    if (!g || !canExpand) return null;
+    const n = g.k === TRAILING ? (content ? content.length - g.from + 1 : null) : g.to - g.from + 1;
+    if (n !== null && n <= 0) return null;
+    const small = n !== null && n <= EXPAND_STEP;
+    const b = (how: "up" | "down" | "all", glyph: string, title: string) => (
+      <button className="expander" disabled={loadingContent} onClick={(e) => { e.stopPropagation(); void expand(g, how); }} title={title} data-testid={`pr-expand-${how}`}>{glyph}</button>
+    );
+    if (small) return b("all", "↕", `Show ${n} hidden line${n === 1 ? "" : "s"}`);
+    return (
+      <span className="expanders">
+        {g.k !== 0 && b("down", "↓", `Show ${EXPAND_STEP} more lines below the previous change`)}
+        {g.k !== TRAILING && b("up", "↑", `Show ${EXPAND_STEP} more lines above this change`)}
+        {n !== null && b("all", "↕", `Show all ${n} hidden lines`)}
+      </span>
+    );
+  };
 
   return (
     <section className={`diff-file ${collapsed ? "collapsed" : ""}`} data-testid="pr-file" data-file={file.path}>
       <header className="diff-file-head" onClick={() => setCollapsed((c) => !c)}>
         <span className="chev">{collapsed ? "›" : "⌄"}</span>
         <span className="diff-path" title={file.path}>{file.previous_path && file.previous_path !== file.path ? `${file.previous_path} → ` : ""}{file.path}</span>
+        <button className={`icon-btn small copy-path ${copied ? "done" : ""}`} title={copied ? "Copied" : "Copy the file path"} aria-label="Copy the file path"
+          onClick={(e) => { e.stopPropagation(); void writeClipboard(file.path).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }); }}
+          data-testid="pr-copy-path">{copied ? "✓" : "⧉"}</button>
         <span className={`chip git ${file.status}`}>{file.status}</span>
         <span className="muted small"><span className="add">+{file.additions}</span> <span className="del">−{file.deletions}</span></span>
         {total > 0 && <span className="chip" data-testid="pr-file-comments" title={`${unresolved} unresolved thread(s)`}>{total} comment{total > 1 ? "s" : ""}</span>}
@@ -250,6 +374,13 @@ export function PrFileDiff({ file, layout, threads, drafts, apiBase, canAsk, col
         <span className="spacer" />
         {canAsk && !file.binary_or_large && (
           <button className="btn small" onClick={(e) => { e.stopPropagation(); setCollapsed(false); setFileComposer(true); }} title="Ask the agent about this file's changes (or comment on the whole file)" data-testid="pr-file-ask">Ask agent</button>
+        )}
+        {canExpand && (
+          fullyExpanded ? (
+            <button className="btn small" onClick={(e) => { e.stopPropagation(); setReveal({}); }} title="Show only the changed lines again" data-testid="pr-collapse-all">Collapse expanded</button>
+          ) : (
+            <button className="btn small" disabled={loadingContent} onClick={(e) => { e.stopPropagation(); setCollapsed(false); void expandAll(); }} title="Show the whole file around the changes" data-testid="pr-file-expand-all">{loadingContent ? "Loading…" : "Expand all"}</button>
+          )
         )}
         <button className="btn small" onClick={(e) => { e.stopPropagation(); setCollapsed(false); setFileComposer(true); }} title="Comment on the whole file" data-testid="pr-file-comment">Comment on file</button>
         <label className={`viewed-box ${file.viewed === "VIEWED" ? "on" : ""}`} onClick={(e) => e.stopPropagation()} title="Mark as viewed (also on GitHub); viewed files fold">
@@ -288,10 +419,10 @@ export function PrFileDiff({ file, layout, threads, drafts, apiBase, canAsk, col
           <tbody>
             {lines.map((ln, i) => {
               if (ln.kind === "file") return null;
-              if (ln.kind === "hunk") return <tr key={i} className="diff-line hunk"><td className="no" colSpan={2} /><td className="code">{ln.raw}</td></tr>;
+              if (ln.kind === "hunk") return <tr key={i} className="diff-line hunk"><td className="no expander-cell" colSpan={2}>{expanderButtons(expanders.get(i))}</td><td className="code">{ln.raw}</td></tr>;
               return (
                 <Fragment key={i}>
-                  <tr className={`diff-line ${ln.kind} ${inSel(i) ? "selected" : ""} ${has(ln) ? "has-comments" : ""}`} {...cell(i)} data-testid="pr-diff-row" data-side={side(ln)} data-line={lineNo(ln)} title="Click to comment or ask; drag or shift-click for several lines">
+                  <tr className={`diff-line ${ln.kind} ${ln.expanded ? "expanded" : ""} ${inSel(i) ? "selected" : ""} ${has(ln) ? "has-comments" : ""}`} {...cell(i)} data-testid="pr-diff-row" data-side={side(ln)} data-line={lineNo(ln)} title="Click to comment or ask; drag or shift-click for several lines">
                     <td className="no">{ln.oldNo ?? ""}</td>
                     <td className="no">{ln.newNo ?? ""}</td>
                     <td className="code"><span className="marker">{ln.kind === "add" ? "+" : ln.kind === "del" ? "-" : " "}</span>{ln.text || " "}</td>
@@ -309,12 +440,12 @@ export function PrFileDiff({ file, layout, threads, drafts, apiBase, canAsk, col
           <SplitCols />
           <tbody>
             {rows.map((row, ri) => {
-              if (row.hunk !== undefined) return <tr key={ri} className="diff-line hunk"><td className="no" /><td className="code" colSpan={3}>{lines[row.hunk].raw}</td></tr>;
+              if (row.hunk !== undefined) return <tr key={ri} className="diff-line hunk"><td className="no expander-cell">{expanderButtons(expanders.get(row.hunk))}</td><td className="code" colSpan={3}>{lines[row.hunk].raw}</td></tr>;
               const L = row.left !== null ? lines[row.left] : null;
               const R = row.right !== null ? lines[row.right] : null;
               return (
                 <Fragment key={ri}>
-                  <tr className="diff-line split-row" data-testid="pr-diff-row">
+                  <tr className={`diff-line split-row ${L?.expanded ? "expanded" : ""}`} data-testid="pr-diff-row">
                     <td className={`no ${L ? L.kind : "empty"}`}>{L?.oldNo ?? ""}</td>
                     <td className={`code left ${L ? L.kind : "empty"} ${L && inSel(row.left!) ? "selected" : ""}`} {...(L ? cell(row.left!) : {})} data-side="LEFT" data-line={L ? lineNo(L) : ""}>
                       {L ? <><span className="marker">{L.kind === "del" ? "-" : " "}</span>{L.text || " "}</> : ""}

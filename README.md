@@ -42,6 +42,8 @@ Design specification: [`DESIGN.md`](DESIGN.md). Visual reference (mockup only): 
 - Python 3.11–3.13, Git, tmux 3.2+ (3.5a tested), Node.js 20+ (22 recommended; only needed to build the frontend)
 - Optional: `opencode` and/or `codex` on `PATH`, already logged in. Without them the reader and terminal still work.
 - Optional: LibreOffice (Writer, Impress, Draw) for the original-layout view of Word, PowerPoint and Visio files.
+- Optional, for PR Development's web editor: `clangd` and a Python language server (`pip install basedpyright`) on the
+  server / SSH hosts; for its VS Code option: [code-server](https://coder.com/docs/code-server/install).
 
 `scripts/setup.sh` does **not** install system packages; it names any missing dependency and how to install it.
 Install commands per distro, the recommended `fs.inotify.max_user_watches` increase for large wikis, and a
@@ -89,6 +91,7 @@ Everything below is explained step by step in **[docs/USER_GUIDE.md](docs/USER_G
 | Area | What you get |
 | --- | --- |
 | Reviews | GitHub review queue next to the wikis (owner's GitHub sign-in only): PRs requesting your review across all repos, grouped by repo, CI/draft/size, filter and sort; a PR opens as a tab (overview, checks, reviews; conversation, all reviewers' threads with resolve, viewed per file, line / file comments and suggestions published as one review, replies) and is discussed with the agent in the repo's wiki, via the server's `gh` login |
+| PR Development | Develop a new pull request or update an existing one: an app-owned Git worktree (your checkout is untouched), an editor in the page — the built-in VS Code-like web editor (Monaco + clangd / basedpyright language servers: completion, go to definition, references, rename, diagnostics; explorer, search, problems, quick open) or VS Code (code-server, with debugging and extensions); AI inline completion, the agent working in the worktree with a whole wiki folder as its reference (it lists the pages it relied on), build / test runs with "Fix with the agent", commit, push, create PR, address review comments, fix failing CI; on this server or an SSH host |
 | Folders | Several wiki folders in one window ("add folder", like VS Code), each fully isolated: documents, discussions, sessions, locks, reviews, Git state; named workspaces (sets of folders with their own tabs and terminals); create folders on the server, clone a repository by URL, close any folder for good, files/folders in the tree |
 | Reading | Markdown, any text/source file (numbered code), Word, PowerPoint, Visio in their original layout (LibreOffice) plus a selectable text view (`.docx`, `.pptx`, `.vsdx`), PDF; kind icons; section links; Read / Discuss modes; reading position restore; tabs for open documents (switch, close, reorder, across folders) |
 | Asking | Select words or lines → question box (copy icon, Enter to send), ask about a page, slide, area or picture of a PDF / Office document (sent to the agent as an image), or ask about the whole document from the discussions panel (any format, images attached for the agent); anchors survive edits; orphaned/ambiguous detection and manual reanchor; review marks |
@@ -157,6 +160,12 @@ separately (`~/.config/wiki-agent-workspace/config.toml`). Backup, restore and m
   a backup (SQLite + snapshots) for the authenticated user.
 - The terminal is the user's own shell with the user's own rights — no artificial sandbox, no per-command prompts.
   **Close terminal** (after an ordinary confirmation) is the only action that kills processes.
+- PR Development's editor (code-server) has the same rights as the terminal. It listens only on a 0600 Unix socket
+  with its own login disabled and is reached through `/dev-editor/<id>/` with the app's cookie (stripped before it is
+  forwarded); writes and WebSockets need a same-origin `Origin`. Its pages are same-origin with the app (framed by
+  the app only), so trust its extensions like programs you run in the terminal. The integration extension talks to
+  `/api/v1/dev/ext/<id>/` with a random per-editor token (cookies are not accepted there). SSH hosts are reached
+  with key authentication only (`BatchMode=yes`); every remote command is a shlex-quoted `sh -c` script.
 
 ## Running the tests
 
@@ -205,4 +214,8 @@ Codex CLI 0.155.1, tmux 3.5a, Python 3.13, Node 20.18):
   `PREVIEW_UNAVAILABLE` and the direct-edit flow remains available.
 - Codex `exec` cannot relay interactive approvals; actions requiring approval fail visibly with the provider's message
   and the terminal is offered as the fallback.
+- PR Development: the editor is code-server, so extensions come from Open VSX (not Microsoft's marketplace); some
+  browser-reserved shortcuts only work when the editor is opened in its own tab (**Open in tab**). The AI inline
+  completion needs a separately configured OpenAI-compatible endpoint. Task logs, editor processes and the SSH
+  tunnels end with the server (runs still marked running at startup become `interrupted`).
 - Node 22+ is recommended by the design; the frontend was built here with Node 20.18 (Vite 5 supports both).

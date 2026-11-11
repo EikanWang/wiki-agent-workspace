@@ -889,3 +889,27 @@ async def test_trigger_ci_rerun_cancel_dispatch_and_ciflow_labels(running_app):
         assert rest_calls[-1] == call
     assert (await api.post(f"{base}/ci", json={"action": "label", "label": "module: xpu"})).json()["error"]["code"] == "INVALID_LABEL"
     assert (await api.post(f"{base}/ci", json={"action": "rerun"})).json()["error"]["code"] == "INVALID_RUN"
+
+
+async def test_pr_file_content_for_expanding_the_diff(running_app, settings):
+    import base64
+
+    h = await running_app()
+    as_github(h, "EikanWang")
+    h.ctx.extra["gh_owner"] = lambda: "EikanWang"
+    h.ctx.extra["gh_graphql"] = fake_pr_detail([], {})
+    h.ctx.extra["gh_pr_files"] = lambda o, r, n: [{"filename": "a.cpp", "status": "modified", "additions": 1, "deletions": 1, "patch": "@@ -1 +1 @@\n-x\n+y"}]
+    seen = []
+
+    def rest(method, path, body=None):
+        seen.append(path)
+        return {"size": 6, "sha": "b", "content": base64.b64encode(b"y\nz\nw\n").decode()}
+
+    h.ctx.extra["gh_rest"] = rest
+    base = "/api/v1/github/pr/pytorch/pytorch/7"
+    await h.api.get(base)
+    r = await h.api.get(f"{base}/file", params={"path": "a.cpp"})
+    assert r.status_code == 200, r.text
+    assert r.json()["lines"] == ["y", "z", "w"] and "contents/a.cpp?ref=" in seen[-1]
+    assert (await h.api.get(f"{base}/file", params={"path": "other.cpp"})).status_code == 404
+    assert (await h.api.get(f"{base}/file", params={"path": "../etc"})).status_code == 400

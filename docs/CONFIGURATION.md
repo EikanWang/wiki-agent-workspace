@@ -168,6 +168,7 @@ The app asks for `openid email` only, reads the email once from Google's userinf
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `default_provider` | auto-detected: `opencode` if on PATH, else `codex`, else empty | Provider used when a document has no session yet. Empty → discussions are disabled with an explanation; reader/terminal still work. |
+| `env_script` | — | A shell script sourced (bash) for every agent process the app starts — turns, model lists, session lists — e.g. one that exports API tokens (`AWS_BEARER_TOKEN_BEDROCK`). Re-read whenever the file changes, so a rotated token applies without a restart. Not passed to SSH development hosts. |
 
 ### `[agents.opencode]`
 
@@ -191,6 +192,65 @@ The app asks for `openid email` only, reads the email once from Google's userinf
 | `extra_args` | `[]` | Appended to every `codex exec`. |
 
 `CODEX_HOME` (environment) is honoured for session listing.
+
+## `[development]` — PR Development
+
+A development workspace uses the built-in **web editor** (default; per workspace) or **VS Code**. The web editor needs
+no configuration; for language intelligence install `clangd` and a Python language server (`basedpyright`,
+`pyright` or `python-lsp-server`) on the server and on every SSH host — per workspace, **Settings** can point to
+specific executables (`clangd`, `python_lsp`). The VS Code option is [code-server](https://coder.com/docs/code-server/install)
+started by the app on a private socket and shown through the app's login; install it on the server and on every SSH
+host where you want it.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `code_server` | `code-server` on PATH | Editor executable on this server. |
+| `worktrees_dir` | `<state_dir>/dev/worktrees` | Where the app's Git worktrees go (on this server). |
+| `extensions` | clangd, CodeLLDB, Python, debugpy, basedpyright, Ruff | Open VSX ids installed by **Install language support** (into the app's own editor profile, not your VS Code). |
+| `ssh` | `ssh` | SSH client. Hosts are reached with `-o BatchMode=yes`: set up key authentication (and `~/.ssh/config` aliases) first. |
+
+### `[[development.hosts]]` — develop on another machine
+
+The worktree, the editor, the agent's CLI (opencode / Codex) and builds/tests all run on the host; the app reaches
+the editor with `ssh -L` (a Unix socket) and the editor's integration extension reaches the app with `ssh -R`. The
+reference wiki is copied there read-only (`<work_dir>/wiki/<folder id>`, refreshed when older than 10 minutes before
+a turn, or from the workspace settings). OpenCode must be in `mode = "cli"` for remote turns.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `name` | — (required) | Shown in the app (letters, digits, `-_.`). |
+| `ssh` | — (required) | Destination: `me@build-box` or a `~/.ssh/config` alias. |
+| `ssh_args` | `[]` | Extra ssh options, e.g. `["-p", "2222"]`. |
+| `work_dir` | `~/.cache/wiki-agent-workspace` | Remote folder for worktrees, editor profile, sockets and wiki snapshots. |
+| `code_server`, `opencode`, `codex` | names on the remote PATH | Executables on the host. |
+
+### `[development.completion]` — AI inline completion (optional)
+
+Ghost-text suggestions in the editor come from one short request to an **OpenAI-compatible** `/chat/completions`
+endpoint (the agent CLIs are too slow for keystrokes). Off until `base_url` and `model` are set.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `base_url` | — | e.g. `"https://bedrock-runtime.us-east-2.amazonaws.com/openai/v1"`. |
+| `model` | — | A fast model, e.g. `"openai.gpt-oss-20b"`. |
+| `api_key_env` | — | Name of the environment variable with the key (the key itself is never stored in the config). |
+| `max_tokens` | `128` | Longest suggestion. |
+| `timeout` | `8` | Seconds. |
+
+```toml
+[development]
+# code_server = "/opt/code-server/bin/code-server"
+
+[[development.hosts]]
+name = "gpu-box"
+ssh = "me@gpu-box"
+work_dir = "~/.cache/wiki-agent-workspace"
+
+[development.completion]
+base_url = "https://bedrock-runtime.us-east-2.amazonaws.com/openai/v1"
+model = "openai.gpt-oss-20b"
+api_key_env = "AWS_BEARER_TOKEN_BEDROCK"
+```
 
 ## Full example
 

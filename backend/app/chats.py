@@ -50,23 +50,49 @@ def chat_title(text: str) -> str:
 
 class ChatIn(BaseModel):
     title: str = Field("", max_length=200)
+    about: str | None = Field(None, max_length=4096)  # a sub-folder or a file of the folder the chat is about
+
+
+def _about_key(workspace_id: str, norm: str) -> str:
+    return f"chat_about:{workspace_id}:{norm}"
+
+
+def chat_about(ctx: AppContext, workspace_id: str, norm: str) -> dict[str, str] | None:
+    """{path, kind: folder|file} when the chat is about a part of its folder (None: the whole folder)."""
+    from .kv import kv_get
+
+    v = kv_get(ctx, _about_key(workspace_id, norm), None)
+    return v if isinstance(v, dict) and v.get("path") else None
 
 
 @router.post("/chats", status_code=201)
 def create_chat(body: ChatIn, ctx: AppContext = Depends(require_auth_mutating)):
     """A new, empty chat about this folder (the X-Workspace one)."""
     assert ctx.documents is not None
-    return new_chat(ctx.documents, body.title)
+    about = None
+    if body.about and body.about.strip("/"):
+        rel, path = ctx.documents.resolve(body.about)
+        if not path.exists():
+            raise not_found(f"{rel} not found", "FILE_NOT_FOUND")
+        about = {"path": rel, "kind": "folder" if path.is_dir() else "file"}
+    out = new_chat(ctx.documents, body.title, about)
+    if about:
+        from .kv import kv_put
+
+        kv_put(ctx, _about_key(ctx.documents.workspace_id, out["path"]), about)
+    out["about"] = about
+    return out
 
 
-def new_chat(docs: Any, title: str) -> dict[str, Any]:
+def new_chat(docs: Any, title: str, about: dict[str, str] | None = None) -> dict[str, Any]:
     title = title.strip() or time.strftime("Chat %Y-%m-%d %H:%M")
     norm = f"{CHAT_PREFIX}{_slug(title)}-{secrets.token_hex(3)}.md"
     p = chat_snapshot_path(docs.snapshots_dir, docs.workspace_id, norm)
     assert p is not None
     p.parent.mkdir(parents=True, exist_ok=True)
     folder = docs.root.name
-    p.write_text(f"# {title}\n\nAn open conversation with the agent about the **{folder}** folder — not about one document. "
+    what = f"the {about['kind']} **{about['path']}** of the **{folder}** folder" if about else f"the **{folder}** folder — not about one document"
+    p.write_text(f"# {title}\n\nAn open conversation with the agent about {what}. "
                  "The agent searches and reads the wiki to answer, and can distill the conversation into a page or update "
                  "the pages it came from.\n", encoding="utf-8")
     doc = docs.get_or_create_document(norm)
@@ -93,7 +119,7 @@ def list_chats(ctx: AppContext = Depends(require_auth)):
             times = [t.updated_at for t in threads if t.updated_at] + ([d.created_at] if d.created_at else [])
             last = max(times) if times else None
             out.append({"path": d.path, "document_id": d.id, "title": chat_title(p.read_text(encoding="utf-8")), "messages": n,
-                        "updated_at": last.isoformat() if last else None})
+                        "updated_at": last.isoformat() if last else None, "about": chat_about(ctx, docs.workspace_id, d.path)})
     out.sort(key=lambda x: x["updated_at"] or "", reverse=True)
     return {"chats": out}
 
@@ -141,10 +167,13 @@ def check_action(ctx: AppContext, action: str | None, target: str | None) -> str
 
 
 def build_chat_prompt(*, question: str, wiki_root: str, prior: list[dict[str, str]] | None, extra: str | None,
-                      locked: list[str], action: str | None = None, target: str | None = None, brief: str | None = None) -> str:
+                      locked: list[str], action: str | None = None, target: str | None = None, brief: str | None = None,
+                      about: dict[str, str] | None = None) -> str:
     parts = [
         f"You are chatting with the user about their wiki: the folder that is your working directory ({wiki_root}). "
-        "This is an open conversation, not about one particular document.",
+        + (f"This conversation is about the {about['kind']} `{about['path']}` (relative to the working directory): focus on "
+           f"it{' and what it contains' if about['kind'] == 'folder' else ''}, and look at the rest of the folder when it helps."
+           if about else "This is an open conversation, not about one particular document."),
         "Answer from the wiki: search and read its pages as needed, cite the pages you rely on (relative paths), and say "
         "clearly when something is not covered by the wiki (then answer from general knowledge and mark it as such).",
     ]

@@ -1,3 +1,5 @@
+import { Splitter, usePane } from "./Split";
+import ModelChoice, { ModelChoiceValue } from "./ModelChoice";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { COMPOSER_HINT, composerKeyDown } from "./keys";
 import Editor from "./Editor";
@@ -17,7 +19,7 @@ export interface ReaderProps {
   onRelink: () => void;
   onOpenThread: (id: string) => void;
   /** Create a discussion; resolves when the thread is created (throws ApiError on failure). */
-  onSend: (anchor: SelectionAnchor, question: string, sessionChoice: string | null) => Promise<void>;
+  onSend: (anchor: SelectionAnchor, question: string, sessionChoice: string | null, modelChoice?: ModelChoiceValue | null) => Promise<void>;
   onMarkReviewed: (anchor: SelectionAnchor) => void;
   sessions: AgentSession[];
   defaultSessionId: string | null;
@@ -47,6 +49,7 @@ const SELECTION_DELAY_MS = 350;
 export default function Reader(props: ReaderProps) {
   const { doc, threads, marks, activeThreadId, changedNotice, onRefresh, onRelink, onOpenThread, initialFragment, onFragmentConsumed, tocOpen = true, onToggleToc, readerMode = "discuss", onReaderModeChange, officeView = "layout", onOfficeViewChange, onEdited, onDirtyChange, onSend, onMarkReviewed, onReanchor, onOpenInternalLink, sessions, defaultSessionId, defaultProvider } = props;
   const [sheet, setSheet] = useState<SelectionAnchor | null>(null); // mobile / header-button composer
+  const tocPane = usePane("reader.toc", 180, 100, 520);
   const [copyChip, setCopyChip] = useState<{ text: string; x: number; y: number; done: boolean } | null>(null); // read mode
   const [editing, setEditing] = useState(false);
   const [textHint, setTextHint] = useState(false);
@@ -647,7 +650,7 @@ export default function Reader(props: ReaderProps) {
           </button>
         )}
         {headings.length > 1 && !editing && !layout && (
-          <nav className={`toc ${tocOpen ? "" : "collapsed"}`} data-testid="toc">
+          <nav className={`toc ${tocOpen ? "" : "collapsed"}`} data-testid="toc" style={tocOpen ? { width: tocPane.size } : undefined}>
             <button className="toc-toggle" onClick={onToggleToc} title={tocOpen ? "Fold outline" : "Unfold outline"} data-testid="toc-toggle">
               {tocOpen ? "▾ Outline" : "▸"}
             </button>
@@ -658,6 +661,10 @@ export default function Reader(props: ReaderProps) {
                 </button>
               ))}
           </nav>
+        )}
+        {headings.length > 1 && !editing && !layout && tocOpen && (
+          <Splitter dir="x" side="before" className="toc-splitter" label="outline" testId="toc-splitter"
+            pane={{ ...tocPane, folded: false, setFolded: (f) => { if (f) onToggleToc?.(); } }} />
         )}
         {editing && (
           <Editor
@@ -730,8 +737,8 @@ export default function Reader(props: ReaderProps) {
             sessions={sessions}
             defaultSessionId={defaultSessionId}
             defaultProvider={defaultProvider}
-            onSend={async (q, sid) => {
-              await onSend(freshAnchor(popover.anchor), q, sid);
+            onSend={async (q, sid, mc) => {
+              await onSend(freshAnchor(popover.anchor), q, sid, mc);
               setPopover(null);
             }}
             onMark={() => {
@@ -761,8 +768,8 @@ export default function Reader(props: ReaderProps) {
               defaultSessionId={defaultSessionId}
               defaultProvider={defaultProvider}
               className="sheet"
-              onSend={async (q, sid) => {
-                await onSend(freshAnchor(sheet), q, sid);
+              onSend={async (q, sid, mc) => {
+                await onSend(freshAnchor(sheet), q, sid, mc);
                 setSheet(null);
               }}
               onMark={() => {
@@ -796,13 +803,14 @@ export function SelectionPopover({ anchor, style, sessions, defaultSessionId, de
   defaultSessionId: string | null;
   defaultProvider: string | null;
   className?: string;
-  onSend: (question: string, sessionChoice: string | null) => Promise<void>;
+  onSend: (question: string, sessionChoice: string | null, modelChoice?: ModelChoiceValue | null) => Promise<void>;
   onMark: () => void;
   onReanchor: (() => void) | null;
   onClose: () => void;
 }) {
   const [question, setQuestion] = useState(initialQuestion ?? "");
   const [session, setSession] = useState<string>(defaultSessionId ?? "__default__");
+  const [modelChoice, setModelChoice] = useState<ModelChoiceValue | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -817,7 +825,7 @@ export function SelectionPopover({ anchor, style, sessions, defaultSessionId, de
     setBusy(true);
     setError(null);
     try {
-      await onSend(question.trim(), session === "__default__" ? null : session);
+      await onSend(question.trim(), session === "__default__" ? null : session, modelChoice);
     } catch (e) {
       const ae = e as ApiError;
       if (ae.code === "DOCUMENT_VERSION_CONFLICT") setError("The document changed after you selected the text. Your question is kept: refresh the document, reselect the passage and send again.");
@@ -881,6 +889,10 @@ export function SelectionPopover({ anchor, style, sessions, defaultSessionId, de
             </option>
           ))}
         </select>
+      </div>
+      <div className="sel-row">
+        <ModelChoice value={modelChoice} onChange={setModelChoice} provider={defaultProvider}
+          session={session === "__default__" ? defaultSess ?? null : session === "new" ? null : sessions.find((x) => x.id === session) ?? null} />
       </div>
       {error && <div className="error-text" role="alert" data-testid="selection-error">{error}</div>}
       <div className="sel-actions">

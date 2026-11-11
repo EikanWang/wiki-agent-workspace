@@ -58,6 +58,7 @@ cache_mb = 2048
 
 [agents]
 default_provider = "opencode"   # or "codex"; detected automatically at setup when empty
+env_script = ""   # e.g. "~/set_tokens.sh": sourced for every agent process (e.g. exports API tokens); re-read when it changes
 
 [agents.opencode]
 enabled = true
@@ -74,3 +75,17 @@ sandbox = "workspace-write"  # sandbox for app-driven turns (DESIGN §8); read-o
 # bin = "/home/me/.local/bin/codex"
 # profile = "wiki"           # --profile name from ~/.codex/config.toml
 extra_args = []
+
+[development]                # PR Development (docs/CONFIGURATION.md): code-server editor, worktrees, SSH hosts
+# code_server = "/opt/code-server/bin/code-server"   # default: code-server on PATH
+# worktrees_dir = "/home/me/.local/share/wiki-agent-workspace/dev/worktrees"
+
+# [[development.hosts]]      # develop on another machine (key-based ssh; code-server and the agent CLI installed there)
+# name = "gpu-box"
+# ssh = "me@gpu-box"
+# work_dir = "~/.cache/wiki-agent-workspace"
+
+# [development.completion]   # AI inline completion: an OpenAI-compatible chat endpoint
+# base_url = "https://bedrock-runtime.us-east-2.amazonaws.com/openai/v1"
+# model = "openai.gpt-oss-20b"
+# api_key_env = "AWS_BEARER_TOKEN_BEDROCK"

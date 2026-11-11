@@ -1,0 +1,57 @@
+#!/usr/bin/env python3
+"""Fake language server (stdio, Content-Length framing): answers initialize, hover and completion, publishes one
+diagnostic on didOpen, and records the methods it received to $FAKE_AGENT_STATE/lsp_methods.log."""
+import json
+import os
+import sys
+from pathlib import Path
+
+STATE = Path(os.environ.get("FAKE_AGENT_STATE", "/tmp/fake-agent-state"))
+inp, out = sys.stdin.buffer, sys.stdout.buffer
+
+
+def send(obj):
+    body = json.dumps(obj).encode()
+    out.write(b"Content-Length: %d\r\n\r\n" % len(body) + body)
+    out.flush()
+
+
+def read():
+    length = None
+    while True:
+        line = inp.readline()
+        if not line:
+            return None
+        line = line.strip()
+        if not line:
+            break
+        k, _, v = line.decode().partition(":")
+        if k.lower() == "content-length":
+            length = int(v)
+    return json.loads(inp.read(length))
+
+
+while True:
+    msg = read()
+    if msg is None:
+        break
+    m = msg.get("method")
+    with (STATE / "lsp_methods.log").open("a") as fh:
+        fh.write(f"{m or 'response'} {os.getcwd()}\n")
+    if m == "initialize":
+        send({"jsonrpc": "2.0", "id": msg["id"], "result": {"capabilities": {"textDocumentSync": 1, "hoverProvider": True,
+                                                                               "completionProvider": {"triggerCharacters": ["."]}}}})
+    elif m == "textDocument/didOpen":
+        uri = msg["params"]["textDocument"]["uri"]
+        send({"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics", "params": {"uri": uri, "diagnostics": [
+            {"range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 3}}, "severity": 1, "message": "fake error", "source": "fake-lsp"}]}})
+    elif m == "textDocument/hover":
+        send({"jsonrpc": "2.0", "id": msg["id"], "result": {"contents": {"kind": "markdown", "value": "**fake hover**"}}})
+    elif m == "textDocument/completion":
+        send({"jsonrpc": "2.0", "id": msg["id"], "result": [{"label": "fake_item", "kind": 3}]})
+    elif m == "shutdown":
+        send({"jsonrpc": "2.0", "id": msg["id"], "result": None})
+    elif m == "exit":
+        break
+    elif "id" in msg and m:
+        send({"jsonrpc": "2.0", "id": msg["id"], "result": None})

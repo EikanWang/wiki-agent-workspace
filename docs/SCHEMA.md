@@ -379,6 +379,47 @@ No plaintext secrets are stored.
 | `response_json` | TEXT | Stored response body, replayed on exact retry. |
 | `created_at` | DATETIME | Keys older than 24 h are purged. |
 
+## `dev_workspaces` — PR Development workspaces
+
+One per piece of development work: an app-owned Git worktree of a repository checkout, on this server or an SSH host
+(`[[development.hosts]]`), opened in the editor (code-server), with a wiki folder as the agent's reference. Its agent
+conversation is the hidden document `.waw-dev/<id>.md` of the reference wiki folder (or the primary folder), whose
+stub lives in `snapshots/dev/<id>.md`.
+
+| Column | Type | Meaning |
+| --- | --- | --- |
+| `id` | TEXT, PK | UUID. |
+| `name` | TEXT | Display name (branch, or `#<n> <PR title>`). |
+| `host` | TEXT | `local`, or the name of a `[[development.hosts]]` entry. |
+| `source_repo` | TEXT | The checkout (top level) the worktree was added to, on the host. |
+| `worktree_path` | TEXT | The worktree, on the host (empty while `creating`). |
+| `mode` | TEXT | `branch` (new work) or `pr` (an existing pull request). |
+| `branch` | TEXT | Local branch of the worktree (`waw/pr-<n>` for a PR). |
+| `base_ref` | TEXT, nullable | Base the branch is compared with (`refs/waw/base/<b>` for a PR). |
+| `github_repo` | TEXT, nullable | `owner/name` of the pull request's repository, when known. |
+| `pr_number` | INTEGER, nullable | The pull request (set at creation for `pr`, after "Create pull request" for `branch`). |
+| `push_remote` | TEXT, nullable | Remote name or URL `git push` uses (the PR's fork for a cross-repository PR). |
+| `push_branch` | TEXT, nullable | Branch name on that remote. |
+| `wiki_workspace_id` | TEXT, FK → workspaces, nullable | The reference wiki folder. |
+| `document_id` | TEXT, FK → documents, nullable | The hidden conversation document. |
+| `settings_json` | TEXT (JSON) | Language and task settings: `python`, `compile_commands_dir`, `clangd`, `build_command`, `test_command`, `debug_program`, `debug_args`, detected `languages`. |
+| `status` | TEXT | `creating`, `ready`, `failed`, `archived`. |
+| `error` | TEXT, nullable | Why creation failed, or a warning (e.g. a fork that refuses maintainer pushes). |
+| `created_at`, `updated_at` | DATETIME | Timestamps. |
+
+## `dev_task_runs` — build / test / custom command runs
+
+| Column | Type | Meaning |
+| --- | --- | --- |
+| `id` | TEXT, PK | UUID. |
+| `dev_id` | TEXT, FK → dev_workspaces | The workspace. |
+| `kind` | TEXT | `build`, `test` or `custom`. |
+| `command` | TEXT | The shell command, run with `sh -c` in the worktree on the host. |
+| `status` | TEXT | `running`, `passed`, `failed`, `cancelled`, `interrupted` (cut off by a server restart). |
+| `exit_code` | INTEGER, nullable | Exit status. |
+| `log_path` | TEXT | Output (stdout and stderr) in `<state_dir>/dev/logs/<id>.log`. |
+| `started_at`, `finished_at` | DATETIME | Timestamps. |
+
 ## `alembic_version`
 
 Alembic bookkeeping: the single current migration revision (`0001_initial`, `0002_active_thread`, …).

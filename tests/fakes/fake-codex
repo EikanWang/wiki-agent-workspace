@@ -48,6 +48,15 @@ def main(argv):
     if argv[:1] == ["--version"]:
         print("codex-cli 0.0.0-fake")
         return 0
+    if argv[:1] == ["delete"]:  # remove the session's rollout files
+        home = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex")))
+        hits = list((home / "sessions").rglob(f"rollout-*{argv[1]}.jsonl"))
+        if not hits:
+            print(f"Error: no session {argv[1]}", file=sys.stderr)
+            return 1
+        for h in hits:
+            h.unlink()
+        return 0
     if argv[:1] != ["exec"]:
         print("unknown command", file=sys.stderr)
         return 2
@@ -87,6 +96,7 @@ def main(argv):
         positional.append(a)
         i += 1
     prompt = sys.stdin.read() if (positional and positional[-1] == "-") or not positional else positional[-1]
+    (STATE / "codex_last_prompt").write_text(prompt)
     sid = None
     if resume:
         sid = positional[0]

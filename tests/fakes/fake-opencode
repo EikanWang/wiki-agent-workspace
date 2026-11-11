@@ -37,6 +37,35 @@ def main(argv):
     if argv[:1] == ["models"]:
         print("fake/alpha\nfake/beta\nother/gamma")
         return 0
+    if argv[:2] == ["debug", "config"]:
+        # the merged config; tests override it via $FAKE_AGENT_STATE/opencode_config.json
+        cfg = STATE / "opencode_config.json"
+        print(cfg.read_text() if cfg.exists() else json.dumps({"$schema": "https://opencode.ai/config.json", "model": "fake/alpha"}))
+        return 0
+    if argv[:1] == ["export"]:
+        sid = argv[1]
+        over = STATE / f"opencode_export_{sid}.json"
+        if over.exists():
+            print(over.read_text())
+            return 0
+        sess = next((x for x in load() if x["id"] == sid), None)
+        if sess is None:
+            print(f"Error: session not found: {sid}", file=sys.stderr)
+            return 1
+        msgs = []
+        for i, (q, a) in enumerate(sess.get("turns", [])):
+            t = sess["updated"] - 1000 + i
+            msgs.append({"info": {"role": "user", "time": {"created": t}}, "parts": [{"type": "text", "text": q}]})
+            msgs.append({"info": {"role": "assistant", "time": {"created": t, "completed": t + 1}, "finish": "stop"}, "parts": [{"type": "text", "text": a}]})
+        print(json.dumps({"info": {"id": sid, "title": sess["title"], "directory": sess["directory"], "time": {"updated": sess["updated"]}}, "messages": msgs}))
+        return 0
+    if argv[:2] == ["session", "delete"]:
+        ss = load()
+        if not any(x["id"] == argv[2] for x in ss):
+            print(f"Error: session not found: {argv[2]}", file=sys.stderr)
+            return 1
+        save([x for x in ss if x["id"] != argv[2]])
+        return 0
     if argv[:2] == ["session", "list"]:
         print(json.dumps([{"id": s["id"], "title": s["title"], "updated": s["updated"], "created": s["updated"], "directory": s["directory"]} for s in load()]))
         return 0
@@ -44,6 +73,10 @@ def main(argv):
         print("unknown command", file=sys.stderr)
         return 2
     args = argv[1:]
+    if os.environ.get("WAW_TEST_TOKEN"):
+        (STATE / "opencode_last_token").write_text(os.environ["WAW_TEST_TOKEN"])
+    if os.environ.get("OPENCODE_CONFIG_CONTENT"):
+        (STATE / "opencode_last_config_content").write_text(os.environ["OPENCODE_CONFIG_CONTENT"])
     session = None
     title = None
     directory = os.getcwd()
@@ -91,6 +124,7 @@ def main(argv):
         rest.append(a)
         i += 1
     prompt = " ".join(rest)
+    (STATE / "opencode_last_prompt").write_text(prompt)
     user_msg = prompt.split("User message:", 1)[1].split("\n\nInstructions:", 1)[0].strip() if "User message:" in prompt else prompt
 
     def emit(obj):
@@ -195,6 +229,12 @@ def main(argv):
         text = f"Wrote {rel} from {len(asked)} question(s)."
     emit({"type": "text", "sessionID": session, "part": {"id": "prt_1", "type": "text", "text": text}})
     emit({"type": "step_finish", "sessionID": session, "part": {"type": "step-finish", "reason": "stop"}})
+    ss = load()
+    for x in ss:
+        if x["id"] == session:
+            x.setdefault("turns", []).append([user_msg, text])
+            x["updated"] = int(time.time() * 1000)
+    save(ss)
     return 0
 
 

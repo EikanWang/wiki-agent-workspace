@@ -1,3 +1,4 @@
+import ModelChoice, { ModelChoiceValue } from "./ModelChoice";
 import { useCallback, useEffect, useState } from "react";
 import { AgentSession, ApiError, OpenDocument, Thread, WorkspaceInfo, getIn, newIdempotencyKey, post } from "../api";
 import { wholeDocument } from "../textmodel";
@@ -6,8 +7,9 @@ import { useJobStream } from "./DiscussionPanel";
 import { COMPOSER_HINT, composerKeyDown } from "./keys";
 import { usePersistentState } from "../persist";
 
-interface ChatItem { path: string; title: string; messages: number; updated_at: string | null }
-export interface ChatTarget { ws: string; path: string | null } // path null: a new chat (nothing sent yet)
+interface ChatItem { path: string; title: string; messages: number; updated_at: string | null; about?: { path: string; kind: string } | null }
+/** path null: a new chat (nothing sent yet); about: a sub-folder or file of the project the new chat is about */
+export interface ChatTarget { ws: string; path: string | null; about?: string | null }
 
 /**
  * The Chats page: talk with a project (a folder of this window) directly — pick the project and type; the first
@@ -29,6 +31,7 @@ export default function ChatsPage({ workspaces, target, onTarget, sessions, onRe
   const [jobId, setJobId] = useState<string | null>(null);
   const [first, setFirst] = usePersistentState(`chat.new.${ws ?? ""}`, "");
   const [busy, setBusy] = useState(false);
+  const [firstModel, setFirstModel] = useState<ModelChoiceValue | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   const loadList = useCallback(async (id: string) => {
@@ -72,17 +75,19 @@ export default function ChatsPage({ workspaces, target, onTarget, sessions, onRe
   });
 
   const startNew = async () => {
+    const mc = firstModel;
     const q = first.trim();
     if (!q || !ws) return;
     setBusy(true);
     setErr(null);
     try {
       const title = q.replace(/\s+/g, " ").slice(0, 60) + (q.length > 60 ? "…" : "");
-      const c = await post<{ path: string }>("/chats", { title }, { workspace: ws });
+      const c = await post<{ path: string }>("/chats", { title, about: target?.about || undefined }, { workspace: ws });
       const d = await getIn<OpenDocument>(ws, `/documents/open?path=${encodeURIComponent(c.path)}`);
-      const r = await post<{ job_id: string }>(`/documents/${d.document_id}/threads`, { ...wholeDocument(), version_sha256: d.sha256, question: q },
+      const r = await post<{ job_id: string }>(`/documents/${d.document_id}/threads`, { ...wholeDocument(), version_sha256: d.sha256, question: q, model_choice: mc ?? undefined },
         { idempotencyKey: newIdempotencyKey(), workspace: ws });
       setFirst("");
+      setFirstModel(null);
       onTarget({ ws, path: c.path });
       setJobId(r.job_id);
       void loadList(ws);
@@ -109,7 +114,7 @@ export default function ChatsPage({ workspaces, target, onTarget, sessions, onRe
         <label className="small">Chat{" "}
           <select value={target?.path ?? ""} onChange={(e) => ws && onTarget({ ws, path: e.target.value || null })} data-testid="chat-history">
             <option value="">＋ New chat</option>
-            {(ws ? lists[ws] ?? [] : []).map((c) => <option key={c.path} value={c.path}>{c.title} ({c.messages})</option>)}
+            {(ws ? lists[ws] ?? [] : []).map((c) => <option key={c.path} value={c.path}>{c.about ? `[${c.about.path}] ` : ""}{c.title} ({c.messages})</option>)}
           </select>
         </label>
         {target?.path && <button className="btn small" onClick={() => ws && onTarget({ ws, path: null })} data-testid="chats-new">＋ New chat</button>}
@@ -119,14 +124,16 @@ export default function ChatsPage({ workspaces, target, onTarget, sessions, onRe
         {err && <div className="banner warn small" role="alert">{err}</div>}
         {ws && !target?.path && (
           <div className="chat-new" data-testid="chat-new-page">
-            <h2>Chat with {project?.name ?? "a project"}</h2>
+            <h2>Chat with {project?.name ?? "a project"}{target?.about ? <> · <span className="mono" data-testid="chat-about">{target.about}</span></> : null}</h2>
+            {target?.about && <div className="row"><span className="chip">about {target.about}</span><button className="link-btn small" onClick={() => ws && onTarget({ ws, path: null })} data-testid="chat-about-clear">chat about the whole project instead</button></div>}
             <div className="muted small">
-              An open conversation with the agent about the whole project — it searches and reads the files to answer and cites them.
+              An open conversation with the agent about {target?.about ? <><b>{target.about}</b> (and the project around it)</> : "the whole project"} — it searches and reads the files to answer and cites them.
               When the conversation is worth keeping, distill it into a page or fold it back into the pages it came from.
             </div>
             <div className="chat-composer">
               <textarea autoFocus rows={4} value={first} onChange={(e) => setFirst(e.target.value)} placeholder={`Ask anything about ${project?.name ?? "the project"} (${COMPOSER_HINT})`}
                 onKeyDown={(e) => composerKeyDown(e, () => void startNew(), setFirst)} data-testid="chat-first" />
+              <ModelChoice value={firstModel} onChange={setFirstModel} />
               <button className="btn primary" disabled={busy || !first.trim()} onClick={() => void startNew()} data-testid="chat-first-send">{busy ? "Starting…" : "Send"}</button>
             </div>
           </div>
@@ -138,12 +145,12 @@ export default function ChatsPage({ workspaces, target, onTarget, sessions, onRe
             threads={threads}
             sessions={sessions}
             liveJob={live}
-            onStart={async (q) => {
-              const r = await post<{ job_id: string }>(`/documents/${doc.document_id}/threads`, { ...wholeDocument(), version_sha256: doc.sha256, question: q }, { idempotencyKey: newIdempotencyKey(), workspace: ws });
+            onStart={async (q, mc) => {
+              const r = await post<{ job_id: string }>(`/documents/${doc.document_id}/threads`, { ...wholeDocument(), version_sha256: doc.sha256, question: q, model_choice: mc ?? undefined }, { idempotencyKey: newIdempotencyKey(), workspace: ws });
               await after(r.job_id);
             }}
-            onSend={async (tid, text) => {
-              const r = await post<{ job_id: string }>(`/threads/${tid}/messages`, { text }, { idempotencyKey: newIdempotencyKey() });
+            onSend={async (tid, text, mc) => {
+              const r = await post<{ job_id: string }>(`/threads/${tid}/messages`, { text, model_choice: mc ?? undefined }, { idempotencyKey: newIdempotencyKey() });
               await after(r.job_id);
             }}
             onAction={async (tid, action, tgt, note) => {

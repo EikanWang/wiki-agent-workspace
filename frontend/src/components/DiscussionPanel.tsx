@@ -1,6 +1,7 @@
+import SkillsChip from "./SkillsChip";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { COMPOSER_HINT, composerKeyDown } from "./keys";
-import { AgentSession, ApiError, JobEvent, Message, Thread, get, subscribeJob } from "../api";
+import { AgentSession, ApiError, JobEvent, Message, Thread, get, subscribeJob, getWorkspace } from "../api";
 import DiffView from "./DiffView";
 import MarkdownView from "./MarkdownView";
 import { usePersistentState } from "../persist";
@@ -169,10 +170,10 @@ export default function DiscussionPanel({
   }, [thread?.messages.length, liveJob?.text, liveJob?.status]);
 
   const modeSwitch = onModeChange ? (
-    <span className="mode-switch" role="tablist" aria-label="Discussion panel mode">
+    <><SkillsChip workspace={getWorkspace()} docId={docId} /><span className="mode-switch" role="tablist" aria-label="Discussion panel mode">
       <button role="tab" aria-selected={mode === "individual"} className={mode === "individual" ? "active" : ""} onClick={() => onModeChange("individual")} title="One discussion at a time" data-testid="mode-individual">Individual</button>
       <button role="tab" aria-selected={mode === "flat"} className={mode === "flat" ? "active" : ""} onClick={() => onModeChange("flat")} title="All discussions of this document as one stream" data-testid="mode-flat">Flat</button>
-    </span>
+    </span></>
   ) : null;
 
   if (mode === "flat") {

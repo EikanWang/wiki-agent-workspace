@@ -36,6 +36,8 @@ Git/GitHub credentials, whoever is signed in.
 └─────────────────────────┴────────────────────────────────────────────────────┴────────────────────┘
 ```
 
+- The **activity bar** at the left edge switches the sidebar: **Files** (the file tree), **Reviews** (GitHub, when
+  signed in as the server's owner) and **PR Development**.
 - **Files** (top left) folds/unfolds the file tree; drag its edge to resize. The discussion panel folds with `›` and
   is resizable too; the outline folds with `▾ Outline`. The document always grows into the freed space.
 - **Aa** — document font (sans/serif/mono), size, optional content-width cap (default: fill), terminal font size.
@@ -245,6 +247,177 @@ can see, grouped by repository (most PRs first):
   a full fetch of ~80 PRs takes about 30 s.
 - PRs in organizations that require **SAML single sign-on** are counted but hidden until you authorize the
   `gh` token for that organization (the note in the panel says how).
+
+## PR Development
+
+Next to reading (Files) and reviewing (Reviews), **PR Development** (the `</>` icon of the activity bar) is where you
+write code with the agent — a new pull request, or changes to an existing one. Each piece of work is a
+**development workspace**:
+
+- its own **Git worktree** created by the app (`git worktree add`): your checkout is never switched, reset or
+  committed to; several workspaces of one repository work side by side;
+- an **editor** in the page — the built-in VS Code-like **web editor** (default) or **VS Code** (code-server) —
+  with the worktree and the reference wiki (read-only);
+- the **agent**, working in the worktree, with a whole **wiki folder as its reference**;
+- **Build & test**, **Changes** (commit, push) and **Pull request** below the editor.
+
+### Creating one
+
+**+** (or *New development workspace*) asks:
+
+- **Runs on** — this server, or an SSH host from `[[development.hosts]]` (editor, agent, builds and tests then run
+  there; the wiki is copied there read-only).
+- **Work on** — *New branch* (name, optional base, the GitHub repository for the PR — detected from `origin`) or an
+  *Existing pull request* (`owner/repo#123` or its URL; its head is fetched and checked out on the local branch
+  `waw/pr-123`; pushes go back to the PR's branch, also on a fork when it allows edits by maintainers). **Open in
+  Development** in a PR tab fills this in.
+- **Repository checkout** — your clone on that host (for a PR, the repository's connected local checkout is offered).
+- **Reference wiki** — a folder of this window; the agent reads the whole folder.
+- Optional: name, Python interpreter (a virtual environment's `python`), `compile_commands.json` folder, build and
+  test commands. Defaults are detected: CMake (`cmake … -DCMAKE_EXPORT_COMPILE_COMMANDS=ON`, `ctest`), Make, and
+  Python projects (`pytest`).
+
+### The editor
+
+Each workspace has one of two editors (switch with the **Web editor / VS Code** menu in its toolbar):
+
+**Web editor** (default) — a VS Code-like workbench in the page, nothing to install in the browser:
+
+- **Explorer** (the worktree, plus the reference wiki read-only; Git changes coloured; new file / folder, rename,
+  delete on hover), **Search** across the worktree or the wiki (`Ctrl+Shift+F`; match case, regex, file filter),
+  **Problems** (`Ctrl+Shift+M`), editor **tabs** (● = unsaved; middle-click closes; reopened after a reload),
+  **Go to file** (`Ctrl+P`), the command palette (`F1`), and a status bar (branch, errors/warnings, cursor,
+  language, language server).
+- The editor is Monaco, VS Code's own editor: multi-cursor, find/replace, folding, minimap, sticky scroll, bracket
+  pairs.
+- **Language intelligence** comes from real language servers started on the workspace's host in the worktree:
+  **clangd** for C/C++ (uses the workspace's `compile_commands.json` folder) and **basedpyright / pyright / pylsp**
+  for Python (also found next to the workspace's Python interpreter). Completion, hover, signature help, go to
+  definition / declaration / type / implementation (`F12`, also into other files), references (`Shift+F12`),
+  rename (`F2`), outline (`Ctrl+Shift+O`), format, quick fixes (`Ctrl+.`) and diagnostics. The status-bar item shows
+  the server's state; click it to restart. When none is installed it says what to install.
+- `Ctrl+S` saves; a save is refused when the file changed on disk since you opened it (agent, command, Git), and you
+  choose to overwrite or reload. Files the agent or a command changes reload by themselves in clean tabs.
+- **Discuss code like a wiki passage**: select code and click **💬 Discuss** next to the selection (or
+  `Ctrl+Alt+D`, or right-click → *Agent: Discuss the selection…*), type the question, choose what to do (Ask,
+  Explain, Fix, Write tests, Implement) and whether to add the current file / all open files / the selected files.
+  The discussion becomes a task in the agent panel showing the quoted lines (click them to jump there), and the lines
+  get a marker in the editor's margin (click it to open the discussion). Follow-ups in that task stay about those
+  lines.
+- **Discuss files**: `Ctrl`/`⌘`-click files in the explorer to select several (**N selected · Discuss**). The agent
+  panel's composer has a file context too — *No files*, *Current file*, *Open files* or *Selected files*; their
+  content goes with the request while it fits (else their paths).
+- Right-click → **Agent: Ask… / Explain this code / Fix problems here / Write tests for this code / Implement a
+  change…** (`Ctrl+Alt+A`, `Ctrl+Alt+F`), and **Fix with the agent** in the quick fixes of any error or warning. Open
+  files are saved first; the file, selection, language and problems go with the request; the answer appears in the
+  agent panel.
+- **AI inline completion** (ghost text, `Tab` accepts) when `[development.completion]` is configured; toggle it with
+  **AI on/off** in the status bar.
+- **Chat about any file**: **💬 Chat about this file** next to the path of every open file starts a discussion about
+  it (also in the agent panel's *This file* view). Files that are not text open in a viewer: **images** are shown and
+  the picture goes to the agent; **PDFs** are shown with PDF.js — discuss the whole PDF, a page or an area (its
+  picture and text go with the question); **other files** (archives, libraries, models…) show *Discuss this file*,
+  and the agent is told what kind of file it is and inspects it with its tools.
+- Not in the web editor: debugging and VS Code extensions — use the VS Code editor for those.
+
+**VS Code** — code-server (VS Code in the browser) through the app's login: it starts by itself (**Stop editor**
+frees it; **Open in tab** shows it full-window, where more keyboard shortcuts work). **Install language support**
+(once per host) adds C/C++ (clangd: completion, go to definition, references,
+rename, diagnostics, clang-tidy; CodeLLDB: debugging) and Python (Python + basedpyright: completion and types;
+debugpy: debugging; Ruff). The workspace has the tasks **waw: build** / **waw: test** (Ctrl+Shift+B) and debug
+configurations (*Python: current file*, *Python: pytest current file*, *C++: debug program* once you set the program
+in **Settings**). Changing the settings updates the open editor.
+
+From VS Code itself (the integration extension; status bar item **Agent**):
+
+- right-click → **Ask the agent…**, **Explain this code**, **Fix problems here**, **Write tests for this code**
+  (`Ctrl+Alt+A`, `Ctrl+Alt+F`): the file, the selection, the language and the language servers' diagnostics go
+  with the request; the editor saves all files first (setting `waw.saveBeforeAsk`; off: unsaved buffers are sent
+  instead);
+- the **Fix with the agent** quick fix (light bulb) on errors and warnings;
+- *Agent: Implement a change…*, *Verify the branch against the wiki*, *Address the PR's review comments*, *Fix the
+  PR's failing CI* in the command palette;
+- **AI inline completion** (ghost text, Tab to accept) for C/C++/Python when `[development.completion]` is
+  configured; *Agent: Toggle AI inline completion* turns it off.
+
+When the agent is done, a notification offers **Open answer** and **Review changes** (Source Control); files the
+agent changed reload in the editor.
+
+### The agent panel
+
+Choose what to do — **Implement**, **Ask**, **Fix**, **Write tests**, **Explain**, **Verify against wiki**, and for a
+PR **Address review comments** / **Fix failing CI** — and describe it. Each request is a *task*; *continue task N*
+adds to the latest one (the agent keeps its context), otherwise a new task starts. Requests made in the editor appear
+here too. The agent searches the wiki before it changes code, follows it (and says where the code or the request
+contradicts it), ends with **Wiki references** (the pages it relied on), runs the build and tests, and never commits,
+pushes or switches branches — that stays with you. The session's model and effort are chosen at the top.
+
+### Chat about a project, a folder or a file
+
+- **Files** — 💬 on a folder or file of the tree starts a chat about it (Chats page; the root folder's 💬 is the
+  whole project); a document's discussions panel is the chat about that file.
+- **PR Review** — *Ask about this PR* (the project), *Ask about a folder / file…*, a file's *Ask agent*, or lines.
+- **PR Development** — the agent panel's *All* view (the project), 💬 on a folder in the explorer, the *This file*
+  view (each file has its own discussions and agent session), or a selection.
+
+The agent gets the skills of the project the folder or file belongs to first (that folder, then its parents up to the
+repository root), then those of every open folder and every connected folder: reference folders (⧉ / *+ folders*),
+repositories' local checkouts and PR repositories' wikis.
+
+### Skills
+
+Every agent turn — wiki discussions, folder chats, PR tabs and PR Development — gets the **skills of the current
+folder and of every connected folder and project**: every folder open in the window (and their project roots, e.g.
+the repository a wiki sub-folder belongs to), plus for PR Development the worktree, its source checkout and the
+reference wiki, and for a PR tab the PR's connected local checkout. Skills are the `SKILL.md` files (any depth) under
+`.opencode/skills`, `.claude/skills`, `.agents/skills` and `.codex/skills`.
+
+- **OpenCode** loads them as its own skills for the turn (`skills.paths` in its configuration for that run).
+- **Codex** has no setting for extra skill folders; the turn's prompt lists them — name, description, path of the
+  `SKILL.md` — the same way Codex lists its own skills, with the instruction to read a matching one first.
+- On an **SSH host** they are copied there read-only (`<work_dir>/skills/…`, refreshed when they change) and loaded
+  from the copies.
+
+**N skills** in the discussion panel, the chat header and the PR Development agent panel lists them.
+
+### Terminal, build & test, changes, pull request
+
+- **Terminal** — shells in the worktree (on an SSH host: an ssh login that starts there), as tabs (**+** for
+  another). They are tmux sessions: they keep running when the page reloads and are listed in the Terminal view too.
+
+- **Build & test** — run the build, the tests or any command in the worktree; the output streams in; a failed run
+  has **Fix with the agent** (the output goes with the request).
+- **Changes** — the worktree's diff (new files included), tick the files to commit (build outputs and caches are
+  unticked), **Draft with agent** writes the message from the diff, **Commit**, **Push** (to the branch's remote; for
+  a PR, to its head branch; never forced).
+- **Pull request** — for new work: title and description (**Draft with agent**, **Verify against wiki first**),
+  **Create pull request** (pushes first; draft by default). For a PR: its checks, **Address review comments**, **Fix
+  failing CI**, **Verify against wiki**.
+
+**⋯ → Archive** stops the editor and hides the workspace; you may also remove its worktree (refused while it has
+uncommitted or unpushed work).
+
+## Agents (monitor)
+
+The **Agents** icon of the activity bar watches OpenCode, Codex and Claude Code sessions — also those you started in
+a terminal or another tool — and tells you when one needs you.
+
+- **Folders** (sidebar): the wiki folders, plus any local folder you add (**+ add folder**). The sessions found in the
+  checked folders (and their sub-folders) are listed; check the ones to monitor.
+- **Add a session by its id** when you cannot tell sessions apart by their titles: choose OpenCode, Codex or Claude
+  Code, paste the id (`ses_…` / the UUID), optionally give it a name to show.
+- **The main page** shows every monitored session with its state: **needs you** (red, first, counted on the Agents
+  icon and in the browser tab title; optional browser notification), **working**, **error**, **stalled**, **idle**,
+  **not found**. "Needs you" means: a question / approval request is pending, a tool call has been waiting without
+  progress (usually a permission prompt in a terminal), or the agent's finished turn ends with a question. It
+  refreshes every few seconds; **Refresh all** re-reads everything.
+- **Click a session** to put it on stage (80 % of the page): its conversation (tool calls optional), live while it
+  runs, and a box to **continue it** — the message runs the provider's CLI on that session in its folder
+  (`opencode run --session`, `codex exec resume`, `claude -p --resume`). **Open in terminal** opens the provider's own
+  interactive UI on the session in a terminal tab — the place to answer permission prompts.
+
+Sessions are read where the agents keep them: `opencode session list` / `opencode export`, `$CODEX_HOME/sessions`,
+`$CLAUDE_CONFIG_DIR/projects` (default `~/.claude`). `[agents.claude] bin` sets the Claude Code executable.
 
 ## After a reload or closing the browser
 

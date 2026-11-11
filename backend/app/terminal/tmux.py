@@ -153,10 +153,14 @@ class Tmux:
         p = self._run(["has-session", "-t", f"={name}"])
         return p.returncode == 0
 
-    def new_session(self, name: str, cwd: Path, cols: int = 120, rows: int = 40) -> None:
+    def new_session(self, name: str, cwd: Path, cols: int = 120, rows: int = 40, command: list[str] | None = None) -> None:
+        """`command` (an argv, e.g. an ssh login to a development host) instead of the default shell."""
         if not cwd.is_dir():
             raise TmuxError(f"initial directory does not exist: {cwd}")
-        p = self._run(["new-session", "-d", "-s", name, "-c", str(cwd), "-x", str(cols), "-y", str(rows)])
+        import shlex
+
+        p = self._run(["new-session", "-d", "-s", name, "-c", str(cwd), "-x", str(cols), "-y", str(rows),
+                       *([shlex.join(command)] if command else [])])
         if p.returncode != 0:
             raise TmuxError(p.stderr.strip() or "tmux new-session failed")
 

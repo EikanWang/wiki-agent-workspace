@@ -15,6 +15,8 @@ export interface Line {
   oldNo: number | null;
   newNo: number | null;
   hunkIndex: number;
+  /** a context line shown by expanding the diff (not part of the diff itself: no comments on it) */
+  expanded?: boolean;
 }
 
 export function parseUnified(unified: string): { lines: Line[]; hunks: string[] } {

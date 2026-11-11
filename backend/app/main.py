@@ -187,6 +187,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     primary = reg.primary
     ctx.documents, ctx.locks, ctx.watcher = primary.docs, primary.locks, primary.watcher
     ctx.workspace_id, ctx.workspace_root = primary.id, primary.root
+    from .agents.base import configure_env_script
+
+    configure_env_script(settings.agent_env_script)
     ctx.providers = ProviderRegistry(settings)
     ctx.jobs = JobManager(db, ctx.providers, bus, primary.root, settings.provider("codex").sandbox)
     ctx.jobs.registry = reg
@@ -211,12 +214,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from .social_login import apply_saved
 
     apply_saved(settings)  # keys from the one-click "Continue with GitHub" setup
+    from .development.editor import EditorManager
+    from .development.tasks import TaskRunner
+
+    ctx.extra["dev_editor"] = EditorManager(ctx)
+    ctx.extra["dev_tasks"] = TaskRunner(ctx)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         n = ctx.jobs.mark_interrupted()
         if n:
             log.info("marked %d unfinished jobs as interrupted", n)
+        ctx.extra["dev_tasks"].mark_interrupted()
         rec = ctx.terminals.reconcile()
         log.info("terminal reconcile: %s", rec)
         try:
@@ -230,6 +239,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             yield
         finally:
             await reg.stop_all()
+            await ctx.extra["dev_editor"].shutdown()
+            await ctx.extra["dev_tasks"].shutdown()
             n = await ctx.jobs.shutdown()
             if n:
                 log.info("marked %d running jobs as interrupted at shutdown", n)
@@ -265,11 +276,37 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     api.include_router(reviews.router)
     api.include_router(workspaces.router)
     api.include_router(terminal.router)
+    from .development import proxy as dev_proxy
+    from .development import routes as dev_routes
+
+    from .development import lsp as dev_lsp
+
+    dev_lsp.configure(settings.development.language_servers)
+
+    api.include_router(dev_routes.router)
+    api.include_router(dev_lsp.router)
+    from . import skills as skills_mod
+
+    api.include_router(skills_mod.router)
+    from . import localfs
+
+    api.include_router(localfs.router)
+    from . import dashboard
+
+    api.include_router(dashboard.router)
+    from . import monitor
+
+    api.include_router(monitor.router)
     app.include_router(api)
+    app.include_router(dev_proxy.router)  # /dev-editor/<id>/… (the editor, through the app's login)
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
         resp = await call_next(request)
+        if request.url.path.startswith("/dev-editor/"):
+            # the proxied editor keeps its own CSP; the proxy itself allows framing by this app only
+            resp.headers.setdefault("Referrer-Policy", "same-origin")
+            return resp
         resp.headers.setdefault("X-Content-Type-Options", "nosniff")
         resp.headers.setdefault("Referrer-Policy", "no-referrer")
         # PDFs shown by the app's own viewer frames (PDF files, Office layout view) may be framed by this origin only;

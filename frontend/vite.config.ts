@@ -16,6 +16,8 @@ const pdfjsAssets = (): Plugin => ({
 // `npm run dev` proxies API and WebSocket traffic to a running backend on 127.0.0.1:8765.
 export default defineConfig({
   plugins: [react(), pdfjsAssets()],
+  // Monaco's ESM files by path (its package "exports" do not expose the CSS and per-feature modules)
+  resolve: { alias: { "monaco-esm": resolve("node_modules/monaco-editor/esm/vs") } },
   build: {
     outDir: "dist",
     sourcemap: false,

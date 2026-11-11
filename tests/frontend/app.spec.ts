@@ -221,6 +221,13 @@ test("C9/C10: real tmux terminal in the browser: marker survives disconnect, sec
   await page.locator(".term-view.active .xterm-helper-textarea").focus();
   await page.keyboard.type("export PS1='$ '; MARK=zeta7; echo marker-$MARK-ok\n");
   await expect(view.locator(".xterm-rows")).toContainText("marker-zeta7-ok", { timeout: 15000 });
+  // Home / End move to the start / end of the input line
+  await page.keyboard.type("echo homeend");
+  await page.keyboard.press("Home");
+  await page.keyboard.type("true;");
+  await page.keyboard.press("End");
+  await page.keyboard.type("-ok\n");
+  await expect(view.locator(".xterm-rows")).toContainText("$ true;echo homeend-ok", { timeout: 15000 });
   // second terminal is independent
   const firstViewId = await view.getAttribute("data-testid");
   await page.getByTestId("terminal-new").click();
@@ -390,6 +397,30 @@ test("a terminal whose shell exited is shown as exited and can be dismissed with
   await expect(page.locator(".term-view.active")).toHaveAttribute("data-state", "exited", { timeout: 15000 });
   await page.getByTestId("terminal-clear-exited").click();
   await expect(page.getByTestId("terminal-tab")).toHaveCount(0);
+});
+
+test("terminal on a Mac: ⌘← / ⌘→ move to the start / end of the input line like Home / End", async ({ browser }) => {
+  const context = await browser.newContext();
+  await context.addInitScript(() => Object.defineProperty(Navigator.prototype, "platform", { get: () => "MacIntel" }));
+  const page = await context.newPage();
+  await login(page);
+  await page.getByTestId("view-terminal").click();
+  await page.getByTestId("terminal-new").click();
+  const view = page.locator(".term-view.active");
+  await expect(view).toHaveAttribute("data-state", "connected", { timeout: 15000 });
+  await expect(view.locator(".xterm-rows")).toContainText("$", { timeout: 15000 }); // the shell prompt
+  await page.locator(".term-view.active .xterm-helper-textarea").focus();
+  await page.keyboard.type("export PS1='$ '; echo ready-mac\n");
+  await expect(view.locator(".xterm-rows")).toContainText("ready-mac", { timeout: 15000 });
+  await page.keyboard.type("echo macend");
+  await page.keyboard.press("Meta+ArrowLeft");
+  await page.keyboard.type("true;");
+  await page.keyboard.press("Meta+ArrowRight");
+  await page.keyboard.type("-ok\n");
+  await expect(view.locator(".xterm-rows")).toContainText("$ true;echo macend-ok", { timeout: 15000 });
+  page.once("dialog", (d) => d.accept());
+  await page.getByTestId("terminal-close").click();
+  await context.close();
 });
 
 test("Recent work lists documents newest first and restores document, position and open discussion", async ({ page }) => {
@@ -2459,4 +2490,538 @@ test("a reload (or closing the browser) brings back what was shown: view, PR tab
   await page.reload();
   await expect(page.getByTestId("pr-view")).toHaveCount(0); // closed stays closed
   await signOut(page);
+});
+
+test("PR Development: new branch workspace, the web editor and the VS Code option, the agent with the wiki, build/test, commit", async ({ page }) => {
+  const src = fs.readFileSync("/tmp/waw-e2e-devsrc", "utf-8").trim();
+  await login(page);
+  await page.getByTestId("activity-development").click();
+  await expect(page.getByTestId("dev-panel")).toBeVisible();
+  await page.getByTestId("dev-new").click();
+  await page.getByTestId("dev-branch").fill("feature/e2e");
+  await page.getByTestId("dev-source").fill(src);
+  await expect(page.getByTestId("dev-wiki")).not.toHaveValue("");
+  await page.getByTestId("dev-create").click();
+  await expect(page.getByTestId("dev-view")).toBeVisible();
+  await expect(page.getByTestId("dev-item").first()).toHaveAttribute("data-status", "ready", { timeout: 20000 });
+  // the web editor (default): explorer, a tab, edit + Ctrl+S saves to the worktree
+  await expect(page.getByTestId("webide")).toBeVisible({ timeout: 20000 });
+  await page.locator('[data-testid="webide-tree-item"][data-path="lib.py"]').click();
+  await expect(page.locator('[data-testid="webide-tab"][data-path="lib.py"]')).toBeVisible();
+  await page.locator(".monaco-editor .view-lines").click();
+  await page.keyboard.press("Control+End");
+  await page.keyboard.type("\nEDITED = True\n");
+  await expect(page.locator('[data-testid="webide-tab"][data-path="lib.py"] .webide-tab-close')).toHaveAttribute("data-dirty", "1");
+  await page.keyboard.press("Control+s");
+  await expect(page.locator('[data-testid="webide-tab"][data-path="lib.py"] .webide-tab-close')).toHaveAttribute("data-dirty", "0");
+  const devWt = fs.readdirSync(path.join(src, "..", "worktrees")).map((d) => path.join(src, "..", "worktrees", d)).find((d) => fs.existsSync(path.join(d, "lib.py")))!;
+  expect(fs.readFileSync(path.join(devWt, "lib.py"), "utf-8")).toContain("EDITED = True");
+  // a change on disk (agent, terminal) shows up in a clean tab
+  fs.appendFileSync(path.join(devWt, "lib.py"), "FROM_DISK = 1\n");
+  await expect(page.locator(".monaco-editor .view-lines")).toContainText("FROM_DISK", { timeout: 15000 });
+  // quick open and search
+  await page.keyboard.press("Control+p");
+  await page.getByTestId("webide-quick-input").fill("pyproj");
+  await page.getByTestId("webide-quick-item").first().click();
+  await expect(page.locator('[data-testid="webide-tab"][data-path="pyproject.toml"]')).toBeVisible();
+  await page.getByTestId("webide-view-search").click();
+  await page.getByTestId("webide-search-input").fill("EDITED");
+  await page.getByTestId("webide-search-input").press("Enter");
+  await expect(page.getByTestId("webide-search-hit")).toHaveCount(1);
+  // the agent from the editor's context menu
+  await page.locator('[data-testid="webide-tab"][data-path="lib.py"]').click();
+  await page.locator(".monaco-editor .view-lines").click({ button: "right" });
+  const item = await page.getByRole("menuitem", { name: /Agent: Explain this code/ }).boundingBox();
+  await page.mouse.move(item!.x + 20, item!.y + item!.height / 2); // Monaco's menu acts on a real pointer
+  await page.waitForTimeout(200);
+  await page.mouse.down();
+  await page.mouse.up();
+  await expect(page.locator('[data-testid="message-agent"][data-status="completed"]').first()).toContainText("echo", { timeout: 20000 });
+  // the VS Code option: code-server through the app's proxy
+  await page.getByTestId("dev-editor-kind").selectOption("vscode");
+  const frame = page.frameLocator('[data-testid="dev-iframe"]');
+  await expect(frame.locator("body")).toContainText("fake-code-server", { timeout: 20000 });
+  await expect(frame.locator("body")).toContainText(".code-workspace");
+  // the agent works in the worktree
+  await page.getByTestId("dev-kind").selectOption("implement");
+  await page.getByTestId("dev-input").fill("Add a test [[write:test_lib.py:::from lib import add\\ndef test_add():\\n    assert add(1, 2) == 3\\n]]");
+  await page.getByTestId("dev-send").click();
+  await expect(page.locator('[data-testid="message-agent"][data-status="completed"]').last()).toContainText("wrote test_lib.py", { timeout: 20000 });
+  // a custom command and its output
+  await page.getByTestId("dev-tab-tasks").click();
+  await page.getByTestId("dev-custom").fill("ls && exit 4");
+  await page.getByRole("button", { name: "Run", exact: true }).click();
+  await expect(page.locator('[data-testid="dev-run"]').first()).toHaveAttribute("data-status", "failed", { timeout: 20000 });
+  await expect(page.getByTestId("dev-log")).toContainText("test_lib.py");
+  await expect(page.getByTestId("dev-run-fix")).toBeVisible();
+  // commit the agent's file
+  await page.getByTestId("dev-tab-changes").click();
+  await expect(page.getByTestId("dev-file")).toHaveCount(2); // lib.py (edited above) and the agent's test_lib.py
+  await page.getByTestId("dev-commit-msg").fill("Add a test for add()");
+  await page.getByTestId("dev-commit").click();
+  await expect(page.getByTestId("dev-note")).toContainText("Committed 2 file(s)");
+  // the selection survives a reload: PR Development is still shown
+  await page.reload();
+  await expect(page.getByTestId("dev-view")).toBeVisible({ timeout: 15000 });
+  await page.getByTestId("dev-editor-stop").click();
+  await expect(page.getByTestId("dev-editor-start")).toBeVisible();
+  await page.getByTestId("dev-editor-kind").selectOption("web");
+  await expect(page.getByTestId("webide")).toBeVisible();
+  await expect(page.locator('[data-testid="webide-tab"][data-path="lib.py"]')).toBeVisible(); // open tabs are remembered
+  await page.getByTestId("activity-files").click();
+});
+
+test("PR Development: discuss a selection (marked in the margin), selected files as context, a terminal in the worktree", async ({ page }) => {
+  await login(page);
+  await page.getByTestId("activity-development").click();
+  await page.getByTestId("dev-item").first().click();
+  await expect(page.getByTestId("webide")).toBeVisible({ timeout: 20000 });
+  await page.locator('[data-testid="webide-tree-item"][data-path="lib.py"] .webide-name').click();
+  await page.locator(".monaco-editor .view-lines").click();
+  await page.keyboard.press("Control+Home");
+  await page.keyboard.press("Shift+ArrowDown");
+  await page.keyboard.press("Shift+End");
+  await page.getByTestId("webide-discuss-btn").click();
+  await page.getByTestId("webide-discuss-input").fill("Is add commutative?");
+  await page.getByTestId("webide-discuss-input").press("Enter");
+  await expect(page.getByTestId("dev-anchor").last()).toContainText("1–2", { timeout: 15000 });
+  await expect(page.locator(".webide-thread-glyph")).toHaveCount(1);
+  await expect(page.locator('[data-testid="dev-task"]').last().locator('[data-testid="message-agent"][data-status="completed"]')).toContainText("echo: Is add commutative?", { timeout: 20000 });
+  // Ctrl-click files in the explorer → "Selected files" context
+  await page.locator('[data-testid="webide-tree-item"][data-path="pyproject.toml"] .webide-name').click({ modifiers: ["Control"] });
+  await page.locator('[data-testid="webide-tree-item"][data-path="CMakeLists.txt"] .webide-name').click({ modifiers: ["Control"] });
+  await expect(page.getByTestId("webide-picked")).toContainText("2 selected");
+  await page.getByTestId("dev-scope").selectOption("selected");
+  await page.getByTestId("dev-target").selectOption("__new__");
+  await page.getByTestId("dev-input").fill("Explain these files");
+  await page.getByTestId("dev-send").click();
+  await expect(page.locator('[data-testid="dev-task"]').last().locator('[data-testid="message-agent"][data-status="completed"]')).toContainText("echo", { timeout: 20000 });
+  // like a wiki document: each open file has its own discussions in the panel
+  await page.getByTestId("dev-view-file").click();
+  await page.locator('[data-testid="webide-tab"][data-path="lib.py"]').click();
+  await expect(page.getByTestId("dev-file-head")).toContainText("lib.py");
+  const libCount = await page.locator('[data-testid="dev-task"]').count();
+  expect(libCount).toBeGreaterThan(0);
+  await expect(page.locator('[data-testid="webide-tab"][data-path="lib.py"] [data-testid="webide-tab-discussions"]')).toBeVisible();
+  await page.locator('[data-testid="webide-tree-item"][data-path="pyproject.toml"] .webide-name').click();
+  await expect(page.getByTestId("dev-file-head")).toContainText("pyproject.toml");
+  await expect(page.getByTestId("dev-file-empty")).toBeVisible();
+  await page.getByTestId("dev-target").selectOption("__new__");
+  await page.getByTestId("dev-input").fill("What does this file configure?");
+  await page.getByTestId("dev-send").click();
+  await expect(page.locator('[data-testid="dev-task"]')).toHaveCount(1);
+  await expect(page.locator('[data-testid="dev-task"] [data-testid="message-agent"][data-status="completed"]')).toContainText("What does this file configure?", { timeout: 20000 });
+  await expect(page.locator('[data-testid="webide-tab"][data-path="pyproject.toml"] [data-testid="webide-tab-discussions"]')).toContainText("1");
+  await page.locator('[data-testid="webide-tab"][data-path="lib.py"]').click();
+  await expect(page.getByTestId("dev-file-head")).toContainText("lib.py"); // back to lib.py's discussions
+  await expect.poll(() => page.locator('[data-testid="dev-task"]').count()).toBeGreaterThanOrEqual(libCount);
+  await expect(page.locator('[data-testid="dev-task"]', { hasText: "What does this file configure?" })).toHaveCount(0);
+  await page.getByTestId("dev-view-all").click();
+  await expect(page.locator('[data-testid="dev-task"]')).toHaveCount(await page.locator('[data-testid="dev-task"]').count());
+  // a terminal in the worktree
+  await page.getByTestId("dev-tab-terminal").click();
+  await expect(page.getByTestId("dev-terminal-tab")).toHaveCount(1, { timeout: 15000 });
+  const term = page.locator('[data-testid="dev-terminal"] .xterm');
+  await expect(term).toBeVisible();
+  await term.click();
+  await page.keyboard.type("echo DEV_TERM_$((40+2))\n");
+  await expect(page.locator('[data-testid="dev-terminal"] .xterm-rows')).toContainText("DEV_TERM_42", { timeout: 15000 });
+  await page.getByTestId("dev-tab-tasks").click();
+  await page.getByTestId("activity-files").click();
+});
+
+test("PR Development: Markdown like a wiki page, Bazel/YAML navigation, a session per file", async ({ page }) => {
+  await login(page);
+  await page.getByTestId("activity-development").click();
+  await page.getByTestId("dev-item").first().click();
+  await expect(page.getByTestId("webide")).toBeVisible({ timeout: 20000 });
+  await page.getByTestId("dev-view-file").click();
+  // Markdown: rendered (Preview), outline, select → Discuss, highlighted, links open files
+  await page.locator('[data-testid="webide-tree-item"][data-path="doc.md"] .webide-name').click();
+  const md = page.getByTestId("webide-md-body");
+  await expect(md.locator("h1")).toHaveText("Design notes");
+  await expect(page.getByTestId("webide-md-toc")).toContainText("Details");
+  await md.locator("p", { hasText: "commutative" }).selectText();
+  await md.locator("p", { hasText: "commutative" }).dispatchEvent("mouseup");
+  await page.getByTestId("webide-md-discuss-btn").click();
+  await page.getByTestId("webide-discuss-input").fill("Is this true?");
+  await page.getByTestId("webide-discuss-input").press("Enter");
+  await expect(page.getByTestId("dev-anchor").last()).toContainText("lines 3", { timeout: 15000 });
+  await expect(md.locator("mark.waw-hl.thread")).toContainText("commutative");
+  const docSession = await page.getByTestId("dev-file-session-select").inputValue();
+  expect(docSession).not.toBe("");
+  await page.getByTestId("webide-md-split").click();
+  await expect(page.getByTestId("webide-editor")).toBeVisible();
+  await page.getByTestId("webide-md-preview").click();
+  await md.locator("a", { hasText: "the code" }).click();
+  await expect(page.locator('[data-testid="webide-tab"][data-path="lib.py"]')).toHaveAttribute("aria-selected", "true");
+  // switching files switches the agent session to the file's own
+  await expect(page.getByTestId("dev-file-session-select")).not.toHaveValue(docSession);
+  await page.locator('[data-testid="webide-tab"][data-path="doc.md"]').click();
+  await expect(page.getByTestId("dev-file-session-select")).toHaveValue(docSession);
+  // Bazel: Starlark highlighting, F12 on a label opens the file it names
+  await page.locator('[data-testid="webide-tree-item"][data-path="pkg"] .webide-name').click();
+  await page.locator('[data-testid="webide-tree-item"][data-path="pkg/BUILD.bazel"] .webide-name').click();
+  await expect(page.getByTestId("webide-status")).toContainText("starlark");
+  await expect(page.getByTestId("webide-lsp")).toContainText("basic navigation", { timeout: 15000 });
+  await page.locator(".monaco-editor .view-lines").click();
+  await page.keyboard.press("Control+g");
+  await page.keyboard.type("1:12");
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("F12");
+  await expect(page.locator('[data-testid="webide-tab"][data-path="tools/defs.bzl"]')).toHaveAttribute("aria-selected", "true", { timeout: 15000 });
+  // YAML: outline (Ctrl+Shift+O) from its keys
+  await page.locator('[data-testid="webide-tree-item"][data-path="ci.yaml"] .webide-name').click();
+  await expect(page.getByTestId("webide-status")).toContainText("yaml");
+  await page.locator(".monaco-editor .view-lines").click();
+  await page.keyboard.press("Control+Shift+o");
+  await expect(page.locator(".quick-input-widget")).toContainText("jobs", { timeout: 10000 });
+  await expect(page.locator(".quick-input-widget")).toContainText("build");
+  await page.keyboard.press("Escape");
+  await page.getByTestId("activity-files").click();
+});
+
+test("chat about a folder or a file: from the file tree, in PR Development's explorer", async ({ page }) => {
+  await login(page);
+  // Files: 💬 on a folder starts a chat about it
+  const dir = page.locator(".tree-row.dir", { hasText: "docs" });
+  await dir.hover();
+  await page.getByTestId("tree-chat-docs").click();
+  await expect(page.getByTestId("chat-about")).toHaveText("docs");
+  await page.getByTestId("chat-first").fill("What is in this folder?");
+  await page.getByTestId("chat-first-send").click();
+  await expect(page.locator('[data-testid="message-agent"][data-status="completed"]').last()).toContainText("What is in this folder?", { timeout: 20000 });
+  await expect(page.getByTestId("chat-history").locator("option", { hasText: "[docs]" })).toHaveCount(1);
+  await page.getByTestId("view-document").click();
+  // PR Development: 💬 on a folder of the worktree
+  await page.getByTestId("activity-development").click();
+  await page.getByTestId("dev-item").first().click();
+  await expect(page.getByTestId("webide")).toBeVisible({ timeout: 20000 });
+  const row = page.locator('[data-testid="webide-tree-item"][data-path="tools"]');
+  await row.hover();
+  await row.getByTestId("webide-discuss-folder").click();
+  await expect(page.getByTestId("webide-discuss")).toContainText("Discuss the folder tools");
+  await page.getByTestId("webide-discuss-input").fill("What do these macros do?");
+  await page.getByTestId("webide-discuss-input").press("Enter");
+  await page.getByTestId("dev-view-all").click();
+  await expect(page.getByTestId("dev-task-about").last()).toContainText("tools", { timeout: 15000 });
+  await page.getByTestId("activity-files").click();
+});
+
+test("PR Development: chat about any type of file — text, image, binary", async ({ page }) => {
+  await login(page);
+  await page.getByTestId("activity-development").click();
+  await page.getByTestId("dev-item").first().click();
+  await expect(page.getByTestId("webide")).toBeVisible({ timeout: 20000 });
+  await page.getByTestId("dev-view-file").click();
+  // a text file: "Chat about this file" in the breadcrumbs
+  await page.locator('[data-testid="webide-tree-item"][data-path="ci.yaml"] .webide-name').click();
+  await page.getByTestId("webide-chat-file").click();
+  await expect(page.getByTestId("webide-discuss")).toContainText("Discuss ci.yaml (the whole file)");
+  await page.getByTestId("webide-discuss-input").fill("What does this CI do?");
+  await page.getByTestId("webide-discuss-input").press("Enter");
+  await expect(page.locator('[data-testid="dev-task"] [data-testid="message-agent"][data-status="completed"]').last()).toContainText("What does this CI do?", { timeout: 20000 });
+  // an image: shown, discussed (the picture goes to the agent)
+  await page.locator('[data-testid="webide-tree-item"][data-path="logo.png"] .webide-name').click();
+  await expect(page.getByTestId("webide-image").locator("img")).toBeVisible();
+  await page.getByTestId("webide-discuss-image-btn").click();
+  await page.getByTestId("webide-discuss-input").fill("What is in the logo?");
+  await page.getByTestId("webide-discuss-input").press("Enter");
+  await expect(page.getByTestId("dev-file-head")).toContainText("logo.png");
+  await expect(page.locator('[data-testid="dev-task"] [data-testid="message-agent"][data-status="completed"]').last()).toContainText("What is in the logo?", { timeout: 20000 });
+  // a PDF: shown with PDF.js; a page is discussed with its picture
+  const src = fs.readFileSync("/tmp/waw-e2e-devsrc", "utf-8").trim();
+  const wtRoot = path.join(src, "..", "worktrees");
+  const devWt = fs.readdirSync(wtRoot).map((d) => path.join(wtRoot, d)).find((d) => fs.existsSync(path.join(d, "lib.py")))!;
+  const cp = require("child_process") as typeof import("child_process");
+  cp.execFileSync(path.resolve(__dirname, "../../.venv/bin/python"), [path.resolve(__dirname, "../fixtures/make_pdf.py"), path.join(devWt, "spec.pdf"), "Timing of the cache", "Second page"]);
+  await page.locator('[data-testid="webide-explorer"] button[title="Refresh"]').click();
+  await page.locator('[data-testid="webide-tree-item"][data-path="spec.pdf"] .webide-name').click();
+  const pdfView = page.getByTestId("webide-pdfjs");
+  await expect(pdfView).toHaveAttribute("data-pages", "2", { timeout: 20000 });
+  const pg = pdfView.locator('[data-page="1"]');
+  await expect(pg).toHaveAttribute("data-rendered", "true", { timeout: 15000 });
+  await pg.getByTestId("pdfjs-ask-page").click();
+  await expect(page.getByTestId("webide-discuss-image")).toBeVisible();
+  await page.getByTestId("webide-discuss-input").fill("Explain this page");
+  await page.getByTestId("webide-discuss-input").press("Enter");
+  await expect(page.locator('[data-testid="dev-task"] [data-testid="message-agent"][data-status="completed"]').last()).toContainText("Explain this page", { timeout: 20000 });
+  // any other file
+  await page.locator('[data-testid="webide-tree-item"][data-path="model.onnx"] .webide-name').click();
+  await expect(page.getByTestId("webide-binary")).toBeVisible();
+  await page.getByTestId("webide-discuss-binary").click();
+  await page.getByTestId("webide-discuss-input").fill("What model is this?");
+  await page.getByTestId("webide-discuss-input").press("Enter");
+  await expect(page.locator('[data-testid="dev-task"] [data-testid="message-agent"][data-status="completed"]').last()).toContainText("What model is this?", { timeout: 20000 });
+  await expect(page.locator('[data-testid="webide-tab"][data-path="model.onnx"] [data-testid="webide-tab-discussions"]')).toContainText("1");
+  await page.getByTestId("activity-files").click();
+});
+
+test("PR Development: resize the bottom panel; choose a model for a discussion and a chat", async ({ page }) => {
+  await login(page);
+  await page.getByTestId("activity-development").click();
+  await page.getByTestId("dev-item").first().click();
+  await expect(page.getByTestId("webide")).toBeVisible({ timeout: 20000 });
+  const bottom = page.locator(".dev-bottom");
+  const h0 = (await bottom.boundingBox())!.height;
+  const sp = (await page.getByTestId("dev-bottom-splitter").boundingBox())!;
+  await page.mouse.move(sp.x + sp.width / 2, sp.y + sp.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(sp.x + sp.width / 2, sp.y - 120, { steps: 5 });
+  await page.mouse.up();
+  const h1 = (await bottom.boundingBox())!.height;
+  expect(h1).toBeGreaterThan(h0 + 100);
+  await page.reload();
+  await expect(page.getByTestId("webide")).toBeVisible({ timeout: 20000 });
+  expect(Math.abs((await page.locator(".dev-bottom").boundingBox())!.height - h1)).toBeLessThan(3); // kept
+  await page.getByTestId("dev-bottom-splitter").dblclick();
+  expect(Math.abs((await page.locator(".dev-bottom").boundingBox())!.height - h0)).toBeLessThan(3); // default
+  // another model for a new discussion about a file
+  await page.getByTestId("dev-view-file").click();
+  await page.locator('[data-testid="webide-tree-item"][data-path="lib.py"] .webide-name').click();
+  await page.getByTestId("webide-chat-file").click();
+  const box = page.getByTestId("webide-discuss");
+  await expect(box.getByTestId("model-choice-model").locator("option").first()).toContainText("Default");
+  await box.getByTestId("model-choice-model").selectOption("fake/beta");
+  await box.getByTestId("model-choice-effort").selectOption("high");
+  await page.getByTestId("webide-discuss-input").fill("Which model answers?");
+  await page.getByTestId("webide-discuss-input").press("Enter");
+  await expect(page.locator('[data-testid="dev-task"] [data-testid="message-agent"][data-status="completed"]').last()).toContainText("Which model answers?", { timeout: 20000 });
+  await expect(page.getByTestId("model-select").first()).toHaveValue("fake/beta"); // the file's session now runs it
+  // a folder chat with another model
+  await page.getByTestId("activity-files").click();
+  await page.locator(".tree-row.dir", { hasText: "docs" }).hover();
+  await page.getByTestId("tree-chat-docs").click();
+  await page.getByTestId("chat-new-page").getByTestId("model-choice-model").selectOption("other/gamma");
+  await page.getByTestId("chat-first").fill("Gamma, what is here?");
+  await page.getByTestId("chat-first-send").click();
+  await expect(page.getByTestId("chats-page").locator('[data-testid="message-agent"][data-status="completed"]').last()).toContainText("Gamma, what is here?", { timeout: 20000 });
+  await page.getByTestId("view-document").click();
+});
+
+test("Local files: open a folder and a file, edit and save like a file manager; Wiki is the former Files", async ({ page }) => {
+  await login(page);
+  await expect(page.getByTestId("activity-files")).toHaveAttribute("title", /^Wiki/);
+  const dir = path.join(path.dirname(workspaceDir()), "localfm");
+  fs.mkdirSync(path.join(dir, "sub"), { recursive: true });
+  fs.writeFileSync(path.join(dir, "notes.txt"), "first line\n");
+  fs.writeFileSync(path.join(dir, "README.md"), "# Local readme\n\nsome text\n");
+  await page.getByTestId("activity-local").click();
+  await expect(page.getByTestId("local-panel")).toBeVisible();
+  await page.getByTestId("local-open-folder").click();
+  await expect(page.getByTestId("folder-picker-selected")).toContainText("/"); // the picker's first listing is in
+  await page.getByTestId("folder-picker-path").fill(dir);
+  await page.getByTestId("folder-picker-path").press("Enter");
+  await expect(page.getByTestId("folder-picker-selected")).toContainText(dir);
+  await page.getByTestId("folder-picker-choose").click();
+  const root = page.locator(`[data-testid="local-root"][data-path="${dir}"]`);
+  await expect(root).toBeVisible();
+  const notes = page.locator(`[data-testid="local-item"][data-path="${dir}/notes.txt"]`);
+  if (!(await notes.isVisible())) await root.click();
+  await notes.click();
+  await expect(page.locator(`[data-testid="local-tab"][data-path="${dir}/notes.txt"]`)).toBeVisible();
+  await page.locator('[data-testid="local-monaco"] .view-lines').click();
+  await page.keyboard.press("Control+End");
+  await page.keyboard.type("added by the editor\n");
+  await expect(page.locator(`[data-testid="local-tab"][data-path="${dir}/notes.txt"] .webide-tab-close`)).toHaveAttribute("data-dirty", "1");
+  await page.keyboard.press("Control+s");
+  await expect(page.locator(`[data-testid="local-tab"][data-path="${dir}/notes.txt"] .webide-tab-close`)).toHaveAttribute("data-dirty", "0");
+  expect(fs.readFileSync(path.join(dir, "notes.txt"), "utf-8")).toContain("added by the editor");
+  // changes on disk show up in a clean tab
+  fs.appendFileSync(path.join(dir, "notes.txt"), "FROM_OUTSIDE\n");
+  await expect(page.locator('[data-testid="local-monaco"] .view-lines')).toContainText("FROM_OUTSIDE", { timeout: 15000 });
+  // Markdown: a preview, Edit for the source
+  await page.locator(`[data-testid="local-item"][data-path="${dir}/README.md"]`).click();
+  await expect(page.getByTestId("local-md-body").locator("h1")).toHaveText("Local readme");
+  await page.getByTestId("local-md-edit").click();
+  await expect(page.getByTestId("local-monaco")).toBeVisible();
+  // a file by its path (outside the folder)
+  await page.getByTestId("local-open-file").fill(path.join(workspaceDir(), "README.md"));
+  await page.getByTestId("local-open-file").press("Enter");
+  await expect(page.locator(`[data-testid="local-tab"][data-path="${path.join(workspaceDir(), "README.md")}"]`)).toBeVisible();
+  // the tabs come back after a reload; Wiki brings the reader back
+  await page.reload();
+  await expect(page.locator(`[data-testid="local-tab"][data-path="${dir}/notes.txt"]`)).toBeVisible({ timeout: 15000 });
+  await page.locator(`[data-testid="local-root"][data-path="${dir}"]`).hover();
+  await page.locator(`[data-testid="local-root"][data-path="${dir}"]`).getByTestId("local-close-root").click();
+  await expect(page.locator(`[data-testid="local-root"][data-path="${dir}"]`)).toHaveCount(0);
+  await page.getByTestId("activity-files").click();
+  await expect(page.getByTestId("view-document")).toBeVisible();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("PR diff: copy the file path, expand hidden lines around a change, expand / collapse the whole file", async ({ page, context }) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await ensureGithubSignIn(page);
+  await page.goto("/");
+  await page.getByTestId("login-github").click();
+  await page.getByTestId("activity-reviews").click();
+  await page.locator('[data-testid="review-pr"][data-number="101"]').click();
+  await page.getByTestId("pr-tab-files").click();
+  if ((await page.getByTestId("pr-layout-unified").getAttribute("aria-selected")) !== "true") await page.getByTestId("pr-layout-unified").click();
+  const f = page.locator('[data-testid="pr-file"][data-file="c10/xpu/stub.cpp"]');
+  await expect(f).toBeVisible();
+  if ((await f.locator(".diff-table").count()) === 0) await f.locator(".diff-file-head").click();
+  await f.getByTestId("pr-copy-path").click();
+  await expect(f.getByTestId("pr-copy-path")).toHaveText("✓");
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("c10/xpu/stub.cpp");
+  const rows = f.locator('[data-testid="pr-diff-row"]');
+  const n0 = await rows.count();
+  // the 9 lines above the hunk: one click shows them all
+  await f.locator(".diff-line.hunk").first().getByTestId("pr-expand-all").click();
+  await expect(f.locator(".diff-line.expanded")).toHaveCount(9);
+  await expect(f.locator(".diff-line.expanded").first()).toContainText("// line 1");
+  // below the last change: 20 at a time, then the rest
+  const tail = f.locator(".diff-line.hunk").last();
+  await tail.getByTestId("pr-expand-down").click();
+  await expect(f.locator(".diff-line.expanded")).toHaveCount(29);
+  await expect(f.locator('.diff-line.expanded[data-line="33"]')).toContainText("// line 33");
+  await f.locator(".diff-line.hunk").last().getByTestId("pr-expand-all").click();
+  await expect(f.locator(".diff-line.expanded")).toHaveCount(36);
+  await expect(f.getByTestId("pr-collapse-all")).toBeVisible();
+  await f.getByTestId("pr-collapse-all").click();
+  await expect(rows).toHaveCount(n0);
+  await f.getByTestId("pr-file-expand-all").click();
+  await expect(f.locator(".diff-line.expanded")).toHaveCount(36);
+  // side by side too
+  await page.getByTestId("pr-layout-split").click();
+  await expect(f.locator(".diff-line.split-row.expanded")).toHaveCount(36);
+  await page.getByTestId("pr-layout-unified").click();
+  await page.getByTestId("activity-files").click();
+});
+
+test("Agents: find sessions in folders, add one by id, alarms, a session on stage, continue it", async ({ page }) => {
+  await login(page);
+  await openGuide(page);
+  await selectText(page, "TorchDynamo");
+  await page.getByTestId("ask-current-selection").click();
+  await page.getByTestId("selection-question").fill("monitor question");
+  await page.getByTestId("selection-send").click();
+  await expect(page.locator('[data-testid="message-agent"][data-status="completed"]').last()).toContainText("monitor question", { timeout: 20000 });
+  await page.getByTestId("activity-agents").click();
+  await expect(page.getByTestId("agents-panel")).toBeVisible();
+  // the recent sessions of the checked folders (the wiki folder) are monitored without picking them
+  const card = page.getByTestId("mon-card").first();
+  await expect(card).toBeVisible({ timeout: 15000 });
+  await expect(card).toHaveAttribute("data-state", /idle|working|needs_input/);
+  // a session given by its id that is not on this machine
+  await page.getByTestId("mon-manual-provider").selectOption("codex");
+  await page.getByTestId("mon-manual-id").fill("00000000-0000-0000-0000-00000000dead");
+  await page.getByTestId("mon-manual-label").fill("my codex run");
+  await page.getByTestId("mon-manual-add").click();
+  await expect(page.locator('[data-testid="mon-card"][data-state="missing"]')).toContainText("my codex run", { timeout: 15000 });
+  // on stage: the conversation takes most of the page; continue it
+  await page.locator('[data-testid="mon-card"]:not([data-state="missing"])').first().click();
+  const stage = page.getByTestId("mon-stage");
+  await expect(stage).toBeVisible();
+  const sw = (await stage.boundingBox())!.width;
+  const mw = (await page.getByTestId("agent-monitor").boundingBox())!.width;
+  expect(sw / mw).toBeGreaterThan(0.7);
+  await expect(page.getByTestId("mon-msg").first()).toBeVisible({ timeout: 15000 });
+  await page.getByTestId("mon-input").fill("follow-up from the monitor");
+  await page.getByTestId("mon-send").click();
+  await expect(page.getByTestId("mon-transcript")).toContainText("echo: follow-up from the monitor", { timeout: 20000 });
+  await page.getByTestId("mon-stage-close").click();
+  await expect(stage).toHaveCount(0);
+  // the list of all sessions is folded; unchecking an automatically monitored one removes it
+  await page.getByTestId("mon-list-toggle").click();
+  const auto = page.locator('[data-testid="mon-found"][data-auto="1"]').first();
+  await expect(auto).toBeChecked({ timeout: 15000 });
+  const key = await auto.getAttribute("data-key");
+  await auto.uncheck();
+  await page.getByTestId("mon-refresh").click();
+  await expect(page.locator(`[data-testid="mon-card"][data-key="${key}"]`)).toHaveCount(0, { timeout: 15000 });
+  // a folder can be unchecked (its sessions are no longer monitored) and checked again; the choice is saved
+  const folderBox = page.getByTestId("mon-folder").first();
+  await expect(folderBox).toBeChecked();
+  const saved = () => page.waitForResponse((r) => r.url().includes("/monitor/auto") && r.request().method() === "PUT" && r.ok());
+  await Promise.all([saved(), folderBox.uncheck()]);
+  await expect(folderBox).not.toBeChecked();
+  await page.reload();
+  await page.getByTestId("activity-agents").click();
+  await expect(page.getByTestId("mon-folder").first()).not.toBeChecked({ timeout: 10000 });
+  await Promise.all([saved(), page.getByTestId("mon-folder").first().check()]);
+  await expect(page.getByTestId("mon-folder").first()).toBeChecked();
+  await page.getByTestId("activity-files").click();
+});
+
+test("layout: panes can be resized by dragging, folded and unfolded, and keep their size", async ({ page }) => {
+  await login(page);
+  await page.getByTestId("activity-development").click();
+  await page.getByTestId("dev-item").first().click();
+  await expect(page.getByTestId("webide")).toBeVisible({ timeout: 20000 });
+  const drag = async (testId: string, dx: number, dy = 0) => {
+    const b = (await page.getByTestId(testId).boundingBox())!;
+    await page.mouse.move(b.x + b.width / 2, b.y + b.height / 4);
+    await page.mouse.down();
+    await page.mouse.move(b.x + b.width / 2 + dx, b.y + b.height / 4 + dy, { steps: 5 });
+    await page.mouse.up();
+  };
+  // the agent panel (right): wider by dragging left; fold and unfold
+  const side = page.locator(".dev-side");
+  const w0 = (await side.boundingBox())!.width;
+  await drag("dev-agent-splitter", -100);
+  expect((await side.boundingBox())!.width).toBeGreaterThan(w0 + 80);
+  await page.getByTestId("dev-agent-splitter").hover();
+  await page.getByTestId("dev-agent-splitter-fold").click();
+  await expect(side).toHaveCount(0);
+  await page.getByTestId("dev-agent-splitter-fold").click();
+  await expect(side).toBeVisible();
+  // the editor's side bar (left): narrower by dragging left, kept after a reload
+  const ex = page.locator(".webide-side");
+  const e0 = (await ex.boundingBox())!.width;
+  await drag("webide-side-splitter", -60);
+  const e1 = (await ex.boundingBox())!.width;
+  expect(e1).toBeLessThan(e0 - 40);
+  await page.reload();
+  await expect(page.getByTestId("webide")).toBeVisible({ timeout: 20000 });
+  expect(Math.abs((await page.locator(".webide-side").boundingBox())!.width - e1)).toBeLessThan(3);
+  await page.getByTestId("webide-side-splitter").dblclick({ position: { x: 2, y: 10 } }); // default size again
+  expect(Math.abs((await page.locator(".webide-side").boundingBox())!.width - 260)).toBeLessThan(3);
+  await page.getByTestId("dev-agent-splitter").dblclick({ position: { x: 2, y: 10 } });
+  // Build & test: the command list beside the output
+  await page.getByTestId("dev-tab-tasks").click();
+  const tl = page.locator(".dev-tasks-side");
+  const t0 = (await tl.boundingBox())!.width;
+  await drag("dev-tasks-splitter", 80);
+  expect((await tl.boundingBox())!.width).toBeGreaterThan(t0 + 60);
+  await page.getByTestId("dev-tasks-splitter").dblclick({ position: { x: 2, y: 10 } });
+  await page.getByTestId("activity-files").click();
+});
+
+test("Agents: rename a session, select all of a folder, delete selected after confirming", async ({ page }) => {
+  await login(page);
+  await openGuide(page);
+  await selectText(page, "while running Python");
+  await page.getByTestId("ask-current-selection").click();
+  await page.getByTestId("selection-session").selectOption("new"); // a second session to delete
+  await page.getByTestId("selection-question").fill("to be deleted");
+  await page.getByTestId("selection-send").click();
+  await expect(page.locator('[data-testid="message-agent"][data-status="completed"]').last()).toContainText("to be deleted", { timeout: 20000 });
+  await page.getByTestId("activity-agents").click();
+  const cards = page.getByTestId("mon-card");
+  await expect.poll(() => cards.count(), { timeout: 20000 }).toBeGreaterThanOrEqual(2);
+  const n0 = await cards.count();
+  // rename
+  const wrap = page.locator(".mon-card-wrap").first();
+  await wrap.hover();
+  page.once("dialog", (d) => void d.accept("Renamed session"));
+  await wrap.getByTestId("mon-rename").click();
+  await expect(cards.first()).toContainText("Renamed session", { timeout: 15000 });
+  // select all of the folder, then cancel the confirmation: nothing is deleted
+  await page.getByTestId("mon-select-folder").first().check();
+  await expect(page.getByTestId("mon-pick").first()).toBeChecked();
+  await page.getByTestId("mon-delete-selected").click();
+  await expect(page.getByTestId("confirm-dialog")).toContainText("deleted permanently");
+  await page.getByTestId("confirm-cancel").click();
+  await expect.poll(() => cards.count()).toBeGreaterThanOrEqual(n0);
+  // one selected, confirmed: gone
+  await page.getByTestId("mon-select-folder").first().uncheck();
+  const victim = await page.locator(".mon-card-wrap").last().getByTestId("mon-card").getAttribute("data-key");
+  await page.locator(".mon-card-wrap").last().getByTestId("mon-pick").check();
+  await expect(page.getByTestId("mon-pick").first()).not.toBeChecked(); // the folder could be deselected
+  await page.getByTestId("mon-delete-selected").click();
+  await page.getByTestId("confirm-ok").click();
+  await expect(page.locator(`[data-testid="mon-card"][data-key="${victim}"]`)).toHaveCount(0, { timeout: 15000 });
+  await page.getByTestId("activity-files").click();
 });

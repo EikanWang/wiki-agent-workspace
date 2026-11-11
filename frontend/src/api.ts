@@ -298,6 +298,9 @@ export interface ModelList {
   models: { id: string; label: string; default?: boolean }[];
   variants: string[];
   can_select_model: boolean;
+  /** what the provider uses when the session sets no model (from the provider's own config); null when unknown */
+  default_model: string | null;
+  default_variant: string | null;
   note: string | null;
 }
 
@@ -384,19 +387,41 @@ export function subscribeJob(jobId: string, after: number, onEvent: (ev: JobEven
   };
 }
 
+// One shared EventSource for every subscriber (browsers allow only a few connections per host over HTTP/1.1).
+const globalListeners = new Set<(ev: Record<string, any>) => void>();
+let globalSource: EventSource | null = null;
+const GLOBAL_TYPES = ["file_changed", "tree_changed", "job_event", "terminal_state", "preview_update", "watcher_ready", "workspaces_changed",
+  "review_finished", "commit", "dev_changed", "dev_task", "message"];
+
 export function subscribeGlobal(onEvent: (ev: Record<string, any>) => void): () => void {
-  const es = new EventSource(`${BASE}/events`);
-  const handler = (e: MessageEvent) => {
-    try {
-      onEvent(JSON.parse(e.data));
-    } catch {
-      /* ignore */
+  globalListeners.add(onEvent);
+  if (!globalSource) {
+    const es = new EventSource(`${BASE}/events`);
+    const handler = (e: MessageEvent) => {
+      let ev: Record<string, any>;
+      try {
+        ev = JSON.parse(e.data);
+      } catch {
+        return;
+      }
+      for (const l of [...globalListeners]) {
+        try {
+          l(ev);
+        } catch {
+          /* one listener's error must not stop the others */
+        }
+      }
+    };
+    for (const t of GLOBAL_TYPES) es.addEventListener(t, handler as EventListener);
+    globalSource = es;
+  }
+  return () => {
+    globalListeners.delete(onEvent);
+    if (globalListeners.size === 0 && globalSource) {
+      globalSource.close();
+      globalSource = null;
     }
   };
-  for (const t of ["file_changed", "tree_changed", "job_event", "terminal_state", "preview_update", "watcher_ready", "workspaces_changed", "review_finished", "commit", "message"]) {
-    es.addEventListener(t, handler as EventListener);
-  }
-  return () => es.close();
 }
 
 // ---------------------------------------------------------------- diff review
@@ -489,4 +514,82 @@ export interface Review {
   comments: ReviewComment[];
   submitted_at?: string | null;
   finished_at?: string | null;
+}
+
+// ---------------------------------------------------------------- PR Development
+
+export interface DevSettings {
+  editor?: "web" | "vscode";
+  python_lsp?: string;
+  languages?: string[];
+  python?: string;
+  compile_commands_dir?: string;
+  clangd?: string;
+  build_command?: string;
+  test_command?: string;
+  debug_program?: string;
+  debug_args?: string[];
+}
+
+export interface DevEditorStatus {
+  state: "stopped" | "starting" | "running" | "failed";
+  url: string | null;
+  error: string | null;
+  started_at?: number;
+}
+
+export interface DevWorkspace {
+  id: string;
+  name: string;
+  host: string;
+  source_repo: string;
+  worktree_path: string;
+  mode: "branch" | "pr";
+  branch: string;
+  base_ref: string | null;
+  github_repo: string | null;
+  pr_number: number | null;
+  push_remote: string | null;
+  push_branch: string | null;
+  wiki_workspace_id: string | null;
+  document_id: string | null;
+  document_path: string;
+  settings: DevSettings;
+  status: "creating" | "ready" | "failed" | "archived";
+  error: string | null;
+  editor: DevEditorStatus;
+  running_tasks: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DevInfo {
+  editor: { code_server: string | null; available: boolean; extension_version: string; install_hint: string | null };
+  hosts: { name: string; label: string; ssh: string | null }[];
+  completion: { enabled: boolean; model: string | null; note: string | null };
+  default_extensions: string[];
+  kinds: string[];
+}
+
+export interface DevGitStatus {
+  branch: string;
+  head: string;
+  subject: string;
+  files: { path: string; status: string }[];
+  commits_on_branch: number | null;
+  unpushed: number | null;
+  push_remote: string | null;
+  push_branch: string | null;
+  identity: { name: string; email: string; configured: boolean };
+}
+
+export interface DevTaskRun {
+  id: string;
+  dev_id: string;
+  kind: "build" | "test" | "custom";
+  command: string;
+  status: "running" | "passed" | "failed" | "cancelled" | "interrupted";
+  exit_code: number | null;
+  started_at: string;
+  finished_at: string | null;
 }

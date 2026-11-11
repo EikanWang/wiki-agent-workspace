@@ -20,7 +20,7 @@ from .db import iso, new_id, utcnow
 from .deps import AppContext, require_auth, require_auth_mutating
 from .documents import sha256_bytes
 from .errors import ApiError, conflict, not_found, DOCUMENT_VERSION_CONFLICT, PREVIEW_UNAVAILABLE
-from .models import Document, Job, Preview
+from .models import AgentSession, Document, Job, Preview
 from .sessions import SessionService
 
 router = APIRouter()
@@ -65,6 +65,7 @@ class PreviewService:
         if sha != body.base_sha256:
             raise conflict(DOCUMENT_VERSION_CONFLICT, "document changed; reload before requesting a preview", current_sha256=sha)
         assert self.ctx.providers
+        base_sess = None
         if body.session_id:
             base_sess = self.sessions.get(body.session_id)
             provider = base_sess.provider
@@ -72,6 +73,9 @@ class PreviewService:
             provider = self.ctx.providers.default_provider()
             if not provider:
                 raise ApiError(503, "PROVIDER_UNAVAILABLE", "no default agent provider configured")
+            if doc.default_session_id:  # start on the model of the document's session
+                with self.ctx.db.read() as s:
+                    base_sess = s.get(AgentSession, doc.default_session_id)
         caps = await self.ctx.providers.capabilities(provider)
         if not caps.available:
             raise ApiError(503, "PROVIDER_UNAVAILABLE", caps.error or f"{provider} unavailable")
@@ -88,7 +92,7 @@ class PreviewService:
             raise
         # The preview uses a fresh provider session so the user's real session history is not polluted
         # with an isolated-copy context. Codex sandbox write scope = the temporary copy.
-        sess = await self.sessions.create_for_provider(provider, f"Preview: {doc.path}")
+        sess = await self.sessions.create_for_provider(provider, f"Preview: {doc.path}", inherit_from=base_sess)
         with self.ctx.db.write() as s:
             srow = s.get(type(sess), sess.id)
             if srow:

@@ -72,6 +72,39 @@ backend/app/
                    (REST POST / DELETE pulls/{n}/requested_reviewers); /ci-failures: REST check-runs of the head
                    commit (filter=latest, paginated), failing GitHub Actions jobs' logs via actions/jobs/{id}/logs
                    saved to snapshots/github/<o>/<r>/<n>.ci/, excerpt = output before the ##[error] marks
+  development/     PR Development (DESIGN: agent-native development workspaces)
+    targets.py     where a workspace runs: LocalTarget, SshTarget (`ssh … sh -c '<shlex-quoted script>'`), RemoteExec
+                   (agent CLI turns on the host: SubprocessTurn wraps the argv)
+    service.py     DevService: worktrees (new branch: `worktree add -b`; PR: fetch `pull/<n>/head` → refs/waw/pr/<n>,
+                   branch waw/pr-<n>, push target = the PR head branch / fork), detected C++/Python settings, git
+                   status / diff / commit / push (refs/waw/pushed/<branch>), `gh pr create`, `gh pr checks`
+    editor.py      EditorManager: one code-server per workspace on a 0600 Unix socket (`--auth none`, own config,
+                   user-data, extensions and shared-data dirs), generated .code-workspace (worktree + read-only wiki,
+                   clangd / Python settings, build/test tasks, debug configs), the integration extension packaged as
+                   a .vsix from vscode-extension/waw-dev, Open VSX language extensions; SSH: `-L` editor socket,
+                   `-R` app socket for the extension
+    proxy.py       /dev-editor/<id>/… HTTP + WebSocket relay to the socket (login cookie required and stripped,
+                   same-origin Origin for writes/WebSockets, X-Frame-Options SAMEORIGIN, own CSP kept)
+    agent.py       prompts grounded in the whole reference wiki (local folder or read-only snapshot on the host),
+                   editor context (file, selection, diagnostics, unsaved buffers, failed task output), task kinds
+    tasks.py       TaskRunner: build / test / custom runs (`sh -c` in the worktree, `ssh -tt` remotely), log files,
+                   cancel, interrupted on restart
+    files.py       the web editor's file access on the host: list, read, conditional write (sha256), create, rename,
+                   delete, stat (follow agent edits), search (git grep / grep); wiki root read-only; no `..`, no .git,
+                   no writes through symlinks leaving the worktree
+    lsp.py         /dev/workspaces/<id>/lsp/<lang> WebSocket ↔ a language server on the host (clangd; basedpyright /
+                   pyright / pylsp) in the worktree; one WS message = one LSP message (Content-Length framing added)
+    completion.py  AI inline completion via an OpenAI-compatible /chat/completions endpoint (cached, cleaned)
+    routes.py      /dev/… API (also: code-anchored discussions → thread target_json {kind: "code"}, skills, worktree
+                   terminals: tmux sessions, `ssh -tt` login on SSH hosts, ids in kv dev_terminals:<id>); /dev/ext/<id>/… for the extension (Bearer token handed to its editor process)
+  skills.py        skills of the connected folders and projects (SKILL.md under .opencode/.claude/.agents/.codex
+                   skills): discovered per turn by JobManager (open folders + `_skill_folders` of the request), added to
+                   OpenCode's config (OPENCODE_CONFIG_CONTENT skills.paths) and listed in every prompt
+  monitor.py       Agents monitor: OpenCode / Codex / Claude Code sessions read from the providers' own stores
+                   (opencode export, Codex rollouts, Claude projects/*.jsonl), derived state (needs_input / working /
+                   error / stalled / idle), discovery by folder, send (provider CLI on the session), open in terminal;
+                   kv monitor_folders / monitor_sessions
+  dashboard.py     status / health of app sessions (jobs) — /agent-dashboard
   kv.py            kv_settings get/put; extra reference folders (context:repo:<o>/<r>, context:ws:<id>) added
                    to every agent prompt for that PR repository / wiki folder (/agent-context)
   office.py        OfficeRenderer: Layout view, LibreOffice headless → PDF, content-addressed cache, parallel
@@ -103,6 +136,8 @@ backend/app/
     pty.py         PTY wrapper around `tmux attach` with asyncio reader/writer, resize
     manager.py     terminal tabs CRUD, reconcile on startup, history snapshot, WebSocket relay
 backend/migrations/   Alembic env + versions 0001 … 0009 (one per schema change)
+vscode-extension/waw-dev/  the editor's integration extension (plain JS, no build step): Agent commands, quick fix,
+                   inline completion provider, status bar; talks to /dev/ext/<id>/… with its token
 frontend/src/
   api.ts           fetch wrapper (CSRF + X-Workspace headers, error shape), types, SSE subscriptions
   markdown.ts      markdown-it + DOMPurify, GitHub slugs, link rewriting (#frag, page.md#frag, images → /raw)
@@ -110,7 +145,10 @@ frontend/src/
   App.tsx          state container: auth, active folder, document, threads, sessions, terminals, jobs, prefs, Recent
   components/      Login, FileTree (multi-root), AddFolderDialog, DocTabs (open documents), PdfView (PDF.js: PDFs and Office Layout view — text layer, page/area asks), Reader (render/highlights/selection popover/
                    reading position/fragments/Read-Discuss), DiscussionPanel (Individual/Flat + useJobStream),
-                   SessionPicker, ModelPicker, PreviewDialog, DiffReview (unified/split, ranges, inline threads,
+                   SessionPicker, ModelPicker, DevPanel / DevSetupDialog / DevView / DevAgentPanel / DevTabs (PR
+                   Development), webide/ (the web editor: WebIde workbench — explorer, search, problems, tabs,
+                   quick open, status bar — around a trimmed Monaco build (monaco.ts), lsp.ts: LSP client → Monaco
+                   providers; lazy-loaded), PreviewDialog, DiffReview (unified/split, ranges, inline threads,
                    review tray), Editor (in-browser editing), CommitPanel, TerminalPanel (xterm.js), RecentList, Layout (prefs, resizer,
                    appearance), FileIcon, DiffView, MarkdownView, keys.ts (composer keys)
 tests/backend/     pytest: real Git + tmux, fake providers (tests/fakes/fake-opencode, fake-codex)

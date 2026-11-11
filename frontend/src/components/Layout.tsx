@@ -53,7 +53,7 @@ export interface Prefs {
   panelWidth: number;
   sidebarOpen: boolean;
   /** what the sidebar shows (activity bar): the file tree or the GitHub review queue */
-  sidebarView: "files" | "reviews";
+  sidebarView: "files" | "reviews" | "development" | "local" | "agents";
   panelOpen: boolean;
   tocOpen: boolean;
   /** Discussion panel: one discussion at a time, or all discussions of the document as one stream. */

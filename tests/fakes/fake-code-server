@@ -1,0 +1,135 @@
+#!/usr/bin/env python3
+"""Fake `code-server` for tests (stdlib only).
+
+* `--install-extension <id|file.vsix>`: records it; a .vsix is unpacked into --extensions-dir like the real one.
+* otherwise: serves on --socket — GET /healthz, GET / (an HTML page naming the workspace), GET /redirect (302 to an
+  absolute path), POST /echo (echoes the body), and a WebSocket echo at /ws (text frames, upper-cased).
+State ($FAKE_AGENT_STATE): code_server_calls.log (argv per call), code_server_env.json (WAW_DEV_* of the server).
+"""
+import asyncio
+import base64
+import hashlib
+import json
+import os
+import sys
+import zipfile
+from pathlib import Path
+
+STATE = Path(os.environ.get("FAKE_AGENT_STATE", "/tmp/fake-agent-state"))
+STATE.mkdir(parents=True, exist_ok=True)
+
+
+def opt(argv, name):
+    return argv[argv.index(name) + 1] if name in argv else None
+
+
+def main(argv):
+    with (STATE / "code_server_calls.log").open("a") as fh:
+        fh.write(json.dumps(argv) + "\n")
+    if "--install-extension" in argv:
+        ext = opt(argv, "--install-extension")
+        dest = Path(opt(argv, "--extensions-dir") or (Path.home() / ".local/share/code-server/extensions"))
+        dest.mkdir(parents=True, exist_ok=True)
+        if "missing" in ext:
+            print(f"Extension '{ext}' not found.", file=sys.stderr)
+            return 1
+        if ext.endswith(".vsix"):
+            with zipfile.ZipFile(ext) as z:
+                pkg = json.loads(z.read("extension/package.json"))
+                target = dest / f"{pkg['publisher']}.{pkg['name']}-{pkg['version']}"
+                for n in z.namelist():
+                    if n.startswith("extension/"):
+                        out = target / n[len("extension/"):]
+                        out.parent.mkdir(parents=True, exist_ok=True)
+                        out.write_bytes(z.read(n))
+        else:
+            (dest / ext).mkdir(exist_ok=True)
+        print(f"Extension '{ext}' was successfully installed.")
+        return 0
+    sock = opt(argv, "--socket")
+    if not sock:
+        print("fake code-server needs --socket", file=sys.stderr)
+        return 2
+    workspace = argv[-1]
+    (STATE / "code_server_env.json").write_text(json.dumps({k: v for k, v in os.environ.items() if k.startswith("WAW_DEV")} | {"workspace": workspace, "cwd": os.getcwd()}))
+    asyncio.run(serve(sock, workspace))
+    return 0
+
+
+async def serve(sock, workspace):
+    async def handle(reader, writer):
+        try:
+            head = await reader.readuntil(b"\r\n\r\n")
+        except Exception:
+            writer.close()
+            return
+        lines = head.decode("latin-1").split("\r\n")
+        method, target, _ = lines[0].split(" ", 2)
+        headers = {k.strip().lower(): v.strip() for k, v in (ln.split(":", 1) for ln in lines[1:] if ":" in ln)}
+        body = b""
+        if int(headers.get("content-length", "0") or 0):
+            body = await reader.readexactly(int(headers["content-length"]))
+        path = target.split("?", 1)[0]
+        if headers.get("upgrade", "").lower() == "websocket":
+            key = headers["sec-websocket-key"]
+            accept = base64.b64encode(hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()).decode()
+            proto = headers.get("sec-websocket-protocol")
+            resp = ("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                    f"Sec-WebSocket-Accept: {accept}\r\n" + (f"Sec-WebSocket-Protocol: {proto.split(',')[0].strip()}\r\n" if proto else "") + "\r\n")
+            writer.write(resp.encode())
+            await writer.drain()
+            (STATE / "code_server_ws_headers.json").write_text(json.dumps(headers))
+            await ws_echo(reader, writer)
+            return
+        if path == "/healthz":
+            out, ctype, status, extra = json.dumps({"status": "alive"}).encode(), "application/json", "200 OK", ""
+        elif path == "/redirect":
+            out, ctype, status, extra = b"", "text/plain", "302 Found", "Location: /login\r\n"
+        elif path == "/echo":
+            out, ctype, status, extra = json.dumps({"method": method, "body": body.decode(), "cookie": headers.get("cookie", ""),
+                                                    "origin": headers.get("origin", ""), "host": headers.get("host", "")}).encode(), \
+                "application/json", "200 OK", ""
+        else:
+            out = f"<html><body>fake-code-server {target} workspace={workspace}</body></html>".encode()
+            ctype, status, extra = "text/html", "200 OK", "Set-Cookie: a=1; Path=/\r\nSet-Cookie: b=2; Path=/\r\n"
+        writer.write(f"HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {len(out)}\r\n{extra}Connection: close\r\n\r\n".encode() + out)
+        await writer.drain()
+        writer.close()
+
+    server = await asyncio.start_unix_server(handle, path=sock)
+    os.chmod(sock, 0o600)
+    async with server:
+        await server.serve_forever()
+
+
+async def ws_echo(reader, writer):
+    while True:
+        try:
+            b1, b2 = await reader.readexactly(2)
+        except Exception:
+            break
+        opcode = b1 & 0x0F
+        n = b2 & 0x7F
+        if n == 126:
+            n = int.from_bytes(await reader.readexactly(2), "big")
+        elif n == 127:
+            n = int.from_bytes(await reader.readexactly(8), "big")
+        mask = await reader.readexactly(4) if b2 & 0x80 else b"\0\0\0\0"
+        data = bytes(c ^ mask[i % 4] for i, c in enumerate(await reader.readexactly(n)))
+        if opcode == 8:
+            writer.write(b"\x88\x00")
+            await writer.drain()
+            break
+        if opcode == 9:
+            writer.write(bytes([0x8A, len(data)]) + data)
+            continue
+        payload = data.upper() if opcode == 1 else data[::-1]
+        ln = len(payload)
+        hdr = bytes([0x80 | opcode]) + (bytes([ln]) if ln < 126 else bytes([126]) + ln.to_bytes(2, "big") if ln < 65536 else bytes([127]) + ln.to_bytes(8, "big"))
+        writer.write(hdr + payload)
+        await writer.drain()
+    writer.close()
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

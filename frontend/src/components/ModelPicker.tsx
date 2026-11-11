@@ -51,9 +51,9 @@ export default function ModelPicker({ session, onChanged, compact = false }: { s
             }}
             data-testid="model-select"
           >
-            <option value="">Provider default</option>
+            <option value="">{list?.default_model ? `Provider default (${list.default_model})` : "Provider default"}</option>
             {known.map((m) => (
-              <option key={m.id} value={m.id}>{m.label}</option>
+              <option key={m.id} value={m.id}>{m.label}{m.default && m.label === m.id ? " (configured default)" : ""}</option>
             ))}
             <option value="__custom__">Other… (type an id)</option>
           </select>
@@ -69,7 +69,7 @@ export default function ModelPicker({ session, onChanged, compact = false }: { s
         <label className="small">
           Effort{" "}
           <select value={variant} disabled={busy} onChange={(e) => { setVariant(e.target.value); void save(model, e.target.value); }} data-testid="variant-select">
-            <option value="">default</option>
+            <option value="">{list.default_variant ? `default (${list.default_variant})` : "default"}</option>
             {list.variants.map((v) => (
               <option key={v} value={v}>{v}</option>
             ))}

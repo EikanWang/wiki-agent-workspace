@@ -381,4 +381,46 @@ class Preview(Base):
     applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class DevWorkspace(Base):
+    """A PR Development workspace: an app-owned Git worktree of a source repository (new branch or an existing PR's
+    branch) on the app server or an SSH host, edited in a VS Code-compatible editor, with a whole wiki folder as the
+    agent's reference. Its agent conversation is the hidden document `.waw-dev/<id>.md` of that wiki folder."""
+
+    __tablename__ = "dev_workspaces"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    host: Mapped[str] = mapped_column(Text, nullable=False, default="local", server_default="local")  # local | a development.hosts name
+    source_repo: Mapped[str] = mapped_column(Text, nullable=False)  # the checkout the worktree is created from (on the host)
+    worktree_path: Mapped[str] = mapped_column(Text, nullable=False)  # on the host
+    mode: Mapped[str] = mapped_column(String(8), nullable=False)  # branch (new work) | pr (an existing pull request)
+    branch: Mapped[str] = mapped_column(Text, nullable=False)  # local branch of the worktree
+    base_ref: Mapped[str | None] = mapped_column(Text, nullable=True)  # base branch the work is compared against / PR base
+    github_repo: Mapped[str | None] = mapped_column(Text, nullable=True)  # owner/name of the PR target, when known
+    pr_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    push_remote: Mapped[str | None] = mapped_column(Text, nullable=True)  # remote name or URL `git push` uses
+    push_branch: Mapped[str | None] = mapped_column(Text, nullable=True)  # branch name on that remote
+    wiki_workspace_id: Mapped[str | None] = mapped_column(ForeignKey("workspaces.id"), nullable=True)  # reference wiki folder
+    document_id: Mapped[str | None] = mapped_column(ForeignKey("documents.id"), nullable=True)  # the agent conversation
+    settings_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}", server_default="{}")  # language + task settings
+    status: Mapped[str] = mapped_column(String(12), nullable=False, default="creating")  # creating|ready|failed|archived
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+class DevTaskRun(Base):
+    """One build / test / custom command run in a development workspace; its output is a log file in the state dir."""
+
+    __tablename__ = "dev_task_runs"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    dev_id: Mapped[str] = mapped_column(ForeignKey("dev_workspaces.id"), nullable=False, index=True)
+    kind: Mapped[str] = mapped_column(String(12), nullable=False)  # build | test | custom
+    command: Mapped[str] = mapped_column(Text, nullable=False)  # shell command, run in the worktree
+    status: Mapped[str] = mapped_column(String(12), nullable=False, default="running")  # running|passed|failed|cancelled|interrupted
+    exit_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    log_path: Mapped[str] = mapped_column(Text, nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 Index("ix_messages_job", Message.job_id)

@@ -276,6 +276,13 @@ def add_fake_review_queue(app) -> None:
         if path.endswith("/requested_reviewers"):
             posted.append({"method": method, "path": path, "body": body})
             return {}
+        if method == "GET" and "/contents/c10/xpu/stub.cpp?ref=" in path:  # the file at the head: 40 lines around the hunk
+            import base64 as _b
+
+            body_lines = [f"// line {n}" for n in range(1, 41)]
+            body_lines[9:13] = ["  load();", "  if (ok)", "    call();", " }"]
+            text = "\n".join(body_lines) + "\n"
+            return {"size": len(text), "sha": "blob1", "content": _b.b64encode(text.encode()).decode()}
         if method == "GET" and path.startswith("users/"):  # a contributor's public profile (not a change: not recorded)
             return {"email": "alice@example.com", "blog": "alice.dev", "hireable": None, "twitter_username": None, "public_repos": 3, "type": "User"}
         posted.append({"method": method, "path": path, "body": body})
@@ -332,6 +339,30 @@ def main() -> None:
     make_workspace(ws)
     settings = make_settings(tmp, ws)
     settings.port = int(os.environ.get("WAW_E2E_PORT", "8799"))
+    # PR Development: the fake editor and a small C++/Python source checkout to branch from
+    from backend.app.config import DevSettings
+
+    settings.development = DevSettings(code_server=str(ROOT / "tests" / "fakes" / "fake-code-server"), worktrees_dir=tmp / "worktrees")
+    src = tmp / "devsrc"
+    src.mkdir()
+    for args in (["init", "-q", "-b", "main"], ["config", "user.email", "e2e@example.com"], ["config", "user.name", "E2E"]):
+        subprocess.run(["git", *args], cwd=src, check=True)
+    (src / "CMakeLists.txt").write_text("cmake_minimum_required(VERSION 3.16)\nproject(p CXX)\n")
+    (src / "pyproject.toml").write_text("[project]\nname = 'p'\n")
+    (src / "lib.py").write_text("def add(a, b):\n    return a + b\n")
+    (src / "doc.md").write_text("# Design notes\n\nThe add function must be commutative.\n\nSee [the code](lib.py) and [details](#details).\n\n## Details\n\nMore text here.\n")
+    (src / "tools").mkdir()
+    (src / "tools" / "defs.bzl").write_text("def my_macro(name):\n    pass\n")
+    (src / "pkg").mkdir()
+    (src / "pkg" / "BUILD.bazel").write_text('load("//tools:defs.bzl", "my_macro")\n\nmy_macro(\n    name = "lib",\n)\n')
+    import base64 as _b64
+
+    (src / "logo.png").write_bytes(_b64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="))
+    (src / "model.onnx").write_bytes(b"\0\1\2\3")
+    (src / "ci.yaml").write_text("jobs:\n  build:\n    runs-on: ubuntu\n  test:\n    needs: build\n")
+    subprocess.run(["git", "add", "-A"], cwd=src, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=src, check=True)
+    Path("/tmp/waw-e2e-devsrc").write_text(str(src))
     settings.frontend_dist = ROOT / "frontend" / "dist"
     # "Sign in with GitHub" against a fake GitHub served by this same server (routes below)
     base = f"http://127.0.0.1:{settings.port}/fake-github"

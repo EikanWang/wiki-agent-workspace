@@ -53,7 +53,8 @@ export default function SessionPicker({
     setBusy(true);
     setError(null);
     try {
-      const s = await post<AgentSession>("/agent-sessions", { provider, display_name: `Wiki session ${new Date().toLocaleString()}` });
+      // start on the model of the current session (the backend copies it only when the provider matches)
+      const s = await post<AgentSession>("/agent-sessions", { provider, display_name: `Wiki session ${new Date().toLocaleString()}`, inherit_from: defaultSessionId ?? undefined });
       await put(`/documents/${docId}/default-session`, { session_id: s.id });
       await onChanged();
       onClose();

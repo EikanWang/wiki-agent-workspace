@@ -105,7 +105,7 @@ export function linkGithubRefs(html: string, repo?: string): string {
   return tpl.innerHTML;
 }
 
-export function renderMarkdown(src: string, docPath: string): string {
+export function renderMarkdown(src: string, docPath: string, opts: { imageUrl?: (rel: string) => string } = {}): string {
   const html = md.render(src, {});
   const clean = DOMPurify.sanitize(html, {
     USE_PROFILES: { html: true },
@@ -139,6 +139,11 @@ export function renderMarkdown(src: string, docPath: string): string {
     if (/^https?:/i.test(src) || src.startsWith("data:image/")) return;
     if (/^[a-z]+:/i.test(src)) {
       img.removeAttribute("src");
+      return;
+    }
+    if (opts.imageUrl) {
+      img.setAttribute("src", opts.imageUrl(resolveRelative(dir, src)));
+      img.setAttribute("loading", "lazy");
       return;
     }
     const ws = getWorkspace();

@@ -16,8 +16,9 @@ from .db import iso, new_id, utcnow
 from .deps import AppContext, require_auth, require_auth_mutating
 from .errors import ApiError, bad_request, conflict, not_found, DOCUMENT_VERSION_CONFLICT, INVALID_ANCHOR
 from .models import AgentSession, AnchorHistory, Document, Job, Message, Thread
-from .sessions import SessionService
+from .sessions import ModelChoiceIn, SessionService
 from .chats import action_message, build_chat_prompt, check_action, is_chat_path
+from .development import is_dev_path
 from .documents import is_pr_path
 from .textmodel import NO_TEXT_FORMATS, TextModel, build_text_model_from_html
 
@@ -297,7 +298,7 @@ class ThreadService:
             raise ApiError(503, "PROVIDER_UNAVAILABLE",
                            "No default agent provider is configured or detected (opencode/codex). Configure agents.default_provider; "
                            "the reader and terminal remain usable.")
-        sess = await self.sessions.create_for_provider(provider, f"Wiki: {doc.path}")
+        sess = await self.sessions.create_for_provider(provider, self._session_title(doc), inherit_from=self._session_or_none(doc.default_session_id))
         with self.ctx.db.write() as s:
             d = s.get(Document, doc.id)
             if d and d.default_session_id is None:
@@ -340,7 +341,20 @@ class ThreadService:
             body.start, body.end = res.start, res.end
             body.prefix = res.prefix if res.prefix is not None else body.prefix
             body.suffix = res.suffix if res.suffix is not None else body.suffix
-        sess = await self._session_for_new_thread(doc, body.session_id)
+        if body.model_choice is not None:
+            # a model chosen for this discussion: the session it starts from, if it already runs that model, else a new one
+            base = None
+            if body.session_id and body.session_id != "new":
+                base = self.sessions.get(body.session_id)
+            elif body.session_id != "new" and doc.default_session_id:
+                base = self._session_or_none(doc.default_session_id)
+            sess = await self.sessions.session_for_model(base, body.model_choice, self._session_title(doc))
+            with self.ctx.db.write() as s:
+                d = s.get(Document, doc.id)
+                if d and d.default_session_id is None:
+                    d.default_session_id = sess.id
+        else:
+            sess = await self._session_for_new_thread(doc, body.session_id)
         heading = None if body.whole_document else (body.heading or model.heading_for(body.start))
         user_msg_id = new_id()
         agent_msg_id = new_id()
@@ -372,8 +386,11 @@ class ThreadService:
                 tt = s.get(Thread, thread_id)
                 if tt:
                     tt.target_json = json.dumps(target, ensure_ascii=False)
-        if is_chat_path(doc.path):
-            prompt = build_chat_prompt(question=body.question, wiki_root=str(self.docs.root), prior=None, extra=self._extra(doc.path),
+        dev_extra: dict[str, Any] = {}
+        if is_dev_path(doc.path):
+            prompt, dev_extra = await self._dev_prompt(doc, body.question, body.dev_kind, body.dev_context, None)
+        elif is_chat_path(doc.path):
+            prompt = build_chat_prompt(question=body.question, wiki_root=str(self.docs.root), prior=None, extra=self._extra(doc.path), about=self._chat_about(doc),
                                        locked=self._locked(), brief=body.chat_brief)
         elif is_pr_path(doc.path):
             text, cpath = _pr_copy(self.docs, doc.path)
@@ -386,7 +403,7 @@ class ThreadService:
                                   extra=self._extra(doc.path))
         job_id = self.jobs.enqueue_turn(session_id=sess.id, thread_id=thread_id, prompt=prompt,
                                         context={"document_id": doc_id, "document_path": doc.path, "sha256": sha, "quote": body.quote,
-                                                 "attachments": attach},
+                                                 "attachments": attach, **self._skill_ctx(doc), **dev_extra},
                                         agent_message_id=agent_msg_id)
         with self.ctx.db.write() as s:
             m = s.get(Message, agent_msg_id)
@@ -408,13 +425,15 @@ class ThreadService:
             prior = [{"role": m.role, "content": m.content} for m in s.query(Message).filter_by(thread_id=thread_id).order_by(Message.created_at).all() if m.status == "completed"]
         assert doc is not None
         if body.session_id == "new":
-            sess = await self._new_default_session_for_thread(doc)
+            sess = await self._new_default_session_for_thread(doc, t.last_session_id)
         elif body.session_id:
             sess = self.sessions.get(body.session_id)
         elif t.last_session_id:
             sess = self.sessions.get(t.last_session_id)
         else:
             sess = await self._session_for_new_thread(doc, None)
+        if body.model_choice is not None:
+            sess = await self.sessions.session_for_model(sess, body.model_choice, self._session_title(doc))
         try:
             _, _, sha = self.docs.current_content(doc)
         except ApiError:
@@ -435,8 +454,25 @@ class ThreadService:
             if tt:
                 tt.last_session_id = sess.id
                 tt.updated_at = utcnow()
-        if is_chat_path(doc.path):
-            prompt = build_chat_prompt(question=shown, wiki_root=str(self.docs.root), prior=prior, extra=self._extra(doc.path),
+        dev_extra: dict[str, Any] = {}
+        if is_dev_path(doc.path):
+            dctx = dict(body.dev_context or {})
+            anchor = json.loads(t.target_json) if t.target_json else None
+            if isinstance(anchor, dict) and anchor.get("kind") == "code" and not dctx.get("selection"):
+                # a discussion about lines of code: every turn of it is about that passage
+                if anchor.get("folder"):
+                    dctx["folder"] = anchor.get("file")
+                else:
+                    dctx.update(file=anchor.get("file"), language=anchor.get("language"))
+                if anchor.get("folder"):
+                    pass
+                elif anchor.get("start_line"):
+                    dctx["selection"] = {"start_line": anchor.get("start_line"), "end_line": anchor.get("end_line"), "text": anchor.get("quote")}
+                else:
+                    dctx["whole_file"] = True
+            prompt, dev_extra = await self._dev_prompt(doc, body.text, body.dev_kind, dctx, prior)
+        elif is_chat_path(doc.path):
+            prompt = build_chat_prompt(question=shown, wiki_root=str(self.docs.root), prior=prior, extra=self._extra(doc.path), about=self._chat_about(doc),
                                        locked=self._locked(), action=body.chat_action, target=target)
         elif is_pr_path(doc.path):
             text, cpath = _pr_copy(self.docs, doc.path)
@@ -448,13 +484,53 @@ class ThreadService:
                                   target=json.loads(t.target_json) if t.target_json else None, extra=self._extra(doc.path))
         job_id = self.jobs.enqueue_turn(session_id=sess.id, thread_id=thread_id, prompt=prompt,
                                         context={"document_id": doc.id, "document_path": doc.path, "sha256": sha, "quote": t.cur_quote,
-                                                 "attachments": image_attachments(self.docs, doc.path) + thread_attachments(self.docs.snapshots_dir, t)},
+                                                 "attachments": image_attachments(self.docs, doc.path) + thread_attachments(self.docs.snapshots_dir, t),
+                                                 **self._skill_ctx(doc), **dev_extra},
                                         agent_message_id=agent_msg_id)
         with self.ctx.db.write() as s:
             m = s.get(Message, agent_msg_id)
             if m:
                 m.job_id = job_id
         return {"message_id": user_msg_id, "job_id": job_id, "session_id": sess.id, "agent_message_id": agent_msg_id}
+
+    async def _dev_prompt(self, doc: Document, question: str, kind: str | None, context: dict[str, Any] | None,
+                          prior: list[dict[str, str]] | None) -> tuple[str, dict[str, Any]]:
+        from .development.agent import dev_turn
+        from .development.service import DevService
+
+        if context is not None and len(json.dumps(context, default=str)) > 600_000:
+            raise bad_request("the editor context is too large", "CONTEXT_TOO_LARGE")
+        row = DevService(self.ctx).for_document(doc)
+        if row is None:
+            raise not_found("development workspace not found", "DEV_WORKSPACE_NOT_FOUND")
+        return await dev_turn(self.ctx, row, question=question, kind=kind or "ask", context=context, prior=prior)
+
+    def _chat_about(self, doc: Document) -> dict[str, str] | None:
+        from .chats import chat_about
+
+        return chat_about(self.ctx, self.docs.workspace_id, doc.path)
+
+    def _skill_ctx(self, doc: Document) -> dict[str, Any]:
+        """The project the discussion belongs to, whose skills come first: the folder of the document discussed, the
+        folder / file a chat is about, a PR's connected local checkout (open and connected folders are added anyway)."""
+        if is_pr_path(doc.path):
+            from .documents import PR_PREFIX
+            from .local_repos import get_link
+
+            parts = doc.path[len(PR_PREFIX):].split("/")
+            link = get_link(self.ctx, f"{parts[0]}/{parts[1]}") if len(parts) == 3 else None
+            return {"_skill_folders": [link["path"]]} if link else {}
+        if is_chat_path(doc.path):
+            from .chats import chat_about
+
+            about = chat_about(self.ctx, self.docs.workspace_id, doc.path)
+            if not about:
+                return {}
+            p = self.docs.root / about["path"]
+            return {"_skill_folders": [str(p if about["kind"] == "folder" else p.parent)]}
+        if is_dev_path(doc.path):
+            return {}
+        return {"_skill_folders": [str((self.docs.root / doc.path).parent)]}
 
     def _locked(self) -> list[str]:
         locks = self.ctx.locks
@@ -466,13 +542,29 @@ class ThreadService:
 
         return extra_context(self.ctx, doc_path, self.docs.workspace_id)
 
-    async def _new_default_session_for_thread(self, doc: Document) -> AgentSession:
-        """`new` for a reply: new session for this thread only (does not change the document default)."""
+    async def _new_default_session_for_thread(self, doc: Document, current_session_id: str | None = None) -> AgentSession:
+        """`new` for a reply: new session for this thread only (does not change the document default).
+        It starts on the model of the thread's current session (else the document's)."""
         assert self.ctx.providers is not None
         provider = self.ctx.providers.default_provider()
         if not provider:
             raise ApiError(503, "PROVIDER_UNAVAILABLE", "no default agent provider configured")
-        return await self.sessions.create_for_provider(provider, f"Wiki: {doc.path}")
+        source = self._session_or_none(current_session_id) or self._session_or_none(doc.default_session_id)
+        return await self.sessions.create_for_provider(provider, self._session_title(doc), inherit_from=source)
+
+    def _session_title(self, doc: Document) -> str:
+        if is_dev_path(doc.path):
+            from .development.service import DevService
+
+            row = DevService(self.ctx).for_document(doc)
+            return f"Dev: {row.name}" if row else "Dev"
+        return f"Wiki: {doc.path}"
+
+    def _session_or_none(self, session_id: str | None) -> AgentSession | None:
+        if not session_id:
+            return None
+        with self.ctx.db.read() as s:
+            return s.get(AgentSession, session_id)
 
     # ------------------------------------------------------------------ retry
     async def retry(self, thread_id: str, message_id: str, session_id: str | None) -> dict[str, Any]:
@@ -556,6 +648,7 @@ class TargetIn(BaseModel):
 
 
 class ThreadCreateIn(BaseModel):
+    model_choice: ModelChoiceIn | None = None  # another model / reasoning level for this discussion
     version_sha256: str
     quote: str = Field("", max_length=20000)
     prefix: str = Field("", max_length=80)
@@ -575,15 +668,21 @@ class ThreadCreateIn(BaseModel):
     pr_review: bool = False
     # folder chats: material for the first turn that is not part of the user's message (e.g. a repository's git log)
     chat_brief: str | None = Field(None, max_length=400_000)
+    # PR Development: what kind of task (ask/explain/fix/tests/implement/review/ci/verify) and the editor's context
+    dev_kind: str | None = Field(None, max_length=20)
+    dev_context: dict[str, Any] | None = None
 
 
 class MessageIn(BaseModel):
+    model_choice: ModelChoiceIn | None = None  # continue with another model / reasoning level
     text: str = Field(min_length=1, max_length=100000)
     session_id: str | None = None
     # folder chats: turn the conversation into wiki content — distill (into target_path) or update the source pages;
     # `text` is then an optional note for the agent ("-" for none)
     chat_action: str | None = None
     target_path: str | None = Field(None, max_length=1000)
+    dev_kind: str | None = Field(None, max_length=20)  # PR Development (see ThreadCreateIn)
+    dev_context: dict[str, Any] | None = None
 
 
 class AnchorUpdateIn(BaseModel):
