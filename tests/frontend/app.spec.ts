@@ -2558,6 +2558,8 @@ test("PR Development: new branch workspace, the web editor and the VS Code optio
   await expect(page.getByTestId("dev-run-fix")).toBeVisible();
   // commit the agent's file
   await page.getByTestId("dev-tab-changes").click();
+  await page.getByTestId("dev-commit-toggle").click(); // the commit panel opens at the top, as on the wiki's Diff page
+  await expect(page.getByTestId("dev-commit-panel")).toBeVisible();
   await expect(page.getByTestId("dev-file")).toHaveCount(2); // lib.py (edited above) and the agent's test_lib.py
   await page.getByTestId("dev-commit-msg").fill("Add a test for add()");
   await page.getByTestId("dev-commit").click();
@@ -2806,6 +2808,7 @@ test("PR Development: Changes view like the wiki's Diff: per-file diffs, side by
   await libDiff.getByTestId("dev-diff-viewed").check();
   await expect(libDiff).toHaveAttribute("data-viewed", "1");
   await expect(libDiff.getByTestId("dev-diff-unified")).toHaveCount(0);
+  await page.getByTestId("dev-commit-toggle").click();
   await page.getByTestId("dev-select-all").uncheck(); // (earlier tests leave other files around)
   await libDiff.getByTestId("dev-diff-in-commit").check(); // picked from the diff itself
   await expect(page.getByTestId("dev-commit")).toHaveText("Commit 1 file(s)");
@@ -2929,6 +2932,7 @@ test("PR Development: open a local folder directly, create a branch there, view 
   await page.getByTestId("dev-changes-toggle").click();
   await expect(page.getByTestId("dev-diff-scope")).toHaveCount(0);
   await expect(page.locator('[data-testid="dev-diff-file"]')).toHaveCount(3);
+  await page.getByTestId("dev-commit-toggle").click();
   await page.getByTestId("dev-commit-msg").fill("Direct work");
   await page.getByTestId("dev-commit").click();
   await expect(page.getByTestId("dev-note")).toContainText("Committed 3 file(s)");

@@ -399,10 +399,11 @@ reference wiki, and for a PR tab the PR's connected local checkout. Skills are t
   branch** or **Committed on this branch** (against where the branch started), one commit, or the worktree against
   another branch. Click a line (drag or shift-click for several) to **Ask agent** about it — the discussion is anchored
   on those lines and the agent gets the diff — or **Open in editor** (double-click a line does the same); **Ask
-  agent** in a file's header asks about all of its changes. Tick the files to commit (in the list or in each file's
-  header; build outputs and caches are unticked), **Draft with agent** writes the message from the diff of the ticked
-  files, **Commit**, **Push** (to the branch's remote; for a PR, to its head branch; never forced). The branch's
-  commits are listed below: click one to see its changes. **Diff** in the toolbar (or **⤢ Expand**) shows all the
+  agent** in a file's header asks about all of its changes. **Commit…** in its header opens the commit panel at the top, as on
+  the wiki's Diff page: tick the files to commit (there or in each file's header; build outputs and caches are
+  unticked), **Draft with agent** writes the message from the diff of the ticked files, **Commit**, then **Push** under
+  *Share* (to the branch's remote; for a PR, to its head branch; never forced). The branch's commits are listed at
+  the bottom of the panel: click one to see its changes. **Diff** in the toolbar (or **⤢ Expand**) shows all the
   changes in the editor area; **±** on a file or folder of the explorer shows only its changes ("only <path>" — × for
   all of them again). **Back to editor** returns the view to the bottom panel.
 - **Pull request** — for new work: title and description (**Draft with agent**, **Verify against wiki first**),

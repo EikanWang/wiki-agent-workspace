@@ -5,7 +5,6 @@ import { COMPOSER_HINT, composerKeyDown } from "./keys";
 import { Line, SplitCols, UnifiedCols, buildSplitRows, numColStyle, parseUnified } from "./DiffReview";
 import { Gap, expandLines } from "./PrDiff";
 import { useJobStream } from "./DiscussionPanel";
-import { Splitter, usePane } from "./Split";
 import { isArtifact } from "./DevTabs";
 import { CodeAnchor } from "./DevAgentPanel";
 
@@ -26,6 +25,8 @@ function query(mode: Mode): Record<string, string> {
   if (mode.startsWith("b:")) return { base: mode.slice(2) };
   return {};
 }
+
+const inScope = (p: string, scope: string) => p === scope || p.startsWith(scope.replace(/\/$/, "") + "/");
 
 /** A short fingerprint of a file's diff: a "Viewed" mark is dropped when the change changes. */
 function fingerprint(s: string): string {
@@ -54,7 +55,6 @@ export default function DevChanges({ dev, refreshKey, onChanged, onAsk, onOpenFi
   wide: boolean;
   onToggleWide: () => void;
 }) {
-  const sidePane = usePane(wide ? "dev.changes.wide" : "dev.changes", wide ? 340 : 300, 200, 900);
   const [mode, setMode] = useState<Mode>(() => sessionStorage.getItem(`waw.dev.compare.${dev.id}`) ?? "wt");
   useEffect(() => { sessionStorage.setItem(`waw.dev.compare.${dev.id}`, mode); }, [mode, dev.id]);
   const [layout, setLayout] = useState<"unified" | "split">(() => (localStorage.getItem("waw.diffLayout") === "split" ? "split" : "unified"));
@@ -146,65 +146,97 @@ export default function DevChanges({ dev, refreshKey, onChanged, onAsk, onOpenFi
   };
   const statusOf = (p: string) => uncommitted.find((f) => f.path === p)?.status;
 
-  const side = (
-    <div className="dev-changes-side" style={{ width: sidePane.size }} data-testid="dev-changes-side">
-      {st && (
-        <div className="muted small">
-          <b className="mono">{st.branch}</b> at {st.head} — {st.subject}
-          <br />{st.commits_on_branch ?? "?"} commit(s) on the branch · {st.unpushed ? <span className="warn">{st.unpushed} not pushed</span> : "all pushed"}
-          {st.push_remote && <><br />push → <span className="mono">{st.push_branch}</span></>}
+  // the commit panel, as on the wiki's Diff page: opened with "Commit…" at the top
+  const [showCommit, setShowCommit] = useState(() => sessionStorage.getItem(`waw.dev.commitOpen.${dev.id}`) === "1");
+  useEffect(() => { sessionStorage.setItem(`waw.dev.commitOpen.${dev.id}`, showCommit ? "1" : "0"); }, [showCommit, dev.id]);
+  const allSelected = uncommitted.length > 0 && selected.length === uncommitted.length;
+  const commitPanel = st && (
+    <div className="commit-panel dev-commit-panel" data-testid="dev-commit-panel">
+      <div className="commit-head">
+        <div>
+          <b className="mono">{st.branch}</b> <span className="muted small">at {st.head || "(no commit yet)"}{st.subject ? ` — ${st.subject}` : ""}</span>
+          <span className="muted small">
+            {st.push_remote ? <> → {st.push_remote === "origin" ? "origin" : "remote"}/{st.push_branch}</> : " · no remote"}
+            {st.commits_on_branch !== null ? ` · ${st.commits_on_branch} commit(s) on the branch` : ""}
+            {st.unpushed ? <> · <span className="warn">{st.unpushed} not pushed</span></> : st.push_remote ? " · all pushed" : ""}
+          </span>
         </div>
-      )}
-      <div className="label">Commit {uncommitted.length > 0 && <label className="small muted dev-select-all">
-        <input type="checkbox" checked={selected.length === uncommitted.length} ref={(el) => { if (el) el.indeterminate = selected.length > 0 && selected.length < uncommitted.length; }}
-          onChange={(e) => setExcluded(e.target.checked ? new Set() : new Set(uncommitted.map((f) => f.path)))} data-testid="dev-select-all" /> all</label>}</div>
-      <div className="dev-files">
-        {uncommitted.map((f) => (
-          <div key={f.path} className={`dev-file mono small ${excluded.has(f.path) ? "excluded" : ""} ${scope && !(f.path === scope || f.path.startsWith(scope.replace(/\/$/, "") + "/")) ? "out-of-scope" : ""}`} title={isArtifact(f.path) ? "Looks like a build output or cache" : f.path}>
-            <input type="checkbox" checked={!excluded.has(f.path)} data-testid="dev-file" aria-label={`Commit ${f.path}`}
-              onChange={(e) => setExcluded((x) => { const n = new Set(x); if (e.target.checked) n.delete(f.path); else n.add(f.path); return n; })} />
-            <span className={`chip git ${f.status}`}>{f.status[0].toUpperCase()}</span>
-            <button className="link-btn dev-file-name" onClick={() => { if (mode !== "wt" && mode !== "branch" && !mode.startsWith("b:")) setMode("wt"); if (scope && !(f.path === scope || f.path.startsWith(scope + "/"))) onScope(null); goTo(f.path); }} data-testid="dev-file-go">{f.path}</button>
-          </div>
-        ))}
-        {st && uncommitted.length === 0 && <div className="muted small">No uncommitted changes.</div>}
+        <div className="muted small" title={`${st.identity.name} <${st.identity.email}>`}>
+          {st.identity.configured ? `as ${st.identity.name}` : "⚠ git user.name/email not configured"}
+        </div>
       </div>
-      <textarea value={msg} onChange={(e) => setMsg(e.target.value)} rows={4} placeholder="Commit message" data-testid="dev-commit-msg" />
-      <div className="row">
-        <button className="btn small" disabled={!selected.length || !!draftJob} data-testid="dev-commit-draft" title="The agent writes a message from the diff of the selected files"
-          onClick={() => void run("draft", async () => { setDraftJob((await post<{ job_id: string }>(`/dev/workspaces/${dev.id}/draft?what=commit`, { paths: selected })).job_id); })}>{draftJob ? "Drafting…" : "Draft with agent"}</button>
-        <button className="btn small primary" disabled={!selected.length || !msg.trim() || !!busy} data-testid="dev-commit"
-          onClick={() => void run("commit", async () => {
-            const r = await post<{ commit: string; files: number }>(`/dev/workspaces/${dev.id}/commit`, { message: msg, paths: selected });
-            setMsg("");
-            setNote(`Committed ${r.files} file(s) as ${r.commit}.`);
-            await load();
-            onChanged();
-          })}>Commit {selected.length === uncommitted.length ? "all" : `${selected.length} file(s)`}</button>
-        <button className="btn small" disabled={!st?.unpushed || !!busy || !st?.push_remote} data-testid="dev-push"
-          onClick={() => void run("push", async () => { await post(`/dev/workspaces/${dev.id}/push`); setNote(`Pushed to ${st?.push_branch}.`); await load(); onChanged(); })}>{busy === "push" ? "Pushing…" : "Push"}</button>
-      </div>
-      {st && !st.identity.configured && <div className="warn small">Set git user.name and user.email on the host to commit.</div>}
-      {note && <div className="small" data-testid="dev-note">{note}</div>}
-      {refs && refs.branch_commits.length > 0 && (
-        <div className="dev-commits">
-          <div className="label">Commits on this branch</div>
-          {refs.branch_commits.map((c) => (
-            <button key={c.sha} className={`list-item small ${mode === `c:${c.sha}` ? "selected" : ""}`} onClick={() => setMode(`c:${c.sha}`)} title={`${c.author} · ${new Date(c.date).toLocaleString()}\nShow this commit's changes`} data-testid="dev-branch-commit">
-              <span className="mono">{c.short}</span> <span className="dev-commit-subject">{c.subject}</span>
-            </button>
+
+      <section>
+        <div className="label">
+          <label><input type="checkbox" checked={allSelected} ref={(el) => { if (el) el.indeterminate = selected.length > 0 && !allSelected; }} disabled={!uncommitted.length}
+            onChange={(e) => setExcluded(e.target.checked ? new Set() : new Set(uncommitted.map((f) => f.path)))} data-testid="dev-select-all" />{" "}
+            {uncommitted.length ? `${selected.length} of ${uncommitted.length} changed files selected` : "Working tree is clean"}</label>
+        </div>
+        <div className="commit-files">
+          {uncommitted.map((f) => (
+            <label key={f.path} className={`commit-file ${excluded.has(f.path) ? "excluded" : ""} ${scope && !inScope(f.path, scope) ? "out-of-scope" : ""}`} title={isArtifact(f.path) ? "Looks like a build output or cache" : f.path}>
+              <input type="checkbox" checked={!excluded.has(f.path)} data-testid="dev-file" aria-label={`Commit ${f.path}`}
+                onChange={(e) => setExcluded((x) => { const n = new Set(x); if (e.target.checked) n.delete(f.path); else n.add(f.path); return n; })} />
+              <button className="link-btn path mono" onClick={(e) => { e.preventDefault(); if (mode !== "wt" && mode !== "branch" && !mode.startsWith("b:")) setMode("wt"); if (scope && !inScope(f.path, scope)) onScope(null); goTo(f.path); }} title="Show its diff" data-testid="dev-file-go">{f.path}</button>
+              <span className={`chip git ${f.status}`}>{f.status}</span>
+            </label>
           ))}
         </div>
+      </section>
+
+      <section>
+        <div className="label">
+          Commit message
+          <button className="btn small" disabled={!selected.length || !!busy || !!draftJob} data-testid="dev-commit-draft" title="Let the agent summarise the selected changes into a commit message (you can edit it)"
+            onClick={() => void run("draft", async () => { setDraftJob((await post<{ job_id: string }>(`/dev/workspaces/${dev.id}/draft?what=commit`, { paths: selected })).job_id); })}>{draftJob ? "Drafting…" : "Draft with agent"}</button>
+        </div>
+        <textarea value={msg} onChange={(e) => setMsg(e.target.value)} rows={6} placeholder="Subject line (≤72 chars), blank line, then details. Or click 'Draft with agent'." data-testid="dev-commit-msg" />
+        <div className="row">
+          <button className="btn primary" disabled={!selected.length || !msg.trim() || !!busy || !st.identity.configured} data-testid="dev-commit"
+            onClick={() => void run("commit", async () => {
+              const r = await post<{ commit: string; files: number }>(`/dev/workspaces/${dev.id}/commit`, { message: msg, paths: selected });
+              setMsg("");
+              setNote(`Committed ${r.files} file(s) as ${r.commit}.`);
+              await load();
+              onChanged();
+            })}>{busy === "commit" ? "Committing…" : `Commit ${selected.length === uncommitted.length ? "all" : `${selected.length} file(s)`}`}</button>
+          <span className="muted small">Commits only the selected files, with your Git identity. Nothing is pushed.</span>
+        </div>
+      </section>
+
+      <section>
+        <div className="label">Share</div>
+        <div className="row">
+          <button className="btn" disabled={!st.unpushed || !!busy || !st.push_remote} data-testid="dev-push" title={st.push_remote ? `git push ${st.push_remote} HEAD:${st.push_branch}` : "No remote to push to"}
+            onClick={() => void run("push", async () => { await post(`/dev/workspaces/${dev.id}/push`); setNote(`Pushed to ${st.push_branch}.`); await load(); onChanged(); })}>
+            {busy === "push" ? "Pushing…" : st.unpushed ? `Push ${st.unpushed} commit${st.unpushed > 1 ? "s" : ""}` : "Push"}</button>
+          <span className="muted small">{st.push_remote ? `To ${st.push_branch} (never forced). The pull request is in the Pull request tab below the editor.` : "This checkout has no remote (add an origin in the terminal)."}</span>
+        </div>
+      </section>
+      {note && <div className="small" data-testid="dev-note">{note}</div>}
+
+      {refs && (refs.branch_commits.length > 0 || refs.commits.length > 0) && (
+        <section>
+          <div className="label">{refs.branch_commits.length ? "Commits on this branch" : "Recent commits"} <span className="muted small">— click one to see its changes</span></div>
+          <ul className="recent-commits">
+            {(refs.branch_commits.length ? refs.branch_commits : refs.commits.slice(0, 5)).map((c) => (
+              <li key={c.sha}>
+                <button className={`link-btn ${mode === `c:${c.sha}` ? "selected" : ""}`} onClick={() => setMode(`c:${c.sha}`)} title={`${c.author} · ${new Date(c.date).toLocaleString()}`} data-testid="dev-branch-commit">
+                  <code>{c.short}</code> {c.subject}
+                </button> <span className="muted small">· {c.author}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
     </div>
   );
 
   return (
     <div className={`dev-changes ${wide ? "wide" : ""}`} data-testid="dev-changes">
-      {!sidePane.folded && side}
-      <Splitter dir="x" side="before" pane={sidePane} label="file list" testId="dev-changes-splitter" />
       <div className="dev-diff" data-testid="dev-diff">
         <div className="dev-diff-bar">
+          <span className="crumbs small"><span className="chip">DIFF</span> {scope ? null : <span className="muted">(whole {dev.mode === "folder" ? "folder" : "worktree"})</span>}</span>
           <select value={mode} onChange={(e) => setMode(e.target.value)} title="What to compare" data-testid="dev-compare">
             <option value="wt">Uncommitted changes</option>
             {refs?.base_ref && <option value="branch">Everything on this branch (vs {refs.base_label ?? "base"})</option>}
@@ -227,14 +259,8 @@ export default function DevChanges({ dev, refreshKey, onChanged, onAsk, onOpenFi
           </select>
           {scope && (
             <span className="chip dev-scope" title={`Only the changes of ${scope}`} data-testid="dev-diff-scope">
-              only <span className="mono">{scope}</span>
+              <span className="mono">{scope}</span>
               <button className="icon-btn small" onClick={() => onScope(null)} title="Show all changes" aria-label="Show all changes" data-testid="dev-diff-scope-clear">×</button>
-            </span>
-          )}
-          {cmp && (
-            <span className="diff-summary small" data-testid="dev-diff-summary">
-              {cmp.summary.files} file{cmp.summary.files === 1 ? "" : "s"} <span className="add">+{cmp.summary.additions}</span> <span className="del">−{cmp.summary.deletions}</span>
-              {files.length > 0 && <span className="muted"> · {viewedCount}/{files.length} viewed</span>}
             </span>
           )}
           <span className="spacer" />
@@ -242,14 +268,26 @@ export default function DevChanges({ dev, refreshKey, onChanged, onAsk, onOpenFi
             <button role="tab" aria-selected={layout === "unified"} className={layout === "unified" ? "active" : ""} onClick={() => setLayout("unified")} data-testid="dev-layout-unified">Unified</button>
             <button role="tab" aria-selected={layout === "split"} className={layout === "split" ? "active" : ""} onClick={() => setLayout("split")} data-testid="dev-layout-split">Side by side</button>
           </span>
-          <button className="link-btn small" onClick={() => setCollapsed(Object.fromEntries(files.map((f) => [f.path, true])))}>collapse all</button>
-          <button className="link-btn small" onClick={() => setCollapsed(Object.fromEntries(files.map((f) => [f.path, false])))}>expand all</button>
-          <button className="icon-btn small" onClick={() => void load()} disabled={loading} title="Refresh" data-testid="dev-diff-reload">↻</button>
+          <button className={`btn small toggle ${showCommit ? "on" : ""}`} onClick={() => setShowCommit((v) => !v)} aria-pressed={showCommit} data-testid="dev-commit-toggle"
+            title="Select changed files, draft a commit message with the agent, commit, push">Commit…{uncommitted.length ? ` (${uncommitted.length})` : ""}</button>
+          <button className="btn small" onClick={() => void load()} disabled={loading} title="Reload the diff" data-testid="dev-diff-reload">{loading ? "…" : "↻"}</button>
           <button className="btn small" onClick={onToggleWide} title={wide ? "Back to the editor (the changes stay in the bottom panel)" : "Show the changes in the editor area"} data-testid="dev-changes-wide">{wide ? "Back to editor" : "⤢ Expand"}</button>
         </div>
-        {err && <div className="error-text small pad" role="alert">{err}</div>}
-        {cmp && files.length === 0 && <div className="muted small dev-hint" data-testid="dev-diff-empty">{scope ? `No changes in ${scope}. ` : ""}{!scope && isWt && mode === "wt" ? "The worktree has no uncommitted changes." : !scope ? "No differences." : ""}{scope && <button className="link-btn" onClick={() => onScope(null)}>Show all changes</button>}</div>}
+        {err && <div className="banner warn small" role="alert">{err}</div>}
         <div className="dev-diff-files">
+        {showCommit && commitPanel}
+        {cmp && files.length > 0 && (
+          <div className="diff-summary muted small" data-testid="dev-diff-summary">
+            {cmp.summary.files} file{cmp.summary.files === 1 ? "" : "s"} · <span className="add">+{cmp.summary.additions}</span> <span className="del">−{cmp.summary.deletions}</span>
+            {" · "}{viewedCount} / {files.length} viewed
+            {files.length > 1 && <>
+              {" · "}<button className="link-btn" onClick={() => setCollapsed(Object.fromEntries(files.map((f) => [f.path, true])))}>collapse all</button>
+              {" · "}<button className="link-btn" onClick={() => setCollapsed(Object.fromEntries(files.map((f) => [f.path, false])))}>expand all</button>
+            </>}
+            {" · "}click a line to ask the agent, drag or shift-click to select several lines
+          </div>
+        )}
+        {cmp && files.length === 0 && <div className="muted small dev-hint" data-testid="dev-diff-empty">{scope ? `No changes in ${scope}. ` : ""}{!scope && isWt && mode === "wt" ? "The worktree has no uncommitted changes." : !scope ? "No differences." : ""}{scope && <button className="link-btn" onClick={() => onScope(null)}>Show all changes</button>}</div>}
           {files.map((f) => (
             <div key={f.path} ref={(el) => { fileRefs.current[f.path] = el; }}>
               <DevFileDiff file={f} layout={layout} devId={dev.id} targetRef={targetRef} collapsed={isCollapsed(f)} viewed={isViewed(f)}

@@ -1230,3 +1230,10 @@ body.resizing-h iframe { pointer-events: none; }
 .branch-list .list-item { text-align: left; }
 .dev-scope { display: inline-flex; align-items: center; gap: 4px; }
 .dev-file.out-of-scope { opacity: 0.55; }
+.dev-commit-panel { margin-bottom: 12px; }
+.commit-file.excluded { opacity: 0.6; }
+.commit-file.out-of-scope { opacity: 0.55; }
+.commit-file .link-btn.path { text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.recent-commits .link-btn { text-align: left; }
+.recent-commits .link-btn.selected { font-weight: 600; text-decoration: underline; }
+.dev-diff-files > .diff-summary { margin: 0 0 8px; }
