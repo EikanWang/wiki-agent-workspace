@@ -370,7 +370,8 @@ export default function App() {
     void (async () => {
       if (!doc) await restoreLast(activeWs);
       const ui = savedUi.current ?? {};
-      if (ui.view === "terminal") setView("terminal");
+      if (prefs.sidebarView === "agents") setView("agents"); // the Agents activity always shows the agents' status
+      else if (ui.view === "terminal") setView("terminal");
       else if (ui.view === "chats") openChats(ui.chat ?? { ws: getWorkspace() ?? "", path: null });
       else if (ui.view === "development" && localStorage.getItem("waw.devActive")) setView("development");
       else if (ui.view === "local") { setLocalUsed(true); setView("local"); }
@@ -503,6 +504,11 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authed, !!boot]);
   const sidebarView = (prefs.sidebarView === "reviews" && !hub?.available) ? "files" : prefs.sidebarView ?? "files";
+  // Document / Terminal / Chats / Diff belong to the wiki: opening one (Recent, a link) while in Agents goes back to it
+  useEffect(() => {
+    if (uiRestored && sidebarView === "agents" && (view === "document" || view === "terminal" || view === "chats" || view === "diff")) updatePrefs({ sidebarView: "files" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view]);
 
   // ---------------------------------------------------------------- global events
   useEffect(() => {
@@ -794,7 +800,7 @@ export default function App() {
           <span className="muted small hide-mobile" title={activeWsInfo?.root ?? boot.workspace.root}>{activeWsInfo?.name ?? boot.workspace.name}{(activeWsInfo?.git ?? boot.workspace.git)?.branch ? ` · ${(activeWsInfo?.git ?? boot.workspace.git)!.branch}` : ""}</span>
         )}
         <span className="spacer" />
-        {panelDoc && (
+        {panelDoc && view !== "agents" && (
           <div className="session-area" data-testid="session-area">
             <span className="muted small hide-mobile">Document session</span>
             <button className="btn small session-btn" onClick={() => setShowSessions(true)} data-testid="session-button" title="Choose or link the session new discussions use">
@@ -807,7 +813,7 @@ export default function App() {
             </button>}
           </div>
         )}
-        <nav className="view-tabs">
+        {view !== "agents" && <nav className="view-tabs">
           <button className={view === "document" ? "active" : ""} onClick={() => setView("document")} data-testid="view-document">Document</button>
           <button className={view === "terminal" ? "active" : ""} onClick={() => setView("terminal")} data-testid="view-terminal">Terminal</button>
           <button className={view === "chats" ? "active" : ""} onClick={() => openChats(chatTarget ?? { ws: getWorkspace() ?? "", path: null })} title="Chat with a project (a folder of this window) directly" data-testid="view-chats">Chats</button>
@@ -819,7 +825,7 @@ export default function App() {
           >
             Diff
           </button>
-        </nav>
+        </nav>}
         <button className="btn small" onClick={() => { setRecentKey((k) => k + 1); setShowRecent(true); }} title="Documents and discussions you worked on, newest first" data-testid="recent-button">Recent</button>
         <span className="font-settings-anchor">
           <button className="btn small" onClick={() => setShowFonts((v) => !v)} title="Font style and size" data-testid="font-button">Aa</button>

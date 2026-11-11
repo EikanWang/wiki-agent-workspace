@@ -2973,6 +2973,20 @@ test("Agents: find sessions in folders, add one by id, alarms, a session on stag
   await expect(page.locator('[data-testid="message-agent"][data-status="completed"]').last()).toContainText("monitor question", { timeout: 20000 });
   await page.getByTestId("activity-agents").click();
   await expect(page.getByTestId("agents-panel")).toBeVisible();
+  // the agents' status page; Document / Terminal / Chats / Diff (and the document's session) do not apply here
+  await expect(page.getByTestId("agent-monitor")).toBeVisible();
+  await expect(page.getByTestId("view-document")).toHaveCount(0);
+  await expect(page.getByTestId("view-diff")).toHaveCount(0);
+  await expect(page.getByTestId("session-area")).toHaveCount(0);
+  await page.reload(); // still the status page after a reload
+  await expect(page.getByTestId("agent-monitor")).toBeVisible({ timeout: 15000 });
+  await expect(page.getByTestId("view-document")).toHaveCount(0);
+  // the wiki brings them back, with the document that was open
+  await page.getByTestId("activity-files").click();
+  await expect(page.getByTestId("view-document")).toHaveClass(/active/);
+  await expect(page.getByTestId("markdown-body").locator("h1")).toContainText("Guide");
+  await page.getByTestId("activity-agents").click();
+  await expect(page.getByTestId("agent-monitor")).toBeVisible();
   // the recent sessions of the checked folders (the wiki folder) are monitored without picking them
   const card = page.getByTestId("mon-card").first();
   await expect(card).toBeVisible({ timeout: 15000 });
