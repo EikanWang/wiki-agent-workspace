@@ -140,6 +140,11 @@ repository the PRs are in three sections by where you stand, most urgent first:
 3. **Commented, nothing new** (*medium*) — ✓ commented, and nothing happened since.
 
 The ★ Priority group lists its PRs in the same order and marks each one (not reviewed yet / ↻ … / ✓ commented).
+**auto-refresh** (in the line above the list) sets how often the list and its badge refresh from GitHub on their
+own: off (only ↻), 1, 2, 5 (default), 10, 15, 30 or 60 minutes. An open pull request has its own **auto-refresh**
+next to ↻ in its toolbar (off by default) — the same setting refreshes PR Development's checks in its Pull request
+tab. Refreshes run only while the page is visible (coming back to the page after the interval refreshes at once);
+the choice is kept per browser.
 **🤖 agent reviewed (N)** shows only the PRs the agent reviewed whose suggested comments wait for you to apply or
 discard (drafts included); such rows say "🤖 N suggestions to confirm" (or "🤖 reviewing…" while it runs), and the
 count follows as you decide in the PR tab. The

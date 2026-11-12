@@ -1936,6 +1936,22 @@ test("GitHub review hub: only the owner's GitHub sign-in sees it; queue grouped 
   // the ★ priority request (new activity since your comment) says so
   await expect(page.getByTestId("review-priority").getByTestId("review-since-mine")).toContainText("new comments");
   await expect(panel).toContainText("1 draft hidden");
+  // auto-refresh from GitHub at an interval you choose (5 min by default; kept per browser)
+  await expect(page.getByTestId("reviews-auto-refresh")).toHaveValue("5");
+  await page.clock.install();
+  const refreshes: string[] = [];
+  page.on("request", (r) => { if (r.url().includes("/api/v1/github/reviews?refresh=true")) refreshes.push(r.url()); });
+  await page.getByTestId("reviews-auto-refresh").selectOption("1");
+  await page.clock.fastForward("01:05");
+  await expect.poll(() => refreshes.length).toBeGreaterThan(0);
+  await page.getByTestId("reviews-auto-refresh").selectOption("0"); // off: only ↻
+  const n = refreshes.length;
+  await page.clock.fastForward("10:00");
+  await page.waitForTimeout(300);
+  expect(refreshes.length).toBe(n);
+  await page.reload();
+  await expect(page.getByTestId("reviews-auto-refresh")).toHaveValue("0", { timeout: 15000 });
+  await page.getByTestId("reviews-auto-refresh").selectOption("5");
   // grouped by repository, most PRs first; drafts hidden by default
   await expect(page.getByTestId("review-group")).toHaveCount(2);
   await expect(page.getByTestId("review-group").first()).toHaveAttribute("data-repo", "pytorch/pytorch");
@@ -1956,6 +1972,7 @@ test("GitHub review hub: only the owner's GitHub sign-in sees it; queue grouped 
   await page.locator('[data-testid="review-pr"][data-number="101"]').click();
   await expect(page.getByTestId("pr-view")).toBeVisible();
   await expect(page.getByRole("link", { name: "Open on GitHub" })).toHaveAttribute("href", "https://github.com/pytorch/pytorch/pull/101");
+  await expect(page.getByTestId("pr-auto-refresh")).toHaveValue("0"); // an open PR: off by default (shared with PR Development)
   await page.locator('[data-testid="doc-tab"][data-ws="github"]').getByTestId("doc-tab-close").click();
   // back to the files; sign out
   await page.getByTestId("activity-files").click();

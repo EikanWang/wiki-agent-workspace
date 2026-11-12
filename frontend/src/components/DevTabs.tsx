@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, DevTaskRun, DevWorkspace, get, post } from "../api";
 import { useJobStream } from "./DiscussionPanel";
 import { confirmAction } from "./Confirm";
+import { GhRefreshSelect, useGhAutoRefresh } from "../ghRefresh";
 
 /** Build outputs and caches: left out of a commit unless you tick them (the checkout may lack a .gitignore for them). */
 export const isArtifact = (p: string) => /(^|\/)(__pycache__|\.pytest_cache|\.mypy_cache|\.ruff_cache|\.cache|build|cmake-build-[^/]*|node_modules|\.venv)(\/|$)|\.(pyc|pyo|o|obj|so|a)$/.test(p);
@@ -127,6 +128,7 @@ export function PrTab({ dev, onAsk, onChanged }: { dev: DevWorkspace; onAsk: (ki
     }
   }, [dev.id, dev.pr_number]);
   useEffect(() => { void loadChecks(); }, [loadChecks]);
+  useGhAutoRefresh("pr", loadChecks, !!dev.pr_number); // the PR's checks, at the interval chosen for open pull requests
   useJobStream(draftJob, (job) => {
     setDraftJob(null);
     if (job.status === "completed" && job.text) {
@@ -148,6 +150,7 @@ export function PrTab({ dev, onAsk, onChanged }: { dev: DevWorkspace; onAsk: (ki
           <button className="btn small" disabled={!failing.length && checks !== null && checks.length > 0} onClick={() => void onAsk("ci", "Fix the pull request's failing CI.")} data-testid="dev-ask-ci">Fix failing CI</button>
           <button className="btn small" onClick={() => void onAsk("verify", "Verify the changes of this branch against the wiki.")}>Verify against wiki</button>
           <button className="icon-btn small" onClick={() => void loadChecks()} title="Refresh checks">↻</button>
+          <GhRefreshSelect kind="pr" testId="dev-checks-auto-refresh" title="How often the checks (and open pull requests in PR Review) refresh from GitHub on its own; ↻ refreshes now" />
         </div>
         <div className="dev-checks">
           {checks?.map((c, i) => (

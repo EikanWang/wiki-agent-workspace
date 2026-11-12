@@ -4,6 +4,7 @@ import RefreshButton from "./RefreshButton";
 import { confirmAction } from "./Confirm";
 import GhUser from "./GhUser";
 import { useRestoredScroll } from "../persist";
+import { GhRefreshSelect } from "../ghRefresh";
 
 export interface ReviewPR {
   repo: string;
@@ -374,6 +375,7 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
             {filter.trim() && <span> · filtered</span>}
             {agentOnly && <span> · only those the agent reviewed, waiting for you</span>}
             {queue.refreshing ? " · refreshing…" : ` · updated ${ago(queue.fetched_at)} ago`}
+            {" · "}<GhRefreshSelect kind="reviews" testId="reviews-auto-refresh" title="How often the Reviews list (and its badge) refreshes from GitHub on its own; ↻ refreshes now" />
           </div>
         )}
         {queue && shown === 0 && <div className="tree-empty">{queue.items.length ? "Nothing matches the filter." : "No pull requests are waiting for your review. 🎉"}</div>}

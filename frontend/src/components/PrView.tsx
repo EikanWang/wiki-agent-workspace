@@ -1,6 +1,6 @@
 import { Splitter, usePane } from "./Split";
 import { ModelChoiceValue } from "./ModelChoice";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { confirmAction } from "./Confirm";
 import { AgentSession, ApiError, WorkspaceInfo, get, post, put } from "../api";
 import { renderGithubMarkdown } from "../markdown";
@@ -15,6 +15,7 @@ import ContextFolders from "./ContextFolders";
 import GhUser from "./GhUser";
 import LocalRepo from "./LocalRepo";
 import RefreshButton from "./RefreshButton";
+import { GhRefreshSelect, useGhAutoRefresh } from "../ghRefresh";
 
 interface Check { name: string | null; state: string; url: string | null }
 export interface PrData {
@@ -143,6 +144,8 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [repo, number]);
+  const autoRefresh = useCallback(() => void load(true), [repo, number]); // eslint-disable-line react-hooks/exhaustive-deps
+  useGhAutoRefresh("pr", autoRefresh, !notPr);
 
   const available = workspaces.filter((w) => w.available);
   // folders (with a trailing /) and files of the PR, for "ask about a folder / file"
@@ -308,6 +311,7 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
           <PrStateMenu apiBase={apiBase} state={p.state} draft={p.draft} number={p.number} onDone={() => load(true)} onError={setError} />
           <a className="btn small" href={p.url} target="_blank" rel="noreferrer">Open on GitHub</a>
           <RefreshButton className="btn small" onRefresh={() => load(true)} title="Reload from GitHub" testId="pr-refresh" />
+          <GhRefreshSelect kind="pr" testId="pr-auto-refresh" title="How often an open pull request (here and in PR Development) refreshes from GitHub on its own; ↻ refreshes now" />
         </div>
       </div>
       {!data.wiki_workspace_id && (

@@ -1272,3 +1272,5 @@ body.resizing-h iframe { pointer-events: none; }
 .review-group > .review-section .review-section-head { background: transparent; font-size: 11px; padding: 3px 8px; }
 .git-badge.review-todo { color: var(--red); }
 .git-badge.agent-waiting { color: var(--primary); font-weight: 600; }
+.gh-refresh { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; }
+.gh-refresh select { font-size: 11px; padding: 0 2px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); color: var(--fg); }

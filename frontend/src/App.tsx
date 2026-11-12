@@ -32,6 +32,7 @@ import AccountMenu from "./components/AccountMenu";
 import ReviewsPanel, { loadReviews, reviewBadge, useReviews } from "./components/ReviewsPanel";
 import { CodeIcon, DashboardIcon, FilesIcon, PullRequestIcon, TerminalIcon, WikiIcon } from "./components/Icons";
 import TerminalsPanel from "./components/TerminalsPanel";
+import { useGhAutoRefresh } from "./ghRefresh";
 import AgentMonitor, { AgentsPanel, Provider } from "./components/AgentMonitor";
 import LocalPanel from "./components/LocalPanel";
 const LocalEditor = lazy(() => import("./components/LocalEditor"));
@@ -494,18 +495,17 @@ export default function App() {
   }, [uiRestored, hub?.available]);
   useEffect(() => {
     if (!authed || !boot) return;
-    let timer: number | undefined;
     void get<{ available: boolean; owner: string | null }>("/github/hub")
       .then((h) => {
         setHub(h);
         if (!h.available) return;
-        void loadReviews();
-        timer = window.setInterval(() => void loadReviews(), 5 * 60 * 1000); // keep the badge current
+        void loadReviews(); // then at the interval chosen in Reviews (useGhAutoRefresh below)
       })
       .catch(() => setHub(null));
-    return () => window.clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authed, !!boot]);
+  const refreshReviews = useCallback(() => void loadReviews(true), []);
+  useGhAutoRefresh("reviews", refreshReviews, !!hub?.available); // the Reviews list and its badge, at the chosen interval
   const sidebarView = (prefs.sidebarView === "reviews" && !hub?.available) ? "files" : prefs.sidebarView ?? "files";
   // the Terminal activity: its terminals page, without the wiki's Document / Terminal / Chats / Diff
   const terminalMode = sidebarView === "terminal" && view === "terminal";
