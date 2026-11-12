@@ -48,14 +48,14 @@ query($q: String!, $after: String, $n: Int!, $me: String!) {
         author { login }
         headRefOid
         mine: reviews(author: $me, last: 10) { nodes { state submittedAt commit { oid } } }
-        others: reviews(last: 10) { nodes { submittedAt author { __typename login } } }
-        comments(last: 10) { nodes { createdAt author { __typename login } } }
+        others: reviews(last: 20) { nodes { submittedAt author { __typename login } } }
+        comments(last: 30) { nodes { createdAt author { __typename login } } }
         timelineItems(itemTypes: [REVIEW_REQUESTED_EVENT], last: 8) { nodes { ... on ReviewRequestedEvent {
           createdAt actor { login ... on User { company } } requestedReviewer { __typename ... on User { login } ... on Team { slug } } } } }
         repository { nameWithOwner isPrivate }
         labels(first: 6) { nodes { name color } }
         reviewRequests(first: 20) { nodes { requestedReviewer { __typename ... on User { login } ... on Team { slug name } } } }
-        commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
+        commits(last: 1) { nodes { commit { committedDate statusCheckRollup { state } } } }
       }
     }
   }
@@ -238,7 +238,7 @@ def normalize(pr: dict[str, Any], owner: str) -> dict[str, Any]:
         "review_decision": pr.get("reviewDecision"), "ci": _ci(pr),
         "labels": [{"name": lb["name"], "color": lb.get("color")} for lb in (pr.get("labels") or {}).get("nodes") or []],
         "requested": "you" if requested_user else ("team" if teams else "you"), "teams": teams,
-        "state": pr.get("state") or "OPEN", **_requester(pr, owner), **_approval(pr, owner),
+        "state": pr.get("state") or "OPEN", **_requester(pr, owner), **_approval(pr, owner), **_activity(pr, owner),
     }
 
 
@@ -277,6 +277,37 @@ def _approval(pr: dict[str, Any], owner: str) -> dict[str, Any]:
                        for n in (pr.get("timelineItems") or {}).get("nodes") or [])
     return {"my_review": state, "approved_no_news": not (new_commits or talk or re_requested),
             "since_approval": [x for x, on in (("new commits", new_commits), ("new comments", talk), ("review requested again", re_requested)) if on]}
+
+
+def _activity(pr: dict[str, Any], owner: str) -> dict[str, Any]:
+    """Where a PR stands for you as a reviewer, for ordering the queue:
+    `todo` — you have not reviewed or commented yet; `news` — you did, and something happened since your latest
+    review / comment (a person's review, review comment or reply, or comment; new commits; your review requested
+    again — bots and GitHub Actions do not count); `quiet` — you did and nothing happened since."""
+    me = owner.lower()
+    mine = [n for n in (pr.get("mine") or {}).get("nodes") or [] if n and n.get("state") != "PENDING" and n.get("submittedAt")]
+    comments = [n for n in (pr.get("comments") or {}).get("nodes") or [] if n]
+    my_comments = [n["createdAt"] for n in comments if n.get("createdAt") and ((n.get("author") or {}).get("login") or "").lower() == me]
+    times = [n["submittedAt"] for n in mine] + my_comments
+    if not times:
+        return {"my_activity": "todo", "my_last_at": None, "since_mine": []}
+    last = max(times)
+
+    def news(at: str | None, author: dict[str, Any] | None) -> bool:
+        return bool(at and at > last and not is_bot(author) and ((author or {}).get("login") or "").lower() != me)
+
+    reviews = any(news(n.get("submittedAt"), n.get("author")) for n in (pr.get("others") or {}).get("nodes") or [] if n)
+    talk = any(news(n.get("createdAt"), n.get("author")) for n in comments)
+    head = ((((pr.get("commits") or {}).get("nodes") or [None])[0] or {}).get("commit") or {})
+    latest_review = max(mine, key=lambda n: n["submittedAt"]) if mine else None
+    new_commits = bool(head.get("committedDate") and head["committedDate"] > last) or bool(
+        latest_review and latest_review["submittedAt"] == last and pr.get("headRefOid")
+        and ((latest_review.get("commit") or {}).get("oid") or pr["headRefOid"]) != pr["headRefOid"])
+    re_requested = any((n or {}).get("createdAt", "") > last and ((n or {}).get("requestedReviewer") or {}).get("login", "").lower() == me
+                       for n in (pr.get("timelineItems") or {}).get("nodes") or [])
+    since = [x for x, on in (("new reviews or replies", reviews), ("new comments", talk), ("new commits", new_commits),
+                             ("review requested again", re_requested)) if on]
+    return {"my_activity": "news" if since else "quiet", "my_last_at": last, "since_mine": since}
 
 
 # Who counts as a "PyTorch Meta maintainer" for prioritising review requests (after ai_tools HARDWARE_VENDORS META)

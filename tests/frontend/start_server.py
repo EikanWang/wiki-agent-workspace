@@ -159,7 +159,10 @@ def add_fake_review_queue(app) -> None:
     meta = pr(104, "pytorch/pytorch", "[inductor] XPU codegen fix", updated="2026-11-07T00:00:00Z")
     meta["timelineItems"] = {"nodes": [{"actor": {"login": "metadev", "company": "Meta", "email": ""},
                                         "requestedReviewer": {"__typename": "User", "login": "e2e-user"}}]}  # a priority request
+    me, bob = {"__typename": "User", "login": "e2e-user"}, {"__typename": "User", "login": "bob"}
+    meta["comments"] = {"nodes": [{"createdAt": "2026-11-05T00:00:00Z", "author": me}, {"createdAt": "2026-11-06T00:00:00Z", "author": bob}]}  # news since yours
     nodes.insert(3, meta)
+    nodes[nodes.index(next(n for n in nodes if n and n["number"] == 201))]["comments"] = {"nodes": [{"createdAt": "2026-11-05T00:00:00Z", "author": me}]}  # quiet
     done = pr(106, "pytorch/pytorch", "Already approved, nothing new")  # left out of the list until "approved" is ticked
     done.update({"headRefOid": "h106", "mine": {"nodes": [{"state": "APPROVED", "submittedAt": "2026-11-05T00:00:00Z", "commit": {"oid": "h106"}}]},
                  "comments": {"nodes": [{"createdAt": "2026-11-06T00:00:00Z", "author": {"__typename": "User", "login": "pytorchmergebot"}}]}})

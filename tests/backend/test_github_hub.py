@@ -913,3 +913,39 @@ async def test_pr_file_content_for_expanding_the_diff(running_app, settings):
     assert r.json()["lines"] == ["y", "z", "w"] and "contents/a.cpp?ref=" in seen[-1]
     assert (await h.api.get(f"{base}/file", params={"path": "other.cpp"})).status_code == 404
     assert (await h.api.get(f"{base}/file", params={"path": "../etc"})).status_code == 400
+
+
+def test_review_categories_by_your_latest_activity():
+    """1 todo: never reviewed / commented; 2 news: something by a person (or new commits, a new request) after your
+    latest review or comment; 3 quiet: nothing since."""
+    me, bob, bot = {"__typename": "User", "login": "EikanWang"}, {"__typename": "User", "login": "bob"}, {"__typename": "Bot", "login": "github-actions"}
+    t1, t2, t3 = "2026-11-05T00:00:00Z", "2026-11-06T00:00:00Z", "2026-11-07T00:00:00Z"
+
+    def with_(p, *, mine=(), comments=(), others=(), head="h1", head_at="2026-11-01T00:00:00Z", rerequest=None):
+        p["headRefOid"] = head
+        p["mine"] = {"nodes": [{"state": st, "submittedAt": at, "commit": {"oid": oid}} for st, at, oid in mine]}
+        p["comments"] = {"nodes": [{"createdAt": at, "author": a} for at, a in comments]}
+        p["others"] = {"nodes": [{"submittedAt": at, "author": a} for at, a in others]}
+        p["commits"] = {"nodes": [{"commit": {"committedDate": head_at, "statusCheckRollup": {"state": "SUCCESS"}}}]}
+        if rerequest:
+            p["timelineItems"] = {"nodes": [{"createdAt": rerequest, "actor": {"login": "x"}, "requestedReviewer": {"__typename": "User", "login": "EikanWang"}}]}
+        return p
+
+    cases = {
+        1: with_(pr(1)),                                                                   # nothing from you
+        2: with_(pr(2), comments=[(t1, bob)], others=[(t2, bob)]),                         # others talk, you never did
+        3: with_(pr(3), comments=[(t1, me)]),                                              # you commented, quiet
+        4: with_(pr(4), comments=[(t1, me), (t2, bob)]),                                   # someone commented after you
+        5: with_(pr(5), mine=[("COMMENTED", t1, "h1")], others=[(t2, bob)]),               # a reply / review after your review
+        6: with_(pr(6), mine=[("COMMENTED", t1, "h1")], head="h2"),                        # new commits since your review
+        7: with_(pr(7), comments=[(t1, me)], head_at=t2),                                  # a commit after your comment
+        8: with_(pr(8), mine=[("CHANGES_REQUESTED", t1, "h1")], comments=[(t2, bot), (t3, me)]),  # only a bot, then you again
+        9: with_(pr(9), mine=[("COMMENTED", t1, "h1")], rerequest=t2),                     # your review requested again
+        10: with_(pr(10), comments=[(t2, me), (t1, bob)], mine=[("PENDING", t3, "h1")]),   # a pending review is not yours yet
+    }
+    got = {n: github_hub.normalize(p, "EikanWang") for n, p in cases.items()}
+    assert {n: x["my_activity"] for n, x in got.items()} == {1: "todo", 2: "todo", 3: "quiet", 4: "news", 5: "news", 6: "news",
+                                                            7: "news", 8: "quiet", 9: "news", 10: "quiet"}
+    assert got[4]["since_mine"] == ["new comments"] and got[5]["since_mine"] == ["new reviews or replies"]
+    assert got[6]["since_mine"] == ["new commits"] and got[9]["since_mine"] == ["review requested again"]
+    assert got[3]["my_last_at"] == t1 and got[8]["my_last_at"] == t3

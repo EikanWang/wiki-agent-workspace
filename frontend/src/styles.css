@@ -1258,3 +1258,13 @@ body.resizing-h iframe { pointer-events: none; }
 .terminals-item:not(.live) { opacity: 0.65; }
 .term-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
 .term-dot.live { background: var(--green); }
+/* Reviews: sections by where you stand (1 not reviewed yet · 2 new activity · 3 nothing new) */
+.review-section { margin-bottom: 6px; border-left: 3px solid transparent; }
+.review-section.top { border-left-color: var(--red); }
+.review-section.high { border-left-color: #d29922; }
+.review-section.medium { border-left-color: var(--border); }
+.review-section-head { display: flex; align-items: center; gap: 6px; width: 100%; border: none; background: var(--accent); padding: 6px 8px; cursor: pointer; font-weight: 700; color: inherit; text-align: left; font-size: 12px; text-transform: uppercase; letter-spacing: 0.03em; }
+.review-level { font-size: 10px; font-weight: 600; padding: 0 6px; border-radius: 8px; text-transform: none; letter-spacing: 0; }
+.review-level.top { background: rgba(248, 81, 73, 0.18); color: var(--red); }
+.review-level.high { background: rgba(210, 153, 34, 0.2); color: #9a6700; }
+.review-level.medium { background: var(--card); color: var(--muted); border: 1px solid var(--border); }

@@ -410,6 +410,22 @@ test("a terminal whose shell exited is shown as exited and can be dismissed with
   await expect(page.getByTestId("terminal-tab")).toHaveCount(0);
 });
 
+/** Type a command in the active terminal until its output shows (a shell still starting up can drop early input). */
+async function runInTerminal(page: Page, cmd: string, output: string) {
+  const rows = page.locator(".term-view.active .xterm-rows");
+  for (let i = 0; i < 4; i++) {
+    await page.locator(".term-view.active .xterm-helper-textarea").focus();
+    await page.keyboard.type(cmd + "\n");
+    try {
+      await expect(rows).toContainText(output, { timeout: 5000 });
+      return;
+    } catch {
+      /* again */
+    }
+  }
+  await expect(rows).toContainText(output);
+}
+
 test("Terminal activity: its own list of terminals (home or a chosen folder), the wiki's terminal page, no wiki tabs", async ({ page }) => {
   await login(page);
   await page.getByTestId("activity-terminal").click();
@@ -423,9 +439,7 @@ test("Terminal activity: its own list of terminals (home or a chosen folder), th
   const view = page.locator(".term-view.active");
   await expect(view).toHaveAttribute("data-state", "connected", { timeout: 15000 });
   await expect(view.locator(".xterm-rows")).toContainText("$", { timeout: 15000 });
-  await page.locator(".term-view.active .xterm-helper-textarea").focus();
-  await page.keyboard.type("echo AT_$(pwd)\n");
-  await expect(view.locator(".xterm-rows")).toContainText(`AT_${process.env.HOME}`, { timeout: 15000 });
+  await runInTerminal(page, "echo AT_$(pwd)", `AT_${process.env.HOME}`);
   // one in a folder picked on the server
   await page.getByTestId("terminals-new-in").click();
   await page.getByTestId("folder-picker-path").fill(workspaceDir());
@@ -436,9 +450,7 @@ test("Terminal activity: its own list of terminals (home or a chosen folder), th
   await expect(page.getByTestId("terminals-item").last()).toContainText(path.basename(workspaceDir()));
   await expect(page.locator(".term-view.active")).toHaveAttribute("data-state", "connected", { timeout: 15000 });
   await expect(page.locator(".term-view.active .xterm-rows")).toContainText("$", { timeout: 15000 });
-  await page.locator(".term-view.active .xterm-helper-textarea").focus();
-  await page.keyboard.type("echo IN_$(pwd)\n");
-  await expect(page.locator(".term-view.active .xterm-rows")).toContainText(`IN_${workspaceDir()}`, { timeout: 15000 });
+  await runInTerminal(page, "echo IN_$(pwd)", `IN_${workspaceDir()}`);
   // the list picks the terminal shown (the same terminals as the tabs above it)
   await page.getByTestId("terminals-item").nth(n0).click();
   await expect(page.getByTestId("terminals-item").nth(n0)).toHaveClass(/selected/);
@@ -1914,6 +1926,14 @@ test("GitHub review hub: only the owner's GitHub sign-in sees it; queue grouped 
   const panel = page.getByTestId("reviews-panel");
   await expect(panel).toBeVisible();
   await expect(page.getByTestId("reviews-note")).toContainText("SAML");
+  // sections by where you stand: not reviewed yet (top), new activity since your comments (high), nothing new (medium)
+  await expect.poll(() => page.getByTestId("review-section").evaluateAll((els) => els.map((e) => e.getAttribute("data-category")))).toEqual(["todo", "news", "quiet"]);
+  const news = page.locator('[data-testid="review-section"][data-category="news"]');
+  await expect(news.locator('[data-testid="review-pr"]')).toHaveCount(1);
+  await expect(news.getByTestId("review-since-mine")).toContainText("new comments");
+  await expect(page.locator('[data-testid="review-section"][data-category="quiet"] [data-testid="review-pr"]')).toHaveAttribute("data-number", "201");
+  await expect(page.locator('[data-testid="review-section"][data-category="quiet"]').getByTestId("review-quiet")).toBeVisible();
+  await expect(panel).toContainText("1 draft hidden");
   // grouped by repository, most PRs first; drafts hidden by default
   await expect(page.getByTestId("review-group")).toHaveCount(2);
   await expect(page.getByTestId("review-group").first()).toHaveAttribute("data-repo", "pytorch/pytorch");

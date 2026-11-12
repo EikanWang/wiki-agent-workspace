@@ -33,7 +33,20 @@ export interface ReviewPR {
   my_review?: string | null;
   approved_no_news?: boolean;
   since_approval?: string[];
+  /** todo: you have not reviewed / commented yet; news: something happened since your latest review or comment;
+   *  quiet: nothing since */
+  my_activity?: "todo" | "news" | "quiet";
+  my_last_at?: string | null;
+  since_mine?: string[];
 }
+
+/** The queue's sections, in priority order. */
+const CATEGORIES = [
+  { key: "todo", title: "Not reviewed yet", level: "top", hint: "You have not reviewed or commented on these yet" },
+  { key: "news", title: "New activity since your comments", level: "high", hint: "Since your latest review or comment: a review, reply or comment from someone else, new commits, or your review requested again (bots do not count)" },
+  { key: "quiet", title: "Commented, nothing new", level: "medium", hint: "You reviewed or commented, and nothing happened since" },
+] as const;
+const categoryOf = (p: ReviewPR) => p.my_activity ?? "todo";
 export interface HubPrefs {
   hidden_repos: string[];
   watched_repos: string[];
@@ -150,7 +163,7 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
   const listScroll = useRestoredScroll("reviews.list", !!queue);
   const [busy, setBusy] = useState<string | null>(null);
   const prefs = queue?.prefs;
-  const { groups, priority, watchedGroups } = useMemo(() => {
+  const { sections, watchedGroups } = useMemo(() => {
     const f = filter.trim().toLowerCase();
     const keep = (p: ReviewPR) => (showDrafts || !p.draft) && (!f || `${p.repo} #${p.number} ${p.title} ${p.author ?? ""} ${p.requested_by ?? ""} ${p.labels.map((l) => l.name).join(" ")}`.toLowerCase().includes(f));
     const key = (p: ReviewPR) => (sort === "updated" ? -new Date(p.updated_at).getTime() : sort === "waiting" ? new Date(p.created_at).getTime() : p.additions + p.deletions);
@@ -161,13 +174,16 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
     };
     const items = (queue?.items ?? []).filter(keep);
     return {
-      priority: items.filter((p) => p.priority).sort((a, b) => key(a) - key(b)),
-      groups: group(items.filter((p) => !p.priority)),
+      // 1 not reviewed yet · 2 new activity since your comments · 3 nothing new; in each: ★ priority, then by repository
+      sections: CATEGORIES.map((c) => {
+        const mine = items.filter((p) => categoryOf(p) === c.key);
+        return { ...c, count: mine.length, priority: mine.filter((p) => p.priority).sort((a, b) => key(a) - key(b)), groups: group(mine.filter((p) => !p.priority)) };
+      }),
       watchedGroups: group((queue?.watched ?? []).filter(keep)),
     };
   }, [queue, filter, showDrafts, sort]);
   const drafts = queue?.items.filter((p) => p.draft).length ?? 0;
-  const shown = priority.length + groups.reduce((n, g) => n + g.prs.length, 0);
+  const shown = sections.reduce((n, sec) => n + sec.count, 0);
   const change = async (what: string, c: Partial<HubPrefs> & { star?: string; unstar?: string }) => {
     setBusy(what);
     try {
@@ -207,6 +223,14 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
             </span>
           )}
           {p.my_review === "CHANGES_REQUESTED" && <span className="git-badge" title="You requested changes"> changes requested</span>}
+          {p.my_activity === "news" && p.my_review !== "APPROVED" && (
+            <span className="git-badge approved-news" title={`Since your latest review / comment (${p.my_last_at ? new Date(p.my_last_at).toLocaleString() : ""})`} data-testid="review-since-mine">
+              {" "}↻ {(p.since_mine ?? []).join(", ")}
+            </span>
+          )}
+          {p.my_activity === "quiet" && p.my_review !== "APPROVED" && (
+            <span className="git-badge clean" title={`Your latest review / comment: ${p.my_last_at ? new Date(p.my_last_at).toLocaleString() : ""}; nothing since`} data-testid="review-quiet"> ✓ commented</span>
+          )}
           {p.labels.slice(0, 2).map((l) => (
             <span key={l.name} className="review-label" style={l.color ? { borderColor: `#${l.color}` } : undefined}>{l.name}</span>
           ))}
@@ -221,12 +245,13 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
       )}
     </button>
   );
-  const groupBox = (repo: string, prs: ReviewPR[], watched: boolean) => {
-    const open = !collapsed.has((watched ? "w:" : "") + repo);
+  const groupBox = (repo: string, prs: ReviewPR[], watched: boolean, section = "") => {
+    const id = (watched ? "w:" : section ? `${section}:` : "") + repo;
+    const open = !collapsed.has(id);
     return (
-      <div key={(watched ? "w:" : "") + repo} className="review-group" data-testid={watched ? "review-group-watched" : "review-group"} data-repo={repo}>
+      <div key={id} className="review-group" data-testid={watched ? "review-group-watched" : "review-group"} data-repo={repo}>
         <div className="review-group-head-row">
-          <button className="review-group-head" onClick={() => toggle((watched ? "w:" : "") + repo)} aria-expanded={open}>
+          <button className="review-group-head" onClick={() => toggle(id)} aria-expanded={open}>
             <span className="chev">{open ? "⌄" : "›"}</span>
             <span className="review-repo">{repo}</span>
             {prs[0]?.private && <span className="git-badge" title="private repository">private</span>}
@@ -308,23 +333,41 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
         {queue && (
           <div className="muted small reviews-meta">
             Requested from you: {queue.items.length}{queue.truncated ? `+ (of ${queue.total})` : ""} · showing {shown}
+            {!showDrafts && drafts > 0 && <span title="Tick “drafts” to show them"> · {drafts} draft{drafts > 1 ? "s" : ""} hidden</span>}
+            {filter.trim() && <span> · filtered</span>}
             {queue.refreshing ? " · refreshing…" : ` · updated ${ago(queue.fetched_at)} ago`}
           </div>
         )}
         {queue && shown === 0 && <div className="tree-empty">{queue.items.length ? "Nothing matches the filter." : "No pull requests are waiting for your review. 🎉"}</div>}
-        {priority.length > 0 && (
-          <div className="review-group priority" data-testid="review-priority">
-            <button className="review-group-head" onClick={() => toggle("!priority")} aria-expanded={!collapsed.has("!priority")}
-              title={`Requests from ${prefs?.priority_meta ? "PyTorch Meta maintainers (GitHub profile company / public email)" : ""}${prefs?.priority_meta && prefs.priority_requesters.length ? " and " : ""}${prefs?.priority_requesters.length ? prefs.priority_requesters.join(", ") : ""}`}>
-              <span className="chev">{collapsed.has("!priority") ? "›" : "⌄"}</span>
-              <span className="review-repo">★ Priority</span>
-              <span className="spacer" />
-              <span className="git-badge clean">{priority.length}</span>
-            </button>
-            {!collapsed.has("!priority") && priority.map((p) => prRow(p, true))}
-          </div>
-        )}
-        {groups.map(({ repo, prs }) => groupBox(repo, prs, false))}
+        {sections.filter((sec) => sec.count > 0).map((sec) => {
+          const open = !collapsed.has(`!cat:${sec.key}`);
+          return (
+            <div key={sec.key} className={`review-section ${sec.level}`} data-testid="review-section" data-category={sec.key}>
+              <button className="review-section-head" onClick={() => toggle(`!cat:${sec.key}`)} aria-expanded={open} title={sec.hint}>
+                <span className="chev">{open ? "⌄" : "›"}</span>
+                <span className="review-section-title">{sec.title}</span>
+                <span className={`review-level ${sec.level}`}>{sec.level}</span>
+                <span className="spacer" />
+                <span className="git-badge clean">{sec.count}</span>
+              </button>
+              {open && <>
+            {sec.priority.length > 0 && (
+              <div className="review-group priority" data-testid="review-priority">
+                <button className="review-group-head" onClick={() => toggle(`!priority:${sec.key}`)} aria-expanded={!collapsed.has(`!priority:${sec.key}`)}
+                  title={`Requests from ${prefs?.priority_meta ? "PyTorch Meta maintainers (GitHub profile company / public email)" : ""}${prefs?.priority_meta && prefs.priority_requesters.length ? " and " : ""}${prefs?.priority_requesters.length ? prefs.priority_requesters.join(", ") : ""}`}>
+                  <span className="chev">{collapsed.has(`!priority:${sec.key}`) ? "›" : "⌄"}</span>
+                  <span className="review-repo">★ Priority</span>
+                  <span className="spacer" />
+                  <span className="git-badge clean">{sec.priority.length}</span>
+                </button>
+                {!collapsed.has(`!priority:${sec.key}`) && sec.priority.map((p) => prRow(p, true))}
+              </div>
+            )}
+                {sec.groups.map(({ repo, prs }) => groupBox(repo, prs, false, sec.key))}
+              </>}
+            </div>
+          );
+        })}
         {watchedGroups.length > 0 && <div className="muted small reviews-meta" data-testid="reviews-watched-head">Watched repositories (all open PRs)</div>}
         {watchedGroups.map(({ repo, prs }) => groupBox(repo, prs, true))}
         {(queue?.approved_hidden ?? 0) > 0 && <div className="muted small reviews-meta" data-testid="reviews-approved-hidden">{queue!.approved_hidden} PR(s) you approved with nothing new since are not listed (tick “approved” to show them).</div>}
