@@ -77,7 +77,9 @@ export default function DevChanges({ dev, refreshKey, onChanged, onAsk, onOpenFi
   useEffect(() => { localStorage.setItem(viewedKey, JSON.stringify(viewed)); }, [viewed, viewedKey]);
   const fileRefs = useRef<Record<string, HTMLElement | null>>({});
 
+  const seq = useRef(0); // only the latest load is shown (an earlier, slower one must not overwrite it)
   const load = useCallback(async () => {
+    const n = ++seq.current;
     setLoading(true);
     try {
       const q = new URLSearchParams({ ...query(mode), ...(scope ? { path: scope } : {}) }).toString();
@@ -86,16 +88,18 @@ export default function DevChanges({ dev, refreshKey, onChanged, onAsk, onOpenFi
         get<DevGitStatus>(`/dev/workspaces/${dev.id}/status`),
         get<DevRefs>(`/dev/workspaces/${dev.id}/refs`),
       ]);
+      if (n !== seq.current) return;
       setCmp(c);
       setSt(s);
       setRefs(r);
       setExcluded((prev) => new Set(s.files.map((f) => f.path).filter((p) => prev.has(p) || (s.files.find((f) => f.path === p)?.status === "untracked" && isArtifact(p)))));
       setErr(null);
     } catch (e) {
+      if (n !== seq.current) return;
       setErr((e as ApiError).message);
       if ((e as ApiError).code === "NO_BASE" || (e as ApiError).code === "INVALID_REF") setMode("wt");
     } finally {
-      setLoading(false);
+      if (n === seq.current) setLoading(false);
     }
   }, [dev.id, mode, scope]);
   useEffect(() => { void load(); }, [load, refreshKey]);

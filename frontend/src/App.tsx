@@ -102,6 +102,7 @@ export default function App() {
   const panelOpen = prefs.panelOpen || isNarrow; // phones always use the full panel via the bottom navigation
   const sidebarOpen = prefs.sidebarOpen;
   const setSidebarOpen = (fn: (v: boolean) => boolean) => updatePrefs({ sidebarOpen: fn(prefs.sidebarOpen) });
+  const listOpen = prefs.listOpen !== false;
   const resizeSidebar = useCallback((dx: number) => setPrefs((p) => ({ ...p, sidebarWidth: Math.min(600, Math.max(160, p.sidebarWidth + dx)) })), []);
   const resizePanel = useCallback((dx: number) => setPrefs((p) => ({ ...p, panelWidth: Math.min(900, Math.max(260, p.panelWidth - dx)) })), []);
   const persistPrefs = useCallback(() => setPrefs((p) => { savePrefs(p); return p; }), []);
@@ -772,7 +773,7 @@ export default function App() {
         ["--reader-size" as string]: `${prefs.readerSize}px`,
         ["--reader-width" as string]: prefs.readerWidth ? `${prefs.readerWidth}px` : "none",
         // the activity bar (Files · PR Review · PR Development) comes on top of the tree's own width
-        ["--sidebar-width" as string]: sidebarOpen ? `${prefs.sidebarWidth + ACTIVITY_BAR_PX}px` : "0px",
+        ["--sidebar-width" as string]: sidebarOpen ? `${(listOpen ? prefs.sidebarWidth : 0) + ACTIVITY_BAR_PX}px` : "0px",
         ["--panel-width" as string]: panelOpen ? `${prefs.panelWidth}px` : "36px",
       }}
     >
@@ -839,27 +840,30 @@ export default function App() {
       {!watcherReady && <div className="banner">The file watcher is still indexing this workspace; until it finishes, use the ↻ button in the file tree to see new files and changes.</div>}
 
       <main className={`layout view-${view === "diff" || view === "chats" || view === "development" || view === "local" || view === "agents" ? "terminal" : view} ${view === "diff" ? "view-diff" : ""} ${view === "chats" ? "view-chats" : ""}`}>
-        <aside className="sidebar with-activity">
+        <aside className={`sidebar with-activity ${listOpen ? "" : "list-folded"}`} data-list={listOpen ? "open" : "folded"}>
           <nav className="activity-bar" aria-label="Sidebar views">
-            <button className={sidebarView === "files" ? "active" : ""} onClick={() => { updatePrefs({ sidebarView: "files" }); if (view === "development" || view === "local" || view === "agents") setView("document"); }} title="Wiki: read, discuss and edit the wiki folders with the agent" aria-label="Wiki" aria-pressed={sidebarView === "files"} data-testid="activity-files">
+            <button className={sidebarView === "files" ? "active" : ""} onClick={() => { if (sidebarView === "files") { updatePrefs({ listOpen: !listOpen }); if (listOpen) return; } updatePrefs({ sidebarView: "files", listOpen: true }); if (view === "development" || view === "local" || view === "agents") setView("document"); }} title="Wiki: read, discuss and edit the wiki folders with the agent" aria-label="Wiki" aria-pressed={sidebarView === "files"} data-testid="activity-files">
               <WikiIcon size={20} />
             </button>
-            <button className={sidebarView === "local" ? "active" : ""} onClick={() => { updatePrefs({ sidebarView: "local" }); setLocalUsed(true); setView("local"); }} title="Local files: browse and edit any folder or file on the server, like a file manager" aria-label="Local files" aria-pressed={sidebarView === "local"} data-testid="activity-local">
+            <button className={sidebarView === "local" ? "active" : ""} onClick={() => { if (sidebarView === "local") { updatePrefs({ listOpen: !listOpen }); if (listOpen) return; } updatePrefs({ sidebarView: "local", listOpen: true }); setLocalUsed(true); setView("local"); }} title="Local files: browse and edit any folder or file on the server, like a file manager" aria-label="Local files" aria-pressed={sidebarView === "local"} data-testid="activity-local">
               <FilesIcon size={20} />
             </button>
             {hub?.available && (
-              <button className={sidebarView === "reviews" ? "active" : ""} onClick={() => { updatePrefs({ sidebarView: "reviews" }); if (view === "development" || view === "local" || view === "agents") setView("document"); }} title="Pull requests waiting for your review" aria-label="Reviews" aria-pressed={sidebarView === "reviews"} data-testid="activity-reviews">
+              <button className={sidebarView === "reviews" ? "active" : ""} onClick={() => { if (sidebarView === "reviews") { updatePrefs({ listOpen: !listOpen }); if (listOpen) return; } updatePrefs({ sidebarView: "reviews", listOpen: true }); if (view === "development" || view === "local" || view === "agents") setView("document"); }} title="Pull requests waiting for your review" aria-label="Reviews" aria-pressed={sidebarView === "reviews"} data-testid="activity-reviews">
                 <PullRequestIcon size={20} />
                 {reviewBadge(reviews.queue) > 0 && <span className="activity-badge" data-testid="activity-reviews-badge">{reviewBadge(reviews.queue)}</span>}
               </button>
             )}
-            <button className={sidebarView === "development" ? "active" : ""} onClick={() => { updatePrefs({ sidebarView: "development" }); if (devId) setView("development"); }} title="PR Development: develop new or existing pull requests with an editor and the agent" aria-label="PR Development" aria-pressed={sidebarView === "development"} data-testid="activity-development">
+            <button className={sidebarView === "development" ? "active" : ""} onClick={() => { if (sidebarView === "development") { updatePrefs({ listOpen: !listOpen }); if (listOpen) return; } updatePrefs({ sidebarView: "development", listOpen: true }); if (devId) setView("development"); }} title="PR Development: develop new or existing pull requests with an editor and the agent" aria-label="PR Development" aria-pressed={sidebarView === "development"} data-testid="activity-development">
               <CodeIcon size={20} />
             </button>
-            <button className={sidebarView === "agents" ? "active" : ""} onClick={() => { updatePrefs({ sidebarView: "agents" }); setView("agents"); }} title="Agents: monitor the status and health of agent sessions" aria-label="Agents" aria-pressed={sidebarView === "agents"} data-testid="activity-agents">
+            <button className={sidebarView === "agents" ? "active" : ""} onClick={() => { if (sidebarView === "agents") { updatePrefs({ listOpen: !listOpen }); if (listOpen) return; } updatePrefs({ sidebarView: "agents", listOpen: true }); setView("agents"); }} title="Agents: monitor the status and health of agent sessions" aria-label="Agents" aria-pressed={sidebarView === "agents"} data-testid="activity-agents">
               <DashboardIcon size={20} />
               {alarms > 0 && <span className="activity-badge alarm" data-testid="activity-agents-badge" title={`${alarms} session(s) need you`}>{alarms}</span>}
             </button>
+            <span className="activity-spacer" />
+            <button onClick={() => updatePrefs({ listOpen: !listOpen })} title={listOpen ? "Fold the list (folders, projects, pull requests…) — click the current icon to unfold it again" : "Show the list"}
+              aria-label={listOpen ? "Fold the list" : "Show the list"} aria-pressed={!listOpen} data-testid="sidebar-list-fold">{listOpen ? "«" : "»"}</button>
           </nav>
           <div className="sidebar-content" style={{ display: sidebarView === "files" ? undefined : "none" }}>
             <FileTree
@@ -907,10 +911,10 @@ export default function App() {
           {sidebarView === "development" && (
             <div className="sidebar-content">
               <DevPanel activeId={view === "development" ? devId : null} workspaces={workspaces} onOpen={(id) => openDev(id)}
-                preset={devPreset} onPresetUsed={() => setDevPreset(null)} onFold={() => setSidebarOpen(() => false)} />
+                preset={devPreset} onPresetUsed={() => setDevPreset(null)} onFold={() => updatePrefs({ listOpen: false })} />
             </div>
           )}
-          {sidebarOpen && <Resizer side="right" onResize={resizeSidebar} onEnd={persistPrefs} />}
+          {sidebarOpen && listOpen && <Resizer side="right" onResize={resizeSidebar} onEnd={persistPrefs} />}
         </aside>
 
         <section className="center" style={{ display: view === "document" ? undefined : "none" }}>
@@ -1068,7 +1072,7 @@ export default function App() {
         <section className="center dev-center" style={{ display: view === "development" ? undefined : "none" }}>
           {devId && (
             <DevView key={devId} devId={devId} workspaces={workspaces} sessions={sessions} onSessionsChanged={() => void refreshSessions()}
-              projectsFolded={!sidebarOpen} onShowProjects={() => { updatePrefs({ sidebarOpen: true, sidebarView: "development" }); }}
+              projectsFolded={!sidebarOpen || !listOpen} onShowProjects={() => { updatePrefs({ sidebarOpen: true, listOpen: true, sidebarView: "development" }); }}
               onArchived={() => openDev(null)}
               onOpenPrReview={hub?.available ? (r, n) => { updatePrefs({ sidebarView: "reviews" }); openPr(r, n); } : undefined} />
           )}

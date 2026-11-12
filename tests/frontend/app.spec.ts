@@ -14,7 +14,16 @@ async function login(page: Page) {
   await page.goto("/");
   await page.getByTestId("login-token").fill(TOKEN);
   await page.getByTestId("login-submit").click();
-  await expect(page.getByTestId("view-document")).toBeVisible();
+  // on a busy host the first sign-in can stay on the login page (the click lands before the form is ready): once more
+  try {
+    await expect(page.getByTestId("view-document")).toBeVisible({ timeout: 8000 });
+  } catch {
+    if (await page.getByTestId("login-submit").isVisible()) {
+      await page.getByTestId("login-token").fill(TOKEN);
+      await page.getByTestId("login-submit").click();
+    }
+    await expect(page.getByTestId("view-document")).toBeVisible({ timeout: 15000 });
+  }
 }
 
 async function openGuide(page: Page) {
@@ -3111,12 +3120,29 @@ test("Agents: find sessions in folders, add one by id, alarms, a session on stag
   const saved = () => page.waitForResponse((r) => r.url().includes("/monitor/auto") && r.request().method() === "PUT" && r.ok());
   await Promise.all([saved(), folderBox.uncheck()]);
   await expect(folderBox).not.toBeChecked();
-  await page.reload();
-  await page.getByTestId("activity-agents").click();
+  await page.reload(); // (still on Agents: clicking its icon again would fold the list)
+  await expect(page.getByTestId("agents-panel")).toBeVisible({ timeout: 15000 });
   await expect(page.getByTestId("mon-folder").first()).not.toBeChecked({ timeout: 10000 });
   await Promise.all([saved(), page.getByTestId("mon-folder").first().check()]);
   await expect(page.getByTestId("mon-folder").first()).toBeChecked();
-  await page.getByTestId("activity-files").click();
+  // the list next to the activity bar folds (the current icon again, or « at the bottom); the activity bar stays
+  const width = async () => (await page.locator(".sidebar").boundingBox())!.width;
+  const open = await width();
+  await page.getByTestId("activity-agents").click();
+  await expect(page.getByTestId("agents-panel")).toBeHidden();
+  await expect(page.getByTestId("activity-files")).toBeVisible();
+  expect(await width()).toBeLessThan(60);
+  await expect(page.getByTestId("agent-monitor")).toBeVisible(); // the main page stays
+  await page.getByTestId("activity-agents").click();
+  await expect(page.getByTestId("agents-panel")).toBeVisible();
+  expect(Math.abs((await width()) - open)).toBeLessThan(3);
+  await page.getByTestId("sidebar-list-fold").click();
+  await expect(page.getByTestId("agents-panel")).toBeHidden();
+  await page.reload(); // kept
+  await expect(page.getByTestId("agent-monitor")).toBeVisible({ timeout: 15000 });
+  await expect(page.getByTestId("agents-panel")).toBeHidden();
+  await page.getByTestId("activity-files").click(); // another icon: its list opens
+  await expect(page.getByTestId("tree-root").first()).toBeVisible();
 });
 
 test("layout: panes can be resized by dragging, folded and unfolded, and keep their size", async ({ page }) => {

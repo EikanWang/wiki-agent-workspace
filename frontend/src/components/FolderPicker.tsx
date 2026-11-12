@@ -68,8 +68,13 @@ export default function FolderPicker({ title, hint, start, requireGit = false, c
   const [filter, setFilter] = useState("");
   const [loading, setLoading] = useState(false);
   const edited = useRef(false);
+  const input = useRef<HTMLInputElement>(null);
+  // the listing shown may update the path box when a folder was asked for (Go, a click); a listing that comes by
+  // itself (the fallback to home) does not touch the box while you are in it (it would mix with what you type)
+  const asked = useRef(true);
   const go = (p: string) => {
     edited.current = false;
+    asked.current = true;
     setFilter("");
     setPath(p);
   };
@@ -80,14 +85,15 @@ export default function FolderPicker({ title, hint, start, requireGit = false, c
       .then((l) => {
         if (!alive) return;
         setListing(l);
-        if (!edited.current) setTyped(l.path);
+        if (!edited.current && (asked.current || document.activeElement !== input.current)) setTyped(l.path);
+        asked.current = false;
         setError(null);
       })
       .catch((e) => {
         if (!alive) return;
         setError((e as ApiError).message);
         // a start path that is gone: begin at home instead (unless another folder was asked for meanwhile)
-        if (!listing && path !== "~") setPath((cur) => (cur === path ? "~" : cur));
+        if (!listing && path !== "~") setPath((cur) => { if (cur === path) asked.current = false; return cur === path ? "~" : cur; });
       })
       .finally(() => alive && setLoading(false));
     return () => { alive = false; };
@@ -110,7 +116,7 @@ export default function FolderPicker({ title, hint, start, requireGit = false, c
         {hint && <div className="muted small">{hint} You are browsing the server's file system.</div>}
         <Places onGo={go} />
         <div className="row">
-          <input className="path-input" value={typed} onChange={(e) => { edited.current = true; setTyped(e.target.value); }} onKeyDown={(e) => { if (e.key === "Enter") go(typed.trim() || "~"); }}
+          <input ref={input} className="path-input" value={typed} onChange={(e) => { edited.current = true; setTyped(e.target.value); }} onKeyDown={(e) => { if (e.key === "Enter") go(typed.trim() || "~"); }}
             placeholder="/absolute/path (Enter to open)" data-testid="folder-picker-path" />
           <button className="btn small" onClick={() => go(typed.trim() || "~")}>Go</button>
           <label className="small"><input type="checkbox" checked={hidden} onChange={(e) => setHidden(e.target.checked)} /> hidden</label>

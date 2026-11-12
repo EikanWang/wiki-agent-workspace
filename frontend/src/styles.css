@@ -1241,3 +1241,7 @@ body.resizing-h iframe { pointer-events: none; }
 .dev-agent-strip { flex: none; width: 22px; border: none; border-left: 1px solid var(--border); background: var(--card); color: var(--muted); cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 8px 0; font-size: 12px; }
 .dev-agent-strip:hover { color: var(--fg); background: var(--accent); }
 .dev-agent-strip-label { writing-mode: vertical-rl; letter-spacing: 0.05em; }
+/* the sidebar's list folded: only the activity bar stays */
+.sidebar.list-folded .sidebar-content { display: none !important; }
+.activity-spacer { flex: 1; }
+.activity-bar button[data-testid="sidebar-list-fold"] { font-size: 16px; }

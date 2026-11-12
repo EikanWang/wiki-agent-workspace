@@ -37,7 +37,10 @@ Git/GitHub credentials, whoever is signed in.
 ```
 
 - The **activity bar** at the left edge switches the sidebar: **Files** (the file tree), **Reviews** (GitHub, when
-  signed in as the server's owner) and **PR Development**.
+  signed in as the server's owner) and **PR Development**. Clicking the current icon again (or **«** at the bottom
+  of the activity bar) folds the list next to it — folders, projects, pull requests… — and leaves only the activity
+  bar; the current icon again (or **»**) brings it back, another icon opens its own list. **Sidebar** (top left)
+  hides both.
 - **Files** (top left) folds/unfolds the file tree; drag its edge to resize. The discussion panel folds with `›` and
   is resizable too; the outline folds with `▾ Outline`. The document always grows into the freed space.
 - **Aa** — document font (sans/serif/mono), size, optional content-width cap (default: fill), terminal font size.

@@ -52,6 +52,8 @@ export interface Prefs {
   sidebarWidth: number;
   panelWidth: number;
   sidebarOpen: boolean;
+  /** the sidebar's list (folders, projects, PRs…) next to the activity bar; folded: only the activity bar shows */
+  listOpen: boolean;
   /** what the sidebar shows (activity bar): the file tree or the GitHub review queue */
   sidebarView: "files" | "reviews" | "development" | "local" | "agents";
   panelOpen: boolean;
@@ -72,6 +74,7 @@ export const DEFAULT_PREFS: Prefs = {
   sidebarWidth: 260,
   panelWidth: 380,
   sidebarOpen: true,
+  listOpen: true,
   sidebarView: "files",
   panelOpen: true,
   tocOpen: true,
