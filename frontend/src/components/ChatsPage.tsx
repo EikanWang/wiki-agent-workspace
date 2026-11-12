@@ -133,8 +133,11 @@ export default function ChatsPage({ workspaces, target, onTarget, sessions, onRe
             <div className="chat-composer">
               <textarea autoFocus rows={4} value={first} onChange={(e) => setFirst(e.target.value)} placeholder={`Ask anything about ${project?.name ?? "the project"} (${COMPOSER_HINT})`}
                 onKeyDown={(e) => composerKeyDown(e, () => void startNew(), setFirst)} data-testid="chat-first" />
-              <ModelChoice value={firstModel} onChange={setFirstModel} />
-              <button className="btn primary" disabled={busy || !first.trim()} onClick={() => void startNew()} data-testid="chat-first-send">{busy ? "Starting…" : "Send"}</button>
+              <div className="chat-composer-bar">
+                <ModelChoice value={firstModel} onChange={setFirstModel} />
+                <span className="spacer" />
+                <button className="btn primary" disabled={busy || !first.trim()} onClick={() => void startNew()} data-testid="chat-first-send">{busy ? "Starting…" : "Send"}</button>
+              </div>
             </div>
           </div>
         )}

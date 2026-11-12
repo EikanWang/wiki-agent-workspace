@@ -2980,6 +2980,10 @@ test("PR Development: resize the bottom panel; choose a model for a discussion a
   await page.locator(".tree-row.dir", { hasText: "docs" }).hover();
   await page.getByTestId("tree-chat-docs").click();
   await page.getByTestId("chat-new-page").getByTestId("model-choice-model").selectOption("other/gamma");
+  // the agent SDK, model and variant pickers sit under the text box
+  const textBox = (await page.getByTestId("chat-first").boundingBox())!;
+  const picker = (await page.getByTestId("chat-new-page").getByTestId("model-choice-model").boundingBox())!;
+  expect(picker.y).toBeGreaterThan(textBox.y + textBox.height - 1);
   await page.getByTestId("chat-first").fill("Gamma, what is here?");
   await page.getByTestId("chat-first-send").click();
   await expect(page.getByTestId("chats-page").locator('[data-testid="message-agent"][data-status="completed"]').last()).toContainText("Gamma, what is here?", { timeout: 20000 });

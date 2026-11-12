@@ -152,8 +152,11 @@ export default function ChatView({ doc, folderName, threads, sessions, liveJob, 
         <textarea rows={3} value={text} onChange={(e) => setText(e.target.value)} disabled={busy}
           placeholder={`${thread ? "Continue the conversation" : `Ask about ${folderName}`} (${COMPOSER_HINT})`}
           onKeyDown={(e) => composerKeyDown(e, send, setText, () => setText(""))} data-testid="chat-input" autoFocus />
-        <ModelChoice value={modelChoice} onChange={setModelChoice} session={chatSession} />
-        <button className="btn primary" disabled={busy || running || !text.trim()} onClick={send} data-testid="chat-send">{running ? "Agent is answering…" : "Send"}</button>
+        <div className="chat-composer-bar">
+          <ModelChoice value={modelChoice} onChange={setModelChoice} session={chatSession} />
+          <span className="spacer" />
+          <button className="btn primary" disabled={busy || running || !text.trim()} onClick={send} data-testid="chat-send">{running ? "Agent is answering…" : "Send"}</button>
+        </div>
       </div>
     </div>
   );

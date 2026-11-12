@@ -799,8 +799,10 @@ mark.waw-hl.review.needs_review { border-bottom: 2px dashed var(--warn); }
 .chat-actions .strong { font-weight: 600; }
 .chat-action-box { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; width: 100%; }
 .chat-action-box input { border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; background: var(--bg); color: inherit; min-width: 220px; flex: 1; }
-.chat-composer { display: flex; gap: 8px; align-items: flex-end; padding-top: 6px; }
-.chat-composer textarea { flex: 1; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; background: var(--bg); color: inherit; font: inherit; resize: vertical; }
+.chat-composer { display: flex; flex-direction: column; gap: 6px; padding-top: 6px; }
+/* under the text box: agent SDK, model, variant (effort) — then Send */
+.chat-composer-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.chat-composer textarea { flex: none; width: 100%; box-sizing: border-box; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; background: var(--bg); color: inherit; font: inherit; resize: vertical; }
 .chat-item { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; background: var(--bg); color: inherit; cursor: pointer; }
 .chat-item:hover { border-color: var(--primary); }
 .chat-item-title { font-weight: 600; }
