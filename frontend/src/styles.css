@@ -1276,3 +1276,16 @@ body.resizing-h iframe { pointer-events: none; }
 .git-badge.agent-waiting { color: var(--primary); font-weight: 600; }
 .gh-refresh { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; }
 .gh-refresh select { font-size: 11px; padding: 0 2px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); color: var(--fg); }
+/* PR Development: your pull requests of a repository */
+.my-prs { border-top: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; max-height: 55%; }
+.my-prs.folded { max-height: none; }
+.my-prs-head { display: flex; align-items: center; gap: 4px; border: none; background: transparent; color: inherit; padding: 6px 10px; cursor: pointer; text-align: left; }
+.my-prs-body { display: flex; flex-direction: column; gap: 4px; padding: 0 8px 6px; min-height: 0; }
+.my-prs-body select, .my-prs-body input { min-width: 0; flex: 1; border: 1px solid var(--border); border-radius: 6px; padding: 2px 6px; background: var(--bg); color: var(--fg); }
+.my-prs-list { overflow: auto; display: flex; flex-direction: column; min-height: 0; }
+.my-pr { display: flex; align-items: center; gap: 4px; border-radius: 6px; }
+.my-pr.here { background: var(--accent); }
+.my-pr-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; border: none; background: transparent; color: inherit; padding: 4px; text-align: left; cursor: pointer; border-radius: 6px; }
+.my-pr-main:hover { background: var(--accent); }
+.my-pr-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.my-pr-text > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

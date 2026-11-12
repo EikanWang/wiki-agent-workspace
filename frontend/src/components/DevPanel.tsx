@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { ApiError, DevInfo, DevWorkspace, WorkspaceInfo, get, subscribeGlobal } from "../api";
 import DevSetupDialog, { DevSetupPreset } from "./DevSetupDialog";
 import { PlusIcon } from "./Icons";
+import MyPrs from "./MyPrs";
 
 /** Sidebar of PR Development: the development workspaces (newest activity first) and "New". */
 export default function DevPanel({ activeId, workspaces, onOpen, preset, onPresetUsed, onFold }: {
@@ -76,6 +77,7 @@ export default function DevPanel({ activeId, workspaces, onOpen, preset, onPrese
           </button>
         ))}
       </div>
+      <MyPrs list={list ?? []} activeId={activeId} onOpen={onOpen} onSetup={(p) => setSetup(p)} onCreated={(d) => { void load(); onOpen(d.id); }} />
       {setup && info && (
         <DevSetupDialog info={info} workspaces={workspaces} preset={setup} onClose={() => setSetup(null)}
           onCreated={(d) => { setSetup(null); void load(); onOpen(d.id); }} />

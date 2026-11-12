@@ -1120,3 +1120,72 @@ async def test_open_a_folder_directly_branches_and_diffs_per_folder(running_app,
     r = await api.post("/api/v1/dev/workspaces", json={"source_repo": str(other), "mode": "folder", "init_git": False})
     d3 = await wait_ready(api, r.json()["id"])
     assert d3["status"] == "failed" and "not in a Git repository" in d3["error"] and not (other / ".git").exists()
+
+
+async def test_your_pull_requests_of_a_repo_and_checking_one_out_in_a_folder(running_app, dev_settings, tmp_path, fake_env, monkeypatch):
+    """List your PRs of a repository (or of a checkout's repository), with the workspaces that have them; check one
+    out in a folder workspace, update it, push to its branch; switching away leaves the PR."""
+    h = await running_app(dev_settings)
+    api = h.api
+    src, bare = make_source(tmp_path)
+    git(src, "remote", "set-url", "origin", "https://github.com/acme/proj.git")
+    git(src, "config", f"url.{bare}.insteadOf", "https://github.com/acme/proj.git")
+    other = tmp_path / "contrib"
+    subprocess.run(["git", "clone", "-q", str(bare), str(other)], check=True)
+    git(other, "config", "user.email", "c@example.com")
+    git(other, "config", "user.name", "C")
+    git(other, "checkout", "-q", "-b", "my-fix")
+    (other / "lib.py").write_text("def add(a, b):\n    return a + b  # my fix\n")
+    git(other, "commit", "-q", "-am", "My fix")
+    git(other, "push", "-q", str(bare), "HEAD:refs/pull/7/head", "HEAD:refs/heads/my-fix")
+
+    from backend.app.development import service
+
+    seen: list = []
+
+    async def my_prs(repo, state="open"):
+        seen.append((repo, state))
+        return [{"number": 7, "title": "My fix", "url": "u7", "isDraft": False, "state": "OPEN", "headRefName": "my-fix", "baseRefName": "main",
+                 "updatedAt": "2026-11-10T00:00:00Z", "reviewDecision": None, "ci": "SUCCESS"},
+                {"number": 9, "title": "Another", "url": "u9", "isDraft": True, "state": "OPEN", "headRefName": "x", "baseRefName": "main",
+                 "updatedAt": "2026-11-09T00:00:00Z", "reviewDecision": None, "ci": None}]
+
+    async def meta(repo, number):
+        return {"headRefName": "my-fix", "head_repo": "acme/proj", "baseRefName": "main", "isCrossRepository": False,
+                "maintainerCanModify": True, "title": "My fix"}
+    monkeypatch.setattr(service, "list_my_prs", my_prs)
+    monkeypatch.setattr(service, "fetch_pr_meta", meta)
+
+    r = await api.post("/api/v1/dev/workspaces", json={"source_repo": str(src), "mode": "folder"})
+    d = await wait_ready(api, r.json()["id"])
+    assert d["github_repo"] == "acme/proj"
+    base = f"/api/v1/dev/workspaces/{d['id']}"
+    # the known repositories, and your PRs of one — by name or by a checkout of it
+    assert (await api.get("/api/v1/dev/repos")).json()["repos"][0] == {"repo": "acme/proj", "source": str(src), "workspaces": 1}
+    got = (await api.get("/api/v1/dev/my-prs", params={"source": str(src)})).json()
+    assert got["repo"] == "acme/proj" and got["source"] == str(src) and [p["number"] for p in got["prs"]] == [7, 9]
+    assert got["prs"][0]["workspaces"] == [] and seen[-1] == ("acme/proj", "open")
+    assert (await api.get("/api/v1/dev/my-prs", params={"repo": "acme/proj", "state": "all"})).json()["state"] == "all"
+    assert (await api.get("/api/v1/dev/my-prs", params={"repo": "not a repo"})).status_code == 400
+    # check #7 out in the folder: its branch, compared with its base; pushes go to the PR's branch
+    r = await api.post(f"{base}/checkout-pr", json={"number": 7})
+    assert r.status_code == 200, r.text
+    assert r.json()["branch"] == "my-fix" and git(src, "symbolic-ref", "--short", "HEAD") == "my-fix"
+    assert "# my fix" in (src / "lib.py").read_text()
+    d = (await api.get(base)).json()
+    assert d["pr_number"] == 7 and d["push_branch"] == "my-fix" and d["base_ref"] == "refs/waw/base/main"
+    st = (await api.get(f"{base}/status")).json()
+    assert st["commits_on_branch"] == 1 and st["unpushed"] == 0
+    assert (await api.get("/api/v1/dev/my-prs", params={"repo": "acme/proj"})).json()["prs"][0]["workspaces"][0]["id"] == d["id"]
+    (src / "lib.py").write_text("def add(a, b):\n    return b + a  # updated\n")
+    assert (await api.post(f"{base}/commit", json={"message": "Update the PR"})).status_code == 200
+    assert (await api.post(f"{base}/push")).status_code == 200
+    assert git(bare, "log", "-1", "--format=%s", "my-fix") == "Update the PR"
+    # back to main: the workspace no longer belongs to the PR
+    assert (await api.post(f"{base}/branch", json={"name": "main", "create": False})).status_code == 200
+    d = (await api.get(base)).json()
+    assert d["pr_number"] is None and d["branch"] == "main" and d["push_remote"] == "origin"
+    # a PR workspace cannot switch to another PR
+    r = await api.post("/api/v1/dev/workspaces", json={"source_repo": str(src), "mode": "pr", "github_repo": "acme/proj", "pr_number": 7})
+    p = await wait_ready(api, r.json()["id"])
+    assert (await api.post(f"/api/v1/dev/workspaces/{p['id']}/checkout-pr", json={"number": 9})).status_code == 409

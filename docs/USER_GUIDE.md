@@ -312,6 +312,13 @@ write code with the agent — a new pull request, or changes to an existing one.
   Development** in a PR tab fills this in. Or a *Local folder*: a Git checkout or any folder, used **as it is** — no
   worktree of its own, so its files and branch change (optionally a branch to create there right away; a folder not
   in a Git repository is made one with `git init` unless you untick it). Archiving never deletes that folder.
+- **My pull requests** — below the workspaces in the sidebar: your pull requests (author: the server's `gh`
+  login) in a repository — the one of the workspace you open, one you develop here, one you type (`owner/repo`), or
+  the repository of a local checkout (**Folder…**); *open* or *all*; CI dot, draft, review state. Click one to open
+  it: its workspace if it has one, otherwise a new *Existing pull request* workspace from the repository's known
+  checkout (or the setup dialog, prefilled). **Check out here** puts it in the open workspace's own checkout (a
+  local folder or a new-branch worktree of the same repository): its head on its branch, compared with its base,
+  **Push** updates the PR. Switching that checkout to another branch leaves the PR (the toolbar's #N goes).
 - **Branches** — the branch chip in the workspace's toolbar (⎇ name ▾) creates a branch from the current one
   (uncommitted changes go along) or switches to another; in a folder opened directly, a new branch is compared with
   the one it was created from. A branch switched outside the app (a terminal) is followed. A pull request's

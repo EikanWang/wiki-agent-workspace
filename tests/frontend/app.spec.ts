@@ -2944,6 +2944,70 @@ test("PR Development: Changes view like the wiki's Diff: per-file diffs, side by
   await page.getByTestId("activity-files").click();
 });
 
+test("PR Development: your pull requests of a repository; check one out in a folder, update it, switch back", async ({ page }) => {
+  const cp = require("child_process") as typeof import("child_process");
+  const tmp = path.dirname(workspaceDir());
+  const bare = path.join(tmp, "demo.git"), proj = path.join(tmp, "demo-proj"), contrib = path.join(tmp, "demo-contrib");
+  for (const d of [bare, proj, contrib]) fs.rmSync(d, { recursive: true, force: true });
+  const g = (cwd: string, ...a: string[]) => cp.execFileSync("git", ["-C", cwd, "-c", "user.name=e2e", "-c", "user.email=e2e@x", ...a], { encoding: "utf-8" }).trim();
+  cp.execFileSync("git", ["init", "-q", "--bare", "-b", "main", bare]);
+  fs.mkdirSync(proj);
+  g(proj, "init", "-q", "-b", "main");
+  fs.writeFileSync(path.join(proj, "app.py"), "VALUE = 1\n");
+  g(proj, "add", "-A");
+  g(proj, "commit", "-q", "-m", "init");
+  g(proj, "remote", "add", "origin", "https://github.com/acme/demo.git");
+  g(proj, "config", `url.${bare}.insteadOf`, "https://github.com/acme/demo.git");
+  g(proj, "push", "-q", "origin", "main");
+  cp.execFileSync("git", ["clone", "-q", bare, contrib]);
+  g(contrib, "checkout", "-q", "-b", "demo-fix");
+  fs.writeFileSync(path.join(contrib, "app.py"), "VALUE = 2  # the fix\n");
+  g(contrib, "commit", "-q", "-am", "Demo fix");
+  g(contrib, "push", "-q", "origin", "HEAD:refs/pull/5/head", "HEAD:refs/heads/demo-fix");
+  await login(page);
+  await page.getByTestId("activity-development").click();
+  await page.getByTestId("dev-new").click();
+  await page.getByTestId("dev-mode-folder").click();
+  await page.getByTestId("dev-source").fill(proj);
+  await page.getByTestId("dev-create").click();
+  await expect(page.getByTestId("dev-branch-button")).toContainText("main", { timeout: 20000 });
+  // the sidebar lists your pull requests of the workspace's repository
+  const prs = page.getByTestId("my-prs");
+  if ((await prs.getByTestId("my-prs-repo").count()) === 0) await page.getByTestId("my-prs-toggle").click();
+  await expect(prs.getByTestId("my-pr")).toHaveCount(2, { timeout: 15000 });
+  await expect(prs).toContainText("acme/demo");
+  const fix = prs.locator('[data-testid="my-pr"][data-number="5"]');
+  await expect(fix).toContainText("Demo fix");
+  // check #5 out right here: its branch and contents; the workspace now belongs to the PR
+  await fix.getByTestId("my-pr-here").click();
+  await expect(page.getByTestId("dev-branch-button")).toContainText("demo-fix", { timeout: 15000 });
+  expect(g(proj, "symbolic-ref", "--short", "HEAD")).toBe("demo-fix");
+  expect(fs.readFileSync(path.join(proj, "app.py"), "utf-8")).toContain("the fix");
+  await expect(page.locator(".dev-toolbar")).toContainText("#5");
+  await expect(fix).toHaveClass(/here/);
+  // update the PR: change, commit, push to its branch
+  fs.writeFileSync(path.join(proj, "app.py"), "VALUE = 3  # updated\n");
+  await page.getByTestId("dev-changes-toggle").click();
+  await page.getByTestId("dev-commit-toggle").click();
+  await page.getByTestId("dev-commit-msg").fill("Update demo fix");
+  await page.getByTestId("dev-commit").click();
+  await expect(page.getByTestId("dev-note")).toContainText("Committed 1 file(s)");
+  await page.getByTestId("dev-push").click();
+  await expect(page.getByTestId("dev-note")).toContainText("Pushed to demo-fix", { timeout: 15000 });
+  expect(g(bare, "log", "-1", "--format=%s", "demo-fix")).toBe("Update demo fix");
+  // switch back to main: no longer the PR's
+  await page.getByTestId("dev-branch-button").click();
+  await page.getByTestId("dev-branch-switch").filter({ hasText: /^main$/ }).click();
+  await expect(page.getByTestId("dev-branch-button")).toContainText("main");
+  await expect(page.locator(".dev-toolbar")).not.toContainText("#5");
+  // archive (the folder stays)
+  page.once("dialog", (d) => d.accept());
+  await page.locator(".dev-toolbar .icon-btn", { hasText: "⋯" }).click();
+  await page.getByTestId("confirm-ok").click();
+  await expect(page.getByTestId("dev-view")).toHaveCount(0, { timeout: 15000 });
+  await page.getByTestId("activity-files").click();
+});
+
 test("PR Development: resize the bottom panel; choose a model for a discussion and a chat", async ({ page }) => {
   await login(page);
   await page.getByTestId("activity-development").click();

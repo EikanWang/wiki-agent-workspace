@@ -450,6 +450,28 @@ class BranchIn(BaseModel):
     start: str | None = Field(None, max_length=250)
 
 
+@router.get("/dev/repos")
+def dev_repos(ctx: AppContext = Depends(require_auth)):
+    """GitHub repositories you develop here, with a local checkout of each when known."""
+    return {"repos": _svc(ctx).known_repos()}
+
+
+@router.get("/dev/my-prs")
+async def dev_my_prs(repo: str | None = Query(None, max_length=200), source: str | None = Query(None, max_length=4096),
+                     state: str = Query("open", pattern="^(open|closed|merged|all)$"), ctx: AppContext = Depends(require_auth)):
+    """Your pull requests in a repository (or the repository of a local checkout), each with its workspaces here."""
+    return await _svc(ctx).my_prs(repo, source, state)
+
+
+class CheckoutPrIn(BaseModel):
+    number: int = Field(ge=1)
+
+
+@router.post("/dev/workspaces/{dev_id}/checkout-pr")
+async def dev_checkout_pr(dev_id: str, body: CheckoutPrIn, ctx: AppContext = Depends(require_auth_mutating)):
+    return await _svc(ctx).checkout_pr(dev_id, body.number)
+
+
 @router.get("/dev/workspaces/{dev_id}/branches")
 async def git_branches(dev_id: str, ctx: AppContext = Depends(require_auth)):
     return await _svc(ctx).branches(dev_id)

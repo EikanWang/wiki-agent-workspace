@@ -365,6 +365,22 @@ def main() -> None:
     (src / "ci.yaml").write_text("jobs:\n  build:\n    runs-on: ubuntu\n  test:\n    needs: build\n")
     subprocess.run(["git", "add", "-A"], cwd=src, check=True)
     subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=src, check=True)
+    # "Your pull requests" of acme/demo (a repository the e2e test makes; its PR head is refs/pull/5/head)
+    from backend.app.development import service as dev_service
+
+    async def my_prs(repo, state="open"):
+        if repo.lower() != "acme/demo":
+            return []
+        return [{"number": 5, "title": "Demo fix", "url": "https://github.com/acme/demo/pull/5", "isDraft": False, "state": "OPEN",
+                 "headRefName": "demo-fix", "baseRefName": "main", "updatedAt": "2026-11-10T00:00:00Z", "reviewDecision": None, "ci": "SUCCESS"},
+                {"number": 6, "title": "Demo draft", "url": "https://github.com/acme/demo/pull/6", "isDraft": True, "state": "OPEN",
+                 "headRefName": "demo-draft", "baseRefName": "main", "updatedAt": "2026-11-09T00:00:00Z", "reviewDecision": None, "ci": None}]
+
+    async def pr_meta(repo, number):
+        return {"headRefName": {5: "demo-fix", 6: "demo-draft"}.get(number, f"pr{number}"), "head_repo": repo, "baseRefName": "main",
+                "isCrossRepository": False, "maintainerCanModify": True, "title": f"Demo PR {number}"}
+    dev_service.list_my_prs = my_prs
+    dev_service.fetch_pr_meta = pr_meta
     Path(f"/tmp/waw-e2e-devsrc-{settings.port}").write_text(str(src))  # per port: runs side by side do not mix
     settings.frontend_dist = ROOT / "frontend" / "dist"
     # "Sign in with GitHub" against a fake GitHub served by this same server (routes below)

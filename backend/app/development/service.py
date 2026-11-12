@@ -229,6 +229,48 @@ async def fetch_pr_meta(repo: str, number: int) -> dict[str, Any]:
     return d
 
 
+async def github_remotes(t: Target, path: str) -> dict[str, str]:
+    """owner/name → remote name, for the checkout's GitHub remotes, from the configured URLs (not rewritten by
+    url.<base>.insteadOf, which `git remote -v` / `get-url` apply)."""
+    _, out, _ = await t.git(path, ["config", "--get-regexp", r"^remote\..*\.url$"])
+    found: dict[str, str] = {}
+    for ln in out.splitlines():
+        key, _, url = ln.partition(" ")
+        name = key.removeprefix("remote.").removesuffix(".url")
+        repo = parse_github_repo(url)
+        if repo and (repo not in found or name == "origin"):
+            found[repo] = name
+    return found
+
+
+async def list_my_prs(repo: str, state: str = "open") -> list[dict[str, Any]]:
+    """Your pull requests in `repo` (author @me, the server's gh login), newest first. Module-level so tests can
+    replace it."""
+    import shutil
+
+    gh = shutil.which("gh")
+    if not gh:
+        raise ApiError(409, "GH_UNAVAILABLE", "the GitHub CLI (gh) is not installed on the server (run gh auth login after installing it)")
+    proc = await asyncio.create_subprocess_exec(
+        gh, "pr", "list", "--repo", repo, "--author", "@me", "--state", state, "--limit", "100", "--json",
+        "number,title,url,isDraft,state,headRefName,baseRefName,updatedAt,reviewDecision,statusCheckRollup",
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, stdin=asyncio.subprocess.DEVNULL)
+    try:
+        out, err = await asyncio.wait_for(proc.communicate(), timeout=90)
+    except TimeoutError:
+        proc.kill()
+        raise ApiError(504, "GH_TIMEOUT", "gh pr list timed out")
+    if proc.returncode != 0:
+        raise ApiError(502, "GH_FAILED", f"gh pr list failed: {err.decode('utf-8', 'replace').strip()[:300]}")
+    items = json.loads(out or b"[]")
+    for p in items:
+        checks = p.pop("statusCheckRollup", None) or []
+        states = {(c.get("conclusion") or c.get("state") or c.get("status") or "").upper() for c in checks}
+        p["ci"] = (None if not checks else "FAILURE" if states & {"FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED"}
+                   else "PENDING" if states & {"PENDING", "QUEUED", "IN_PROGRESS", "EXPECTED", "WAITING", ""} else "SUCCESS")
+    return sorted(items, key=lambda p: p.get("updatedAt") or "", reverse=True)
+
+
 # ---------------------------------------------------------------------- the service
 
 
@@ -467,11 +509,8 @@ class DevService:
             fields["branch"] = row.branch
             if not exists and current:
                 fields["base_ref"] = current
-        github_repo = row.github_repo
+        github_repo = row.github_repo or await self.repo_of_folder(wt, t)
         _, remotes, _ = await t.git(wt, ["remote"])
-        if not github_repo and "origin" in remotes.split():
-            rc, url, _ = await t.git(wt, ["remote", "get-url", "origin"])
-            github_repo = parse_github_repo(url) if rc == 0 else None
         fields.update(github_repo=github_repo, push_remote="origin" if "origin" in remotes.split() else None,
                       push_branch=fields["branch"] if fields["branch"] != "HEAD" else None)
         await self._finish(dev_id, t, wt, fields)
@@ -714,6 +753,97 @@ class DevService:
             raise ApiError(413, "FILE_TOO_LARGE", "the file is too large to show")
         return {"lines": out.split("\n")[:-1] if out.endswith("\n") else out.split("\n")}
 
+    # ------------------------------------------------------------------ your pull requests
+    def known_repos(self) -> list[dict[str, Any]]:
+        """GitHub repositories you work on here, each with a local checkout to develop in (on this server) if known:
+        from the development workspaces and the checkouts connected in PR Review."""
+        from ..kv import kv_get
+        from ..models import KvSetting
+
+        out: dict[str, dict[str, Any]] = {}
+        for r in self.list():
+            if not r.get("github_repo"):
+                continue
+            k = r["github_repo"].lower()
+            cur = out.setdefault(k, {"repo": r["github_repo"], "source": None, "workspaces": 0})
+            cur["workspaces"] += 1
+            if r.get("host") == LOCAL and not cur["source"] and r.get("source_repo"):
+                cur["source"] = r["source_repo"]
+        with self.ctx.db.read() as s:
+            keys = [k.key for k in s.query(KvSetting.key).filter(KvSetting.key.like("local_repo:%"))]
+        for key in keys:
+            repo = key.removeprefix("local_repo:")
+            link = kv_get(self.ctx, key, None) or {}
+            cur = out.setdefault(repo.lower(), {"repo": repo, "source": None, "workspaces": 0})
+            if not cur["source"] and link.get("path"):
+                cur["source"] = link["path"]
+        return sorted(out.values(), key=lambda x: (-x["workspaces"], x["repo"].lower()))
+
+    async def repo_of_folder(self, path: str, t: Target | None = None) -> str | None:
+        """The GitHub repository of a checkout (its origin, else any GitHub remote)."""
+        remotes = await github_remotes(t or self.target(LOCAL), path)
+        return next((r for r, name in remotes.items() if name == "origin"), None) or next(iter(remotes), None)
+
+    async def my_prs(self, repo: str | None, source: str | None, state: str) -> dict[str, Any]:
+        if not repo and source:
+            source = await self.target(LOCAL).expand(source)
+            repo = await self.repo_of_folder(source)
+            if not repo:
+                raise bad_request(f"{source} has no GitHub remote", "NO_GITHUB_REPO")
+        if not repo or not _REPO.match(repo):
+            raise bad_request("give the repository as owner/name (or a local checkout of it)", "INVALID_REPO")
+        prs = await list_my_prs(repo, state)
+        rows = [r for r in self.list() if (r.get("github_repo") or "").lower() == repo.lower() and r.get("pr_number")]
+        for p in prs:
+            p["workspaces"] = [{"id": r["id"], "name": r["name"], "mode": r["mode"]} for r in rows if r["pr_number"] == p["number"]]
+        known = next((k for k in self.known_repos() if k["repo"].lower() == repo.lower()), None)
+        return {"repo": repo, "state": state, "source": source or (known or {}).get("source"), "prs": prs}
+
+    async def checkout_pr(self, dev_id: str, number: int) -> dict[str, Any]:
+        """Put one of the repository's pull requests in this workspace's own checkout (a folder opened directly, or a
+        new-branch worktree): its head on a local branch, compared with its base, pushes going back to the PR's
+        branch. Your uncommitted changes go along (git refuses when they would be overwritten)."""
+        row, t = self._ready(dev_id)
+        if row.mode == "pr":
+            raise conflict("PR_WORKSPACE", "this workspace belongs to a pull request: open the other one in its own workspace")
+        if not row.github_repo:
+            raise conflict("NO_GITHUB_REPO", "this checkout has no GitHub remote")
+        wt = row.worktree_path
+        meta = await fetch_pr_meta(row.github_repo, number)
+        origin_repo = {k.lower(): v for k, v in (await github_remotes(t, wt)).items()}
+        repo = row.github_repo
+        fetch_src = origin_repo.get(repo.lower()) or f"https://github.com/{repo}.git"
+        base = meta.get("baseRefName") or "main"
+        rc, _, err = await t.git(wt, ["fetch", "--no-tags", "--quiet", fetch_src, f"+refs/pull/{number}/head:refs/waw/pr/{number}",
+                                      f"+refs/heads/{base}:refs/waw/base/{base}"], timeout=900)
+        if rc != 0:
+            raise ApiError(502, "GIT_FETCH_FAILED", f"could not fetch the pull request: {err.strip()[-400:]}")
+        head = meta.get("headRefName") or f"pr-{number}"
+        local = head if valid_branch(head) else f"pr-{number}"
+        exists = (await t.git(wt, ["rev-parse", "--verify", "--quiet", f"refs/heads/{local}"]))[0] == 0
+        if exists:  # a local branch of that name: use it if it is the PR's (or behind it), else a branch of its own
+            rc, _, _ = await t.git(wt, ["merge-base", "--is-ancestor", local, f"refs/waw/pr/{number}"])
+            rc2, _, _ = await t.git(wt, ["merge-base", "--is-ancestor", f"refs/waw/pr/{number}", local])
+            if rc != 0 and rc2 != 0:
+                local, exists = f"pr-{number}", (await t.git(wt, ["rev-parse", "--verify", "--quiet", f"refs/heads/pr-{number}"]))[0] == 0
+        if exists:
+            rc, out, err = await t.git(wt, ["switch", local], timeout=180)
+            if rc == 0:  # bring it up to the PR's head when it is behind
+                await t.git(wt, ["merge", "--ff-only", "--quiet", f"refs/waw/pr/{number}"], timeout=180)
+        else:
+            rc, out, err = await t.git(wt, ["switch", "-c", local, f"refs/waw/pr/{number}"], timeout=180)
+        if rc != 0:
+            raise ApiError(409, "GIT_SWITCH_FAILED", f"git switch failed: {(err or out).strip()[-500:]}")
+        head_repo = meta.get("head_repo") or repo
+        push_remote = origin_repo.get(head_repo.lower()) or f"https://github.com/{head_repo}.git"
+        await t.git(wt, ["update-ref", f"refs/waw/pushed/{local}", f"refs/waw/pr/{number}"])
+        warn = None
+        if meta.get("isCrossRepository") and not meta.get("maintainerCanModify"):
+            warn = "This PR comes from a fork that does not allow edits by maintainers: pushing to its branch will be refused."
+        self._update(dev_id, branch=local, pr_number=number, base_ref=f"refs/waw/base/{base}", push_remote=push_remote,
+                     push_branch=head, error=warn)
+        return {"branch": local, "pr_number": number, "title": meta.get("title"), "push_branch": head, "warning": warn}
+
     # ------------------------------------------------------------------ branches
     async def _follow_branch(self, row: DevWorkspace, t: Target) -> DevWorkspace:
         """A folder opened directly (or a worktree) may switch branches outside the app: follow it."""
@@ -722,9 +852,13 @@ class DevService:
         _, cur, _ = await t.git(row.worktree_path, ["symbolic-ref", "--quiet", "--short", "HEAD"])
         cur = cur.strip() or "HEAD"
         if cur != row.branch:
-            self._update(row.id, branch=cur, push_branch=cur if cur != "HEAD" else None)
+            self._update(row.id, branch=cur, push_branch=cur if cur != "HEAD" else None,
+                         **({"pr_number": None, "push_remote": self._default_remote(row)} if row.pr_number else {}))
             row = self.get(row.id)
         return row
+
+    def _default_remote(self, row: DevWorkspace) -> str | None:
+        return "origin" if row.push_remote else row.push_remote  # a PR's remote may be a fork's URL: back to origin
 
     async def branches(self, dev_id: str) -> dict[str, Any]:
         row, t = self._ready(dev_id)
@@ -760,6 +894,8 @@ class DevService:
         if rc != 0:
             raise ApiError(409, "GIT_SWITCH_FAILED", f"git switch failed: {(err or out).strip()[-500:]}")
         fields: dict[str, Any] = {"branch": name, "push_branch": name}
+        if row.pr_number:  # off the pull request's branch
+            fields.update(pr_number=None, push_remote=self._default_remote(row), error=None)
         if create and row.mode == "folder":
             fields["base_ref"] = start or (prev if prev != "HEAD" else None)  # compared against where it started
         self._update(dev_id, **fields)
