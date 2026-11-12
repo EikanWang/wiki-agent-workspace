@@ -1,11 +1,39 @@
 # Wiki Agent Workspace
 
-A self-hosted, single-user web application that runs on the Linux machine holding your Markdown wiki and your
-command-line agents (OpenCode, Codex). From any browser (desktop or phone) you get:
+A self-hosted, single-user web application that runs on the Linux machine holding your Markdown wikis, your code
+and your command-line agents (OpenCode, Codex, Claude Code). From any browser — desktop or phone — you get:
 
-1. **A real remote terminal** — tmux-backed shells that survive browser disconnects and web-server restarts.
-2. **A Markdown reader with anchored discussions** — select words or lines, ask an agent about *that exact text*,
-   follow up, and come back months later with discussions, session links, reading position and version history intact.
+- **Wiki** — read Markdown, Office and PDF documents; select a passage and ask an agent about *that exact text*;
+  discussions follow the passage across edits; chat with a whole wiki; edit, review the diff, commit, push.
+- **Local files** — browse and edit any folder or file on the server, like a file manager with VS Code's editor.
+- **PR Review** — the GitHub pull requests waiting for your review, grouped by repository and by where you stand;
+  review in the app, with an agent that suggests comments you apply or discard.
+- **PR Development** — develop a new pull request or update an existing one: a web IDE (or VS Code), the agent
+  working in the code with a wiki as its reference, build / test, diff, commit, push, CI.
+- **Agents** — monitor every OpenCode, Codex and Claude Code session on the machine: who needs you, errors, continue
+  any of them.
+- **Terminal** — real tmux-backed shells that survive browser disconnects and server restarts.
+
+## Quick start
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/EikanWang/wiki-agent-workspace/main/scripts/install.sh | bash
+```
+
+One command from an empty Linux account: it installs what is missing (with `sudo` if you allow it, otherwise
+user-level Python and Node.js in your home folder), gets the code, creates your wiki folder if needed, builds
+everything, starts the server as a user service, checks it and prints the **URL** and the **access token**.
+In a clone: `scripts/install.sh` (`--yes` to ask nothing; `--help` for the options). Then:
+
+1. Open the URL (another machine: `ssh -N -L 8765:127.0.0.1:8765 you@server`, then `http://127.0.0.1:8765`) and
+   paste the token.
+2. Log in to your agents once if needed: `opencode auth login`, `codex login`.
+3. For PR Review / PR Development: `gh auth login`, then in the app: account menu → **Set up “Continue with
+   GitHub”…** (one click).
+4. Anything missing? `scripts/doctor.sh` checks every feature and prints the fix.
+
+Day to day: `scripts/service.sh status | logs | restart | stop`. Step-by-step, manual install, HTTPS, upgrades:
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). How to use each feature: [docs/USER_GUIDE.md](docs/USER_GUIDE.md).
 
 Design specification: [`DESIGN.md`](DESIGN.md). Visual reference (mockup only): `INTERFACE_PROTOTYPE.html`.
 
@@ -19,8 +47,11 @@ Design specification: [`DESIGN.md`](DESIGN.md). Visual reference (mockup only): 
 | `frontend/` | React + TypeScript + Vite UI (markdown-it + DOMPurify reader, xterm.js terminal) |
 | `tests/backend/` | pytest suite (real Git + real tmux + controllable fake `opencode`/`codex` executables) |
 | `tests/frontend/` | Playwright browser tests against the production build |
-| `tests/fakes/` | `fake-opencode`, `fake-codex`: emit the providers' documented JSON protocols without credentials |
-| `scripts/setup.sh`, `scripts/start.sh`, `scripts/test.sh` | one setup command, one start command, test runner |
+| `tests/fakes/` | `fake-opencode`, `fake-codex`, `fake-claude`, `fake-code-server`, `fake-lsp`, `fake-ssh`: the external programs' protocols, without credentials |
+| `scripts/install.sh` | one-click install from an empty account (prerequisites, code, wiki folder, setup, service, check) |
+| `scripts/setup.sh`, `scripts/start.sh` | Python environment + UI build + configuration; start in the foreground |
+| `scripts/service.sh`, `scripts/doctor.sh` | run in the background as a user service (status, logs, restart…); check every feature with fixes |
+| `scripts/test.sh` | test runner |
 | `config.example.toml`, `requirements.lock`, `frontend/package-lock.json` | configuration template and dependency locks |
 | `docs/` | deployment, configuration, operations, schema and architecture guides (index below) |
 
@@ -29,7 +60,7 @@ Design specification: [`DESIGN.md`](DESIGN.md). Visual reference (mockup only): 
 | Guide | Read it when… |
 | --- | --- |
 | [docs/USER_GUIDE.md](docs/USER_GUIDE.md) | you want to know how to use a feature: folders, reading, asking, discussions, models, locks, diff, reviews, commits, Recent, terminal, keyboard |
-| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | you are installing on a new machine: prerequisites with install commands, setup, configuration decisions, service unit, remote access (tunnel / HTTPS proxy), provider login, upgrade, uninstall |
+| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | you are installing on a new machine: the one-click installer and its options, prerequisites with install commands (also without root), manual install, configuration decisions, running as a service, agents, GitHub (PR Review / PR Development), PR Development tools, remote access (tunnel / HTTPS proxy), upgrade, uninstall, troubleshooting |
 | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | you need the meaning and default of every `config.toml` key and environment variable, or want several wikis on one host |
 | [docs/OPERATIONS.md](docs/OPERATIONS.md) | day-to-day: logs, backup/restore, moving the state directory, maintenance, and a troubleshooting table of every error/banner the app can show |
 | [docs/SCHEMA.md](docs/SCHEMA.md) | you want to query or understand the SQLite database (every table and column, kept in sync by a test) |
@@ -38,23 +69,21 @@ Design specification: [`DESIGN.md`](DESIGN.md). Visual reference (mockup only): 
 
 ## Requirements (server)
 
-- Linux, the **same OS user** that owns the wiki checkout and the agent logins (never root)
-- Python 3.11–3.13, Git, tmux 3.2+ (3.5a tested), Node.js 20+ (22 recommended; only needed to build the frontend)
-- Optional: `opencode` and/or `codex` on `PATH`, already logged in. Without them the reader and terminal still work.
-- Optional: LibreOffice (Writer, Impress, Draw) for the original-layout view of Word, PowerPoint and Visio files.
-- Optional, for PR Development's web editor: `clangd` and a Python language server (`pip install basedpyright`) on the
-  server / SSH hosts; for its VS Code option: [code-server](https://coder.com/docs/code-server/install).
+- Linux, the **same OS user** that owns the wiki and the agent logins (never root)
+- Python 3.11–3.13, Git, tmux 3.2+ (3.5a tested), Node.js 20+ (22 recommended; only to build the UI) —
+  `scripts/install.sh` installs what is missing
+- Optional: `opencode` / `codex` (agents), `claude` (Agents monitor), `gh` (PR Review, PR Development), LibreOffice
+  (original layout of Word / PowerPoint / Visio), `clangd` / `basedpyright` / code-server (PR Development)
 
-`scripts/setup.sh` does **not** install system packages; it names any missing dependency and how to install it.
-Install commands per distro, the recommended `fs.inotify.max_user_watches` increase for large wikis, and a
-step-by-step walkthrough are in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+The full table with install commands per distro, and the no-root alternatives: [docs/DEPLOYMENT.md §1](docs/DEPLOYMENT.md#1-prerequisites).
 
-## Setup (one command) and start (one command)
+## Manual setup
 
 ```bash
 git clone https://github.com/EikanWang/wiki-agent-workspace.git && cd wiki-agent-workspace
 scripts/setup.sh --workspace /path/to/your/wiki        # creates .venv, builds the UI, writes config, prints the token ONCE
-scripts/start.sh                                        # http://127.0.0.1:8765
+scripts/service.sh install                              # background user service (or scripts/start.sh in the foreground)
+scripts/doctor.sh                                       # check everything
 ```
 
 `setup.sh` writes `~/.config/wiki-agent-workspace/config.toml` (mode 0600) containing the generated 32-byte access
@@ -74,15 +103,16 @@ Alternative token source: `WAW_ACCESS_TOKEN=... scripts/start.sh`. Other env ove
 
 ## Daily workflow
 
-1. **Terminal tab** → `+ New terminal` → run `opencode`, `codex`, `git`, editors… exactly as in SSH. Closing the
-   browser only detaches the tmux client; the shell and the running agent keep going.
+1. **Terminal** → **+** → run `opencode`, `codex`, `git`, editors… exactly as in SSH. Closing the browser only
+   detaches the tmux client; the shell and the running agent keep going.
 2. Ask the agent in the terminal to write a wiki page. It shows up in the file tree as soon as the file exists — no
    commit/push needed.
-3. **Document** → open the page → select text → ask. The quoted passage, question, streamed answer and the session
+3. **Wiki** → open the page → select text → ask. The quoted passage, question, streamed answer and the session
    used are stored on the server; discussions follow the passage across edits.
 4. Ask the agent to edit in a discussion (or **Preview change**), then review in **Diff** — comment on lines, stash
    comments into a **review** the agent triages in one go — and **Commit…** / push / open a pull request.
-5. Come back later: **Recent** restores the document, your reading position and the discussion you had open.
+5. **PR Review** shows what waits for you; **Agents** shows which agent sessions need you.
+6. Come back later: **Recent** restores the document, your reading position and the discussion you had open.
 
 ### Feature overview
 
@@ -90,21 +120,24 @@ Everything below is explained step by step in **[docs/USER_GUIDE.md](docs/USER_G
 
 | Area | What you get |
 | --- | --- |
-| Reviews | GitHub review queue next to the wikis (owner's GitHub sign-in only): PRs requesting your review across all repos, grouped by repo, CI/draft/size, filter and sort; a PR opens as a tab (overview, checks, reviews; conversation, all reviewers' threads with resolve, viewed per file, line / file comments and suggestions published as one review, replies) and is discussed with the agent in the repo's wiki, via the server's `gh` login |
-| PR Development | Develop a new pull request or update an existing one: an app-owned Git worktree (your checkout is untouched), an editor in the page — the built-in VS Code-like web editor (Monaco + clangd / basedpyright language servers: completion, go to definition, references, rename, diagnostics; explorer, search, problems, quick open) or VS Code (code-server, with debugging and extensions); AI inline completion, the agent working in the worktree with a whole wiki folder as its reference (it lists the pages it relied on), build / test runs with "Fix with the agent", commit, push, create PR, address review comments, fix failing CI; on this server or an SSH host |
+| PR Review | GitHub review queue next to the wikis (owner's GitHub sign-in only): PRs requesting your review across all repos, grouped by repo and by where you stand (not reviewed yet / new activity since your comments / nothing new), ★ priority, CI/draft/size, filter, sort, auto-refresh interval; "🤖 agent reviewed" filter; a PR opens as a tab (overview, checks, reviews; conversation, all reviewers' threads with resolve, viewed per file, line / file comments and suggestions published as one review, replies); agent reviews become suggested comments you apply or discard, via the server's `gh` login |
+| PR Development | Develop a new pull request, update an existing one, or work in a local checkout / folder directly (create and switch branches): an app-owned Git worktree, the built-in VS Code-like web editor (Monaco + clangd / basedpyright language servers: completion, go to definition, references, rename, diagnostics; explorer with per-file/folder diff, search, problems, quick open) or VS Code (code-server); AI inline completion; the agent working in the code with a whole wiki folder as its reference; build / test runs with "Fix with the agent"; a Changes view like the wiki's Diff (per-file diffs, side by side, compare a commit or the branch, ask about lines) with commit and push; create PR, address review comments, fix failing CI; on this server or an SSH host; resizable / foldable panes |
+| Agents | Monitor OpenCode, Codex and Claude Code sessions (also those started in a terminal): needs you / errors / working / idle, alarms and notifications, a session on stage with its conversation, continue it, rename, delete; sessions of chosen folders monitored automatically |
+| Local files | Any folder or file on the server: open folders, new / rename / delete, VS Code's editor with conflict-safe saves, Markdown preview, images |
 | Folders | Several wiki folders in one window ("add folder", like VS Code), each fully isolated: documents, discussions, sessions, locks, reviews, Git state; named workspaces (sets of folders with their own tabs and terminals); create folders on the server, clone a repository by URL, close any folder for good, files/folders in the tree |
 | Reading | Markdown, any text/source file (numbered code), Word, PowerPoint, Visio in their original layout (LibreOffice) plus a selectable text view (`.docx`, `.pptx`, `.vsdx`), PDF; kind icons; section links; Read / Discuss modes; reading position restore; tabs for open documents (switch, close, reorder, across folders) |
 | Asking | Select words or lines → question box (copy icon, Enter to send), ask about a page, slide, area or picture of a PDF / Office document (sent to the agent as an image), or ask about the whole document from the discussions panel (any format, images attached for the agent); anchors survive edits; orphaned/ambiguous detection and manual reanchor; review marks |
 | Discussions | Individual or Flat (all discussions as one stream) panel; streaming answers rendered as Markdown; retry / cancel |
-| Agents | OpenCode and Codex with your existing login; per-session **model and effort**; link provider sessions; per-session job queueing |
+| Chats | Talk with a whole wiki, a folder or a file; distill the conversation into a page or fold it back into the pages it came from |
+| Models | OpenCode and Codex with your existing login; per-session **model and effort**, another model for one discussion or chat; link provider sessions; per-session job queueing; skills from connected folders |
 | Editing | Edit Markdown and any text/source file in the browser: Ctrl/⌘+S, live Markdown preview, conflict-safe saves, versions + diff |
 | Safety | **Locks** on files/folders (read-only for the app and app-driven agents); preview-before-apply; no auto-commit, no force-push |
 | Diff | File / folder / whole-folder diffs vs any ref; unified or side-by-side; multi-line comments; inline answers; **Viewed** checkbox |
 | Reviews | Stash comments, **Submit review** once; the agent addresses / replies / skips each comment |
 | Git | **Commit…** selected files with an agent-drafted message, push, create a GitHub pull request |
 | Recent | All folders, newest first; filter, hide, delete history |
-| Terminal | tmux-backed tabs that survive disconnects and server restarts; history snapshot; exited tabs dismissable; full-screen keyboard capture and a Keys menu / sticky Ctrl for browser-reserved shortcuts (Ctrl+T, Ctrl+W…); copy to the browser clipboard (drag via tmux, Shift+drag, Ctrl+Shift+C, Copy button, programs via OSC 52, history Copy all) |
-| Layout | Foldable/resizable file tree and panel, foldable outline, fonts and sizes (`Aa`) |
+| Terminal | tmux-backed tabs that survive disconnects and server restarts, also as their own activity (terminals in your home folder or any folder); history snapshot; exited tabs dismissable; full-screen keyboard capture and a Keys menu / sticky Ctrl for browser-reserved shortcuts (Ctrl+T, Ctrl+W…); Home/End (⌘←/⌘→ on a Mac); copy to the browser clipboard (drag via tmux, Shift+drag, Ctrl+Shift+C, Copy button, programs via OSC 52, history Copy all) |
+| Layout | Activity bar with foldable lists, resizable / foldable panes everywhere, foldable outline, fonts and sizes (`Aa`) |
 
 ### Agent sessions
 
@@ -131,7 +164,7 @@ All processes are started with argument arrays; document text never passes throu
 
 The server binds to `127.0.0.1:8765` by default and must never be exposed unauthenticated on a public interface.
 Two supported options, neither requiring a new account — details and proxy snippets in
-[docs/DEPLOYMENT.md §8](docs/DEPLOYMENT.md#8-remote-access):
+[docs/DEPLOYMENT.md §9](docs/DEPLOYMENT.md#9-remote-access):
 
 - **Private network / tunnel**: `ssh -N -L 8765:127.0.0.1:8765 user@remote-host`, or `--bind` a VPN/LAN address.
 - **HTTPS via an authenticated reverse proxy** (Caddy/nginx): set `cookie_secure = true`, `trusted_proxies`,
@@ -170,8 +203,8 @@ separately (`~/.config/wiki-agent-workspace/config.toml`). Backup, restore and m
 ## Running the tests
 
 ```bash
-scripts/test.sh            # backend: pytest (142 tests; real git + tmux + fake agents), ~25 s
-scripts/test.sh --e2e      # + Playwright browser suite (56 scenarios) against the production build
+scripts/test.sh            # backend: pytest (181 tests; real git + tmux + fake agents), ~3 min
+scripts/test.sh --e2e      # + Playwright browser suite (71 scenarios) against the production build
 # or individually
 .venv/bin/python -m pytest tests/backend -q
 cd frontend && npx playwright install chromium && npm run test:e2e

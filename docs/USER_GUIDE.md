@@ -1,9 +1,12 @@
 # User guide
 
-How to use every part of Wiki Agent Workspace day to day. Installation is in [DEPLOYMENT.md](DEPLOYMENT.md), settings
-in [CONFIGURATION.md](CONFIGURATION.md), troubleshooting in [OPERATIONS.md](OPERATIONS.md).
+How to use every part of Wiki Agent Workspace day to day. Installation is in [DEPLOYMENT.md](DEPLOYMENT.md) — in
+short, `scripts/install.sh` sets everything up and prints the address and the access token, and
+`scripts/doctor.sh` tells you what is missing for a feature — settings in [CONFIGURATION.md](CONFIGURATION.md),
+troubleshooting in [OPERATIONS.md](OPERATIONS.md).
 
-Contents: [Window layout](#window-layout) · [Folders (multi-root)](#folders-multi-root) ·
+Contents: [Window layout](#window-layout) · [Folders (multi-root)](#folders-multi-root) · [Local files](#local-files) ·
+[Reviews (GitHub)](#reviews-github) · [PR Development](#pr-development) · [Agents (monitor)](#agents-monitor) ·
 [Reading](#reading-documents) · [Asking about a passage](#asking-about-a-passage) ·
 [Discussions panel](#discussions-panel) · [Agent sessions and models](#agent-sessions-and-models) ·
 [Editing a file yourself](#editing-a-file-yourself) · [Editing through the agent](#editing-through-the-agent) · [Locks](#locks) · [Diff review](#diff-review) ·
@@ -122,6 +125,16 @@ Hover a folder (or a root folder) in the tree: **＋🗎** creates a file, **＋
 in the tree (Enter creates, Esc cancels). A path such as `notes/2026/today.md` creates the folders on the way. A new
 Markdown or text file opens in the editor (a Markdown file starts with a heading from its name). Existing names,
 locked folders and paths through links that leave the folder are refused, with the reason under the name box.
+
+## Local files
+
+**Local files** (the folder icon of the activity bar) browses and edits any folder or file on the server, like a file
+manager — no wiki features (discussions, locks, versions), just the files. **Open a folder** (or type a path) adds
+it to the list; open folders stay there for every browser; ✕ closes one (nothing is deleted). Hover a folder for
+**New file** / **New folder**, a file or folder for **Rename / move** and **Delete**. Files open in tabs in VS Code's
+editor (Monaco): syntax highlighting, find / replace, outline (`Ctrl+Shift+O`), `Ctrl/⌘+S` saves — a file that
+changed on disk in the meantime is never overwritten silently, and clean tabs follow changes on disk. Markdown has
+a preview, images are shown, other binary files can be downloaded.
 
 ## Reviews (GitHub)
 

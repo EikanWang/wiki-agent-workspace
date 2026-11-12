@@ -8,7 +8,8 @@
 # (`loginctl enable-linger $USER`; install tries it). Without systemd (containers, some HPC hosts) the server runs
 # detached with a pid file; `start` again after a reboot (or add `scripts/service.sh start` to your crontab @reboot).
 #
-# Environment: WAW_CONFIG (another config file), WAW_SERVICE_NAME (default wiki-agent-workspace; one per instance).
+# Environment: WAW_CONFIG (another config file), WAW_SERVICE_NAME (default wiki-agent-workspace; one per instance),
+# WAW_NO_LINGER=1 (install: do not turn lingering on; undo with `loginctl disable-linger $USER`), WAW_NO_SYSTEMD=1.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$(pwd)"
@@ -94,7 +95,7 @@ case "$cmd" in
       write_unit
       systemctl --user daemon-reload
       systemctl --user enable --now "$NAME.service"
-      if command -v loginctl >/dev/null 2>&1 && [ "$(loginctl show-user "$USER" -p Linger --value 2>/dev/null)" != "yes" ]; then
+      if [ -z "${WAW_NO_LINGER:-}" ] && command -v loginctl >/dev/null 2>&1 && [ "$(loginctl show-user "$USER" -p Linger --value 2>/dev/null)" != "yes" ]; then
         loginctl enable-linger "$USER" 2>/dev/null && echo "lingering enabled: the service starts at boot and keeps running after you log out" \
           || echo "note: to keep it running after you log out and start it at boot, run: sudo loginctl enable-linger $USER"
       fi

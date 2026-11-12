@@ -1,254 +1,304 @@
 # Deployment guide — from an empty machine to a running service
 
-This guide assumes nothing is installed except a Linux user account. Every command runs as **your own user**
-(the one that owns the wiki checkout and is logged in to OpenCode/Codex). Nothing requires root except the
-optional OS package installation and the optional inotify limit.
+Everything runs as **your own Linux user**: the one that owns the wiki and is logged in to the agent CLIs
+(OpenCode, Codex, Claude Code) and to GitHub (`gh`). Root is only needed — optionally — to install system packages;
+without it the installer puts Python and Node.js in your home folder.
 
-Contents: [1 Prerequisites](#1-prerequisites) · [2 Get the code](#2-get-the-code) · [3 Install](#3-install) ·
-[4 Configure](#4-configure) · [5 Start and log in](#5-start-and-log-in) · [6 Verify](#6-verify) ·
-[7 Run as a service](#7-run-as-a-service-optional) · [8 Remote access](#8-remote-access) ·
-[9 Agent providers](#9-agent-providers) · [10 Upgrade](#10-upgrade) · [11 Uninstall](#11-uninstall)
+Contents: [0 One-click install](#0-one-click-install) · [1 Prerequisites](#1-prerequisites) ·
+[2 Manual install](#2-manual-install-step-by-step) · [3 Configure](#3-configure) · [4 Start, stop, keep running](#4-start-stop-keep-running) ·
+[5 Log in and check](#5-log-in-and-check) · [6 Agents](#6-agents) · [7 GitHub: PR Review and PR Development](#7-github-pr-review-and-pr-development) ·
+[8 PR Development tools](#8-pr-development-tools) · [9 Remote access](#9-remote-access) · [10 Upgrade](#10-upgrade) ·
+[11 Uninstall](#11-uninstall) · [12 Troubleshooting](#12-troubleshooting)
+
+## 0. One-click install
+
+On the Linux machine that holds your wiki (or where you want one):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/EikanWang/wiki-agent-workspace/main/scripts/install.sh | bash
+```
+
+or, in a clone of this repository: `scripts/install.sh`. It asks a few questions (all have defaults; `--yes` takes
+them all), then:
+
+1. **Prerequisites** — Git, curl, tmux, Python 3.11+, Node.js 20+. Missing ones are installed with your package
+   manager (apt, dnf, yum, zypper, pacman, apk) if you allow `sudo`; otherwise, without root, Python comes from
+   [uv](https://docs.astral.sh/uv/) and Node.js 22 from nodejs.org, both into your home folder. (tmux needs the
+   package manager; without it everything but the terminals works.)
+2. **The code** — cloned to `~/wiki-agent-workspace` (`--dir`) when the script runs outside a checkout.
+3. **Your wiki folder** — `--workspace DIR`; created as a new Git repository with a first page if it does not exist.
+4. **Agent CLIs** (optional, `--agents opencode,codex,claude|all|none`) — installed in your home folder if missing.
+5. **Optional features** (`--with gh,office,dev|all|none`) — the GitHub CLI (PR Review, PR Development's pull
+   requests), LibreOffice (original layout of Word / PowerPoint / Visio files), PR Development's tools (clangd,
+   basedpyright, code-server).
+6. **Setup** — `scripts/setup.sh`: the Python environment (`.venv`, locked dependencies), the browser UI
+   (`frontend/dist`), the configuration `~/.config/wiki-agent-workspace/config.toml` (mode 0600) with a generated
+   access token, and the data folder `~/.local/share/wiki-agent-workspace/`.
+7. **Start** — a systemd *user* service (`scripts/service.sh install`; starts at boot and keeps running after you
+   log out if you agree), or a background process where systemd user services are unavailable (`--no-service`: do
+   not start).
+8. **Check** — `scripts/doctor.sh`, then it prints the **URL** and the **access token**.
+
+All options:
+
+| Option | Meaning |
+| --- | --- |
+| `--workspace DIR` | your wiki folder (default: asked; `~/wiki` with `--yes`; an existing configuration's folder on a re-run) |
+| `--agents LIST` | `opencode`, `codex`, `claude` (comma-separated), `all` or `none` |
+| `--with LIST` | `gh`, `office`, `dev` (comma-separated), `all` or `none` |
+| `--port N`, `--bind ADDR`, `--state-dir DIR` | listen port (8765), address (127.0.0.1), data folder |
+| `--dir DIR`, `--repo URL` | where to clone the code, and from where |
+| `--no-system-packages` | never use sudo / the package manager |
+| `--no-service` | do not start the server |
+| `-y`, `--yes` | ask nothing |
+
+Examples:
+
+```bash
+scripts/install.sh --yes --workspace ~/notes                        # quiet install for an existing wiki
+scripts/install.sh --workspace ~/team-wiki --agents opencode --with all
+scripts/install.sh --yes --no-system-packages --port 8800           # shared machine without root
+```
+
+Re-running the installer is safe: it upgrades dependencies, rebuilds the UI and keeps your configuration, token and
+data. Then do the few logins it lists (§5–§7) and you are done.
 
 ## 1. Prerequisites
 
 | Requirement | Version | Why | Check |
 | --- | --- | --- | --- |
-| Linux (x86_64/arm64) | any modern distro | server platform (running the server on Windows/macOS is out of scope; browsers on them are fine) | `uname -a` |
-| Python | 3.11 – 3.13 | backend | `python3 --version` |
-| `python3-venv` / `pip` | matching | creates `.venv` | `python3 -m venv --help` |
-| Git | any 2.x | reads branch/status of the wiki; the wiki itself must be a Git checkout or plain directory | `git --version` |
-| tmux | **3.2+** (3.5a tested) | persistent terminals; without it the reader works but terminals are disabled | `tmux -V` |
-| Node.js + npm | **20+** (22 recommended) | builds the browser UI once (not needed at runtime) | `node --version` |
-| OpenCode and/or Codex CLI | current | agent providers, logged in as the same user | `opencode --version`, `codex --version` |
-| LibreOffice (Writer, Impress, Draw) | 7.x+ (25.2 tested) | optional: the original-layout view of Word, PowerPoint and Visio files; without it only their text view is available | `soffice --version` |
-| `infocmp`/ncurses terminfo | usual | tmux picks `tmux-256color`/`screen-256color` for the inner `$TERM` | `infocmp tmux-256color` |
+| Linux (x86_64/arm64) | any modern distro | the server (browsers on any system — desktop or phone — use it) | `uname -a` |
+| Python + `venv` | 3.11 – 3.13 | the backend | `python3 --version` |
+| Git | 2.x | wiki folders are Git checkouts (or plain folders); diffs, commits, PR Development | `git --version` |
+| tmux | **3.2+** (3.5a tested) | persistent terminals; without it the rest works | `tmux -V` |
+| Node.js + npm | **20+** (22 recommended) | builds the browser UI once (not used at run time) | `node --version` |
+| OpenCode and/or Codex | current | agents for discussions, chats, PR reviews, PR Development | `opencode --version`, `codex --version` |
+| Claude Code | current | optional: its sessions in the Agents monitor | `claude --version` |
+| GitHub CLI `gh` | 2.x | optional: PR Review, PR Development's pull requests (uses its login) | `gh auth status` |
+| LibreOffice (Writer, Impress, Draw) | 7.x+ | optional: original layout of Word, PowerPoint and Visio files (else text view only) | `soffice --version` |
+| clangd, basedpyright | current | optional: C/C++ and Python intelligence in PR Development's web editor | `clangd --version` |
+| code-server | 4.x | optional: PR Development's *VS Code* editor option (the built-in web editor needs nothing) | `code-server --version` |
 
-Install commands (choose your distro):
+The installer handles all of these. To install them yourself:
 
 ```bash
 # Debian / Ubuntu
-sudo apt update && sudo apt install -y git tmux python3 python3-venv python3-pip curl
-# optional: original layout of Word / PowerPoint / Visio files
-sudo apt install -y --no-install-recommends libreoffice-writer libreoffice-impress libreoffice-draw
-# Node 22 via NodeSource (or use nvm: https://github.com/nvm-sh/nvm)
+sudo apt update && sudo apt install -y git curl tmux python3 python3-venv python3-pip
 curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt install -y nodejs
+sudo apt install -y gh clangd                                                     # optional
+sudo apt install -y --no-install-recommends libreoffice-writer libreoffice-impress libreoffice-draw   # optional
 
 # Fedora / RHEL
-sudo dnf install -y git tmux python3 python3-pip nodejs npm
-sudo dnf install -y libreoffice-writer libreoffice-impress libreoffice-draw   # optional, see above
+sudo dnf install -y git curl tmux python3 python3-pip nodejs npm gh clang-tools-extra
+sudo dnf install -y libreoffice-writer libreoffice-impress libreoffice-draw         # optional
 
-# No root? Python via uv/pyenv, Node via nvm, tmux built from source into ~/.local all work:
-#   curl -LsSf https://astral.sh/uv/install.sh | sh && uv python install 3.12
-#   curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash && nvm install 22
+# No root: Python via uv, Node via nvm (or the installer's user-level installs)
+curl -LsSf https://astral.sh/uv/install.sh | sh && uv python install 3.12
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash && nvm install 22
+
+# Agents and tools in your home folder
+curl -fsSL https://opencode.ai/install | bash                                      # OpenCode
+npm install -g --prefix ~/.local @openai/codex                                     # Codex
+npm install -g --prefix ~/.local @anthropic-ai/claude-code                         # Claude Code
+curl -fsSL https://code-server.dev/install.sh | sh -s -- --method=standalone --prefix=$HOME/.local   # code-server
 ```
 
-Agent CLIs (only what you use):
+**inotify limit (large wikis).** The file watcher needs one inotify watch per directory, shared with other tools
+(IDEs, OpenCode's server). If the UI says "inotify watch limit … exhausted", live change detection stops (↻ still
+works). Raise it once:
 
 ```bash
-# OpenCode  — https://opencode.ai/docs/
-curl -fsSL https://opencode.ai/install | bash && opencode auth login
-# Codex CLI — https://developers.openai.com/codex/cli/
-npm install -g @openai/codex && codex login
+echo fs.inotify.max_user_watches=1048576 | sudo tee /etc/sysctl.d/90-inotify-watches.conf && sudo sysctl --system
 ```
 
-**inotify limit (recommended for large wikis).** The file watcher registers every directory of the workspace;
-other tools (OpenCode's own server, IDEs) consume the same per-user budget. If the limit is exhausted the UI shows
-"inotify watch limit … exhausted" and live change detection stops (manual refresh still works). Raise it once:
+## 2. Manual install (step by step)
 
-```bash
-echo fs.inotify.max_user_watches=1048576 | sudo tee /etc/sysctl.d/90-inotify-watches.conf
-sudo sysctl --system
-```
-
-## 2. Get the code
+What the installer does, by hand:
 
 ```bash
 git clone https://github.com/EikanWang/wiki-agent-workspace.git ~/wiki-agent-workspace
 cd ~/wiki-agent-workspace
+scripts/setup.sh --workspace /path/to/your/wiki      # .venv, browser UI, config + token (printed once)
+scripts/service.sh install                           # start it in the background, kept running
+scripts/doctor.sh                                    # check everything
 ```
 
-The repository must **not** live inside the wiki checkout (the app excludes its own state from the file tree but
-will happily index its source otherwise).
+Keep the code **outside** the wiki folder. `setup.sh` is idempotent (re-run it any time; it keeps the token) and
+takes `--port N --bind ADDR --state-dir DIR --default-provider opencode|codex
+--codex-sandbox read-only|workspace-write|danger-full-access --show-token`. It never installs system packages: it
+names what is missing. `WAW_PYTHON=/path/to/python3.12 scripts/setup.sh …` picks a specific interpreter.
 
-## 3. Install
+Several instances (e.g. one per team): give each its own `WAW_CONFIG=…/config.toml`, `--port` and `--state-dir`,
+and `WAW_SERVICE_NAME=…` for `scripts/service.sh`. Usually one instance with several folders is simpler (§3).
 
-```bash
-scripts/setup.sh --workspace /path/to/your/wiki
-```
+## 3. Configure
 
-What it does (idempotent, re-run any time):
-
-1. Checks `git`, `tmux`, `node`, `npm`, Python ≥ 3.11 and names anything missing with install hints
-   (it never installs system packages itself).
-2. Creates `.venv` and installs the **locked** Python dependencies (`requirements.lock`) plus the project itself.
-3. `npm ci` + `npm run build` in `frontend/` → `frontend/dist/` (served by the Python server; no Node at runtime).
-4. Writes the configuration file (default `~/.config/wiki-agent-workspace/config.toml`, mode **0600**) with a
-   freshly generated 32-byte access token and server secret, creates the state directory
-   (default `~/.local/share/wiki-agent-workspace/`), and **prints the access token once**.
-
-Options: `--port N` `--bind ADDR` `--state-dir DIR` `--default-provider opencode|codex`
-`--codex-sandbox read-only|workspace-write|danger-full-access` `--show-token`.
-Use `WAW_CONFIG=/other/path/config.toml scripts/setup.sh …` to keep the config elsewhere (e.g. several
-instances for several wikis — give each its own `--port` and `--state-dir`).
-
-Typical duration: 20–60 s (mostly `npm ci`).
-
-## 4. Configure
-
-Everything is in the one TOML file written by setup; `config.example.toml` in the repo is the annotated template
-and [docs/CONFIGURATION.md](CONFIGURATION.md) describes every key. Decisions to make now:
+One TOML file, `~/.config/wiki-agent-workspace/config.toml` (or `$WAW_CONFIG`); `config.example.toml` is the
+annotated template and [CONFIGURATION.md](CONFIGURATION.md) describes every key. Restart after editing
+(`scripts/service.sh restart`). The decisions most people make:
 
 | Question | Setting |
 | --- | --- |
-| Only from this machine / through an SSH tunnel? | keep `server.bind = "127.0.0.1"` (default) |
-| From other machines on a trusted LAN/VPN? | `server.bind = "0.0.0.0"` (or the LAN/VPN address). Token login still applies; traffic is plain HTTP unless you add a reverse proxy (§8). |
-| Behind an HTTPS reverse proxy? | `server.cookie_secure = true`, `server.trusted_proxies = ["127.0.0.1"]`, add the public origin to `allowed_origins` |
-| Which agent answers by default? | `agents.default_provider = "opencode"` or `"codex"` (auto-detected at setup) |
-| Codex may edit the wiki when you explicitly ask? | `agents.codex.sandbox = "workspace-write"` (default); `read-only` to forbid edits |
-| OpenCode shared with your terminal TUI? | `agents.opencode.mode = "server"`, `server_url = "http://127.0.0.1:4096"` (see §9) |
-| More than one wiki? | Nothing to do now: add folders later with **＋ Add folder** in the file tree, or list them under `[[workspaces]]` (see CONFIGURATION.md). Each folder needs its own inotify watches (§1). |
+| Reach it only from this machine / an SSH tunnel? | keep `server.bind = "127.0.0.1"` (default) |
+| From a trusted LAN/VPN? | `server.bind = "0.0.0.0"` or that address — plain HTTP; prefer §9 B for anything else |
+| Behind an HTTPS reverse proxy? | `server.cookie_secure = true`, `server.trusted_proxies = ["127.0.0.1"]`, the public origin in `allowed_origins` |
+| More wiki folders? | nothing: **＋ Add folder** in the app (or `[[workspaces]]`) |
+| Default agent? | `agents.default_provider = "opencode"` or `"codex"` (detected at setup) |
+| Agents need API tokens from a script? | `agents.env_script = "~/set_tokens.sh"` (sourced for every agent process; re-read when it changes) |
+| Codex may edit when you ask? | `agents.codex.sandbox = "workspace-write"` (default) or `"read-only"` |
+| Sign in with GitHub / Google instead of the token? | §7 (one click for GitHub), `[auth.google]` |
+| PR Development on another machine? | `[[development.hosts]]` (§8) |
 
-Edit the file and restart the server after changes (`setup.sh` can also be re-run with flags; it preserves the
-token and secret).
-
-## 5. Start and log in
-
-```bash
-scripts/start.sh                 # foreground; Ctrl-C stops it. Log goes to stdout.
-# or detached without a service manager:
-nohup scripts/start.sh > ~/.local/share/wiki-agent-workspace/server.log 2>&1 &
-```
-
-Open `http://<host>:8765/` in a desktop or mobile browser and paste the access token. The login cookie lasts
-30 days and is renewed while you use the app; you will not be asked again for documents, messages, shell
-commands or edits. Forgot the token? `scripts/setup.sh --show-token`.
-
-## 6. Verify
+## 4. Start, stop, keep running
 
 ```bash
-curl -s http://127.0.0.1:8765/api/v1/health            # {"status":"ok"}
-.venv/bin/python -m backend.app.cli print-config        # effective config, secrets redacted
+scripts/service.sh install     # systemd user service: now, at boot, after logout (asks about "lingering")
+scripts/service.sh status      # running? answering?
+scripts/service.sh logs [-f]   # the server log
+scripts/service.sh restart     # after a config change or an upgrade
+scripts/service.sh stop | start
+scripts/service.sh uninstall   # remove the service (data and terminals are kept)
+scripts/start.sh               # or: in the foreground (Ctrl-C stops it)
 ```
 
-In the browser: the file tree lists your wiki folder (and any additional folders) with Git badges → open one → select text → the question
-box appears → **Terminal** tab → **+ New terminal** → run `opencode` or `codex` as usual. The startup log shows
-provider detection, e.g. `provider opencode: available=True version=1.18.31`, the terminal reconcile summary and
-`filesystem watcher ready for …`.
+Without systemd user services (containers, some HPC login nodes) `service.sh` runs the server detached with a pid
+file and its log in the data folder; `scripts/service.sh start` again after a reboot (or a `@reboot` crontab line).
+The service file keeps your `PATH`, so the agent CLIs and `gh` are found as in your shell.
 
-Run the test suites once on the target machine to confirm tmux/Git/PTY behaviour there (they use fake agents,
-no credentials needed): `scripts/test.sh` (backend, ~30 s) and `scripts/test.sh --e2e` (needs
-`cd frontend && npx playwright install chromium` once).
+Restarting the server never kills your terminals: they live on the app's own tmux server and are reattached at
+startup; agent turns that were running are marked *interrupted* (never re-run by themselves).
 
-## 7. Run as a service (optional)
+## 5. Log in and check
 
-User-level systemd, no root:
-
-```ini
-# ~/.config/systemd/user/wiki-agent-workspace.service
-[Unit]
-Description=Wiki Agent Workspace
-After=network.target
-
-[Service]
-WorkingDirectory=%h/wiki-agent-workspace
-ExecStart=%h/wiki-agent-workspace/scripts/start.sh
-Restart=on-failure
-RestartSec=3
-# Environment=WAW_CONFIG=%h/.config/wiki-agent-workspace/config.toml
-
-[Install]
-WantedBy=default.target
-```
+Open the URL the installer printed (default `http://127.0.0.1:8765`; from another machine see §9) and paste the
+access token once. The login lasts 30 days and renews while you use it. Forgot the token?
+`scripts/setup.sh --show-token`.
 
 ```bash
-systemctl --user daemon-reload
-systemctl --user enable --now wiki-agent-workspace
-loginctl enable-linger $USER          # keep it running after you log out
-journalctl --user -u wiki-agent-workspace -f
+scripts/doctor.sh              # every feature: ✓ ok, ! optional/advice, ✗ problem — each with the fix
+scripts/doctor.sh --quick      # without the slower checks;  --json for scripts
+curl -s http://127.0.0.1:8765/api/v1/health        # {"status":"ok"}
 ```
 
-A restart of the web server never kills your terminals: tmux sessions live on the app-owned tmux server and are
-reattached on startup; unfinished agent jobs are marked `interrupted` (never re-run automatically).
+A first tour: the **Wiki** sidebar lists your folder → open a page → select text → ask. **Terminal** (activity bar)
+→ **+** → run `opencode`, `codex`, `git` as usual. [USER_GUIDE.md](USER_GUIDE.md) explains every feature.
 
-## 8. Remote access
+## 6. Agents
 
-The server must never be exposed unauthenticated on a public interface; the token login protects the shell, but
-plain HTTP on an untrusted network exposes the session cookie.
+| | OpenCode | Codex | Claude Code |
+| --- | --- | --- | --- |
+| Log in once, as your user | `opencode auth login` | `codex login` | `claude` (first run) |
+| Used for | discussions, chats, PR reviews, PR Development | same | the Agents monitor (watch, continue its sessions) |
+| How the app runs it | `opencode run --format json --dir WS [--session ID]` (or `mode = "server"`) | `codex exec --json …` / `codex exec resume …` | `claude -p --resume ID` when you continue a session |
+| Its sessions (Agents monitor) | `opencode session list` | `$CODEX_HOME/sessions` | `$CLAUDE_CONFIG_DIR/projects` (`~/.claude`) |
 
-**A. Private network or tunnel (simplest).**
+Agents are optional: without any, reading, editing, diffs, commits and terminals work and the UI explains what is
+unavailable. If your agents get their API keys from environment variables, put the exports in a script and set
+`agents.env_script` (§3). **OpenCode server mode** (one backend shared with your terminal TUI):
 
 ```bash
-ssh -N -L 8765:127.0.0.1:8765 user@remote-host      # then browse http://127.0.0.1:8765
-```
-or bind to a VPN/Tailscale/WireGuard address (`--bind 100.64.0.5`) or to the LAN (`--bind 0.0.0.0`) when the
-network itself is trusted. Corporate proxies: add the host to your browser's proxy bypass list (`no_proxy`) —
-the "Access Denied" page of a DMZ proxy means the browser routed the private address through it.
-
-**B. HTTPS through an authenticated reverse proxy.** Example with Caddy:
-
-```
-wiki.example.internal {
-    basic_auth { you <hash from `caddy hash-password`> }   # optional extra factor
-    reverse_proxy 127.0.0.1:8765
-}
-```
-Then set `cookie_secure = true`, `trusted_proxies = ["127.0.0.1"]` and, if the proxy rewrites `Host`, add
-`https://wiki.example.internal` to `allowed_origins`. WebSockets (`/api/v1/terminals/*/ws`) and SSE
-(`/api/v1/events`, `/api/v1/jobs/*/events`) must be proxied without buffering (Caddy/nginx defaults are fine;
-nginx needs `proxy_http_version 1.1; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection
-"upgrade"; proxy_buffering off;`).
-
-If the gateway already authenticates you and sets a header (Authelia, oauth2-proxy, Cloudflare Access), set
-`gateway_auth = true` and `gateway_user_header = "X-Forwarded-User"`; only requests arriving from
-`trusted_proxies` with that header skip the token login.
-
-## 9. Agent providers
-
-| | OpenCode | Codex |
-| --- | --- | --- |
-| Login | `opencode auth login` in a terminal as your user | `codex login` |
-| How app turns run | `opencode run --format json --dir WS [--session ID]` (CLI mode, default) | `codex exec --json -C WS -s <sandbox> -` and `codex exec resume … ID -` |
-| Session list for "link existing session" | `opencode session list --format json` | read from `$CODEX_HOME/session_index.jsonl` + rollout files |
-| Permission prompts | CLI mode: handled by OpenCode's configured rules (cannot be relayed). Server mode: relayed into the discussion panel. | `codex exec` cannot ask interactively: actions needing approval fail visibly, with the terminal as fallback |
-| Sandbox | OpenCode's own permission config | `agents.codex.sandbox` for app turns only (default `workspace-write`, scoped to the workspace) |
-
-**OpenCode server mode** (share one backend between your terminal TUI and the app): start one server and attach
-both to it.
-
-```bash
-opencode serve --port 4096 --hostname 127.0.0.1      # e.g. in a tmux terminal of the app, or a user service
-opencode --attach http://127.0.0.1:4096               # your interactive TUI, same backend
+opencode serve --port 4096 --hostname 127.0.0.1       # e.g. in a terminal of the app
+opencode --attach http://127.0.0.1:4096                # your TUI, same backend
 ```
 ```toml
 [agents.opencode]
 mode = "server"
 server_url = "http://127.0.0.1:4096"
 ```
-Starting a second `opencode serve` does **not** attach to a TUI's own server; always point both at the same
-instance. Server mode streams token deltas and relays OpenCode's real permission requests.
 
-Providers are optional: with none installed the reader and terminal work, and the UI explains why discussions are
-unavailable.
+## 7. GitHub: PR Review and PR Development
+
+**PR Review** (your review queue, PR tabs, agent reviews) is shown only to the GitHub account the server's `gh` CLI
+is logged in as, signed in to the app with GitHub (the queue can include private repositories):
+
+1. `gh auth login` on the server (as your user) — `scripts/doctor.sh` shows "signed in as <you>".
+2. In the app: account menu (top right) → **Set up “Continue with GitHub”…** → GitHub shows *Create GitHub App*
+   with everything filled in → **Create**. Nothing to copy, no restart; the login page now offers **Continue with
+   GitHub** (only that account is allowed; more in `[auth.github] allowed_users`).
+3. Sign out and **Continue with GitHub**: the **Reviews** icon appears in the activity bar.
+
+**PR Development** uses the same `gh` login to fetch pull requests, push and create PRs, and your Git identity
+(`git config --global user.name/user.email`) to commit.
+
+## 8. PR Development tools
+
+| Feature | Needs | Where it comes from |
+| --- | --- | --- |
+| Web editor (default) | nothing | built in (Monaco) |
+| C/C++ intelligence | `clangd` (+ a `compile_commands.json`) | `apt install clangd`; set the folder in the workspace's Settings |
+| Python intelligence | `basedpyright` (or pyright / pylsp) | `.venv/bin/pip install basedpyright` (installer: `--with dev`) |
+| *VS Code* editor option | code-server | installer `--with dev`, or §1; **Install language support** in the app adds its extensions |
+| Develop on another machine | key-based `ssh`, the agent CLI (and code-server for VS Code) there | `[[development.hosts]]` in the configuration |
+| AI inline completion | an OpenAI-compatible endpoint | `[development.completion]` |
+
+```toml
+[[development.hosts]]
+name = "gpu-box"
+ssh = "me@gpu-box"                 # key authentication (BatchMode); test with: ssh me@gpu-box true
+work_dir = "~/.cache/wiki-agent-workspace"
+```
+
+## 9. Remote access
+
+The server must never be reachable unauthenticated from a public network; plain HTTP on an untrusted network would
+expose the login cookie.
+
+**A. SSH tunnel or private network (simplest).**
+
+```bash
+ssh -N -L 8765:127.0.0.1:8765 you@server       # on your laptop; then browse http://127.0.0.1:8765
+```
+or `--bind` a VPN / Tailscale / WireGuard address. Corporate proxies: add the server to the browser's proxy
+bypass list (`no_proxy`).
+
+**B. HTTPS through a reverse proxy** (Caddy example):
+
+```
+wiki.example.internal {
+    reverse_proxy 127.0.0.1:8765
+}
+```
+Then `cookie_secure = true`, `trusted_proxies = ["127.0.0.1"]` and, if the proxy rewrites `Host`,
+`allowed_origins = ["https://wiki.example.internal"]`. WebSockets (`/api/v1/terminals/*/ws`, `/dev-editor/…`) and
+SSE (`/api/v1/events`, `/api/v1/jobs/*/events`) must pass unbuffered (nginx: `proxy_http_version 1.1;
+proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; proxy_buffering off;`).
+Behind a gateway that already authenticates you (Authelia, oauth2-proxy, Cloudflare Access): `gateway_auth = true`
+and `gateway_user_header = "X-Forwarded-User"`. With HTTPS, **Continue with GitHub/Google** work from anywhere.
 
 ## 10. Upgrade
 
 ```bash
-cd ~/wiki-agent-workspace
-git pull
-scripts/setup.sh                     # re-installs locked deps if changed, rebuilds the UI, keeps your config/token
-systemctl --user restart wiki-agent-workspace   # or Ctrl-C + scripts/start.sh
+cd ~/wiki-agent-workspace && git pull && scripts/install.sh --yes --no-service && scripts/service.sh restart
 ```
-Database migrations (Alembic) run automatically on startup; they are additive and keep your data. Take a backup
-first if you like (`Backup` button or `curl -b <cookie> http://127.0.0.1:8765/api/v1/export > backup.tar.gz`).
-See [docs/OPERATIONS.md](OPERATIONS.md) for backup/restore and moving the state directory.
+(or `git pull && scripts/setup.sh && scripts/service.sh restart`). Database migrations run at startup and keep your
+data; for a backup first see [OPERATIONS.md](OPERATIONS.md) (stop, copy the data folder; or download
+`/api/v1/export` while logged in).
 
 ## 11. Uninstall
 
 ```bash
-systemctl --user disable --now wiki-agent-workspace 2>/dev/null
-tmux -L "$(cat ~/.local/share/wiki-agent-workspace/tmux-socket)" kill-server   # ends the app's terminals only
-rm -rf ~/wiki-agent-workspace                          # code + .venv + frontend build
-rm -rf ~/.local/share/wiki-agent-workspace             # database, snapshots (your Q&A history!)
-rm -rf ~/.config/wiki-agent-workspace                  # config incl. access token
+scripts/service.sh uninstall
+tmux -L "$(cat ~/.local/share/wiki-agent-workspace/tmux-socket)" kill-server   # the app's terminals
+rm -rf ~/wiki-agent-workspace                      # code, .venv, UI build
+rm -rf ~/.local/share/wiki-agent-workspace         # database and snapshots (your discussions!), user-level Node
+rm -rf ~/.config/wiki-agent-workspace              # configuration and token
+loginctl disable-linger "$USER"                    # if nothing else of yours needs to run after logout
 ```
-Your wiki checkout and your OpenCode/Codex installations and logins are untouched.
+Your wiki folders, agent CLIs and their logins are untouched.
+
+## 12. Troubleshooting
+
+Start with `scripts/doctor.sh`: it names what is wrong and the fix. Then `scripts/service.sh logs`.
+
+| Symptom | Fix |
+| --- | --- |
+| The page does not load | `scripts/service.sh status`; on another machine use the tunnel (§9 A); corporate proxy → bypass list |
+| "unknown API route" after an upgrade | the server is older than the page: `scripts/service.sh restart` |
+| Terminals disabled | install tmux 3.2+, restart |
+| "No provider" / discussions unavailable | install and log in to OpenCode or Codex (§6), `scripts/setup.sh`, restart |
+| Agents fail with authentication errors | log in again (`opencode auth login`, `codex login`); tokens from a script → `agents.env_script` |
+| No Reviews icon | §7: `gh auth login`, **Continue with GitHub** with that account |
+| File changes not noticed | inotify limit (§1); ↻ in the file tree works meanwhile |
+| Office files: only the text view | install LibreOffice (§1) |
+
+More (every banner and error the app can show, logs, backups, moving the data folder): [OPERATIONS.md](OPERATIONS.md).

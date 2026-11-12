@@ -2,8 +2,13 @@
 
 ## Logs
 
-`scripts/start.sh` logs to stdout (uvicorn access log + app log). Under systemd: `journalctl --user -u
-wiki-agent-workspace -f`. Logs never include the access token, cookies, document contents or terminal output.
+`scripts/service.sh logs [-f]` shows the log of the background server (systemd user service: the journal;
+otherwise `<state_dir>/server.log`); `scripts/start.sh` in the foreground logs to stdout (uvicorn access log + app
+log). Logs never include the access token, cookies, document contents or terminal output.
+
+**First step for any problem:** `scripts/doctor.sh` — it checks the installation, the running server, the agents,
+GitHub and the optional features, and prints the fix for each problem (`--json` for scripts). Then
+`scripts/service.sh status` / `restart`.
 
 Startup lines worth knowing:
 

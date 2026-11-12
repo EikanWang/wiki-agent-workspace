@@ -152,7 +152,7 @@ Setup, once: [Google Cloud console](https://console.cloud.google.com/) → *APIs
 (external or internal, scope `email`), then *Credentials → Create credentials → OAuth client ID → Web application*,
 with *Authorized redirect URI* = your address + `/api/v1/auth/google/callback`. Note: Google accepts plain `http://`
 redirect URIs only for `localhost`; for an address such as `http://10.0.0.5:8765` serve the app over HTTPS with a host
-name (DEPLOYMENT.md §8) or reach it through an SSH tunnel as `http://localhost:8765`.
+name (DEPLOYMENT.md §9) or reach it through an SSH tunnel as `http://localhost:8765`.
 
 ```toml
 [auth.google]

@@ -269,6 +269,8 @@ fi
 URL="$(.venv/bin/python -c 'from backend.app.config import load_settings as l; s=l(); h="127.0.0.1" if s.bind in ("0.0.0.0","::","") else s.bind; print(f"http://{h}:{s.port}")')"
 if [ "$NO_SERVICE" -eq 0 ]; then
   step "Starting the server"
+  # keep the service running after you log out and start it at boot ("lingering"): ask, unless --yes
+  if [ -n "$TTY" ] && ! yes_no "Keep the server running after you log out, and start it at boot?" "y"; then export WAW_NO_LINGER=1; fi
   bash scripts/service.sh install | sed 's/^/  /' || warn "the server did not come up: scripts/service.sh logs"
 fi
 
@@ -280,7 +282,8 @@ echo
 echo "${B}Done.${N}"
 if [ "$NO_SERVICE" -eq 0 ]; then echo "  Open:          ${B}$URL${N}"; else echo "  Start it with: scripts/start.sh   (or scripts/service.sh install)  → $URL"; fi
 echo "  Access token:  ${B}$TOKEN${N}   (paste it once; scripts/setup.sh --show-token shows it again)"
-echo "  From another machine: ssh -N -L 8765:127.0.0.1:8765 $USER@$(hostname -f 2>/dev/null || hostname)  then open http://127.0.0.1:8765"
+PORT="${URL##*:}"
+echo "  From another machine: ssh -N -L $PORT:127.0.0.1:$PORT $USER@$(hostname -f 2>/dev/null || hostname)  then open http://127.0.0.1:$PORT"
 echo
 echo "  Next steps (as needed):"
 has opencode && echo "    opencode auth login        # once, if OpenCode is not logged in yet"
