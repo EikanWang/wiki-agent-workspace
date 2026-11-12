@@ -2885,8 +2885,13 @@ test("PR Development: Changes view like the wiki's Diff: per-file diffs, side by
   const lib = fs.readFileSync(path.join(devWt, "lib.py"), "utf-8");
   const pad = Array.from({ length: 40 }, (_, i) => `PAD_${i} = ${i}`).join("\n");
   fs.writeFileSync(path.join(devWt, "lib.py"), `${lib}${pad}\n`);
-  cp.execFileSync("git", ["-C", devWt, "add", "lib.py"]);
-  cp.execFileSync("git", ["-C", devWt, "-c", "user.name=e2e", "-c", "user.email=e2e@x", "commit", "-q", "-m", "Pad lib.py"]);
+  const gitRetry = (...a: string[]) => { // the app's own `git status` may hold the index lock for a moment
+    for (let i = 0; ; i++) {
+      try { return cp.execFileSync("git", ["-C", devWt, "-c", "user.name=e2e", "-c", "user.email=e2e@x", ...a]); } catch (e) { if (i >= 9 || !String(e).includes("index.lock")) throw e; cp.execFileSync("sleep", ["0.3"]); }
+    }
+  };
+  gitRetry("add", "lib.py");
+  gitRetry("commit", "-q", "-m", "Pad lib.py");
   fs.writeFileSync(path.join(devWt, "lib.py"), `${lib}${pad.replace("PAD_20 = 20", "PAD_20 = 'changed'")}\n`);
   fs.writeFileSync(path.join(devWt, "notes_e2e.md"), "# notes\n");
   // the Changes view in the editor area
@@ -2978,13 +2983,16 @@ test("PR Development: your pull requests of a repository; check one out in a fol
   await expect(page.getByTestId("dev-branch-button")).toContainText("main", { timeout: 20000 });
   // the sidebar lists your pull requests of the workspace's repository
   const prs = page.getByTestId("my-prs");
-  if ((await prs.getByTestId("my-prs-repo").count()) === 0) await page.getByTestId("my-prs-toggle").click();
-  await expect(prs.getByTestId("my-pr")).toHaveCount(2, { timeout: 15000 });
-  await expect(prs).toContainText("acme/demo");
+  if ((await prs.getByTestId("my-prs-refresh").count()) === 0) await page.getByTestId("my-prs-toggle").click();
+  // grouped by repository, with its local folder
+  const group = prs.locator('[data-testid="my-prs-group"][data-repo="acme/demo"]');
+  await expect(group.getByTestId("my-pr")).toHaveCount(2, { timeout: 15000 });
+  await expect(group).toContainText("demo-proj");
+  const prs2 = group;
   // at the top of the PR Development sidebar
   expect((await prs.boundingBox())!.y).toBeLessThan((await page.locator(".dev-list").boundingBox())!.y);
   const items = await page.getByTestId("dev-item").count();
-  const fix = prs.locator('[data-testid="my-pr"][data-number="5"]');
+  const fix = prs2.locator('[data-testid="my-pr"][data-number="5"]');
   await expect(fix).toContainText("Demo fix");
   // click #5: the folder switches to its branch (no new worktree); the workspace now belongs to the PR
   await fix.locator(".my-pr-main").click();
@@ -3009,7 +3017,7 @@ test("PR Development: your pull requests of a repository; check one out in a fol
   await expect(page.getByTestId("dev-branch-button")).toContainText("main");
   await expect(page.locator(".dev-toolbar")).not.toContainText("#5");
   // another PR: the same folder switches again
-  await prs.locator('[data-testid="my-pr"][data-number="6"] .my-pr-main').click();
+  await prs2.locator('[data-testid="my-pr"][data-number="6"] .my-pr-main').click();
   await expect(page.getByTestId("dev-branch-button")).toContainText("demo-draft", { timeout: 15000 });
   expect(fs.existsSync(path.join(proj, "draft.py"))).toBe(true);
   await expect(page.getByTestId("dev-item")).toHaveCount(items); // no new workspace

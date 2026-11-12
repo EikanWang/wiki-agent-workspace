@@ -313,8 +313,10 @@ write code with the agent — a new pull request, or changes to an existing one.
   worktree of its own, so its files and branch change (optionally a branch to create there right away; a folder not
   in a Git repository is made one with `git init` unless you untick it). Archiving never deletes that folder.
 - **My pull requests** — at the top of the sidebar, above the workspaces: your pull requests (author: the server's `gh`
-  login) in a repository — the one of the workspace you open, one you develop here, one you type (`owner/repo`), or
-  the repository of a local checkout (**Folder…**); *open* or *all*; CI dot, draft, review state. Click one to open
+  login), **grouped by repository**, each group showing its local folder (📁 path · current branch). The groups are
+  the repositories you develop here plus any you add — by name (`owner/repo`, **Add**) or from a local checkout
+  (**Folder…**; × removes an added one); each folds on its own; *open* or *all*; ↻ refreshes; CI dot, draft, review
+  state. Click one to open
   it: its workspace if it already has one; otherwise, when the repository is connected to a local folder (a *Local
   folder* workspace, or a known checkout of it — after a confirmation), that folder **switches to the PR's branch**
   — no clone, no extra worktree; otherwise the setup dialog, prefilled. In a new-branch worktree of the same

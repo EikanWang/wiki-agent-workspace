@@ -1289,3 +1289,12 @@ body.resizing-h iframe { pointer-events: none; }
 .my-pr-main:hover { background: var(--accent); }
 .my-pr-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
 .my-pr-text > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.my-prs-head { display: flex; align-items: center; gap: 4px; padding: 4px 8px 4px 2px; }
+.my-prs-title { display: flex; align-items: center; gap: 4px; border: none; background: transparent; color: inherit; padding: 2px 8px; cursor: pointer; text-align: left; }
+.my-prs-head select { border: 1px solid var(--border); border-radius: 6px; padding: 1px 4px; background: var(--bg); color: var(--fg); font-size: 12px; }
+.my-prs-group { margin-bottom: 4px; }
+.my-prs-group-head { display: flex; align-items: center; gap: 2px; }
+.my-prs-group-title { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; border: none; background: var(--accent); color: inherit; padding: 4px 6px; cursor: pointer; text-align: left; border-radius: 6px; }
+.my-prs-group-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.my-prs-group-text > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.my-prs-group .my-pr, .my-prs-empty { margin-left: 12px; }
