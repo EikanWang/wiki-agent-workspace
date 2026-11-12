@@ -5,6 +5,7 @@ import { confirmAction } from "./Confirm";
 import FolderPicker from "./FolderPicker";
 import MarkdownView from "./MarkdownView";
 import { writeClipboard } from "../clipboard";
+import { utc8 } from "../time";
 import { COMPOSER_HINT, composerKeyDown } from "./keys";
 
 export type Provider = "opencode" | "codex" | "claude";
@@ -473,7 +474,7 @@ function SessionStage({ item, onClose, onUnwatch, onChanged, onRename, onDelete 
             <div key={idx} className="mon-tool mono small"><span className={`chip status ${m.status === "error" ? "failed" : ""}`}>{m.tool}</span> {m.text}{m.status && m.status !== "completed" && m.status !== "called" ? ` · ${m.status}` : ""}</div>
           ) : (
             <div key={idx} className={`msg ${m.role === "user" ? "user" : "agent"}`} data-testid="mon-msg" data-role={m.role}>
-              <div className="msg-head"><span className="who">{m.role === "user" ? "You" : "Agent"}</span><span className="muted small">{m.time ? new Date(m.time).toLocaleString() : ""}</span></div>
+              <div className="msg-head"><span className="who">{m.role === "user" ? "You" : "Agent"}</span><span className="muted small msg-time" data-testid="msg-time">{m.time ? utc8(m.time) : ""}</span></div>
               {m.role === "user" ? <div className="msg-body">{m.text}</div> : <MarkdownView text={m.text} className="msg-body" />}
             </div>
           )

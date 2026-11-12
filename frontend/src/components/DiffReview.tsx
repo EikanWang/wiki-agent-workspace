@@ -6,6 +6,7 @@ import { FileIcon } from "./FileIcon";
 import { useRestoredScroll } from "../persist";
 import CommitPanel from "./CommitPanel";
 import MarkdownView from "./MarkdownView";
+import { utc8 } from "../time";
 import { useJobStream } from "./DiscussionPanel";
 
 export interface Line {
@@ -744,6 +745,7 @@ function InlineThread({ comment, decision, onOpen, onChanged, testId = "diff-com
             return (
               <div key={m.id} className={`diff-msg ${m.role} ${status}`} data-testid={`diff-msg-${m.role}`} data-status={status}>
                 <span className="who">{m.role === "user" ? "You" : "Agent"}</span>
+                <span className="muted small msg-time" data-testid="msg-time">{utc8(m.created_at)}</span>
                 {m.role === "agent" ? (
                   content ? <MarkdownView text={content} className="small" /> : <span className="muted small">{status === "failed" ? "failed" : "thinking…"}</span>
                 ) : (
@@ -851,7 +853,7 @@ function ReviewTray({ review, last, lastJob, summary, onSummary, sessions, onCha
         <div className={`review-last ${last.status}`} data-testid="review-last">
           <div className="label">
             Last review · {last.status === "submitted" ? (lastJob ? `running (${lastJob.status})` : "running") : last.status}
-            {last.finished_at && <span className="muted small"> · {new Date(last.finished_at).toLocaleString()}</span>}
+            {last.finished_at && <span className="muted small"> · {utc8(last.finished_at)}</span>}
           </div>
           {last.status === "submitted" && lastJob?.activity.length ? <ul className="activity">{lastJob.activity.slice(-4).map((a, i) => <li key={i}>{a}</li>)}</ul> : null}
           {last.result?.summary && <div className="small">{String(last.result.summary)}</div>}

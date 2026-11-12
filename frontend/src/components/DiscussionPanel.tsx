@@ -12,6 +12,7 @@ export function hideReviewBlock(text: string): string {
   return text.replace(/```waw-review[ \t]*\n[\s\S]*?(\n```|$)/g, "*Suggested comments → added to the diff (Files) as suggestions to apply or discard.*");
 }
 import ModelPicker from "./ModelPicker";
+import { utc8 } from "../time";
 import { PlusIcon } from "./Icons";
 
 export interface LiveJob {
@@ -403,6 +404,7 @@ export function MessageView({ m, session, live, onRetry, onCancel, onPermission,
     <div className={`msg ${m.role} ${status}`} data-testid={`message-${m.role}`} data-status={status}>
       <div className="msg-head">
         <span className="who">{m.role === "user" ? "You" : "Agent"}</span>
+        <span className="muted small msg-time" title={m.role === "user" ? "Asked" : "Answer started"} data-testid="msg-time">{utc8(m.created_at)}</span>
         {session && <span className="muted small">{session.provider} #{session.short_id ?? statusLabel(session.status)}</span>}
         {isAgent && status !== "completed" && <span className={`chip status ${status}`}>{jobStatusLabel(status)}</span>}
       </div>
@@ -563,7 +565,7 @@ function FlatPanel({ threads, sessions, sessionsById, defaultSessionId, liveJob,
                   <AnchorBadge state={t.anchor_state} />
                   <span className="quote-text">{quoteLabel(t, 140)}</span>
                 </button>
-                <span className="muted small">{new Date(t.created_at).toLocaleString()}{differs ? " · other session" : ""}</span>
+                <span className="muted small">{utc8(t.created_at)}{differs ? " · other session" : ""}</span>
               </header>
               {t.messages.map((m) => (
                 <MessageView key={m.id} m={m} session={m.session_id ? sessionsById[m.session_id] : undefined} live={m.id === liveMessageId ? live : null} onRetry={(sid) => onRetry(t.id, m.id, sid)} onCancel={onCancel} onPermission={onPermission} sessions={sessions} />

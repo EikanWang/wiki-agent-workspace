@@ -4,6 +4,7 @@ import { AgentSession, ApiError, DevWorkspace, Thread, get, post, put } from "..
 import { LiveJob, MessageView, SessionChip, useJobStream } from "./DiscussionPanel";
 import ModelPicker from "./ModelPicker";
 import { usePersistentState } from "../persist";
+import { utc8 } from "../time";
 import { COMPOSER_HINT, composerKeyDown } from "./keys";
 
 export const DEV_KINDS: { id: string; label: string; hint: string; pr?: boolean }[] = [
@@ -232,7 +233,7 @@ export default function DevAgentPanel({ dev, sessions, threads, fileSessions = {
           return (
             <div key={t.id} ref={(el) => { if (el) taskRefs.current.set(t.id, el); }} className={`dev-task ${targetThread?.id === t.id ? "current" : ""}`} data-testid="dev-task" data-thread={t.id}>
               <div className="dev-task-head muted small">
-                <button className="link-btn small" onClick={() => setTarget(t.id)} title="Continue this discussion">{fileView ? "Discussion" : "Task"} {i + 1}</button> · {new Date(t.created_at).toLocaleString()}
+                <button className="link-btn small" onClick={() => setTarget(t.id)} title="Continue this discussion">{fileView ? "Discussion" : "Task"} {i + 1}</button> · {utc8(t.created_at)}
                 {a && !a.start_line && <span className="chip" data-testid="dev-task-about">{a.folder ? `📁 ${a.file}` : fileView ? "whole file" : a.file.split("/").pop()}</span>}
               </div>
               {a && a.start_line && (

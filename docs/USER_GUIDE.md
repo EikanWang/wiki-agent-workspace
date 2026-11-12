@@ -575,6 +575,9 @@ nothing, and never become *orphaned* when the file changes; replies stay about t
 
 ## Discussions panel
 
+Every question and answer — in discussions, chats, PR Development tasks, diff comments and the Agents monitor —
+shows its date and time in **UTC+8** (e.g. `2026-11-12 15:03:21 UTC+8`): when you asked, and when the answer started.
+
 - **Individual** — one discussion at a time: quoted passage, session (and its model), messages, **View diff**
   (changes since the discussion started), reply box.
 - **Flat** — all discussions of the document as one chronological stream, grouped by passage; the reply box

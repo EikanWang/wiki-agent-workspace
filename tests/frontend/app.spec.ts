@@ -159,7 +159,7 @@ test("B5: both discussions use the document default session; header shows provid
   await page.getByTestId("reply-input").fill("follow-up");
   await page.getByTestId("reply-send").click();
   await expect(page.locator('[data-testid="message-agent"][data-status="completed"]').last()).toContainText("echo: follow-up", { timeout: 20000 });
-  const ids = await page.locator('[data-testid="message-agent"] .msg-head .muted').allTextContents();
+  const ids = await page.locator('[data-testid="message-agent"] .msg-head .muted:not(.msg-time)').allTextContents();
   expect(new Set(ids).size).toBe(1);
 });
 
@@ -3317,6 +3317,14 @@ test("Agents: find sessions in folders, add one by id, alarms, a session on stag
   await page.getByTestId("selection-question").fill("monitor question");
   await page.getByTestId("selection-send").click();
   await expect(page.locator('[data-testid="message-agent"][data-status="completed"]').last()).toContainText("monitor question", { timeout: 20000 });
+  // every question and answer shows its date and time in UTC+8
+  const stamp = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC\+8$/;
+  const now8 = new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10); // today's date in UTC+8
+  for (const who of ["user", "agent"]) {
+    const t = page.locator(`[data-testid="message-${who}"]`).last().getByTestId("msg-time");
+    await expect(t).toHaveText(stamp);
+    expect((await t.textContent())!.startsWith(now8)).toBe(true);
+  }
   await page.getByTestId("activity-agents").click();
   await expect(page.getByTestId("agents-panel")).toBeVisible();
   // the agents' status page; Document / Terminal / Chats / Diff (and the document's session) do not apply here
@@ -3351,6 +3359,7 @@ test("Agents: find sessions in folders, add one by id, alarms, a session on stag
   const mw = (await page.getByTestId("agent-monitor").boundingBox())!.width;
   expect(sw / mw).toBeGreaterThan(0.7);
   await expect(page.getByTestId("mon-msg").first()).toBeVisible({ timeout: 15000 });
+  await expect(page.getByTestId("mon-msg").first().getByTestId("msg-time")).toHaveText(/UTC\+8$/); // the monitor too
   await page.getByTestId("mon-input").fill("follow-up from the monitor");
   await page.getByTestId("mon-send").click();
   await expect(page.getByTestId("mon-transcript")).toContainText("echo: follow-up from the monitor", { timeout: 20000 });
