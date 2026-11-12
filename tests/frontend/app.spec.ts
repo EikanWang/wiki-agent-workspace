@@ -3032,6 +3032,15 @@ test("PR Development: your pull requests of a repository; check one out in a fol
   await expect(draft).toHaveClass(/closed/);
   await draft.getByTestId("dev-pr-reopen").click();
   await expect(draft).not.toHaveClass(/closed/);
+  // remove a PR from the list (nothing changes on GitHub), show it, restore it
+  await draft.hover();
+  await draft.getByTestId("my-pr-remove").click();
+  await expect(draft).toHaveCount(0);
+  await prs2.getByTestId("my-prs-show-removed").click();
+  await expect(draft).toHaveClass(/removed/);
+  await draft.getByTestId("my-pr-restore").click();
+  await expect(draft).not.toHaveClass(/removed/);
+  await expect(prs2.getByTestId("my-prs-show-removed")).toHaveCount(0);
   // another PR: the same folder switches again
   await prs2.locator('[data-testid="my-pr"][data-number="6"] .my-pr-main').click();
   await expect(page.getByTestId("dev-branch-button")).toContainText("demo-draft", { timeout: 15000 });
@@ -3040,11 +3049,15 @@ test("PR Development: your pull requests of a repository; check one out in a fol
   await page.getByTestId("dev-branch-button").click();
   await page.getByTestId("dev-branch-switch").filter({ hasText: /^main$/ }).click();
   await expect(page.getByTestId("dev-branch-button")).toContainText("main");
-  // archive (the folder stays)
-  page.once("dialog", (d) => d.accept());
-  await page.locator(".dev-toolbar .icon-btn", { hasText: "⋯" }).click();
+  // remove the workspace from the list with its × (archived; the folder stays)
+  const row = page.locator(".dev-item-row").filter({ has: page.locator('[data-testid="dev-item"].selected') });
+  await row.hover();
+  await row.getByTestId("dev-item-remove").click();
+  await expect(page.getByTestId("confirm-dialog")).toContainText("nothing changes on GitHub");
   await page.getByTestId("confirm-ok").click();
-  await expect(page.getByTestId("dev-view")).toHaveCount(0, { timeout: 15000 });
+  await expect(page.getByTestId("dev-item")).toHaveCount(items - 1, { timeout: 15000 });
+  await expect(page.getByTestId("dev-view")).toHaveCount(0);
+  expect(fs.existsSync(path.join(proj, "app.py"))).toBe(true);
   await page.getByTestId("activity-files").click();
 });
 

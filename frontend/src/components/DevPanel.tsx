@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { ApiError, DevInfo, DevWorkspace, WorkspaceInfo, get, subscribeGlobal } from "../api";
+import { ApiError, DevInfo, DevWorkspace, WorkspaceInfo, del, get, subscribeGlobal } from "../api";
+import { confirmAction } from "./Confirm";
 import DevSetupDialog, { DevSetupPreset } from "./DevSetupDialog";
 import { PlusIcon } from "./Icons";
 import MyPrs from "./MyPrs";
@@ -35,6 +36,17 @@ export default function DevPanel({ activeId, workspaces, onOpen, preset, onPrese
       if (ev.type === "dev_changed" || ev.type === "dev_task") void load();
     });
   }, [load]);
+  const remove = async (d: DevWorkspace) => {
+    if (!(await confirmAction({ title: `Remove “${d.name}” from the list?`, confirmLabel: "Remove", danger: false,
+      message: `The workspace is archived: its editor stops; ${d.mode === "folder" ? `the folder ${d.worktree_path}` : `its worktree ${d.worktree_path} and branch ${d.branch}`} and its conversation stay, and nothing changes on GitHub${d.pr_number ? ` (#${d.pr_number} stays open)` : ""}.` }))) return;
+    try {
+      await del(`/dev/workspaces/${d.id}?remove_worktree=false`);
+      await load();
+      if (d.id === activeId) onOpen("");
+    } catch (e) {
+      setErr((e as ApiError).message);
+    }
+  };
   useEffect(() => {
     if (preset) {
       setSetup(preset);
@@ -64,7 +76,8 @@ export default function DevPanel({ activeId, workspaces, onOpen, preset, onPrese
           </div>
         )}
         {list?.map((d) => (
-          <button key={d.id} className={`list-item dev-item ${d.id === activeId ? "selected" : ""}`} onClick={() => onOpen(d.id)} data-testid="dev-item" data-status={d.status}>
+          <div key={d.id} className="dev-item-row">
+          <button className={`list-item dev-item ${d.id === activeId ? "selected" : ""}`} onClick={() => onOpen(d.id)} data-testid="dev-item" data-status={d.status}>
             <span className="dev-item-main">
               <span className="dev-item-name">{d.name}</span>
               <span className="muted small mono">{d.branch}{d.host !== "local" ? ` · ${d.host}` : ""}</span>
@@ -76,6 +89,9 @@ export default function DevPanel({ activeId, workspaces, onOpen, preset, onPrese
               {d.running_tasks > 0 && <span className="chip" title="Commands running">⏵{d.running_tasks}</span>}
             </span>
           </button>
+          <button className="icon-btn small dev-item-remove" onClick={() => void remove(d)} title="Remove from this list (archive; its files and branch stay; nothing changes on GitHub)"
+            aria-label={`Remove ${d.name}`} data-testid="dev-item-remove">×</button>
+          </div>
         ))}
       </div>
       {setup && info && (

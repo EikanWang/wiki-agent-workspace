@@ -926,7 +926,7 @@ export default function App() {
           )}
           {sidebarView === "development" && (
             <div className="sidebar-content">
-              <DevPanel activeId={view === "development" ? devId : null} workspaces={workspaces} onOpen={(id) => openDev(id)}
+              <DevPanel activeId={view === "development" ? devId : null} workspaces={workspaces} onOpen={(id) => openDev(id || null)}
                 preset={devPreset} onPresetUsed={() => setDevPreset(null)} onFold={() => updatePrefs({ listOpen: false })} />
             </div>
           )}

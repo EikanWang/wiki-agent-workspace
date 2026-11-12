@@ -21,6 +21,7 @@ const home = (p: string) => p.replace(/^\/home\/[^/]+|^\/root/, "~");
 const lc = (s: string) => s.toLowerCase();
 const EXTRA = "waw.dev.myprs.extra"; // repositories you added here: [{repo, source}]
 const FOLDED = "waw.dev.myprs.folded";
+const HIDDEN = "waw.dev.myprs.hidden"; // "owner/repo#n" removed from this list (nothing changes on GitHub)
 const readJson = <T,>(k: string, d: T): T => { try { return JSON.parse(localStorage.getItem(k) ?? "") as T; } catch { return d; } };
 
 /**
@@ -42,6 +43,11 @@ export default function MyPrs({ list, activeId, onOpen, onSetup, onCreated }: {
   useEffect(() => { localStorage.setItem(EXTRA, JSON.stringify(extra)); }, [extra]);
   const [folded, setFolded] = useState<Set<string>>(() => new Set(readJson<string[]>(FOLDED, [])));
   useEffect(() => { localStorage.setItem(FOLDED, JSON.stringify([...folded])); }, [folded]);
+  const [hidden, setHidden] = useState<Set<string>>(() => new Set(readJson<string[]>(HIDDEN, [])));
+  useEffect(() => { localStorage.setItem(HIDDEN, JSON.stringify([...hidden])); }, [hidden]);
+  const [showHidden, setShowHidden] = useState<Set<string>>(new Set()); // groups showing their removed PRs
+  const hideKey = (repo: string, n: number) => `${lc(repo)}#${n}`;
+  const setHiddenOne = (repo: string, n: number, on: boolean) => setHidden((h) => { const x = new Set(h); if (on) x.add(hideKey(repo, n)); else x.delete(hideKey(repo, n)); return x; });
   const [state, setState] = useState<"open" | "all">("open");
   const [groups, setGroups] = useState<Record<string, Group>>({});
   const [typed, setTyped] = useState("");
@@ -129,7 +135,7 @@ export default function MyPrs({ list, activeId, onOpen, onSetup, onCreated }: {
 
   const f = filter.trim().toLowerCase();
   const keep = (p: MyPr) => !f || `#${p.number} ${p.title} ${p.headRefName}`.toLowerCase().includes(f);
-  const total = repos.reduce((n, r) => n + (groups[lc(r.repo)]?.prs?.length ?? 0), 0);
+  const total = repos.reduce((n, r) => n + (groups[lc(r.repo)]?.prs ?? []).filter((p) => !hidden.has(hideKey(r.repo, p.number))).length, 0);
   const toggle = (k: string) => setFolded((s) => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n; });
 
   return (
@@ -163,7 +169,8 @@ export default function MyPrs({ list, activeId, onOpen, onSetup, onCreated }: {
               const g: Group = groups[k] ?? { repo: r.repo, source: r.source, prs: null, err: null, loading: true };
               const source = g.source ?? r.source;
               const ws = folderOf(r.repo, source);
-              const shown = (g.prs ?? []).filter(keep);
+              const removed = (g.prs ?? []).filter((p) => hidden.has(hideKey(r.repo, p.number)));
+              const shown = (g.prs ?? []).filter((p) => keep(p) && (showHidden.has(k) || !hidden.has(hideKey(r.repo, p.number))));
               const isOpen = !folded.has(k);
               return (
                 <div key={k} className="my-prs-group" data-testid="my-prs-group" data-repo={r.repo}>
@@ -175,18 +182,23 @@ export default function MyPrs({ list, activeId, onOpen, onSetup, onCreated }: {
                         <span className="my-prs-repo"><b>{r.repo}</b></span>
                         <span className="muted small mono">{ws ? `📁 ${home(ws.worktree_path)} · ${ws.branch}` : source ? `📁 ${home(source)}` : "no local folder"}</span>
                       </span>
-                      <span className="git-badge clean">{g.loading && !g.prs ? "…" : g.prs?.length ?? "?"}</span>
+                      <span className="git-badge clean">{g.loading && !g.prs ? "…" : g.prs ? g.prs.length - removed.length : "?"}</span>
                     </button>
                     {r.added && <button className="icon-btn small" onClick={() => setExtra((x) => x.filter((e) => lc(e.repo) !== k))} title="Remove from this list" aria-label={`Remove ${r.repo}`}>×</button>}
                   </div>
                   {isOpen && <>
                     {g.err && <div className="error-text small">{g.err}</div>}
+                    {removed.length > 0 && (
+                      <button className="link-btn small my-prs-empty" onClick={() => setShowHidden((s) => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n; })} data-testid="my-prs-show-removed">
+                        {showHidden.has(k) ? "hide removed" : `${removed.length} removed from this list · show`}
+                      </button>
+                    )}
                     {g.prs && shown.length === 0 && <div className="muted small my-prs-empty" data-testid="my-prs-empty">{f ? "Nothing matches." : `No ${state === "open" ? "open " : ""}pull requests of yours.`}</div>}
                     {shown.map((p) => {
                       const here = !!ws && ws.pr_number === p.number;
                       const label = busy === `${r.repo}#${p.number}`;
                       return (
-                        <div key={p.number} className={`my-pr ${here ? "here" : ""} ${p.state !== "OPEN" ? "closed" : ""}`} data-testid="my-pr" data-number={p.number}>
+                        <div key={p.number} className={`my-pr ${here ? "here" : ""} ${p.state !== "OPEN" ? "closed" : ""} ${hidden.has(hideKey(r.repo, p.number)) ? "removed" : ""}`} data-testid="my-pr" data-number={p.number}>
                           <button className="my-pr-main" onClick={() => void openPr(g, p)} disabled={busy !== null}
                             title={`${p.headRefName} → ${p.baseRefName}\n${p.workspaces.length ? `Open its workspace: ${p.workspaces.map((w) => w.name).join(", ")}` : ws ? `Switch ${ws.worktree_path} to its branch` : source ? `Switch your checkout ${source} to its branch` : "Open it in a new workspace"}`}>
                             <span className={`ci-dot ${(p.ci ?? "none").toLowerCase()}`} aria-hidden="true" />
@@ -196,6 +208,12 @@ export default function MyPrs({ list, activeId, onOpen, onSetup, onCreated }: {
                             </span>
                             {label ? <span className="muted small">switching…</span> : p.workspaces.length > 0 && <span className="chip" title="Has a workspace here">{here ? "here" : "open"}</span>}
                           </button>
+                          {hidden.has(hideKey(r.repo, p.number)) ? (
+                            <button className="btn small" onClick={() => setHiddenOne(r.repo, p.number, false)} title="Show it in this list again" data-testid="my-pr-restore">Restore</button>
+                          ) : (
+                            <button className="icon-btn small my-pr-close" onClick={() => setHiddenOne(r.repo, p.number, true)}
+                              title="Remove from this list (nothing changes on GitHub; its workspace, if any, stays — “N removed · show” brings it back)" aria-label={`Remove #${p.number} from the list`} data-testid="my-pr-remove">×</button>
+                          )}
                           <span className="my-pr-close"><DevPrState compact repo={r.repo} number={p.number} state={p.state}
                             onDone={(st) => setGroups((gs) => ({ ...gs, [k]: { ...g, prs: (g.prs ?? []).map((x) => (x.number === p.number ? { ...x, state: st } : x)) } }))} /></span>
                           {active && active.mode === "branch" && active.status === "ready" && sameRepo(active, r.repo) && active.pr_number !== p.number && p.state === "OPEN" && (

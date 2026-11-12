@@ -1305,3 +1305,8 @@ body.resizing-h iframe { pointer-events: none; }
 .my-pr .my-pr-close { visibility: hidden; }
 .my-pr:hover .my-pr-close, .my-pr .my-pr-close:focus-within, .my-pr.closed .my-pr-close { visibility: visible; }
 .my-pr.closed .my-pr-title { opacity: 0.7; }
+.dev-item-row { display: flex; align-items: center; }
+.dev-item-row .dev-item { flex: 1; min-width: 0; }
+.dev-item-row .dev-item-remove { visibility: hidden; margin-right: 4px; }
+.dev-item-row:hover .dev-item-remove { visibility: visible; }
+.my-pr.removed { opacity: 0.55; }

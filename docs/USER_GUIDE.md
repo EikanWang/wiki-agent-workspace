@@ -323,7 +323,11 @@ write code with the agent — a new pull request, or changes to an existing one.
   repository, **Check out here** does the same in that worktree. The PR's head is on its branch, compared with its
   base; **Push** updates the PR. **Close** (hover a PR in the list) or **Close pull request…** in the workspace's
   *Pull request* tab closes it on GitHub, with an optional comment; **Reopen** brings it back. The branch and your
-  workspaces stay. Switching that checkout to another branch leaves the PR (the toolbar's #N goes).
+  workspaces stay. **×** (hover) only **removes a PR from this list** — nothing changes on GitHub; "N removed from
+  this list · show" in its group shows them again with **Restore** (kept per browser).
+- **Removing a workspace** — × on a workspace in the list (hover) removes it from the list: it is archived (the
+  editor stops); its folder or worktree, branch and conversation stay, and nothing changes on GitHub. (⋯ in the
+  workspace's toolbar can also delete an app-made worktree.) Switching that checkout to another branch leaves the PR (the toolbar's #N goes).
 - **Branches** — the branch chip in the workspace's toolbar (⎇ name ▾) creates a branch from the current one
   (uncommitted changes go along) or switches to another; in a folder opened directly, a new branch is compared with
   the one it was created from. A branch switched outside the app (a terminal) is followed. A pull request's
