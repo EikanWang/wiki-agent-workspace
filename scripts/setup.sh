@@ -19,7 +19,8 @@ need node "install Node.js 20+ (recommended 22) from https://nodejs.org or via n
 need npm "comes with Node.js"
 
 PY=""
-for cand in python3.13 python3.12 python3.11 python3; do
+# WAW_PYTHON: a specific interpreter (scripts/install.sh passes a user-level one when the system Python is too old)
+for cand in ${WAW_PYTHON:-} python3.13 python3.12 python3.11 python3; do
   if command -v "$cand" >/dev/null 2>&1; then
     if "$cand" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' 2>/dev/null; then PY="$cand"; break; fi
   fi
@@ -57,4 +58,5 @@ fi
 echo "==> Configuration"
 .venv/bin/python -m backend.app.cli setup "$@"
 echo
-echo "Start the server with: scripts/start.sh"
+echo "Start the server with: scripts/start.sh (foreground) or scripts/service.sh install (background, kept running)"
+echo "Check everything with:  scripts/doctor.sh"

@@ -1,4 +1,4 @@
-"""Command-line entry point: `wiki-agent-workspace setup|serve|print-config`."""
+"""Command-line entry point: `wiki-agent-workspace setup|serve|print-config|doctor`."""
 
 from __future__ import annotations
 
@@ -87,6 +87,15 @@ def cmd_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_doctor(args: argparse.Namespace) -> int:
+    from .doctor import as_json, report, run_checks
+
+    settings = load_settings(Path(args.config).expanduser() if args.config else None)
+    checks = run_checks(settings, url=args.url, quick=args.quick)
+    print(as_json(checks) if args.json else report(checks, color=sys.stdout.isatty() and not os.environ.get("NO_COLOR")))
+    return 1 if any(c.level == "fail" for c in checks) else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="wiki-agent-workspace")
     parser.add_argument("--config", help="path to config.toml")
@@ -104,6 +113,11 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(fn=cmd_print_config)
     r = sub.add_parser("serve", help="start the web server")
     r.set_defaults(fn=cmd_serve)
+    d = sub.add_parser("doctor", help="check the installation feature by feature and say how to fix what is missing")
+    d.add_argument("--json", action="store_true", help="machine-readable output")
+    d.add_argument("--quick", action="store_true", help="skip the slower checks (versions, gh login, the running server)")
+    d.add_argument("--url", help="where the server answers (default: http://<bind>:<port>)")
+    d.set_defaults(fn=cmd_doctor)
     args = parser.parse_args(argv)
     return args.fn(args)
 
