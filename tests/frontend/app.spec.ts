@@ -2964,6 +2964,11 @@ test("PR Development: your pull requests of a repository; check one out in a fol
   fs.writeFileSync(path.join(contrib, "app.py"), "VALUE = 2  # the fix\n");
   g(contrib, "commit", "-q", "-am", "Demo fix");
   g(contrib, "push", "-q", "origin", "HEAD:refs/pull/5/head", "HEAD:refs/heads/demo-fix");
+  g(contrib, "checkout", "-q", "-b", "demo-draft", "main");
+  fs.writeFileSync(path.join(contrib, "draft.py"), "DRAFT = 1\n");
+  g(contrib, "add", "-A");
+  g(contrib, "commit", "-q", "-m", "Demo draft");
+  g(contrib, "push", "-q", "origin", "HEAD:refs/pull/6/head", "HEAD:refs/heads/demo-draft");
   await login(page);
   await page.getByTestId("activity-development").click();
   await page.getByTestId("dev-new").click();
@@ -2976,10 +2981,13 @@ test("PR Development: your pull requests of a repository; check one out in a fol
   if ((await prs.getByTestId("my-prs-repo").count()) === 0) await page.getByTestId("my-prs-toggle").click();
   await expect(prs.getByTestId("my-pr")).toHaveCount(2, { timeout: 15000 });
   await expect(prs).toContainText("acme/demo");
+  // at the top of the PR Development sidebar
+  expect((await prs.boundingBox())!.y).toBeLessThan((await page.locator(".dev-list").boundingBox())!.y);
+  const items = await page.getByTestId("dev-item").count();
   const fix = prs.locator('[data-testid="my-pr"][data-number="5"]');
   await expect(fix).toContainText("Demo fix");
-  // check #5 out right here: its branch and contents; the workspace now belongs to the PR
-  await fix.getByTestId("my-pr-here").click();
+  // click #5: the folder switches to its branch (no new worktree); the workspace now belongs to the PR
+  await fix.locator(".my-pr-main").click();
   await expect(page.getByTestId("dev-branch-button")).toContainText("demo-fix", { timeout: 15000 });
   expect(g(proj, "symbolic-ref", "--short", "HEAD")).toBe("demo-fix");
   expect(fs.readFileSync(path.join(proj, "app.py"), "utf-8")).toContain("the fix");
@@ -3000,6 +3008,14 @@ test("PR Development: your pull requests of a repository; check one out in a fol
   await page.getByTestId("dev-branch-switch").filter({ hasText: /^main$/ }).click();
   await expect(page.getByTestId("dev-branch-button")).toContainText("main");
   await expect(page.locator(".dev-toolbar")).not.toContainText("#5");
+  // another PR: the same folder switches again
+  await prs.locator('[data-testid="my-pr"][data-number="6"] .my-pr-main').click();
+  await expect(page.getByTestId("dev-branch-button")).toContainText("demo-draft", { timeout: 15000 });
+  expect(fs.existsSync(path.join(proj, "draft.py"))).toBe(true);
+  await expect(page.getByTestId("dev-item")).toHaveCount(items); // no new workspace
+  await page.getByTestId("dev-branch-button").click();
+  await page.getByTestId("dev-branch-switch").filter({ hasText: /^main$/ }).click();
+  await expect(page.getByTestId("dev-branch-button")).toContainText("main");
   // archive (the folder stays)
   page.once("dialog", (d) => d.accept());
   await page.locator(".dev-toolbar .icon-btn", { hasText: "⋯" }).click();

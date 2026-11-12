@@ -54,6 +54,7 @@ export default function DevPanel({ activeId, workspaces, onOpen, preset, onPrese
       </div>
       {info && !info.editor.available && <div className="warn small dev-hint">{info.editor.install_hint}</div>}
       {err && <div className="error-text small">{err}</div>}
+      <MyPrs list={list ?? []} activeId={activeId} onOpen={onOpen} onSetup={(p) => setSetup(p)} onCreated={(d) => { void load(); onOpen(d.id); }} />
       <div className="dev-list">
         {list?.length === 0 && (
           <div className="muted small dev-hint">
@@ -77,7 +78,6 @@ export default function DevPanel({ activeId, workspaces, onOpen, preset, onPrese
           </button>
         ))}
       </div>
-      <MyPrs list={list ?? []} activeId={activeId} onOpen={onOpen} onSetup={(p) => setSetup(p)} onCreated={(d) => { void load(); onOpen(d.id); }} />
       {setup && info && (
         <DevSetupDialog info={info} workspaces={workspaces} preset={setup} onClose={() => setSetup(null)}
           onCreated={(d) => { setSetup(null); void load(); onOpen(d.id); }} />

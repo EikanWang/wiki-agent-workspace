@@ -401,7 +401,7 @@ class DevService:
             s.add(DevWorkspace(
                 id=dev_id, name=name[:200], host=host, source_repo=source_abs, worktree_path="", mode=body.mode,
                 branch=(body.branch or "").strip() if body.mode != "pr" else f"waw/pr-{body.pr_number}",
-                base_ref=(body.base or "").strip() or None, github_repo=body.github_repo or None, pr_number=body.pr_number if body.mode == "pr" else None,
+                base_ref=(body.base or "").strip() or None, github_repo=body.github_repo or None, pr_number=body.pr_number if body.mode != "branch" else None,
                 wiki_workspace_id=body.wiki_workspace_id or None, document_id=doc.id,
                 settings_json=json.dumps(clean_settings(body.settings or {})), status="creating"))
         self._start(dev_id, self._provision_folder(dev_id, body.init_git) if body.mode == "folder" else self._provision(dev_id))
@@ -513,6 +513,14 @@ class DevService:
         _, remotes, _ = await t.git(wt, ["remote"])
         fields.update(github_repo=github_repo, push_remote="origin" if "origin" in remotes.split() else None,
                       push_branch=fields["branch"] if fields["branch"] != "HEAD" else None)
+        pr = row.pr_number
+        if pr:  # opened for one of the repository's pull requests: switch the folder to it before it is ready
+            self._update(dev_id, **{k: v for k, v in fields.items()}, pr_number=None)
+            try:
+                done = await self.checkout_pr(dev_id, pr, provisioning=True)
+                fields = {"error": done["warning"]} if done.get("warning") else {}
+            except ApiError as exc:
+                fields["error"] = f"Could not check out pull request #{pr}: {exc.message}"
         await self._finish(dev_id, t, wt, fields)
 
     async def _finish(self, dev_id: str, t: Target, wt: str, fields: dict[str, Any]) -> None:
@@ -799,11 +807,11 @@ class DevService:
         known = next((k for k in self.known_repos() if k["repo"].lower() == repo.lower()), None)
         return {"repo": repo, "state": state, "source": source or (known or {}).get("source"), "prs": prs}
 
-    async def checkout_pr(self, dev_id: str, number: int) -> dict[str, Any]:
+    async def checkout_pr(self, dev_id: str, number: int, provisioning: bool = False) -> dict[str, Any]:
         """Put one of the repository's pull requests in this workspace's own checkout (a folder opened directly, or a
         new-branch worktree): its head on a local branch, compared with its base, pushes going back to the PR's
         branch. Your uncommitted changes go along (git refuses when they would be overwritten)."""
-        row, t = self._ready(dev_id)
+        row, t = (self.get(dev_id), self.target(self.get(dev_id))) if provisioning else self._ready(dev_id)
         if row.mode == "pr":
             raise conflict("PR_WORKSPACE", "this workspace belongs to a pull request: open the other one in its own workspace")
         if not row.github_repo:

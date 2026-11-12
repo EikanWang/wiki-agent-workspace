@@ -1185,6 +1185,12 @@ async def test_your_pull_requests_of_a_repo_and_checking_one_out_in_a_folder(run
     assert (await api.post(f"{base}/branch", json={"name": "main", "create": False})).status_code == 200
     d = (await api.get(base)).json()
     assert d["pr_number"] is None and d["branch"] == "main" and d["push_remote"] == "origin"
+    # a folder opened for one of your PRs: the folder switches to it (no worktree, no clone)
+    assert (await api.delete(base)).status_code == 200
+    r = await api.post("/api/v1/dev/workspaces", json={"source_repo": str(src), "mode": "folder", "pr_number": 7})
+    f2 = await wait_ready(api, r.json()["id"])
+    assert f2["status"] == "ready" and f2["worktree_path"] == str(src) and f2["pr_number"] == 7 and f2["branch"] == "my-fix", f2
+    assert git(src, "symbolic-ref", "--short", "HEAD") == "my-fix"
     # a PR workspace cannot switch to another PR
     r = await api.post("/api/v1/dev/workspaces", json={"source_repo": str(src), "mode": "pr", "github_repo": "acme/proj", "pr_number": 7})
     p = await wait_ready(api, r.json()["id"])

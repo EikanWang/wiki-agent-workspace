@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { ApiError, DevWorkspace, get, post } from "../api";
 import FolderPicker from "./FolderPicker";
 import { DevSetupPreset } from "./DevSetupDialog";
+import { confirmAction } from "./Confirm";
 
 export interface MyPr {
   number: number; title: string; url: string; isDraft: boolean; state: string; headRefName: string; baseRefName: string;
@@ -66,29 +67,38 @@ export default function MyPrs({ list, activeId, onOpen, onSetup, onCreated }: {
   const here = active && active.status === "ready" && active.mode !== "pr" && data && (active.github_repo ?? "").toLowerCase() === data.repo.toLowerCase() ? active : null;
   const source = data?.source ?? repos.find((r) => r.repo.toLowerCase() === (data?.repo ?? "").toLowerCase())?.source ?? null;
 
+  // a folder workspace of this repository (your own checkout, used directly): PRs switch its branch there
+  const sameRepo = (d: DevWorkspace) => !!data && (d.github_repo ?? "").toLowerCase() === data.repo.toLowerCase();
+  const folderWs = (active && active.mode === "folder" && active.status === "ready" && sameRepo(active) ? active : null)
+    ?? list.find((d) => d.mode === "folder" && d.status === "ready" && sameRepo(d))
+    ?? (source ? list.find((d) => d.mode === "folder" && d.status === "ready" && d.worktree_path === source) : undefined) ?? null;
+
+  /** Open a PR: the workspace it already has; else switch the repository's local folder to its branch (no clone,
+   *  no worktree); else a new workspace from the setup dialog. */
   const openPr = async (p: MyPr) => {
-    const existing = p.workspaces.find((w) => w.mode === "pr") ?? p.workspaces[0];
+    const existing = p.workspaces[0];
     if (existing) return onOpen(existing.id);
     if (!data) return;
-    if (!source) return onSetup({ mode: "pr", github_repo: data.repo, pr_number: p.number });
-    setBusy(`open:${p.number}`);
     setErr(null);
+    if (folderWs) return void checkoutIn(folderWs, p);
+    if (!source) return onSetup({ mode: "pr", github_repo: data.repo, pr_number: p.number });
+    if (!(await confirmAction({ title: `Switch ${source} to #${p.number}?`, message: `Your local checkout of ${data.repo} switches to the pull request's branch ${p.headRefName} (uncommitted changes go along; git refuses if they would be overwritten). It opens as a workspace that works in that folder directly.`, confirmLabel: "Switch the folder", danger: false }))) return;
+    setBusy(`open:${p.number}`);
     try {
       const wiki = localStorage.getItem("waw.devWiki") || undefined;
-      onCreated(await post<DevWorkspace>("/dev/workspaces", { host: "local", source_repo: source, mode: "pr", github_repo: data.repo, pr_number: p.number, wiki_workspace_id: wiki }));
+      onCreated(await post<DevWorkspace>("/dev/workspaces", { host: "local", source_repo: source, mode: "folder", github_repo: data.repo, pr_number: p.number, wiki_workspace_id: wiki }));
     } catch (e) {
       setErr((e as ApiError).message);
     } finally {
       setBusy(null);
     }
   };
-  const checkoutHere = async (p: MyPr) => {
-    if (!here) return;
+  const checkoutIn = async (ws: DevWorkspace, p: MyPr) => {
     setBusy(`here:${p.number}`);
     setErr(null);
     try {
-      await post(`/dev/workspaces/${here.id}/checkout-pr`, { number: p.number });
-      onOpen(here.id);
+      await post(`/dev/workspaces/${ws.id}/checkout-pr`, { number: p.number });
+      onOpen(ws.id);
       void load({ repo: data!.repo });
     } catch (e) {
       setErr((e as ApiError).message);
@@ -96,6 +106,7 @@ export default function MyPrs({ list, activeId, onOpen, onSetup, onCreated }: {
       setBusy(null);
     }
   };
+  const checkoutHere = (p: MyPr) => { if (here) void checkoutIn(here, p); };
   const f = filter.trim().toLowerCase();
   const shown = (data?.prs ?? []).filter((p) => !f || `#${p.number} ${p.title} ${p.headRefName}`.toLowerCase().includes(f));
 
@@ -133,15 +144,15 @@ export default function MyPrs({ list, activeId, onOpen, onSetup, onCreated }: {
               return (
                 <div key={p.number} className={`my-pr ${isHere ? "here" : ""}`} data-testid="my-pr" data-number={p.number}>
                   <button className="my-pr-main" onClick={() => void openPr(p)} disabled={busy !== null}
-                    title={`${p.headRefName} → ${p.baseRefName}\n${ws.length ? `Open its workspace: ${ws.map((w) => w.name).join(", ")}` : source ? "Open it in a new workspace (a worktree of your checkout)" : "Open it in a new workspace"}`}>
+                    title={`${p.headRefName} → ${p.baseRefName}\n${ws.length ? `Open its workspace: ${ws.map((w) => w.name).join(", ")}` : folderWs ? `Switch ${folderWs.worktree_path} to its branch` : source ? `Switch your checkout ${source} to its branch` : "Open it in a new workspace"}`}>
                     <span className={`ci-dot ${(p.ci ?? "none").toLowerCase()}`} aria-hidden="true" />
                     <span className="my-pr-text">
                       <span className="my-pr-title">{p.isDraft && <span className="chip">draft</span>} {p.state !== "OPEN" && <span className="chip">{p.state.toLowerCase()}</span>} {p.title}</span>
                       <span className="muted small mono">#{p.number} · {p.headRefName} · {ago(p.updatedAt)}{p.reviewDecision === "APPROVED" ? " · approved" : p.reviewDecision === "CHANGES_REQUESTED" ? " · changes requested" : ""}</span>
                     </span>
-                    {busy === `open:${p.number}` ? <span className="muted small">opening…</span> : ws.length > 0 && <span className="chip" title="Has a workspace here">{isHere ? "here" : "open"}</span>}
+                    {busy === `open:${p.number}` || busy === `here:${p.number}` ? <span className="muted small">switching…</span> : ws.length > 0 && <span className="chip" title="Has a workspace here">{isHere ? "here" : "open"}</span>}
                   </button>
-                  {here && !isHere && p.state === "OPEN" && (
+                  {here && here.mode === "branch" && !isHere && p.state === "OPEN" && (
                     <button className="btn small" disabled={busy !== null} onClick={() => void checkoutHere(p)} title={`Check it out in “${here.name}” (${here.worktree_path}); uncommitted changes go along`} data-testid="my-pr-here">
                       {busy === `here:${p.number}` ? "…" : "Check out here"}
                     </button>

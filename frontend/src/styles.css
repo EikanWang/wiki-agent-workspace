@@ -1277,7 +1277,7 @@ body.resizing-h iframe { pointer-events: none; }
 .gh-refresh { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; }
 .gh-refresh select { font-size: 11px; padding: 0 2px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); color: var(--fg); }
 /* PR Development: your pull requests of a repository */
-.my-prs { border-top: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; max-height: 55%; }
+.my-prs { border-bottom: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; max-height: 55%; flex: none; }
 .my-prs.folded { max-height: none; }
 .my-prs-head { display: flex; align-items: center; gap: 4px; border: none; background: transparent; color: inherit; padding: 6px 10px; cursor: pointer; text-align: left; }
 .my-prs-body { display: flex; flex-direction: column; gap: 4px; padding: 0 8px 6px; min-height: 0; }
