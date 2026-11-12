@@ -6,6 +6,7 @@ import DevTerminal from "./DevTerminal";
 import { PrTab, TasksTab } from "./DevTabs";
 import DevChanges, { ChangesAsk } from "./DevChanges";
 import { confirmAction } from "./Confirm";
+import { removeWorkspaceDialog } from "./DevPanel";
 import { usePersistentState } from "../persist";
 
 type Bottom = "terminal" | "tasks" | "changes" | "pr";
@@ -150,7 +151,17 @@ export default function DevView({ devId, workspaces, sessions, onSessionsChanged
       }} />
   );
   const archive = async () => {
-    if (!(await confirmAction({ title: "Archive this development workspace?", message: dev.mode === "folder" ? `The editor stops and the workspace leaves the list; the folder ${dev.worktree_path} is not touched.` : "The editor stops and the workspace leaves the list; its branch and conversation are kept.", confirmLabel: "Archive" }))) return;
+    const how = await removeWorkspaceDialog(dev);
+    if (!how) return;
+    if (how === "purge") {
+      try {
+        await del(`/dev/workspaces/${dev.id}?purge=true`);
+        onArchived();
+      } catch (e) {
+        setErr((e as ApiError).message);
+      }
+      return;
+    }
     const remove = dev.mode !== "folder" && await confirmAction({ title: "Remove its Git worktree too?", message: `Deletes the folder ${dev.worktree_path} (refused when it has uncommitted or unpushed work). Choose Cancel to keep it.`, confirmLabel: "Remove worktree" });
     try {
       await del(`/dev/workspaces/${dev.id}?remove_worktree=${remove ? "true" : "false"}`);

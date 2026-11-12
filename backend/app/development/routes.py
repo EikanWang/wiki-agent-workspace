@@ -135,8 +135,102 @@ async def update_dev(dev_id: str, body: DevUpdateIn, ctx: AppContext = Depends(r
 
 @router.delete("/dev/workspaces/{dev_id}")
 async def archive_dev(dev_id: str, remove_worktree: bool = Query(False), force: bool = Query(False),
-                      ctx: AppContext = Depends(require_auth_mutating)):
+                      purge: bool = Query(False), ctx: AppContext = Depends(require_auth_mutating)):
+    """Archive (default), or with purge=true clear everything the workspace has locally (see purge_dev)."""
+    if purge:
+        return await purge_dev(ctx, dev_id)
     return await _svc(ctx).archive(dev_id, remove_worktree, force)
+
+
+async def purge_dev(ctx: AppContext, dev_id: str) -> dict[str, Any]:
+    """Clear everything local of a workspace: its terminals, build / test runs and logs, its conversation with the
+    agent (discussions, jobs, the hidden document), its settings, and — for an app-made worktree — the worktree, its
+    local branch and the app's refs. A folder opened directly is never deleted (only the app's refs in it). Nothing
+    changes on GitHub; the agents' own sessions (OpenCode / Codex) are kept."""
+    import shutil
+    from pathlib import Path as _P
+
+    from ..kv import kv_get
+    from ..models import AnchorHistory, DevTaskRun, DevWorkspace, Document, DocumentVersion, JobEvent, KvSetting, Preview, ReadingState, ReviewMark
+    from .service import dev_doc_path, dev_snapshot_path
+
+    svc = _svc(ctx)
+    row = svc.get(dev_id)
+    with ctx.db.read() as s:
+        tids = [t.id for t in s.query(Thread.id).filter_by(document_id=row.document_id)] if row.document_id else []
+        busy = s.query(Job).filter(Job.thread_id.in_(tids), Job.status.in_(("queued", "running", "waiting_for_session",
+                                                                           "waiting_provider_permission"))).count() if tids else 0
+    if busy:
+        raise ApiError(409, "DEV_BUSY", "an agent turn of this workspace is running: wait for it (or cancel it) first")
+    editor = ctx.extra.get("dev_editor")
+    if editor:
+        await editor.stop(dev_id)
+    removed: list[str] = []
+    if ctx.terminals is not None:
+        for tid in kv_get(ctx, _dev_terms_key(dev_id), []):
+            try:
+                ctx.terminals.close(tid)
+            except Exception:  # noqa: BLE001 - already gone
+                pass
+    if row.worktree_path:
+        t = svc.target(row)
+        repo = row.source_repo if row.mode != "folder" else row.worktree_path
+        refs = [f"refs/waw/pushed/{row.branch}", *([f"refs/waw/pr/{row.pr_number}"] if row.pr_number else [])]
+        if row.mode != "folder":
+            rc, _, err = await t.git(row.source_repo, ["worktree", "remove", "--force", row.worktree_path], timeout=300)
+            if rc != 0 and await t.is_dir(row.worktree_path):
+                raise ApiError(400, "WORKTREE_REMOVE_FAILED", f"git worktree remove failed: {err.strip()[:300]}")
+            await t.git(row.source_repo, ["worktree", "prune"])
+            removed.append(f"worktree {row.worktree_path}")
+            # the workspace's local branch (a PR's waw/pr-N, or the new branch made for it) — unless checked out elsewhere
+            rc, _, _ = await t.git(row.source_repo, ["branch", "-D", "--", row.branch])
+            if rc == 0:
+                removed.append(f"branch {row.branch}")
+        for ref in refs:
+            exists = (await t.git(repo, ["rev-parse", "--verify", "--quiet", ref]))[0] == 0
+            if exists and (await t.git(repo, ["update-ref", "-d", ref]))[0] == 0:
+                removed += [ref]
+    with ctx.db.write() as s:
+        for run in s.query(DevTaskRun).filter_by(dev_id=dev_id).all():
+            try:
+                _P(run.log_path).unlink(missing_ok=True)
+            except OSError:
+                pass
+            s.delete(run)
+        if tids:
+            jobs = [j.id for j in s.query(Job.id).filter(Job.thread_id.in_(tids))]
+            if jobs:
+                s.query(JobEvent).filter(JobEvent.job_id.in_(jobs)).delete(synchronize_session=False)
+                s.query(Job).filter(Job.id.in_(jobs)).delete(synchronize_session=False)
+            s.query(AnchorHistory).filter(AnchorHistory.thread_id.in_(tids)).delete(synchronize_session=False)
+            s.query(Message).filter(Message.thread_id.in_(tids)).delete(synchronize_session=False)
+            s.query(Thread).filter(Thread.id.in_(tids)).delete(synchronize_session=False)
+        for key in (_dev_terms_key(dev_id), _fs_key(dev_id)):
+            kv = s.get(KvSetting, key)
+            if kv is not None:
+                s.delete(kv)
+        d = s.get(DevWorkspace, dev_id)
+        doc_id = d.document_id if d else None
+        doc_ws = (s.get(Document, doc_id).workspace_id if doc_id and s.get(Document, doc_id) else None)
+        if d is not None:
+            s.delete(d)
+        s.flush()
+        if doc_id:
+            for model in (ReadingState, ReviewMark, DocumentVersion, Preview):
+                s.query(model).filter(model.document_id == doc_id).delete(synchronize_session=False)
+            doc = s.get(Document, doc_id)
+            if doc is not None:
+                s.delete(doc)
+    rt = ctx.workspaces.runtimes.get(doc_ws) if doc_ws and ctx.workspaces is not None else None
+    snap_root = rt.docs.snapshots_dir if rt else ctx.settings.state_dir / "snapshots"
+    if doc_id:
+        shutil.rmtree(snap_root / doc_id, ignore_errors=True)  # its versions
+        stub = dev_snapshot_path(snap_root, dev_doc_path(dev_id))
+        if stub is not None:
+            stub.unlink(missing_ok=True)
+    if ctx.events:
+        ctx.events.publish("global", {"type": "dev_changed", "dev_id": dev_id})
+    return {"purged": dev_id, "removed": removed}
 
 
 @router.post("/dev/workspaces/{dev_id}/wiki-snapshot")

@@ -3053,11 +3053,38 @@ test("PR Development: your pull requests of a repository; check one out in a fol
   const row = page.locator(".dev-item-row").filter({ has: page.locator('[data-testid="dev-item"].selected') });
   await row.hover();
   await row.getByTestId("dev-item-remove").click();
-  await expect(page.getByTestId("confirm-dialog")).toContainText("nothing changes on GitHub");
+  await expect(page.getByTestId("confirm-dialog")).toContainText("Nothing changes on GitHub");
   await page.getByTestId("confirm-ok").click();
   await expect(page.getByTestId("dev-item")).toHaveCount(items - 1, { timeout: 15000 });
   await expect(page.getByTestId("dev-view")).toHaveCount(0);
   expect(fs.existsSync(path.join(proj, "app.py"))).toBe(true);
+  await page.getByTestId("activity-files").click();
+});
+
+test("PR Development: remove a workspace and clear everything it has locally (worktree, branch, conversation)", async ({ page }) => {
+  const src = fs.readFileSync(`/tmp/waw-e2e-devsrc-${E2E_PORT}`, "utf-8").trim();
+  const cp = require("child_process") as typeof import("child_process");
+  await login(page);
+  await page.getByTestId("activity-development").click();
+  const before = (await (await page.request.get("/api/v1/dev/workspaces")).json()).workspaces.length;
+  await expect(page.getByTestId("dev-item")).toHaveCount(before);
+  await page.getByTestId("dev-new").click();
+  await page.getByTestId("dev-branch").fill("feature/to-clear");
+  await page.getByTestId("dev-source").fill(src);
+  await page.getByTestId("dev-create").click();
+  await expect(page.getByTestId("dev-item")).toHaveCount(before + 1);
+  await expect(page.locator('[data-testid="dev-item"].selected')).toHaveAttribute("data-status", "ready", { timeout: 20000 });
+  const ws = (await (await page.request.get("/api/v1/dev/workspaces")).json()).workspaces.find((w: any) => w.branch === "feature/to-clear");
+  expect(fs.existsSync(ws.worktree_path)).toBe(true);
+  const row = page.locator(".dev-item-row").filter({ has: page.locator('[data-testid="dev-item"].selected') });
+  await row.hover();
+  await row.getByTestId("dev-item-remove").click();
+  await expect(page.getByTestId("confirm-dialog")).toContainText("Clear everything locally");
+  await page.getByTestId("confirm-purge").click();
+  await expect(page.getByTestId("dev-item")).toHaveCount(before, { timeout: 15000 });
+  await expect.poll(() => fs.existsSync(ws.worktree_path)).toBe(false);
+  expect(cp.execFileSync("git", ["-C", src, "branch", "--list", "feature/to-clear"], { encoding: "utf-8" }).trim()).toBe("");
+  expect((await page.request.get(`/api/v1/dev/workspaces/${ws.id}`)).status()).toBe(404);
   await page.getByTestId("activity-files").click();
 });
 

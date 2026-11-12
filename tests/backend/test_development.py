@@ -1209,3 +1209,43 @@ async def test_your_pull_requests_of_a_repo_and_checking_one_out_in_a_folder(run
     r = await api.post("/api/v1/dev/workspaces", json={"source_repo": str(src), "mode": "pr", "github_repo": "acme/proj", "pr_number": 7})
     p = await wait_ready(api, r.json()["id"])
     assert (await api.post(f"/api/v1/dev/workspaces/{p['id']}/checkout-pr", json={"number": 9})).status_code == 409
+
+
+async def test_clear_everything_locally(running_app, dev_settings, tmp_path, fake_env):
+    """purge: the worktree, its branch, terminals, runs, the conversation and the workspace itself go; a folder
+    opened directly stays (only the app's data about it goes)."""
+    from backend.app.models import DevTaskRun, DevWorkspace, Document, Message, Thread
+
+    h = await running_app(dev_settings)
+    api = h.api
+    src, _ = make_source(tmp_path)
+    d = await new_branch_ws(api, src, None)
+    base = f"/api/v1/dev/workspaces/{d['id']}"
+    wt = Path(d["worktree_path"])
+    r = await api.post(f"{base}/ask", json={"text": "hello", "kind": "ask"})
+    await api.wait_job(r.json()["job_id"])
+    term = (await api.post(f"{base}/terminals")).json()
+    run = (await api.post(f"{base}/tasks", json={"kind": "custom", "command": "echo hi"})).json()
+    for _ in range(100):
+        if (await api.get(f"/api/v1/dev/tasks/{run['id']}/log")).json()["run"]["status"] != "running":
+            break
+        await asyncio.sleep(0.05)
+    with h.ctx.db.read() as s:
+        doc_id = s.get(DevWorkspace, d["id"]).document_id
+        assert s.query(Thread).filter_by(document_id=doc_id).count() == 1
+    r = await api.delete(base, params={"purge": "true"})
+    assert r.status_code == 200, r.text
+    assert "branch feature/x" in r.json()["removed"] and any(x.startswith("worktree ") for x in r.json()["removed"])
+    assert not wt.exists() and "feature/x" not in git(src, "branch", "--list")
+    assert (await api.get(base)).status_code == 404
+    assert d["id"] not in [x["id"] for x in (await api.get("/api/v1/dev/workspaces", params={"archived": "true"})).json()["workspaces"]]
+    with h.ctx.db.read() as s:
+        assert s.get(Document, doc_id) is None and s.query(Thread).filter_by(document_id=doc_id).count() == 0
+        assert s.query(Message).count() == 0 and s.query(DevTaskRun).filter_by(dev_id=d["id"]).count() == 0
+    assert [t for t in (await api.get("/api/v1/terminals")).json()["terminals"] if t["id"] == term["id"] and t["state"] == "live"] == []
+    # a folder opened directly: never deleted
+    r = await api.post("/api/v1/dev/workspaces", json={"source_repo": str(src), "mode": "folder"})
+    f = await wait_ready(api, r.json()["id"])
+    assert (await api.delete(f"/api/v1/dev/workspaces/{f['id']}", params={"purge": "true"})).status_code == 200
+    assert (src / "lib.py").exists() and (src / ".git").is_dir()
+    assert (await api.get(f"/api/v1/dev/workspaces/{f['id']}")).status_code == 404

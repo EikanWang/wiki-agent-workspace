@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { ApiError, DevInfo, DevWorkspace, WorkspaceInfo, del, get, subscribeGlobal } from "../api";
-import { confirmAction } from "./Confirm";
+import { chooseAction } from "./Confirm";
 import DevSetupDialog, { DevSetupPreset } from "./DevSetupDialog";
 import { PlusIcon } from "./Icons";
 import MyPrs from "./MyPrs";
@@ -37,10 +37,10 @@ export default function DevPanel({ activeId, workspaces, onOpen, preset, onPrese
     });
   }, [load]);
   const remove = async (d: DevWorkspace) => {
-    if (!(await confirmAction({ title: `Remove “${d.name}” from the list?`, confirmLabel: "Remove", danger: false,
-      message: `The workspace is archived: its editor stops; ${d.mode === "folder" ? `the folder ${d.worktree_path}` : `its worktree ${d.worktree_path} and branch ${d.branch}`} and its conversation stay, and nothing changes on GitHub${d.pr_number ? ` (#${d.pr_number} stays open)` : ""}.` }))) return;
+    const how = await removeWorkspaceDialog(d);
+    if (!how) return;
     try {
-      await del(`/dev/workspaces/${d.id}?remove_worktree=false`);
+      await del(`/dev/workspaces/${d.id}?${how === "purge" ? "purge=true" : "remove_worktree=false"}`);
       await load();
       if (d.id === activeId) onOpen("");
     } catch (e) {
@@ -100,4 +100,20 @@ export default function DevPanel({ activeId, workspaces, onOpen, preset, onPrese
       )}
     </div>
   );
+}
+
+/** "Remove from the list" (archive) or "Clear everything locally" for a workspace: the key chosen, or null. */
+export function removeWorkspaceDialog(d: DevWorkspace): Promise<string | null> {
+  const where = d.mode === "folder" ? `the folder ${d.worktree_path}` : `its worktree ${d.worktree_path} and branch ${d.branch}`;
+  return chooseAction({
+    title: `Remove “${d.name}”?`,
+    message: `Remove from the list: the workspace is archived (its editor stops); ${where} and its conversation stay.\n\n`
+      + `Clear everything locally: its terminals, build / test runs, its conversation with the agent and its settings are deleted`
+      + (d.mode === "folder" ? ` (the folder itself is not touched).` : `, and so are ${where} — uncommitted changes and commits not pushed are lost.`)
+      + `\n\nNothing changes on GitHub${d.pr_number ? ` (#${d.pr_number} stays open)` : ""}.`,
+    actions: [
+      { key: "purge", label: "Clear everything locally", danger: true, hint: "Delete everything this workspace has on this machine" },
+      { key: "ok", label: "Remove from the list" },
+    ],
+  });
 }
