@@ -1944,6 +1944,8 @@ test("GitHub review hub: only the owner's GitHub sign-in sees it; queue grouped 
   await page.getByTestId("reviews-auto-refresh").selectOption("1");
   await page.clock.fastForward("01:05");
   await expect.poll(() => refreshes.length).toBeGreaterThan(0);
+  await page.getByTestId("reviews-auto-refresh").selectOption("480"); // up to 8 hours
+  await expect(page.getByTestId("reviews-auto-refresh").locator("option:checked")).toHaveText("8 h");
   await page.getByTestId("reviews-auto-refresh").selectOption("0"); // off: only ↻
   const n = refreshes.length;
   await page.clock.fastForward("10:00");

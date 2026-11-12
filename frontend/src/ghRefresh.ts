@@ -7,7 +7,7 @@ import { createElement, useEffect, useState, useSyncExternalStore } from "react"
  */
 export type GhRefreshKind = "reviews" | "pr";
 export const GH_REFRESH_DEFAULTS: Record<GhRefreshKind, number> = { reviews: 5, pr: 0 };
-export const GH_REFRESH_CHOICES = [0, 1, 2, 5, 10, 15, 30, 60];
+export const GH_REFRESH_CHOICES = [0, 1, 2, 5, 10, 15, 30, 60, 120, 240, 480];
 
 const KEY = (k: GhRefreshKind) => `waw.ghRefresh.${k}`;
 const subs = new Set<() => void>();
@@ -49,7 +49,7 @@ export function useGhAutoRefresh(kind: GhRefreshKind, refresh: () => void, enabl
   }, [minutes, enabled, refresh]);
 }
 
-const label = (m: number) => (m === 0 ? "off" : m < 60 ? `${m} min` : `${m / 60} h`);
+const label = (m: number) => (m === 0 ? "off (↻ only)" : m < 60 ? `${m} min` : `${m / 60} h`);
 
 /** "auto-refresh [5 min ▾]" */
 export function GhRefreshSelect({ kind, testId, title }: { kind: GhRefreshKind; testId?: string; title?: string }) {

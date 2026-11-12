@@ -141,7 +141,7 @@ repository the PRs are in three sections by where you stand, most urgent first:
 
 The ★ Priority group lists its PRs in the same order and marks each one (not reviewed yet / ↻ … / ✓ commented).
 **auto-refresh** (in the line above the list) sets how often the list and its badge refresh from GitHub on their
-own: off (only ↻), 1, 2, 5 (default), 10, 15, 30 or 60 minutes. An open pull request has its own **auto-refresh**
+own: off (only ↻), 1, 2, 5 (default), 10, 15, 30 minutes, or 1, 2, 4, 8 hours; ↻ refreshes now at any time. An open pull request has its own **auto-refresh**
 next to ↻ in its toolbar (off by default) — the same setting refreshes PR Development's checks in its Pull request
 tab. Refreshes run only while the page is visible (coming back to the page after the interval refreshes at once);
 the choice is kept per browser.
