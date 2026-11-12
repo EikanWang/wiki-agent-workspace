@@ -131,15 +131,16 @@ the number of PRs waiting for you, drafts not counted). Token logins and other G
 queue can include private repositories.
 
 **Reviews** lists the open pull requests that request your review, across every repository your GitHub account
-can see, in three sections by where you stand, most urgent first:
+can see, grouped by repository (most PRs first; ★ priority requests in their own group on top). Inside each
+repository the PRs are in three sections by where you stand, most urgent first:
 1. **Not reviewed yet** (*top*) — you have not reviewed or commented on it;
 2. **New activity since your comments** (*high*) — since your latest review, review comment, reply or comment,
    someone else reviewed, replied or commented, new commits were pushed, or your review was requested again (bots and
    GitHub Actions do not count); the row says what (↻ new comments, new commits…);
 3. **Commented, nothing new** (*medium*) — ✓ commented, and nothing happened since.
 
-Inside each section: ★ priority requests first, then the PRs grouped by repository (most PRs first). The line above
-the list says how many are requested, how many are shown and how many drafts are hidden.
+The ★ Priority group lists its PRs in the same order and marks each one (not reviewed yet / ↻ … / ✓ commented). The
+line above the list says how many are requested, how many are shown and how many drafts are hidden.
 - each PR shows a CI dot (green passed, red failing, amber running), title, #number, author, last update,
   size (+/−), draft flag and labels; hover for details;
 - **filter** by repository, title, author, requester or label; **drafts** shows or hides draft PRs; sort by

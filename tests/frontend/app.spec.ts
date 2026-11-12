@@ -1926,13 +1926,15 @@ test("GitHub review hub: only the owner's GitHub sign-in sees it; queue grouped 
   const panel = page.getByTestId("reviews-panel");
   await expect(panel).toBeVisible();
   await expect(page.getByTestId("reviews-note")).toContainText("SAML");
-  // sections by where you stand: not reviewed yet (top), new activity since your comments (high), nothing new (medium)
-  await expect.poll(() => page.getByTestId("review-section").evaluateAll((els) => els.map((e) => e.getAttribute("data-category")))).toEqual(["todo", "news", "quiet"]);
-  const news = page.locator('[data-testid="review-section"][data-category="news"]');
-  await expect(news.locator('[data-testid="review-pr"]')).toHaveCount(1);
-  await expect(news.getByTestId("review-since-mine")).toContainText("new comments");
-  await expect(page.locator('[data-testid="review-section"][data-category="quiet"] [data-testid="review-pr"]')).toHaveAttribute("data-number", "201");
-  await expect(page.locator('[data-testid="review-section"][data-category="quiet"]').getByTestId("review-quiet")).toBeVisible();
+  // inside each repository: not reviewed yet (top), new activity since your comments (high), nothing new (medium)
+  const sectionsOf = (repo: string) => page.locator(`[data-testid="review-group"][data-repo="${repo}"] [data-testid="review-section"]`)
+    .evaluateAll((els) => els.map((e) => e.getAttribute("data-category")));
+  await expect.poll(() => sectionsOf("pytorch/pytorch")).toEqual(["todo"]);
+  await expect.poll(() => sectionsOf("intel/torch-xpu-ops")).toEqual(["quiet"]);
+  await expect(page.locator('[data-repo="intel/torch-xpu-ops"] [data-category="quiet"] [data-testid="review-pr"]')).toHaveAttribute("data-number", "201");
+  await expect(page.locator('[data-repo="intel/torch-xpu-ops"]').getByTestId("review-quiet")).toBeVisible();
+  // the ★ priority request (new activity since your comment) says so
+  await expect(page.getByTestId("review-priority").getByTestId("review-since-mine")).toContainText("new comments");
   await expect(panel).toContainText("1 draft hidden");
   // grouped by repository, most PRs first; drafts hidden by default
   await expect(page.getByTestId("review-group")).toHaveCount(2);
