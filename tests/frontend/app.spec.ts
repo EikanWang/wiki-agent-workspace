@@ -410,6 +410,57 @@ test("a terminal whose shell exited is shown as exited and can be dismissed with
   await expect(page.getByTestId("terminal-tab")).toHaveCount(0);
 });
 
+test("Terminal activity: its own list of terminals (home or a chosen folder), the wiki's terminal page, no wiki tabs", async ({ page }) => {
+  await login(page);
+  await page.getByTestId("activity-terminal").click();
+  await expect(page.getByTestId("terminals-panel")).toBeVisible();
+  await expect(page.locator(".terminal-center")).toBeVisible();
+  await expect(page.getByTestId("view-document")).toHaveCount(0); // Document / Terminal / Chats / Diff are the wiki's
+  const n0 = await page.getByTestId("terminals-item").count();
+  // a terminal in the home folder
+  await page.getByTestId("terminals-new").click();
+  await expect(page.getByTestId("terminals-item")).toHaveCount(n0 + 1);
+  const view = page.locator(".term-view.active");
+  await expect(view).toHaveAttribute("data-state", "connected", { timeout: 15000 });
+  await expect(view.locator(".xterm-rows")).toContainText("$", { timeout: 15000 });
+  await page.locator(".term-view.active .xterm-helper-textarea").focus();
+  await page.keyboard.type("echo AT_$(pwd)\n");
+  await expect(view.locator(".xterm-rows")).toContainText(`AT_${process.env.HOME}`, { timeout: 15000 });
+  // one in a folder picked on the server
+  await page.getByTestId("terminals-new-in").click();
+  await page.getByTestId("folder-picker-path").fill(workspaceDir());
+  await page.getByTestId("folder-picker-path").press("Enter");
+  await expect(page.getByTestId("folder-picker-choose")).toBeEnabled();
+  await page.getByTestId("folder-picker-choose").click();
+  await expect(page.getByTestId("terminals-item")).toHaveCount(n0 + 2);
+  await expect(page.getByTestId("terminals-item").last()).toContainText(path.basename(workspaceDir()));
+  await expect(page.locator(".term-view.active")).toHaveAttribute("data-state", "connected", { timeout: 15000 });
+  await expect(page.locator(".term-view.active .xterm-rows")).toContainText("$", { timeout: 15000 });
+  await page.locator(".term-view.active .xterm-helper-textarea").focus();
+  await page.keyboard.type("echo IN_$(pwd)\n");
+  await expect(page.locator(".term-view.active .xterm-rows")).toContainText(`IN_${workspaceDir()}`, { timeout: 15000 });
+  // the list picks the terminal shown (the same terminals as the tabs above it)
+  await page.getByTestId("terminals-item").nth(n0).click();
+  await expect(page.getByTestId("terminals-item").nth(n0)).toHaveClass(/selected/);
+  await expect(page.locator(".term-view.active .xterm-rows")).toContainText(`AT_${process.env.HOME}`);
+  // still the Terminal activity after a reload; the wiki brings its tabs back
+  await page.reload();
+  await expect(page.getByTestId("terminals-panel")).toBeVisible({ timeout: 15000 });
+  await expect(page.locator(".terminal-center")).toBeVisible();
+  await page.getByTestId("activity-files").click();
+  await expect(page.getByTestId("view-document")).toHaveClass(/active/);
+  await page.getByTestId("activity-terminal").click();
+  // close the two terminals again
+  for (let i = 0; i < 2; i++) {
+    const item = page.getByTestId("terminals-item").last();
+    await item.hover();
+    await item.getByTestId("terminals-close").click();
+    await page.getByTestId("confirm-ok").click();
+    await expect(page.getByTestId("terminals-item")).toHaveCount(n0 + 1 - i);
+  }
+  await page.getByTestId("activity-files").click();
+});
+
 test("terminal on a Mac: ⌘← / ⌘→ move to the start / end of the input line like Home / End", async ({ browser }) => {
   const context = await browser.newContext();
   await context.addInitScript(() => Object.defineProperty(Navigator.prototype, "platform", { get: () => "MacIntel" }));

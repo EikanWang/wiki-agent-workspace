@@ -37,7 +37,11 @@ Git/GitHub credentials, whoever is signed in.
 ```
 
 - The **activity bar** at the left edge switches the sidebar: **Files** (the file tree), **Reviews** (GitHub, when
-  signed in as the server's owner) and **PR Development**. Clicking the current icon again (or **«** at the bottom
+  signed in as the server's owner), **PR Development**, **Agents** and **Terminal**. **Terminal** is the wiki's
+  Terminal view on its own: the server's terminals are listed in the sidebar (**+** opens one in your home folder,
+  **+ New terminal in a folder…** one where you choose; × closes one) and the page shows them as tabs, exactly like
+  the wiki's Terminal (copy, keys, full screen, tmux history); the wiki's Document / Terminal / Chats / Diff tabs are
+  hidden there. Clicking the current icon again (or **«** at the bottom
   of the activity bar) folds the list next to it — folders, projects, pull requests… — and leaves only the activity
   bar; the current icon again (or **»**) brings it back, another icon opens its own list. **Sidebar** (top left)
   hides both.

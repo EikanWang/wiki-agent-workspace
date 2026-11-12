@@ -1245,3 +1245,16 @@ body.resizing-h iframe { pointer-events: none; }
 .sidebar.list-folded .sidebar-content { display: none !important; }
 .activity-spacer { flex: 1; }
 .activity-bar button[data-testid="sidebar-list-fold"] { font-size: 16px; }
+/* the Terminal activity */
+.activity-badge.quiet { background: var(--muted); }
+.terminals-panel { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.terminals-panel .pad-x { padding: 0 10px 6px; }
+.terminals-list { flex: 1; overflow: auto; display: flex; flex-direction: column; }
+.terminals-item { display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 6px 10px; }
+.terminals-item .icon-btn { visibility: hidden; }
+.terminals-item:hover .icon-btn, .terminals-item.selected .icon-btn { visibility: visible; }
+.terminals-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.terminals-label, .terminals-cwd { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.terminals-item:not(.live) { opacity: 0.65; }
+.term-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+.term-dot.live { background: var(--green); }

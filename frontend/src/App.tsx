@@ -30,7 +30,8 @@ import { ConfirmHost, confirmAction } from "./components/Confirm";
 import WorkspaceMenu from "./components/WorkspaceMenu";
 import AccountMenu from "./components/AccountMenu";
 import ReviewsPanel, { loadReviews, reviewBadge, useReviews } from "./components/ReviewsPanel";
-import { CodeIcon, DashboardIcon, FilesIcon, PullRequestIcon, WikiIcon } from "./components/Icons";
+import { CodeIcon, DashboardIcon, FilesIcon, PullRequestIcon, TerminalIcon, WikiIcon } from "./components/Icons";
+import TerminalsPanel from "./components/TerminalsPanel";
 import AgentMonitor, { AgentsPanel, Provider } from "./components/AgentMonitor";
 import LocalPanel from "./components/LocalPanel";
 const LocalEditor = lazy(() => import("./components/LocalEditor"));
@@ -372,6 +373,7 @@ export default function App() {
       if (!doc) await restoreLast(activeWs);
       const ui = savedUi.current ?? {};
       if (prefs.sidebarView === "agents") setView("agents"); // the Agents activity always shows the agents' status
+      else if (prefs.sidebarView === "terminal") setView("terminal"); // the Terminal activity: the terminals
       else if (ui.view === "terminal") setView("terminal");
       else if (ui.view === "chats") openChats(ui.chat ?? { ws: getWorkspace() ?? "", path: null });
       else if (ui.view === "development" && localStorage.getItem("waw.devActive")) setView("development");
@@ -505,9 +507,12 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authed, !!boot]);
   const sidebarView = (prefs.sidebarView === "reviews" && !hub?.available) ? "files" : prefs.sidebarView ?? "files";
+  // the Terminal activity: its terminals page, without the wiki's Document / Terminal / Chats / Diff
+  const terminalMode = sidebarView === "terminal" && view === "terminal";
   // Document / Terminal / Chats / Diff belong to the wiki: opening one (Recent, a link) while in Agents goes back to it
   useEffect(() => {
     if (uiRestored && sidebarView === "agents" && (view === "document" || view === "terminal" || view === "chats" || view === "diff")) updatePrefs({ sidebarView: "files" });
+    if (uiRestored && sidebarView === "terminal" && (view === "document" || view === "chats" || view === "diff")) updatePrefs({ sidebarView: "files" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view]);
 
@@ -801,7 +806,7 @@ export default function App() {
           <span className="muted small hide-mobile" title={activeWsInfo?.root ?? boot.workspace.root}>{activeWsInfo?.name ?? boot.workspace.name}{(activeWsInfo?.git ?? boot.workspace.git)?.branch ? ` · ${(activeWsInfo?.git ?? boot.workspace.git)!.branch}` : ""}</span>
         )}
         <span className="spacer" />
-        {panelDoc && view !== "agents" && (
+        {panelDoc && view !== "agents" && !terminalMode && (
           <div className="session-area" data-testid="session-area">
             <span className="muted small hide-mobile">Document session</span>
             <button className="btn small session-btn" onClick={() => setShowSessions(true)} data-testid="session-button" title="Choose or link the session new discussions use">
@@ -814,7 +819,7 @@ export default function App() {
             </button>}
           </div>
         )}
-        {view !== "agents" && <nav className="view-tabs">
+        {view !== "agents" && !terminalMode && <nav className="view-tabs">
           <button className={view === "document" ? "active" : ""} onClick={() => setView("document")} data-testid="view-document">Document</button>
           <button className={view === "terminal" ? "active" : ""} onClick={() => setView("terminal")} data-testid="view-terminal">Terminal</button>
           <button className={view === "chats" ? "active" : ""} onClick={() => openChats(chatTarget ?? { ws: getWorkspace() ?? "", path: null })} title="Chat with a project (a folder of this window) directly" data-testid="view-chats">Chats</button>
@@ -842,14 +847,14 @@ export default function App() {
       <main className={`layout view-${view === "diff" || view === "chats" || view === "development" || view === "local" || view === "agents" ? "terminal" : view} ${view === "diff" ? "view-diff" : ""} ${view === "chats" ? "view-chats" : ""}`}>
         <aside className={`sidebar with-activity ${listOpen ? "" : "list-folded"}`} data-list={listOpen ? "open" : "folded"}>
           <nav className="activity-bar" aria-label="Sidebar views">
-            <button className={sidebarView === "files" ? "active" : ""} onClick={() => { if (sidebarView === "files") { updatePrefs({ listOpen: !listOpen }); if (listOpen) return; } updatePrefs({ sidebarView: "files", listOpen: true }); if (view === "development" || view === "local" || view === "agents") setView("document"); }} title="Wiki: read, discuss and edit the wiki folders with the agent" aria-label="Wiki" aria-pressed={sidebarView === "files"} data-testid="activity-files">
+            <button className={sidebarView === "files" ? "active" : ""} onClick={() => { if (sidebarView === "files") { updatePrefs({ listOpen: !listOpen }); if (listOpen) return; } updatePrefs({ sidebarView: "files", listOpen: true }); if (view === "development" || view === "local" || view === "agents" || sidebarView === "terminal") setView("document"); }} title="Wiki: read, discuss and edit the wiki folders with the agent" aria-label="Wiki" aria-pressed={sidebarView === "files"} data-testid="activity-files">
               <WikiIcon size={20} />
             </button>
             <button className={sidebarView === "local" ? "active" : ""} onClick={() => { if (sidebarView === "local") { updatePrefs({ listOpen: !listOpen }); if (listOpen) return; } updatePrefs({ sidebarView: "local", listOpen: true }); setLocalUsed(true); setView("local"); }} title="Local files: browse and edit any folder or file on the server, like a file manager" aria-label="Local files" aria-pressed={sidebarView === "local"} data-testid="activity-local">
               <FilesIcon size={20} />
             </button>
             {hub?.available && (
-              <button className={sidebarView === "reviews" ? "active" : ""} onClick={() => { if (sidebarView === "reviews") { updatePrefs({ listOpen: !listOpen }); if (listOpen) return; } updatePrefs({ sidebarView: "reviews", listOpen: true }); if (view === "development" || view === "local" || view === "agents") setView("document"); }} title="Pull requests waiting for your review" aria-label="Reviews" aria-pressed={sidebarView === "reviews"} data-testid="activity-reviews">
+              <button className={sidebarView === "reviews" ? "active" : ""} onClick={() => { if (sidebarView === "reviews") { updatePrefs({ listOpen: !listOpen }); if (listOpen) return; } updatePrefs({ sidebarView: "reviews", listOpen: true }); if (view === "development" || view === "local" || view === "agents" || sidebarView === "terminal") setView("document"); }} title="Pull requests waiting for your review" aria-label="Reviews" aria-pressed={sidebarView === "reviews"} data-testid="activity-reviews">
                 <PullRequestIcon size={20} />
                 {reviewBadge(reviews.queue) > 0 && <span className="activity-badge" data-testid="activity-reviews-badge">{reviewBadge(reviews.queue)}</span>}
               </button>
@@ -860,6 +865,11 @@ export default function App() {
             <button className={sidebarView === "agents" ? "active" : ""} onClick={() => { if (sidebarView === "agents") { updatePrefs({ listOpen: !listOpen }); if (listOpen) return; } updatePrefs({ sidebarView: "agents", listOpen: true }); setView("agents"); }} title="Agents: monitor the status and health of agent sessions" aria-label="Agents" aria-pressed={sidebarView === "agents"} data-testid="activity-agents">
               <DashboardIcon size={20} />
               {alarms > 0 && <span className="activity-badge alarm" data-testid="activity-agents-badge" title={`${alarms} session(s) need you`}>{alarms}</span>}
+            </button>
+            <button className={sidebarView === "terminal" ? "active" : ""} onClick={() => { if (sidebarView === "terminal") { updatePrefs({ listOpen: !listOpen }); if (listOpen) return; } updatePrefs({ sidebarView: "terminal", listOpen: true }); setView("terminal"); }}
+              title="Terminal: shells on the server (tmux; they keep running when the page closes)" aria-label="Terminal" aria-pressed={sidebarView === "terminal"} data-testid="activity-terminal">
+              <TerminalIcon size={20} />
+              {terminals.some((t) => t.state === "live") && <span className="activity-badge quiet" title={`${terminals.filter((t) => t.state === "live").length} live terminal(s)`}>{terminals.filter((t) => t.state === "live").length}</span>}
             </button>
             <span className="activity-spacer" />
             <button onClick={() => updatePrefs({ listOpen: !listOpen })} title={listOpen ? "Fold the list (folders, projects, pull requests…) — click the current icon to unfold it again" : "Show the list"}
@@ -906,6 +916,12 @@ export default function App() {
           {sidebarView === "agents" && (
             <div className="sidebar-content">
               <AgentsPanel workspaces={workspaces} watched={watched} onWatched={setWatched} onAutoChanged={() => setAutoVersion((n) => n + 1)} />
+            </div>
+          )}
+          {sidebarView === "terminal" && (
+            <div className="sidebar-content">
+              <TerminalsPanel terminals={terminals} activeId={activeTerminal} onActive={(id) => { setActiveTerminal(id); setView("terminal"); }} onChanged={refreshTerminals}
+                available={!!boot.terminal_info?.tmux_available} />
             </div>
           )}
           {sidebarView === "development" && (
@@ -1080,7 +1096,7 @@ export default function App() {
         </section>
 
         <section className="center terminal-center" style={{ display: view === "terminal" ? undefined : "none" }}>
-          <TerminalPanel terminals={terminals} info={boot.terminal_info} activeId={activeTerminal} onActive={setActiveTerminal} onChanged={refreshTerminals} visible={view === "terminal"} workspaceRoot={activeWsInfo?.root ?? boot.workspace.root} fontSize={prefs.terminalSize} />
+          <TerminalPanel terminals={terminals} info={boot.terminal_info} activeId={activeTerminal} onActive={setActiveTerminal} onChanged={refreshTerminals} visible={view === "terminal"} workspaceRoot={terminalMode ? "~" : activeWsInfo?.root ?? boot.workspace.root} fontSize={prefs.terminalSize} />
         </section>
 
         {view === "document" && panelDoc && !panelOpen && (
