@@ -523,7 +523,10 @@ async def test_agent_review_suggestions_apply_discard_and_publish(running_app, w
         prompt = s.query(Job).order_by(Job.created_at.desc()).first().prompt
     assert "fenced block tagged waw-review" in prompt and "          1 |+fast" in prompt and "    1       |-old" in prompt
     base = "/api/v1/github/pr/pytorch/pytorch/7"
+    # the review queue: reviewed by the agent, waiting for you (even before the PR is opened again)
+    assert github_hub.agent_review_states(h.ctx)["pytorch/pytorch#7"]["state"] == "waiting"
     c = (await api.get(f"{base}/comments")).json()
+    assert github_hub.agent_review_states(h.ctx)["pytorch/pytorch#7"] == {"state": "waiting", "proposed": 2}
     assert c["agent_reviews"][0]["state"] == "done" and c["agent_reviews"][0]["added"] == 2 and "not/in/pr.cpp" in c["agent_reviews"][0]["problem"]
     ds = {x["subject"]: x for x in c["drafts"]}
     line, filec = ds["line"], ds["file"]
@@ -539,6 +542,7 @@ async def test_agent_review_suggestions_apply_discard_and_publish(running_app, w
     assert (await api.patch(f"{base}/drafts/{line['id']}", json={"decision": "maybe"})).status_code == 400
     assert (await api.patch(f"{base}/drafts/{line['id']}", json={"decision": "accepted"})).json()["decision"] == "accepted"
     assert (await api.patch(f"{base}/drafts/{filec['id']}", json={"decision": "discarded"})).json()["decision"] == "discarded"
+    assert "pytorch/pytorch#7" not in github_hub.agent_review_states(h.ctx)  # all decided: no longer waiting
     r = (await api.post(f"{base}/review", json={"event": "COMMENT"})).json()
     assert r["published"] == 1 and r["undecided"] == 0
     threads = [v for n, v in gh["mutations"] if n == "AddThread"]

@@ -38,6 +38,8 @@ export interface ReviewPR {
   my_activity?: "todo" | "news" | "quiet";
   my_last_at?: string | null;
   since_mine?: string[];
+  /** the agent's review of this PR: still running, or done and waiting for you to apply / discard its suggestions */
+  agent_review?: { state: "running" | "waiting"; proposed: number; unread?: boolean } | null;
 }
 
 /** The queue's sections, in priority order. */
@@ -47,6 +49,12 @@ const CATEGORIES = [
   { key: "quiet", title: "Commented, nothing new", level: "medium", hint: "You reviewed or commented, and nothing happened since" },
 ] as const;
 const categoryOf = (p: ReviewPR) => p.my_activity ?? "todo";
+
+/** A checkbox kept per browser. */
+function usePersistedFlag(key: string): [boolean, (v: boolean) => void] {
+  const [v, setV] = useState(() => localStorage.getItem(`waw.${key}`) === "1");
+  return [v, (x: boolean) => { setV(x); localStorage.setItem(`waw.${key}`, x ? "1" : "0"); }];
+}
 export interface HubPrefs {
   hidden_repos: string[];
   watched_repos: string[];
@@ -132,6 +140,8 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
   const { queue, error, loading } = useReviews();
   const [filter, setFilter] = useState("");
   const [showDrafts, setShowDrafts] = useState(() => localStorage.getItem("waw.reviews.drafts") === "1");
+  const [agentOnly, setAgentOnly] = usePersistedFlag("reviews.agentOnly");
+  const agentWaiting = [...(queue?.items ?? []), ...(queue?.watched ?? [])].filter((p) => p.agent_review?.state === "waiting").length;
   const [sort, setSort] = useState<Sort>(() => (localStorage.getItem("waw.reviews.sort") as Sort) || "updated");
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set(JSON.parse(localStorage.getItem("waw.reviews.collapsed") || "[]")));
   useEffect(() => localStorage.setItem("waw.reviews.drafts", showDrafts ? "1" : "0"), [showDrafts]);
@@ -165,7 +175,7 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
   const prefs = queue?.prefs;
   const { priority, groups, watchedGroups } = useMemo(() => {
     const f = filter.trim().toLowerCase();
-    const keep = (p: ReviewPR) => (showDrafts || !p.draft) && (!f || `${p.repo} #${p.number} ${p.title} ${p.author ?? ""} ${p.requested_by ?? ""} ${p.labels.map((l) => l.name).join(" ")}`.toLowerCase().includes(f));
+    const keep = (p: ReviewPR) => (agentOnly ? p.agent_review?.state === "waiting" : showDrafts || !p.draft) && (!f || `${p.repo} #${p.number} ${p.title} ${p.author ?? ""} ${p.requested_by ?? ""} ${p.labels.map((l) => l.name).join(" ")}`.toLowerCase().includes(f));
     const key = (p: ReviewPR) => (sort === "updated" ? -new Date(p.updated_at).getTime() : sort === "waiting" ? new Date(p.created_at).getTime() : p.additions + p.deletions);
     const group = (list: ReviewPR[]) => {
       const by = new Map<string, ReviewPR[]>();
@@ -181,7 +191,7 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
       groups: group(items.filter((p) => !p.priority)),
       watchedGroups: group((queue?.watched ?? []).filter(keep)),
     };
-  }, [queue, filter, showDrafts, sort]);
+  }, [queue, filter, showDrafts, sort, agentOnly]);
   const drafts = queue?.items.filter((p) => p.draft).length ?? 0;
   const shown = priority.length + groups.reduce((n, g) => n + g.prs.length, 0);
   const change = async (what: string, c: Partial<HubPrefs> & { star?: string; unstar?: string }) => {
@@ -224,6 +234,12 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
           )}
           {p.my_review === "CHANGES_REQUESTED" && <span className="git-badge" title="You requested changes"> changes requested</span>}
           {showRepo && categoryOf(p) === "todo" && <span className="git-badge review-todo" title="You have not reviewed or commented yet" data-testid="review-todo"> not reviewed yet</span>}
+          {p.agent_review?.state === "waiting" && (
+            <span className="git-badge agent-waiting" title="The agent reviewed this PR: apply or discard its suggested comments (Files tab)" data-testid="review-agent-waiting">
+              {" "}🤖 {p.agent_review.proposed ? `${p.agent_review.proposed} suggestion${p.agent_review.proposed > 1 ? "s" : ""} to confirm` : "review to confirm"}
+            </span>
+          )}
+          {p.agent_review?.state === "running" && <span className="git-badge" title="The agent is reviewing this PR" data-testid="review-agent-running"> 🤖 reviewing…</span>}
           {p.my_activity === "news" && p.my_review !== "APPROVED" && (
             <span className="git-badge approved-news" title={`Since your latest review / comment (${p.my_last_at ? new Date(p.my_last_at).toLocaleString() : ""})`} data-testid="review-since-mine">
               {" "}↻ {(p.since_mine ?? []).join(", ")}
@@ -336,6 +352,9 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
                 onChange={(e) => void change("approved", { show_approved: e.target.checked })} data-testid="reviews-show-approved" /> approved ({queue.prefs.show_approved ? queue.items.filter((p) => p.approved_no_news).length : queue.approved_hidden ?? 0})
             </label>
           )}
+          <label className="small" title="Only the PRs the agent reviewed whose suggested comments wait for you to apply or discard (drafts included)">
+            <input type="checkbox" checked={agentOnly} onChange={(e) => setAgentOnly(e.target.checked)} data-testid="reviews-agent-waiting" /> 🤖 agent reviewed ({agentWaiting})
+          </label>
           <select className="reviews-sort" value={sort} onChange={(e) => setSort(e.target.value as Sort)} data-testid="reviews-sort" aria-label="Sort">
             <option value="updated">Recently updated</option>
             <option value="waiting">Waiting longest</option>
@@ -351,8 +370,9 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
         {queue && (
           <div className="muted small reviews-meta">
             Requested from you: {queue.items.length}{queue.truncated ? `+ (of ${queue.total})` : ""} · showing {shown}
-            {!showDrafts && drafts > 0 && <span title="Tick “drafts” to show them"> · {drafts} draft{drafts > 1 ? "s" : ""} hidden</span>}
+            {!showDrafts && !agentOnly && drafts > 0 && <span title="Tick “drafts” to show them"> · {drafts} draft{drafts > 1 ? "s" : ""} hidden</span>}
             {filter.trim() && <span> · filtered</span>}
+            {agentOnly && <span> · only those the agent reviewed, waiting for you</span>}
             {queue.refreshing ? " · refreshing…" : ` · updated ${ago(queue.fetched_at)} ago`}
           </div>
         )}

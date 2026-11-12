@@ -463,6 +463,9 @@ async def review_queue(refresh: bool = Query(False), auth: tuple[AppContext, str
         _start_refresh(graphql, owner, prefs["watched_repos"])
         running = True
     data = apply_prefs(hit[1], prefs)
+    agent = agent_review_states(ctx)
+    for key in ("items", "watched"):
+        data[key] = [{**p, "agent_review": agent.get(f"{p['repo']}#{p['number']}".lower())} for p in data.get(key) or []]
     return {**data, "cached": True, "age_seconds": round(age), "refreshing": running, "refresh_error": _errors.get(owner),
             "prefs": prefs, "rate": RATE.status()}
 
@@ -1544,6 +1547,39 @@ def register_agent_review(ctx: AppContext, doc_path: str, job_id: str, thread_id
     runs.append({"job_id": job_id, "thread_id": thread_id, "message_id": message_id, "state": "running", "added": 0, "problem": None,
                  "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
     kv_put(ctx, key, runs[-10:])
+
+
+def agent_review_states(ctx: AppContext) -> dict[str, dict[str, Any]]:
+    """"owner/repo#n" (lower case) → where the agent's review of that PR stands for you: `running` (the agent is still
+    reviewing) or `waiting` (it suggested comments you have not applied or discarded yet; `proposed` of them — also a
+    finished review whose suggestions are brought in when you open the PR)."""
+    from sqlalchemy import func
+
+    from .models import GithubPrDraft, KvSetting, Message
+
+    out: dict[str, dict[str, Any]] = {}
+    with ctx.db.read() as s:
+        for repo, number, n in (s.query(GithubPrDraft.repo, GithubPrDraft.number, func.count())
+                                .filter(GithubPrDraft.origin == "agent", GithubPrDraft.decision == "proposed")
+                                .group_by(GithubPrDraft.repo, GithubPrDraft.number)):
+            out[f"{repo}#{number}".lower()] = {"state": "waiting", "proposed": int(n)}
+        for row in s.query(KvSetting).filter(KvSetting.key.like("agent_review:%")):
+            try:
+                runs = json.loads(row.value) or []
+            except ValueError:
+                continue
+            key = row.key.removeprefix("agent_review:")
+            for r in runs:
+                if r.get("state") != "running":
+                    continue
+                m = s.get(Message, r.get("message_id"))
+                status = m.status if m else "failed"
+                if status in ("queued", "running", "streaming"):
+                    out.setdefault(key, {"state": "running", "proposed": 0})
+                elif status == "completed":  # finished, its suggestions not brought in yet
+                    cur = out.setdefault(key, {"state": "waiting", "proposed": 0})
+                    cur["state"], cur["unread"] = "waiting", True
+    return out
 
 
 def import_agent_reviews(ctx: AppContext, owner: str, repo: str, number: int) -> list[dict[str, Any]]:

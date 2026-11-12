@@ -188,6 +188,13 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
   }, [review.agent_reviews, onDiscussionsChanged]);
   const accepted = review.drafts.filter((d) => (d.decision ?? "accepted") === "accepted").length;
   const undecided = review.drafts.filter((d) => d.decision === "proposed").length;
+  // the Reviews list marks PRs whose agent suggestions wait for you: keep it current as you decide (cached queue)
+  const agentMark = `${undecided}:${lastRun?.state ?? ""}`;
+  const prevMark = useRef<string | null>(null);
+  useEffect(() => {
+    if (prevMark.current !== null && prevMark.current !== agentMark) void loadReviews(false);
+    prevMark.current = agentMark;
+  }, [agentMark]);
   const body = useMemo(() => (data ? renderGithubMarkdown(data.pr.body || "_No description._", repo) : ""), [data, repo]);
   const conv = useMemo(() => groupConversation(review.conversation), [review.conversation]);
 

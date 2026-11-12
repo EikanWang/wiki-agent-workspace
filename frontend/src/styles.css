@@ -1271,3 +1271,4 @@ body.resizing-h iframe { pointer-events: none; }
 .review-group > .review-section { margin: 0 0 2px 10px; }
 .review-group > .review-section .review-section-head { background: transparent; font-size: 11px; padding: 3px 8px; }
 .git-badge.review-todo { color: var(--red); }
+.git-badge.agent-waiting { color: var(--primary); font-weight: 600; }

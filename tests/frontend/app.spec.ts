@@ -2339,6 +2339,15 @@ test("GitHub PR tab: agent review → suggested comments in the diff; discuss, a
   await expect(agent).toHaveCount(2);
   await expect(agent.first()).toHaveAttribute("data-decision", "proposed");
   await expect(page.getByTestId("pr-undecided")).toContainText("2 agent suggestion(s) to decide");
+  // the Reviews list: a filter for the PRs the agent reviewed whose suggestions wait for you
+  await page.getByTestId("reviews-refresh").click();
+  const waiting = page.getByTestId("reviews-agent-waiting");
+  await expect(page.locator("label", { has: waiting })).toContainText("agent reviewed (1)", { timeout: 15000 });
+  await waiting.check();
+  await expect(page.getByTestId("review-pr")).toHaveCount(1);
+  await expect(page.getByTestId("review-pr")).toHaveAttribute("data-number", "101");
+  await expect(page.getByTestId("review-agent-waiting")).toContainText("2 suggestions to confirm");
+  await waiting.uncheck();
   await expect(page.getByTestId("pr-finish-review")).toHaveText(/^Finish review ▾$/); // nothing to publish yet
   const line = agent.filter({ hasText: "is this guard needed?" });
   const file = agent.filter({ hasText: "Line 9999: Agent: consider a test." });
@@ -2359,6 +2368,7 @@ test("GitHub PR tab: agent review → suggested comments in the diff; discuss, a
   await page.getByTestId("pr-submit-send").click();
   await expect(page.getByTestId("pr-notice")).toContainText("Review published on GitHub");
   await expect(page.getByTestId("pr-draft")).toHaveCount(0);
+  await expect(page.locator("label", { has: page.getByTestId("reviews-agent-waiting") })).toContainText("agent reviewed (0)", { timeout: 15000 }); // decided: the list follows
   const posted = (await (await page.request.get("/fake-github/posted")).json()).slice(before);
   const threads = posted.filter((x: any) => x.mutation === "AddThread").map((x: any) => x.variables);
   expect(threads).toHaveLength(1);

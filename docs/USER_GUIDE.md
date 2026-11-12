@@ -139,7 +139,10 @@ repository the PRs are in three sections by where you stand, most urgent first:
    GitHub Actions do not count); the row says what (↻ new comments, new commits…);
 3. **Commented, nothing new** (*medium*) — ✓ commented, and nothing happened since.
 
-The ★ Priority group lists its PRs in the same order and marks each one (not reviewed yet / ↻ … / ✓ commented). The
+The ★ Priority group lists its PRs in the same order and marks each one (not reviewed yet / ↻ … / ✓ commented).
+**🤖 agent reviewed (N)** shows only the PRs the agent reviewed whose suggested comments wait for you to apply or
+discard (drafts included); such rows say "🤖 N suggestions to confirm" (or "🤖 reviewing…" while it runs), and the
+count follows as you decide in the PR tab. The
 line above the list says how many are requested, how many are shown and how many drafts are hidden.
 - each PR shows a CI dot (green passed, red failing, amber running), title, #number, author, last update,
   size (+/−), draft flag and labels; hover for details;
