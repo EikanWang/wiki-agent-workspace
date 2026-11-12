@@ -1298,3 +1298,10 @@ body.resizing-h iframe { pointer-events: none; }
 .my-prs-group-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
 .my-prs-group-text > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .my-prs-group .my-pr, .my-prs-empty { margin-left: 12px; }
+.dev-pr-state { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.dev-pr-close-box { display: flex; flex-direction: column; gap: 4px; min-width: 240px; }
+.dev-pr-close-box textarea { width: 100%; border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; background: var(--bg); color: var(--fg); }
+.my-pr { flex-wrap: wrap; }
+.my-pr .my-pr-close { visibility: hidden; }
+.my-pr:hover .my-pr-close, .my-pr .my-pr-close:focus-within, .my-pr.closed .my-pr-close { visibility: visible; }
+.my-pr.closed .my-pr-title { opacity: 0.7; }

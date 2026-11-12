@@ -3001,6 +3001,14 @@ test("PR Development: your pull requests of a repository; check one out in a fol
   expect(fs.readFileSync(path.join(proj, "app.py"), "utf-8")).toContain("the fix");
   await expect(page.locator(".dev-toolbar")).toContainText("#5");
   await expect(fix).toHaveClass(/here/);
+  // close the PR from its Pull request tab (with a comment), then reopen it
+  await page.getByTestId("dev-tab-pr").click();
+  await page.getByTestId("dev-pr").getByTestId("dev-pr-close").click();
+  await page.getByTestId("dev-pr-close-comment").fill("Not needed after all");
+  await page.getByTestId("dev-pr-close-confirm").click();
+  await expect(page.getByTestId("dev-pr-closed")).toBeVisible();
+  await page.getByTestId("dev-pr").getByTestId("dev-pr-reopen").click();
+  await expect(page.getByTestId("dev-pr").getByTestId("dev-pr-close")).toBeVisible();
   // update the PR: change, commit, push to its branch
   fs.writeFileSync(path.join(proj, "app.py"), "VALUE = 3  # updated\n");
   await page.getByTestId("dev-changes-toggle").click();
@@ -3016,6 +3024,14 @@ test("PR Development: your pull requests of a repository; check one out in a fol
   await page.getByTestId("dev-branch-switch").filter({ hasText: /^main$/ }).click();
   await expect(page.getByTestId("dev-branch-button")).toContainText("main");
   await expect(page.locator(".dev-toolbar")).not.toContainText("#5");
+  // close another PR right from the list
+  const draft = prs2.locator('[data-testid="my-pr"][data-number="6"]');
+  await draft.hover();
+  await draft.getByTestId("dev-pr-close").click();
+  await draft.getByTestId("dev-pr-close-confirm").click();
+  await expect(draft).toHaveClass(/closed/);
+  await draft.getByTestId("dev-pr-reopen").click();
+  await expect(draft).not.toHaveClass(/closed/);
   // another PR: the same folder switches again
   await prs2.locator('[data-testid="my-pr"][data-number="6"] .my-pr-main').click();
   await expect(page.getByTestId("dev-branch-button")).toContainText("demo-draft", { timeout: 15000 });

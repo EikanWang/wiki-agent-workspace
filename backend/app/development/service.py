@@ -243,6 +243,25 @@ async def github_remotes(t: Target, path: str) -> dict[str, str]:
     return found
 
 
+async def set_pr_state(repo: str, number: int, action: str, comment: str | None) -> None:
+    """`gh pr close|reopen` (the server's gh login). Module-level so tests can replace it."""
+    import shutil
+
+    gh = shutil.which("gh")
+    if not gh:
+        raise ApiError(409, "GH_UNAVAILABLE", "the GitHub CLI (gh) is not installed on the server")
+    args = [gh, "pr", action, str(number), "--repo", repo, *(["--comment", comment] if comment else [])]
+    proc = await asyncio.create_subprocess_exec(*args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                                                stdin=asyncio.subprocess.DEVNULL)
+    try:
+        out, err = await asyncio.wait_for(proc.communicate(), timeout=90)
+    except TimeoutError:
+        proc.kill()
+        raise ApiError(504, "GH_TIMEOUT", f"gh pr {action} timed out")
+    if proc.returncode != 0:
+        raise ApiError(502, "GH_FAILED", f"gh pr {action} failed: {(err or out).decode('utf-8', 'replace').strip()[:300]}")
+
+
 async def list_my_prs(repo: str, state: str = "open") -> list[dict[str, Any]]:
     """Your pull requests in `repo` (author @me, the server's gh login), newest first. Module-level so tests can
     replace it."""

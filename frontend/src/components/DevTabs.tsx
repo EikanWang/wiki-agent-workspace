@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, DevTaskRun, DevWorkspace, get, post } from "../api";
 import { useJobStream } from "./DiscussionPanel";
 import { confirmAction } from "./Confirm";
+import DevPrState, { usePrInfo } from "./DevPrState";
 import { GhRefreshSelect, useGhAutoRefresh } from "../ghRefresh";
 
 /** Build outputs and caches: left out of a commit unless you tick them (the checkout may lack a .gitignore for them). */
@@ -137,6 +138,7 @@ export function PrTab({ dev, onAsk, onChanged }: { dev: DevWorkspace; onAsk: (ki
       setBody(rest.join("\n").trim());
     } else if (job.error) setErr(job.error.message);
   });
+  const [prInfo, setPrInfo] = usePrInfo(dev.github_repo, dev.pr_number);
   const prUrl = dev.github_repo && dev.pr_number ? `https://github.com/${dev.github_repo}/pull/${dev.pr_number}` : url;
   if (dev.pr_number) {
     const failing = (checks ?? []).filter((c) => ["FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "fail"].includes(c.state));
@@ -144,8 +146,10 @@ export function PrTab({ dev, onAsk, onChanged }: { dev: DevWorkspace; onAsk: (ki
       <div className="dev-pr" data-testid="dev-pr">
         <div className="row">
           <a href={prUrl ?? "#"} target="_blank" rel="noreferrer"><b>{dev.github_repo}#{dev.pr_number}</b></a>
+          {prInfo?.title && <span className="small">{prInfo.title}</span>}
           <span className="muted small">pushes go to <span className="mono">{dev.push_branch}</span></span>
           <span className="spacer" />
+          {dev.github_repo && prInfo && <DevPrState repo={dev.github_repo} number={dev.pr_number} state={prInfo.state} onDone={(st) => setPrInfo({ ...prInfo, state: st })} />}
           <button className="btn small" onClick={() => void onAsk("review", "Address the pull request's review comments.")} data-testid="dev-ask-review">Address review comments</button>
           <button className="btn small" disabled={!failing.length && checks !== null && checks.length > 0} onClick={() => void onAsk("ci", "Fix the pull request's failing CI.")} data-testid="dev-ask-ci">Fix failing CI</button>
           <button className="btn small" onClick={() => void onAsk("verify", "Verify the changes of this branch against the wiki.")}>Verify against wiki</button>

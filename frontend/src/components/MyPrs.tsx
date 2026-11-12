@@ -3,6 +3,7 @@ import { ApiError, DevWorkspace, get, post } from "../api";
 import FolderPicker from "./FolderPicker";
 import { DevSetupPreset } from "./DevSetupDialog";
 import { confirmAction } from "./Confirm";
+import DevPrState from "./DevPrState";
 
 export interface MyPr {
   number: number; title: string; url: string; isDraft: boolean; state: string; headRefName: string; baseRefName: string;
@@ -185,7 +186,7 @@ export default function MyPrs({ list, activeId, onOpen, onSetup, onCreated }: {
                       const here = !!ws && ws.pr_number === p.number;
                       const label = busy === `${r.repo}#${p.number}`;
                       return (
-                        <div key={p.number} className={`my-pr ${here ? "here" : ""}`} data-testid="my-pr" data-number={p.number}>
+                        <div key={p.number} className={`my-pr ${here ? "here" : ""} ${p.state !== "OPEN" ? "closed" : ""}`} data-testid="my-pr" data-number={p.number}>
                           <button className="my-pr-main" onClick={() => void openPr(g, p)} disabled={busy !== null}
                             title={`${p.headRefName} → ${p.baseRefName}\n${p.workspaces.length ? `Open its workspace: ${p.workspaces.map((w) => w.name).join(", ")}` : ws ? `Switch ${ws.worktree_path} to its branch` : source ? `Switch your checkout ${source} to its branch` : "Open it in a new workspace"}`}>
                             <span className={`ci-dot ${(p.ci ?? "none").toLowerCase()}`} aria-hidden="true" />
@@ -195,6 +196,8 @@ export default function MyPrs({ list, activeId, onOpen, onSetup, onCreated }: {
                             </span>
                             {label ? <span className="muted small">switching…</span> : p.workspaces.length > 0 && <span className="chip" title="Has a workspace here">{here ? "here" : "open"}</span>}
                           </button>
+                          <span className="my-pr-close"><DevPrState compact repo={r.repo} number={p.number} state={p.state}
+                            onDone={(st) => setGroups((gs) => ({ ...gs, [k]: { ...g, prs: (g.prs ?? []).map((x) => (x.number === p.number ? { ...x, state: st } : x)) } }))} /></span>
                           {active && active.mode === "branch" && active.status === "ready" && sameRepo(active, r.repo) && active.pr_number !== p.number && p.state === "OPEN" && (
                             <button className="btn small" disabled={busy !== null} onClick={() => void checkoutIn(active, r.repo, p)} title={`Check it out in “${active.name}” (${active.worktree_path})`} data-testid="my-pr-here">Check out here</button>
                           )}

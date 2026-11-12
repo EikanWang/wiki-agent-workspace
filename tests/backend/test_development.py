@@ -1191,6 +1191,20 @@ async def test_your_pull_requests_of_a_repo_and_checking_one_out_in_a_folder(run
     f2 = await wait_ready(api, r.json()["id"])
     assert f2["status"] == "ready" and f2["worktree_path"] == str(src) and f2["pr_number"] == 7 and f2["branch"] == "my-fix", f2
     assert git(src, "symbolic-ref", "--short", "HEAD") == "my-fix"
+    # close and reopen a PR (through gh), with a comment; its state is read back
+    calls: list = []
+
+    async def set_state(repo, number, action, comment):
+        calls.append((repo, number, action, comment))
+    monkeypatch.setattr(service, "set_pr_state", set_state)
+    r = await api.post("/api/v1/dev/prs/acme/proj/7/state", json={"action": "close", "comment": "  Superseded by #9 "})
+    assert r.status_code == 200 and r.json()["state"] == "CLOSED" and calls[-1] == ("acme/proj", 7, "close", "Superseded by #9")
+    assert (await api.post("/api/v1/dev/prs/acme/proj/7/state", json={"action": "reopen"})).json()["state"] == "OPEN"
+    assert calls[-1] == ("acme/proj", 7, "reopen", None)
+    assert (await api.post("/api/v1/dev/prs/acme/proj/7/state", json={"action": "merge"})).status_code in (400, 422)
+    assert (await api.post("/api/v1/dev/prs/ac%20me/proj/7/state", json={"action": "close"})).status_code == 400
+    info = (await api.get("/api/v1/dev/prs/acme/proj/7")).json()
+    assert info["state"] == "OPEN" and info["head"] == "my-fix"
     # a PR workspace cannot switch to another PR
     r = await api.post("/api/v1/dev/workspaces", json={"source_repo": str(src), "mode": "pr", "github_repo": "acme/proj", "pr_number": 7})
     p = await wait_ready(api, r.json()["id"])

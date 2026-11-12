@@ -463,6 +463,44 @@ async def dev_my_prs(repo: str | None = Query(None, max_length=200), source: str
     return await _svc(ctx).my_prs(repo, source, state)
 
 
+def _pr_args(owner: str, name: str, number: int) -> str:
+    from .service import _REPO
+
+    repo = f"{owner}/{name}"
+    if not _REPO.match(repo) or number < 1:
+        raise ApiError(400, "INVALID_REPO", "give the pull request as owner/name and number")
+    return repo
+
+
+@router.get("/dev/prs/{owner}/{name}/{number}")
+async def dev_pr_info(owner: str, name: str, number: int, ctx: AppContext = Depends(require_auth)):
+    """A pull request's state (OPEN, CLOSED, MERGED), title, branches."""
+    from . import service
+
+    repo = _pr_args(owner, name, number)
+    m = await service.fetch_pr_meta(repo, number)
+    return {"repo": repo, "number": number, "state": m.get("state") or "OPEN", "title": m.get("title"), "url": m.get("url"),
+            "head": m.get("headRefName"), "base": m.get("baseRefName")}
+
+
+class PrStateIn(BaseModel):
+    action: str = Field(pattern="^(close|reopen)$")
+    comment: str | None = Field(None, max_length=60_000)  # posted with the change
+
+
+@router.post("/dev/prs/{owner}/{name}/{number}/state")
+async def dev_pr_state(owner: str, name: str, number: int, body: PrStateIn, ctx: AppContext = Depends(require_auth_mutating)):
+    """Close or reopen a pull request (its branch and your workspaces stay)."""
+    from . import service
+
+    repo = _pr_args(owner, name, number)
+    await service.set_pr_state(repo, number, body.action, (body.comment or "").strip() or None)
+    for r in _svc(ctx).list():
+        if (r.get("github_repo") or "").lower() == repo.lower() and r.get("pr_number") == number and ctx.events:
+            ctx.events.publish("global", {"type": "dev_changed", "dev_id": r["id"]})
+    return {"repo": repo, "number": number, "state": "CLOSED" if body.action == "close" else "OPEN"}
+
+
 class CheckoutPrIn(BaseModel):
     number: int = Field(ge=1)
 
