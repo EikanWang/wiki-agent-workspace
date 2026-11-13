@@ -3453,6 +3453,17 @@ test("Repo Insights: the history in the folder, a week's report (daily summaries
   await page.getByTestId("insights-settings-open").click();
   await expect(page.getByTestId("insights-settings")).toBeVisible();
   await expect(page.getByTestId("insights-task")).toHaveCount(5);
+  // the agent for two tasks, one right after the other: both stay chosen (on the page and on the server)
+  const task = (t: string) => page.locator(`[data-testid="insights-task"][data-task="${t}"]`);
+  await task("report").getByTestId("insights-task-mode").selectOption("agent");
+  await task("daily").getByTestId("insights-task-mode").selectOption("agent");
+  await expect(task("report").getByTestId("insights-task-mode")).toHaveValue("agent");
+  await expect(task("report").getByTestId("model-choice")).toBeVisible();
+  await expect.poll(async () => { const x = (await (await page.request.get("/api/v1/insights/settings")).json()).llm; return `${x.report.mode} ${x.daily.mode}`; }).toBe("agent agent");
+  await task("report").getByTestId("model-choice-provider").selectOption("codex");
+  await expect.poll(async () => (await (await page.request.get("/api/v1/insights/settings")).json()).llm.report.provider).toBe("codex");
+  for (const t of ["report", "daily"]) await task(t).getByTestId("insights-task-mode").selectOption("api");
+  await expect.poll(async () => { const x = (await (await page.request.get("/api/v1/insights/settings")).json()).llm; return `${x.report.mode} ${x.daily.mode}`; }).toBe("api api");
   await page.locator('[data-testid="insights-repo-cfg"][data-repo="vllm-project/vllm"]').getByTestId("insights-schedule").check();
   await page.getByTestId("insights-repos-save").click();
   await expect(page.getByTestId("insights-note")).toContainText("Saved");

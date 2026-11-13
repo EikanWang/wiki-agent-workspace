@@ -247,3 +247,21 @@ async def test_scheduler_runs_the_last_complete_day_once(running_app, tmp_path):
     assert await scheduler.tick(h.ctx, late) == []  # done for the day
     st.save(h.ctx, {"repos": [{"repo": "acme/proj", "schedule": {"enabled": False, "time": "05:35"}}]})
     assert await scheduler.tick(h.ctx, late + dt.timedelta(days=1)) == []  # off
+
+
+async def test_a_task_set_to_the_agent_runs_an_agent_turn(running_app, tmp_path, monkeypatch):
+    from backend.app import review_priority
+    from backend.app.insights import llm
+
+    h, _, _ = await make(running_app, tmp_path, {})
+    h.ctx.extra.pop("insights_llm")
+    seen = []
+
+    async def fake_turn(ctx, choice, prompt, title):
+        seen.append((choice["provider"], title, prompt))
+        return "from the agent"
+    monkeypatch.setattr(review_priority, "run_turn", fake_turn)
+    st.save(h.ctx, {"llm": {"report": {"mode": "agent", "provider": "codex"}}})
+    assert await llm.complete(h.ctx, "report", "write it") == "from the agent"
+    assert seen == [("codex", "Insights: report", "write it")]
+    assert st.load(h.ctx)["llm"]["daily"]["mode"] == "api"  # the other tasks are unchanged

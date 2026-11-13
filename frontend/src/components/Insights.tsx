@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, del, get, post, put } from "../api";
 import MarkdownView from "./MarkdownView";
 import ModelChoice, { ModelChoiceValue } from "./ModelChoice";
@@ -335,18 +335,36 @@ function InsightsSettings() {
   const [note, setNote] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => { void loadInsightsSettings().then(setS).catch((e) => setErr((e as ApiError).message)); }, []);
+  // saves run one after another, and each takes from the answer only what it saved: a quick second change (or an
+  // unsaved edit elsewhere on the page) is not overwritten by an earlier answer
+  const queue = useRef<Promise<unknown>>(Promise.resolve());
   if (!s) return <div className="muted pad">{err ?? "Loading…"}</div>;
-  const save = async (patch: Record<string, unknown>) => {
+  const save = (patch: Record<string, unknown>) => {
     setErr(null);
     setNote(null);
-    try {
-      const next = await put<Settings>("/insights/settings", patch);
-      settingsCache = next;
-      setS(next);
-      setNote("Saved.");
-    } catch (e) {
-      setErr((e as ApiError).message);
-    }
+    const run = queue.current.then(async () => {
+      try {
+        const next = await put<Settings>("/insights/settings", patch);
+        settingsCache = next;
+        setS((prev) => {
+          if (!prev) return next;
+          const out: Settings = { ...prev, endpoint: next.endpoint };
+          for (const k of Object.keys(patch)) if (k !== "endpoint" && k in next) (out as unknown as Record<string, unknown>)[k] = (next as unknown as Record<string, unknown>)[k];
+          return out;
+        });
+        setNote("Saved.");
+      } catch (e) {
+        setErr((e as ApiError).message);
+        void loadInsightsSettings().then((n) => setS((prev) => (prev ? { ...prev, llm: n.llm } : n))).catch(() => undefined);
+      }
+    });
+    queue.current = run;
+    return run;
+  };
+  /** one task's model: shown at once, and only that task is sent */
+  const setTask = (task: string, v: TaskModel) => {
+    setS((prev) => (prev ? { ...prev, llm: { ...prev.llm, [task]: v } } : prev));
+    void save({ llm: { [task]: v } });
   };
   const setRepo = (i: number, patch: Partial<InsightsRepo>) => setS({ ...s, repos: s.repos.map((r, k) => (k === i ? { ...r, ...patch } : r)) });
   const list = (v: string) => v.split(",").map((x) => x.trim()).filter(Boolean);
@@ -369,12 +387,12 @@ function InsightsSettings() {
       {Object.entries(s.llm).map(([task, m]) => (
         <div key={task} className="row nowrap small" data-testid="insights-task" data-task={task}>
           <span className="insights-task-name">{TASK_LABEL[task] ?? task}</span>
-          <select value={m.mode} onChange={(e) => void save({ llm: { ...s.llm, [task]: { ...m, mode: e.target.value } } })} data-testid="insights-task-mode">
+          <select value={m.mode} onChange={(e) => setTask(task, { ...m, mode: e.target.value as TaskModel["mode"] })} data-testid="insights-task-mode">
             <option value="api">model endpoint ({s.endpoint.model})</option>
             <option value="agent">the app's agent</option>
           </select>
           {m.mode === "agent" && <ModelChoice value={m.provider || m.model ? { provider: m.provider ?? undefined, model: m.model ?? undefined, variant: m.variant ?? undefined } : null}
-            onChange={(v: ModelChoiceValue | null) => void save({ llm: { ...s.llm, [task]: { mode: "agent", provider: v?.provider ?? null, model: v?.model ?? null, variant: v?.variant ?? null } } })} />}
+            onChange={(v: ModelChoiceValue | null) => setTask(task, { mode: "agent", provider: v?.provider ?? null, model: v?.model ?? null, variant: v?.variant ?? null })} />}
         </div>
       ))}
       <div className="row nowrap small">XPU highlight threshold <input type="number" className="insights-num" defaultValue={s.highlight.threshold} onBlur={(e) => void save({ highlight: { ...s.highlight, threshold: Number(e.target.value) } })} />
