@@ -75,6 +75,7 @@ export default function FolderPicker({ title, hint, start, requireGit = false, c
   const go = (p: string) => {
     edited.current = false;
     asked.current = true;
+    if (p !== path) setLoading(true); // at once: "Choose" must not take the folder still shown while the new one loads
     setFilter("");
     setPath(p);
   };
