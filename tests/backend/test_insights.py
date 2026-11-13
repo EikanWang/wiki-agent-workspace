@@ -187,9 +187,9 @@ async def test_reports_of_any_period_with_blocks_commits_rfcs_highlights(running
     main_fetch = [q for q in gh.queries if q.startswith("repo:acme/proj updated:>=2026-10-16") and "label" not in q and "in:title" not in q]
     assert len(main_fetch) == 1  # all missing days in one GitHub search
     final = next(p for t, p in model.calls if t == "report")
-    assert "## RFCs" in final and "RFC-0042" in final and "[RFC] New device API" in final
+    assert "## RFCs ::" in final and "RFC-0042" in final and "[RFC] New device API" in final
     assert "Commits on the default branch: 2 by 1 authors" in final and "Change 1 (#901)" in final
-    assert "## XPU watch" in final and "[Hot](https://x/1)" in final and "GPU_TYPE" in final and "devices" in final
+    assert "## XPU watch ::" in final and "[Hot](https://x/1)" in final and "GPU_TYPE" in final and "devices" in final
     assert any(f.startswith("Days with a summary") for f in rep["facts"])
     # the same period again: the summaries and the weekly blocks are reused (no daily / rollup work), the clone updated
     (up / "f2.py").write_text("2")

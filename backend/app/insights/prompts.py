@@ -227,21 +227,22 @@ XPU_FOCUS = (
 
 
 def report(repo: str, since: str, until: str, days: int, focus: str, has: dict[str, bool]) -> str:
-    sections = ["## Highlights — the 5 to 10 most important changes of the period" + (", ranked by the focus" if focus else "")]
+    sections = ["## Highlights :: the 5 to 10 most important changes of the period" + (", ranked by the focus" if focus else "")]
     if has.get("commits"):
-        sections.append("## Changes by area — what landed (from the commits): new features and APIs, behaviour changes, "
+        sections.append("## Changes by area :: what landed (from the commits): new features and APIs, behaviour changes, "
                         "performance, notable fixes, deprecations and removals, build / CI")
     if has.get("issues"):
-        sections.append("## Issues and pull requests — new and significant, closed / resolved, active discussions")
+        sections.append("## Issues and pull requests :: new and significant, closed / resolved, active discussions")
     if has.get("rfcs"):
-        sections.append("## RFCs — new, updated, decided")
+        sections.append("## RFCs :: new, updated, decided")
     if has.get("highlights"):
-        sections.append("## XPU watch — the scored items that matter most for Intel GPU, with their score")
-    sections += ["## Trends — 3 to 5 bullets", "## Numbers — from the facts given"]
+        sections.append("## XPU watch :: the scored items that matter most for Intel GPU, with their score")
+    sections += ["## Trends :: 3 to 5 bullets", "## Numbers :: from the facts given"]
     return (
         f"Write a report of what happened in the GitHub repository {repo} from {since} to {until} ({days} days), from the "
         "material below (it was prepared from GitHub and the git history; do not invent anything). Use exactly these "
-        "Markdown sections, in this order, and leave out a section only when its material is empty:\n"
+        "Markdown sections, in this order (the heading is the text before \"::\" exactly; after it is what goes in the "
+        "section), and leave out a section only when its material is empty:\n"
         + "\n".join(sections) + "\n\nRules: be concise; bullets of one or two sentences; every issue, PR, RFC or commit you "
         "mention is a Markdown link (e.g. [PR #123](https://github.com/" + repo + "/pull/123), "
         "[issue #45](https://github.com/" + repo + "/issues/45)); group related items; do not repeat an item across "
