@@ -173,6 +173,7 @@ async def test_reports_of_any_period_with_blocks_commits_rfcs_highlights(running
     # a 21-day custom range: daily summaries made for the missing days (one fetch), rolled up week by week
     r = (await api.post("/api/v1/insights/reports", json={"repo": "acme/proj", "period": "custom", "since": "2026-10-16", "until": "2026-11-05",
                                                           "focus": "devices", "preset": "xpu"})).json()
+    assert r["kind"] == "dates" and r["label"] == "2026-10-16 – 2026-11-05"
     rid = r["id"]
     for _ in range(200):
         rep = (await api.get(f"/api/v1/insights/reports/acme/proj/{rid}")).json()
@@ -182,7 +183,7 @@ async def test_reports_of_any_period_with_blocks_commits_rfcs_highlights(running
     assert rep["status"] == "done", rep
     assert rep["text"].startswith("Report of acme/proj from 2026-10-16 to 2026-11-05:") and "[report]" in rep["text"]
     days = [r for r in store.index(h.ctx, "acme/proj") if r["daily"]]
-    assert len(days) == 21 and model.count("daily") == 3 and model.count("rollup") == 3  # empty days need no model
+    assert len(days) == 21 and model.count("daily") == 3 and model.count("rollup") == 4  # calendar weeks: Oct 16–18, 19–25, Oct 26–Nov 1, Nov 2–5; empty days need no model
     assert "No notable activity" in store.body(store.daily(h.ctx, "acme/proj", "2026-10-20")["path"])
     main_fetch = [q for q in gh.queries if q.startswith("repo:acme/proj updated:>=2026-10-16") and "label" not in q and "in:title" not in q]
     assert len(main_fetch) == 1  # all missing days in one GitHub search
@@ -213,7 +214,8 @@ async def test_reports_of_any_period_with_blocks_commits_rfcs_highlights(running
     assert (await api.delete(f"/api/v1/insights/reports/acme/proj/{rid}")).status_code == 200
     assert (await api.get(f"/api/v1/insights/reports/acme/proj/{rid}")).status_code == 404
     for bad in ({"repo": "acme/proj", "period": "custom", "since": "2026-11-05", "until": "2026-11-01"}, {"repo": "x", "period": "week"},
-                {"repo": "acme/proj", "period": "fortnight"}):
+                {"repo": "acme/proj", "period": "fortnight"}, {"repo": "acme/proj", "period": "month", "value": "2026-13"},
+                {"repo": "acme/proj", "period": "quarter", "value": "2026-Q5"}, {"repo": "acme/proj", "period": "year", "value": "2999"}):
         assert (await api.post("/api/v1/insights/reports", json=bad)).status_code in (400, 422), bad
 
 
@@ -265,3 +267,33 @@ async def test_a_task_set_to_the_agent_runs_an_agent_turn(running_app, tmp_path,
     assert await llm.complete(h.ctx, "report", "write it") == "from the agent"
     assert seen == [("codex", "Insights: report", "write it")]
     assert st.load(h.ctx)["llm"]["daily"]["mode"] == "api"  # the other tasks are unchanged
+
+
+def test_calendar_periods(monkeypatch):
+    monkeypatch.setattr(pl, "today", lambda: dt.date(2026, 11, 13))
+    cp = pl.calendar_period
+    assert cp("day", "2026-11-12") == ("2026-11-12", "2026-11-12", "2026-11-12", "daily")
+    assert cp("week", "2026-11-04") == ("2026-11-02", "2026-11-08", "Week 45, 2026 (Nov 2 – Nov 8)", "weekly")
+    assert cp("week", "2026-11-13") == ("2026-11-09", "2026-11-13", "Week 46, 2026 (Nov 9 – Nov 15) (so far)", "weekly")
+    assert cp("month", "2026-02") == ("2026-02-01", "2026-02-28", "February 2026", "monthly")
+    assert cp("month", "2026-11") == ("2026-11-01", "2026-11-13", "November 2026 (so far)", "monthly")
+    assert cp("quarter", "2026-Q1") == ("2026-01-01", "2026-03-31", "Q1 2026", "quarterly")
+    assert cp("quarter", "2026-Q3") == ("2026-07-01", "2026-09-30", "Q3 2026", "quarterly")
+    assert cp("quarter", "2026-Q4")[1] == "2026-11-13"
+    assert cp("year", "2025") == ("2025-01-01", "2025-12-31", "2025", "yearly")
+    assert cp("year", None) == ("2026-01-01", "2026-11-13", "2026 (so far)", "yearly")
+    assert cp("custom", None, "2026-10-14", "2026-11-13")[2:] == ("2026-10-14 – 2026-11-13", "dates")
+    assert pl.weeks(pl.days_of("2026-10-14", "2026-10-27")) == [pl.days_of("2026-10-14", "2026-10-18"), pl.days_of("2026-10-19", "2026-10-25"),
+                                                                ["2026-10-26", "2026-10-27"]]
+
+
+async def test_long_periods_go_through_month_summaries(running_app, tmp_path):
+    h, _, model = await make(running_app, tmp_path, proj_nodes())
+    text, n = await pl.issue_material(h.ctx, "acme/proj", "2026-08-01", "2026-11-05", None)  # 97 days
+    assert n == 97
+    assert [x.split(" (")[0] for x in text.split("--- Month ")[1:]] == ["2026-08", "2026-09", "2026-10", "2026-11"]
+    month_calls = [p for t, p in model.calls if t == "rollup" and "weekly summaries" in p]
+    assert len(month_calls) == 4
+    r0 = model.count("rollup")
+    await pl.issue_material(h.ctx, "acme/proj", "2026-08-01", "2026-11-05", None)
+    assert model.count("rollup") == r0  # finished weeks and months reused

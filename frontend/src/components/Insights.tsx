@@ -23,7 +23,7 @@ interface Settings {
   endpoint: { base_url: string; model: string; has_key: boolean };
 }
 interface FileRow { path: string; name: string; since: string; until: string; daily: boolean; partial: boolean; size: number; mtime: number }
-interface ReportMeta { id: string; repo: string; since: string; until: string; label: string; status: string; step?: string; created_at: string;
+interface ReportMeta { id: string; repo: string; since: string; until: string; label: string; kind?: string; status: string; step?: string; created_at: string;
   sources: Record<string, boolean>; focus: string; preset: string | null; error?: string; facts?: string[]; log?: string[]; text?: string | null }
 interface Job { id: string; kind: string; status: string; step: string; error: string | null; log: string[] }
 interface Overview {
@@ -34,6 +34,25 @@ interface Highlight { title: string; url: string; xpu_relevance_score: number; x
 
 const TASK_LABEL: Record<string, string> = { daily: "Daily summaries", rollup: "Weekly roll-ups", commits: "Commit summaries", report: "Reports", highlight: "XPU highlight scoring" };
 const PERIODS = ["day", "week", "month", "quarter", "year", "custom"] as const;
+const PERIOD_LABEL: Record<string, string> = { day: "Day", week: "Week", month: "Month", quarter: "Quarter", year: "Year", custom: "Dates" };
+const KINDS = [["daily", "Daily"], ["weekly", "Weekly"], ["monthly", "Monthly"], ["quarterly", "Quarterly"], ["yearly", "Yearly"], ["dates", "Dates"]] as const;
+const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const iso = (d: Date) => d.toISOString().slice(0, 10);
+const fmt = (d: Date) => `${MONTHS[d.getUTCMonth()].slice(0, 3)} ${d.getUTCDate()}`;
+/** The calendar weeks (Mon–Sun, ISO numbering) of a year that have started: [monday, label], newest first. */
+function weeksOf(year: number): [string, string][] {
+  const jan4 = new Date(Date.UTC(year, 0, 4));
+  let mon = new Date(jan4.getTime() - ((jan4.getUTCDay() + 6) % 7) * 86400_000);
+  const out: [string, string][] = [];
+  const now = Date.now();
+  for (let n = 1; mon.getTime() <= now && n <= 53; n++) {
+    const sun = new Date(mon.getTime() + 6 * 86400_000);
+    if (n === 53 && new Date(Date.UTC(year, 11, 28)).getTime() < mon.getTime()) break;
+    out.push([iso(mon), `Week ${n} · ${fmt(mon)} – ${fmt(sun)}`]);
+    mon = new Date(mon.getTime() + 7 * 86400_000);
+  }
+  return out.reverse();
+}
 const todayIso = () => new Date().toISOString().slice(0, 10);
 const daysAgo = (n: number) => new Date(Date.now() - n * 86400_000).toISOString().slice(0, 10);
 
@@ -134,18 +153,7 @@ function RepoPage({ repo, onOpenChat }: { repo: string; onOpenChat: (ws: string,
               </button>
             ))}
           </span>
-          {tab === "reports" && (
-            <div className="insights-items">
-              {ov.reports.length === 0 && <div className="muted small pad">No report yet: choose a period above.</div>}
-              {ov.reports.map((r) => (
-                <button key={r.id} className={`list-item ${open?.kind === "report" && open.id === r.id ? "selected" : ""}`} onClick={() => setOpen({ kind: "report", id: r.id })}
-                  data-testid="insights-report" data-status={r.status}>
-                  <span className="insights-item-main"><b>{r.label}</b>
-                    <span className="muted small">{r.status === "running" ? `⏳ ${r.step ?? "working…"}` : r.status === "done" ? utc8(r.created_at, false) : r.status}{r.preset ? ` · ${r.preset}` : ""}</span></span>
-                </button>
-              ))}
-            </div>
-          )}
+          {tab === "reports" && <ReportList reports={ov.reports} openId={open?.kind === "report" ? open.id : null} onOpen={(id) => setOpen({ kind: "report", id })} />}
           {tab === "daily" && <DailyList ov={ov} openPath={open?.kind === "file" ? open.path : null} onOpen={(p) => setOpen({ kind: "file", path: p })} onRan={load} />}
           {tab === "highlights" && <div className="muted small pad">Pick dates on the right.</div>}
         </div>
@@ -160,9 +168,47 @@ function RepoPage({ repo, onOpenChat }: { repo: string; onOpenChat: (ws: string,
   );
 }
 
+function ReportList({ reports, openId, onOpen }: { reports: ReportMeta[]; openId: string | null; onOpen: (id: string) => void }) {
+  const [folded, setFolded] = useState<Record<string, boolean>>(() => { try { return JSON.parse(localStorage.getItem("waw.insights.folded") || "{}"); } catch { return {}; } });
+  useEffect(() => localStorage.setItem("waw.insights.folded", JSON.stringify(folded)), [folded]);
+  if (reports.length === 0) return <div className="insights-items"><div className="muted small pad">No report yet: choose a period above.</div></div>;
+  return (
+    <div className="insights-items">
+      {KINDS.map(([kind, title]) => {
+        const rows = reports.filter((r) => (r.kind ?? "dates") === kind).sort((x, y) => (y.since + y.created_at).localeCompare(x.since + x.created_at));
+        if (!rows.length) return null;
+        const isOpen = !folded[kind] || rows.some((r) => r.id === openId && r.status === "running");
+        return (
+          <div key={kind} className="insights-group" data-testid="insights-group" data-kind={kind}>
+            <button className="insights-group-head" onClick={() => setFolded({ ...folded, [kind]: isOpen })} aria-expanded={isOpen}>
+              {isOpen ? "▾" : "▸"} {title} <span className="muted">({rows.length})</span>
+            </button>
+            {isOpen && rows.map((r) => (
+              <button key={r.id} className={`list-item ${openId === r.id ? "selected" : ""}`} onClick={() => onOpen(r.id)} data-testid="insights-report" data-status={r.status}>
+                <span className="insights-item-main"><b>{r.label}</b>
+                  <span className="muted small">{r.status === "running" ? `⏳ ${r.step ?? "working…"}` : r.status === "done" ? `made ${utc8(r.created_at, false)}` : r.status}{r.preset ? ` · ${r.preset}` : ""}</span></span>
+              </button>
+            ))}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function NewReport({ repo, cfg, onCreated }: { repo: string; cfg: InsightsRepo; onCreated: (id: string) => void }) {
   const [period, setPeriod] = useState<(typeof PERIODS)[number]>("week");
-  const [end, setEnd] = useState(todayIso());
+  const now = new Date();
+  const thisYear = now.getUTCFullYear();
+  const [year, setYear] = useState(thisYear);
+  const [day, setDay] = useState(daysAgo(1));
+  const weekList = useMemo(() => weeksOf(year), [year]);
+  const [week, setWeek] = useState("");
+  const lastMonth = year === thisYear ? now.getUTCMonth() : 11;
+  const [month, setMonth] = useState(now.getUTCMonth());
+  const lastQ = year === thisYear ? Math.floor(now.getUTCMonth() / 3) + 1 : 4;
+  const [quarter, setQuarter] = useState(Math.floor(now.getUTCMonth() / 3) + 1);
+  const years = Array.from({ length: 4 }, (_, i) => thisYear - i);
   const [since, setSince] = useState(daysAgo(30));
   const [until, setUntil] = useState(todayIso());
   const [src, setSrc] = useState({ issues: cfg.sources.issues, commits: cfg.sources.commits, rfcs: cfg.sources.rfcs, highlights: cfg.highlights });
@@ -176,7 +222,9 @@ function NewReport({ repo, cfg, onCreated }: { repo: string; cfg: InsightsRepo; 
     setBusy(true);
     setErr(null);
     try {
-      const body = period === "custom" ? { repo, period, since, until } : { repo, period, end };
+      const value = period === "day" ? day : period === "week" ? (week || weekList[0]?.[0]) : period === "month" ? `${year}-${String(Math.min(month, lastMonth) + 1).padStart(2, "0")}`
+        : period === "quarter" ? `${year}-Q${Math.min(quarter, lastQ)}` : String(year);
+      const body = period === "custom" ? { repo, period, since, until } : { repo, period, value };
       const r = await post<ReportMeta>("/insights/reports", { ...body, sources: src, focus, preset: preset || undefined });
       onCreated(r.id);
     } catch (e) {
@@ -188,12 +236,31 @@ function NewReport({ repo, cfg, onCreated }: { repo: string; cfg: InsightsRepo; 
   return (
     <div className="insights-new" data-testid="insights-new">
       <span className="mode-switch" role="tablist">
-        {PERIODS.map((p) => <button key={p} role="tab" aria-selected={period === p} className={period === p ? "active" : ""} onClick={() => setPeriod(p)} data-testid={`insights-period-${p}`}>{p === "custom" ? "Dates…" : p[0].toUpperCase() + p.slice(1)}</button>)}
+        {PERIODS.map((p) => <button key={p} role="tab" aria-selected={period === p} className={period === p ? "active" : ""} onClick={() => setPeriod(p)} data-testid={`insights-period-${p}`}>{PERIOD_LABEL[p]}</button>)}
       </span>
-      {period === "custom" ? (
-        <span className="row nowrap small">from <input type="date" value={since} onChange={(e) => setSince(e.target.value)} data-testid="insights-since" /> to <input type="date" value={until} onChange={(e) => setUntil(e.target.value)} data-testid="insights-until" /></span>
-      ) : (
-        <span className="row nowrap small">ending <input type="date" value={end} onChange={(e) => setEnd(e.target.value)} data-testid="insights-end" /></span>
+      {period === "custom" && (
+        <span className="row nowrap small">from <input type="date" value={since} max={todayIso()} onChange={(e) => setSince(e.target.value)} data-testid="insights-since" /> to <input type="date" value={until} max={todayIso()} onChange={(e) => setUntil(e.target.value)} data-testid="insights-until" /></span>
+      )}
+      {period === "day" && <input type="date" value={day} max={todayIso()} onChange={(e) => setDay(e.target.value)} data-testid="insights-day-pick" />}
+      {(period === "week" || period === "month" || period === "quarter" || period === "year") && (
+        <select value={year} onChange={(e) => { setYear(Number(e.target.value)); setWeek(""); }} title="Year" data-testid="insights-year">
+          {years.map((y) => <option key={y} value={y}>{y}</option>)}
+        </select>
+      )}
+      {period === "week" && (
+        <select value={week || weekList[0]?.[0] || ""} onChange={(e) => setWeek(e.target.value)} data-testid="insights-week">
+          {weekList.map(([m, l]) => <option key={m} value={m}>{l}</option>)}
+        </select>
+      )}
+      {period === "month" && (
+        <select value={Math.min(month, lastMonth)} onChange={(e) => setMonth(Number(e.target.value))} data-testid="insights-month">
+          {MONTHS.slice(0, lastMonth + 1).map((m, i) => <option key={m} value={i}>{m}</option>)}
+        </select>
+      )}
+      {period === "quarter" && (
+        <select value={Math.min(quarter, lastQ)} onChange={(e) => setQuarter(Number(e.target.value))} data-testid="insights-quarter">
+          {[1, 2, 3, 4].slice(0, lastQ).map((q) => <option key={q} value={q}>Q{q} ({MONTHS[3 * q - 3].slice(0, 3)} – {MONTHS[3 * q - 1].slice(0, 3)})</option>)}
+        </select>
       )}
       <span className="row nowrap small insights-sources">
         {(["issues", "commits", "rfcs", "highlights"] as const).map((k) => (

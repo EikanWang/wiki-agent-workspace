@@ -36,6 +36,62 @@ def days_of(since: str, until: str) -> list[str]:
     return [(a + dt.timedelta(days=i)).isoformat() for i in range((b - a).days + 1)]
 
 
+KINDS = {"day": "daily", "week": "weekly", "month": "monthly", "quarter": "quarterly", "year": "yearly", "custom": "dates"}
+_MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
+
+
+def calendar_period(period: str, value: str | None, since: str | None = None, until: str | None = None) -> tuple[str, str, str, str]:
+    """(since, until, label, kind) of a calendar period: a day (YYYY-MM-DD), the week (Mon–Sun) of a day, a month
+    (YYYY-MM), a quarter (YYYY-Qn), a year (YYYY), or given dates. A period still going ends today ("so far")."""
+    import re
+
+    t = today()
+    try:
+        if period == "day":
+            a = b = dt.date.fromisoformat(value or t.isoformat())
+            label = a.isoformat()
+        elif period == "week":
+            d = dt.date.fromisoformat(value or t.isoformat())
+            a = d - dt.timedelta(days=d.weekday())
+            b = a + dt.timedelta(days=6)
+            iy, iw, _ = a.isocalendar()
+            label = f"Week {iw}, {iy} ({a.strftime('%b')} {a.day} – {b.strftime('%b')} {b.day})"
+        elif period == "month":
+            m = re.fullmatch(r"(\d{4})-(\d{2})", value or t.strftime("%Y-%m"))
+            if not m or not 1 <= int(m[2]) <= 12:
+                raise ValueError(value)
+            a = dt.date(int(m[1]), int(m[2]), 1)
+            b = (a.replace(day=28) + dt.timedelta(days=4)).replace(day=1) - dt.timedelta(days=1)
+            label = f"{_MONTHS[a.month - 1]} {a.year}"
+        elif period == "quarter":
+            m = re.fullmatch(r"(\d{4})-Q([1-4])", value or f"{t.year}-Q{(t.month - 1) // 3 + 1}")
+            if not m:
+                raise ValueError(value)
+            q = int(m[2])
+            a = dt.date(int(m[1]), 3 * q - 2, 1)
+            b = (dt.date(int(m[1]) + (q == 4), 1 if q == 4 else 3 * q + 1, 1)) - dt.timedelta(days=1)
+            label = f"Q{q} {a.year}"
+        elif period == "year":
+            y = int(value or t.year)
+            a, b = dt.date(y, 1, 1), dt.date(y, 12, 31)
+            label = str(y)
+        elif period == "custom":
+            a, b = dt.date.fromisoformat(since or ""), dt.date.fromisoformat(until or "")
+            if a > b:
+                raise ApiError(400, "INVALID_DATE", "the start is after the end")
+            label = f"{a.isoformat()} – {b.isoformat()}"
+        else:
+            raise ApiError(400, "INVALID_PERIOD", "day, week, month, quarter, year or custom")
+    except (ValueError, TypeError):
+        raise ApiError(400, "INVALID_DATE", f"{period}: {value or since!r} is not a valid {period}")
+    if a > t:
+        raise ApiError(400, "INVALID_DATE", "that period has not started yet")
+    if b > t:
+        b = t
+        label += " (so far)"
+    return a.isoformat(), b.isoformat(), label, KINDS[period]
+
+
 def _hash(*parts: str) -> str:
     return hashlib.sha256("\0".join(parts).encode()).hexdigest()[:16]
 
@@ -149,29 +205,69 @@ async def _cached_block(ctx: Any, repo: str, name: str, make) -> str:
 
 
 def weeks(days: list[str]) -> list[list[str]]:
-    return [days[i:i + 7] for i in range(0, len(days), 7)]
+    """The days in calendar weeks (Mon–Sun; the first and last may be partial) — the same weeks in every report."""
+    out: list[list[str]] = []
+    for d in days:
+        if out and dt.date.fromisoformat(d).weekday() != 0:
+            out[-1].append(d)
+        else:
+            out.append([d])
+    return out
+
+
+def months(days: list[str]) -> list[list[str]]:
+    out: list[list[str]] = []
+    for d in days:
+        if out and out[-1][0][:7] == d[:7]:
+            out[-1].append(d)
+        else:
+            out.append([d])
+    return out
+
+
+MONTH_BLOCKS_AFTER = 92  # longer periods: each month is summarized from its weeks first
 
 
 async def issue_material(ctx: Any, repo: str, since: str, until: str, j: dict[str, Any] | None) -> tuple[str, int]:
+    """The issues-and-PRs material of a period: up to two weeks the daily summaries themselves; up to a quarter one
+    summary per calendar week (made from that week's daily summaries); longer, one per month (made from its weeks).
+    Finished weeks and months are kept and reused by every later report."""
     days = days_of(since, until)
     dailies = await ensure_dailies(ctx, repo, days, j)
     if len(days) <= WEEK_BLOCKS_AFTER:
         return "\n\n".join(f"--- Daily summary of {d} ---\n{t}" for d, t in dailies.items()), len(dailies)
+    groups = months(days) if len(days) > MONTH_BLOCKS_AFTER else [days]
+    total_weeks = sum(len(weeks(g)) for g in groups)
+    k = 0
     parts = []
-    ws = weeks(days)
-    for i, w in enumerate(ws):
-        texts = [f"--- Daily summary of {d} ---\n{dailies[d]}" for d in w if d in dailies]
-        if not texts:
-            continue
-        done = dt.date.fromisoformat(w[-1]) < today()
+    for gi, g in enumerate(groups):
+        week_texts: list[tuple[list[str], str]] = []
+        for w in weeks(g):
+            k += 1
+            texts = [f"--- Daily summary of {d} ---\n{dailies[d]}" for d in w if d in dailies]
+            if not texts:
+                continue
 
-        async def make(w=w, texts=texts, i=i) -> str:
-            step(j, f"week {i + 1}/{len(ws)} ({w[0]} … {w[-1]}): rolling up {len(texts)} daily summaries")
-            ins = prompts.rollup(len(texts), "daily", repo, w[0], w[-1], len(w))
-            return await llm.summarize(ctx, "rollup", texts, ins, prompts.COMBINE)
-        key = f"week_{w[0]}_{w[-1]}_{_hash(*texts)}"
-        text = await (_cached_block(ctx, repo, key, make) if done else make())
-        parts.append(f"--- Week {w[0]} … {w[-1]} ---\n{text}")
+            async def make(w=w, texts=texts, k=k) -> str:
+                step(j, f"week {k} of {total_weeks} ({w[0]} … {w[-1]}): condensing its {len(texts)} daily summaries into one "
+                        f"week summary (the report is then written from the week summaries of the whole {since} … {until})")
+                return await llm.summarize(ctx, "rollup", texts, prompts.rollup(len(texts), "daily", repo, w[0], w[-1], len(w)), prompts.COMBINE)
+            done = dt.date.fromisoformat(w[-1]) < today()
+            text = await (_cached_block(ctx, repo, f"week_{w[0]}_{w[-1]}_{_hash(*texts)}", make) if done else make())
+            week_texts.append((w, text))
+        if len(groups) == 1:
+            parts += [f"--- Week {w[0]} … {w[-1]} ---\n{t}" for w, t in week_texts]
+            continue
+        if not week_texts:
+            continue
+        texts = [f"--- Week {w[0]} … {w[-1]} ---\n{t}" for w, t in week_texts]
+
+        async def make_m(g=g, texts=texts, gi=gi) -> str:
+            step(j, f"month {gi + 1} of {len(groups)} ({g[0][:7]}): condensing its {len(texts)} week summaries into one month summary")
+            return await llm.summarize(ctx, "rollup", texts, prompts.rollup(len(texts), "weekly", repo, g[0], g[-1], len(g)), prompts.COMBINE)
+        done = dt.date.fromisoformat(g[-1]) < today()
+        text = await (_cached_block(ctx, repo, f"month_{g[0]}_{g[-1]}_{_hash(*texts)}", make_m) if done else make_m())
+        parts.append(f"--- Month {g[0][:7]} ({g[0]} … {g[-1]}) ---\n{text}")
     return "\n\n".join(parts), len(dailies)
 
 
@@ -193,7 +289,7 @@ async def commit_material(ctx: Any, repo: str, since: str, until: str, j: dict[s
         sub = {**data, "commits": rows, "areas": []}
 
         async def make(w=w, sub=sub, i=i) -> str:
-            step(j, f"commits of week {i + 1}/{len(ws)} ({w[0]} … {w[-1]}): {len(sub['commits'])} commits")
+            step(j, f"commits, week {i + 1} of {len(ws)} ({w[0]} … {w[-1]}): summarizing its {len(sub['commits'])} commits")
             return await llm.complete(ctx, "commits", prompts.COMMITS.format(repo=repo, since=w[0], until=w[-1]) + cm.text_of(repo, sub))
         key = f"commits_{w[0]}_{w[-1]}_{_hash(*(c[0] for c in rows))}"
         text = await (_cached_block(ctx, repo, key, make) if dt.date.fromisoformat(w[-1]) < today() else make())
@@ -225,6 +321,7 @@ def reports(ctx: Any, repo: str | None = None) -> list[dict[str, Any]]:
             m = json.loads(p.read_text())
         except (OSError, ValueError):
             continue
+        m.setdefault("kind", "daily" if m.get("since") == m.get("until") else "dates")  # reports made before categories
         live = _jobs.get(m.get("job_id") or "")
         if live and m.get("status") == "running":
             m = {**m, "step": live["step"], "status": live["status"]}
@@ -307,9 +404,10 @@ async def make_report(ctx: Any, meta: dict[str, Any], j: dict[str, Any]) -> dict
     return {"report": meta["id"]}
 
 
-def new_report(ctx: Any, repo: str, since: str, until: str, sources: dict[str, bool], focus: str, label: str, preset: str | None) -> dict[str, Any]:
+def new_report(ctx: Any, repo: str, since: str, until: str, sources: dict[str, bool], focus: str, label: str, preset: str | None,
+               kind: str = "dates") -> dict[str, Any]:
     j = new_job("report", repo, since=since, until=until)
-    meta = {"id": j["id"], "job_id": j["id"], "repo": repo, "since": since, "until": until, "label": label, "sources": sources,
+    meta = {"id": j["id"], "job_id": j["id"], "repo": repo, "since": since, "until": until, "label": label, "kind": kind, "sources": sources,
             "focus": focus, "preset": preset, "status": "running", "created_at": dt.datetime.now(dt.timezone.utc).isoformat()}
     _meta_write(ctx, meta)
 

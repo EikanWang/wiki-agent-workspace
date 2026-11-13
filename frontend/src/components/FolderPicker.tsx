@@ -117,7 +117,7 @@ export default function FolderPicker({ title, hint, start, requireGit = false, c
         {hint && <div className="muted small">{hint} You are browsing the server's file system.</div>}
         <Places onGo={go} />
         <div className="row">
-          <input ref={input} className="path-input" value={typed} onChange={(e) => { edited.current = true; setTyped(e.target.value); }} onKeyDown={(e) => { if (e.key === "Enter") go(typed.trim() || "~"); }}
+          <input ref={input} className="path-input" value={typed} onChange={(e) => { edited.current = true; setTyped(e.target.value); }} onKeyDown={(e) => { if (e.key === "Enter") go(e.currentTarget.value.trim() || "~"); }}
             placeholder="/absolute/path (Enter to open)" data-testid="folder-picker-path" />
           <button className="btn small" onClick={() => go(typed.trim() || "~")}>Go</button>
           <label className="small"><input type="checkbox" checked={hidden} onChange={(e) => setHidden(e.target.checked)} /> hidden</label>

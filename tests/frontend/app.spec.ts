@@ -3443,9 +3443,22 @@ test("Repo Insights: the history in the folder, a week's report (daily summaries
   // the days it made are in the list now
   await page.getByTestId("insights-tab-daily").click();
   await expect(page.getByTestId("insights-day")).toHaveCount(5);
-  // continue in a chat
+  // a month of this year: its own category in the list
   await page.getByTestId("insights-tab-reports").click();
-  await page.getByTestId("insights-report").first().click();
+  await page.getByTestId("insights-period-month").click();
+  await expect(page.getByTestId("insights-year")).toHaveValue(String(new Date().getUTCFullYear()));
+  await page.getByTestId("insights-month").selectOption({ index: 0 }); // January
+  await page.getByTestId("insights-create").click();
+  await expect(view).toHaveAttribute("data-status", "done", { timeout: 60000 });
+  await expect(view).toContainText(`January ${new Date().getUTCFullYear()}`);
+  await expect(page.getByTestId("insights-group")).toHaveCount(2);
+  await expect(page.locator('[data-testid="insights-group"][data-kind="monthly"]')).toContainText("Monthly (1)");
+  await expect(page.locator('[data-testid="insights-group"][data-kind="dates"]')).toContainText("Dates (1)");
+  // the week list: calendar weeks of the year
+  await page.getByTestId("insights-period-week").click();
+  await expect(page.getByTestId("insights-week").locator("option").first()).toContainText(/^Week \d+ · /);
+  // continue in a chat
+  await page.locator('[data-testid="insights-group"][data-kind="dates"]').getByTestId("insights-report").first().click();
   await page.getByTestId("insights-chat").click();
   await expect(page.getByTestId("chats-page")).toBeVisible({ timeout: 15000 });
   // settings

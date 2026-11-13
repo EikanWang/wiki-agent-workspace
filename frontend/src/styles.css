@@ -1376,3 +1376,5 @@ body.resizing-h iframe { pointer-events: none; }
 .insights-preset { display: flex; gap: 6px; align-items: flex-start; }
 .insights-preset textarea { flex: 1; }
 .insights-task-name { width: 170px; }
+.insights-group { display: flex; flex-direction: column; }
+.insights-group-head { text-align: left; background: none; border: 0; padding: 4px 6px; font-weight: 600; font-size: 12px; color: var(--fg); cursor: pointer; }

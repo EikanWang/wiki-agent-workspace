@@ -102,8 +102,8 @@ def _date(s: str) -> str:
 
 class ReportIn(BaseModel):
     repo: str = Field(max_length=200)
-    period: str | None = Field(None, pattern="^(day|week|month|quarter|year|custom)$")
-    end: str | None = None
+    period: str = Field("custom", pattern="^(day|week|month|quarter|year|custom)$")
+    value: str | None = Field(None, max_length=20)  # day / a day of the week: YYYY-MM-DD; month: YYYY-MM; quarter: YYYY-Qn; year: YYYY
     since: str | None = None
     until: str | None = None
     sources: dict[str, bool] | None = None
@@ -113,20 +113,10 @@ class ReportIn(BaseModel):
 
 @router.post("/insights/reports", status_code=201)
 async def create_report(body: ReportIn, ctx: AppContext = Depends(require_auth_mutating)):
-    from ..local_repos import period_range
-
     repo = body.repo.strip()
     if not st.REPO.match(repo):
         raise ApiError(400, "INVALID_REPO", "use owner/name")
-    if body.period and body.period != "custom":
-        since, until, label = period_range(body.period, body.end)
-    else:
-        if not body.since or not body.until:
-            raise ApiError(400, "INVALID_DATE", "give a start and an end date")
-        since, until = _date(body.since), _date(body.until)
-        if since > until:
-            raise ApiError(400, "INVALID_DATE", "the start is after the end")
-        label = f"{since} – {until}"
+    since, until, label, kind = pl.calendar_period(body.period, body.value, body.since, body.until)
     if (dt.date.fromisoformat(until) - dt.date.fromisoformat(since)).days > 3700:
         raise ApiError(400, "INVALID_DATE", "at most 10 years")
     cfg = st.repo_cfg(ctx, repo)
@@ -136,7 +126,7 @@ async def create_report(body: ReportIn, ctx: AppContext = Depends(require_auth_m
         p = next((x for x in st.load(ctx)["presets"] if x["id"] == body.preset), None)
         if p:
             focus = (p["text"] + ("\n" + focus if focus else "")).strip()
-    return pl.new_report(ctx, repo, since, until, {k: bool(v) for k, v in src.items()}, focus, label, body.preset)
+    return pl.new_report(ctx, repo, since, until, {k: bool(v) for k, v in src.items()}, focus, label, body.preset, kind)
 
 
 @router.get("/insights/reports/{owner}/{name}/{rid}")
