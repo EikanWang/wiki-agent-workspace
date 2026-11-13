@@ -2373,6 +2373,61 @@ test("GitHub PR tab: overview, files, choose the wiki once, ask about the PR and
   await signOut(page);
 });
 
+test("PR Review cache: a PR opens from the local cache, GitHub is checked right after, the tab updates itself (not while you type)", async ({ page }) => {
+  await ensureGithubSignIn(page);
+  await page.goto("/");
+  await page.getByTestId("login-github").click();
+  await expect(page.getByTestId("view-document")).toBeVisible({ timeout: 15000 });
+  await page.getByTestId("activity-reviews").click();
+  const tab = page.locator('[data-testid="doc-tab"][data-ws="github"]');
+  const open103 = async () => {
+    await page.locator('[data-testid="review-group"] [data-testid="review-pr"][data-number="103"]').click();
+    await expect(page.getByTestId("pr-view")).toBeVisible();
+  };
+  // opened once: from GitHub (and cached); later (memory forgotten, as after a restart) from the cache, checked at once
+  await open103();
+  await expect(page.locator(".pr-title-row")).toContainText("Add XPU event timing");
+  await tab.getByTestId("doc-tab-close").click();
+  await page.request.get("/fake-github/forget-memory");
+  await open103();
+  await expect(page.getByTestId("pr-fresh")).toHaveAttribute("data-state", /cache|current/);
+  await expect(page.getByTestId("pr-fresh")).toHaveAttribute("data-state", "current", { timeout: 15000 }); // nothing changed
+  await tab.getByTestId("doc-tab-close").click();
+  // it changes on GitHub while cached: the tab opens with the cached copy, then updates itself
+  await page.request.get("/fake-github/rename-pr?n=103&title=" + encodeURIComponent("Add XPU event timing (v2)"));
+  await page.request.get("/fake-github/forget-memory");
+  await open103();
+  await expect(page.locator(".pr-title-row")).toContainText("Add XPU event timing (v2)", { timeout: 15000 });
+  await expect(page.getByTestId("pr-fresh")).toHaveAttribute("data-state", "updated");
+  await tab.getByTestId("doc-tab-close").click();
+  // while you write a comment (unsent text is kept, also when the tab closes): a note offers the reload, your text stays
+  await open103();
+  await page.getByTestId("pr-conv-text").fill("half-written thought");
+  await tab.getByTestId("doc-tab-close").click();
+  await page.request.get("/fake-github/rename-pr?n=103&title=" + encodeURIComponent("Add XPU event timing (v3)"));
+  await page.request.get("/fake-github/forget-memory");
+  await open103();
+  await expect(page.getByTestId("pr-conv-text")).toHaveValue("half-written thought");
+  await expect(page.getByTestId("pr-updated-note")).toBeVisible({ timeout: 15000 });
+  await expect(page.locator(".pr-title-row")).toContainText("(v2)");
+  await page.getByTestId("pr-updated-reload").click();
+  await expect(page.locator(".pr-title-row")).toContainText("(v3)");
+  await expect(page.getByTestId("pr-conv-text")).toHaveValue("half-written thought");
+  await page.getByTestId("pr-conv-text").fill("");
+  await tab.getByTestId("doc-tab-close").click();
+  // ⚙ → Cache: usage, clear
+  await page.getByTestId("reviews-settings").click();
+  await page.getByTestId("reviews-settings-cache").click();
+  await expect(page.getByTestId("cache-usage")).toContainText("pull request(s)");
+  await expect(page.getByTestId("cache-dir")).toHaveValue(/github-cache$/);
+  await page.getByTestId("cache-clear").click();
+  await expect(page.getByTestId("cache-usage")).toContainText("0 pull request(s)");
+  await page.getByTestId("reviews-settings-priority").click();
+  await page.getByTestId("reviews-settings").click();
+  await page.request.get("/fake-github/rename-pr?n=103&title=" + encodeURIComponent("Add XPU event timing"));
+  await signOut(page);
+});
+
 test("GitHub PR tab: agent review → suggested comments in the diff; discuss, apply or discard; only applied ones are published", async ({ page }) => {
   await ensureGithubSignIn(page);
   await page.goto("/");

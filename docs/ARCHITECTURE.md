@@ -35,6 +35,11 @@ backend/app/
                    small diff (≤12k chars) read in full, else per-file summaries (≤25k chars per turn, parts,
                    60 files, cache by patch hash in kv pr_file_summaries) then a decision turn; results in kv
                    pr_priority_results; read-only turns in <state_dir>/priority-work, sessions origin "priority"
+  github_cache.py  PR Review's local cache (<state_dir>/github-cache or ⚙ → Cache): parts pr / comments / people per PR
+                   (atomic JSON, 0700/0600) and files by commit. Only a tab's first load (cached=true) reads it; the
+                   same fetch runs right after in the background and a `github_cache` event (opaque token) tells the
+                   tab when it changed; never loaded into _pr_cache (actions use in-process data); actions mark it
+                   stale; prefetch from the review list via RATE (≥1000 left), off in tests unless gh_cache_prefetch
   github_hub.py    GitHub review hub: owner gate (GitHub sign-in = gh account), review queue via one paginated
                    GraphQL search through the server's gh CLI (40 PRs/page; smaller on GitHub 502), partial
                    results (SAML-protected PRs), stale-while-revalidate cache; /github/hub, /github/reviews;

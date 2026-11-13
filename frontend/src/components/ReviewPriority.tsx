@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { ApiError, post } from "../api";
+import { ApiError, get, post, put } from "../api";
+import FolderPicker from "./FolderPicker";
 import ModelChoice, { ModelChoiceValue } from "./ModelChoice";
 import { utc8 } from "../time";
 
@@ -267,5 +268,81 @@ export function LevelMenu({ pr, level, source, reasons, levels, agentOn, onSet, 
         </span>
       )}
     </span>
+  );
+}
+
+interface CacheInfo { dir: string; cap_mb: number; prefetch: boolean; bytes: number; prs: number; queued: number; prefetching: number; prefetched: number }
+
+/** ⚙ → Cache: where PR Review keeps its local copies (opened at once, checked on GitHub right after), size, prefetch. */
+export function CacheSettings() {
+  const [info, setInfo] = useState<CacheInfo | null>(null);
+  const [dir, setDir] = useState("");
+  const [cap, setCap] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [pick, setPick] = useState(false);
+  const load = async () => {
+    try {
+      const r = await get<CacheInfo>("/github/cache");
+      setInfo(r);
+      setDir((d) => d || r.dir);
+      setCap((c) => c || String(r.cap_mb));
+    } catch (e) {
+      setErr((e as ApiError).message);
+    }
+  };
+  useEffect(() => { void load(); }, []);
+  const save = async (body: Record<string, unknown>, done: string) => {
+    setBusy(true);
+    setErr(null);
+    setNote(null);
+    try {
+      const r = await put<CacheInfo>("/github/cache", body);
+      setInfo(r);
+      setDir(r.dir);
+      setCap(String(r.cap_mb));
+      setNote(done);
+    } catch (e) {
+      setErr((e as ApiError).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const mb = (b: number) => (b < 1024 * 1024 ? `${Math.ceil(b / 1024)} KB` : `${(b / 1024 / 1024).toFixed(1)} MB`);
+  if (!info) return <div className="muted small">{err ?? "Loading…"}</div>;
+  return (
+    <div className="priority-settings" data-testid="cache-settings">
+      <div className="muted small">
+        Pull requests open at once from these local copies; GitHub is checked right after and the tab updates itself when
+        something changed. Your actions, ↻ and polling always go to GitHub.
+      </div>
+      <div className="small" data-testid="cache-usage">
+        {info.prs} pull request(s) · {mb(info.bytes)}{info.queued + info.prefetching > 0 ? ` · prefetching ${info.queued + info.prefetching}…` : ""}
+      </div>
+      <div className="small strong">Folder</div>
+      <div className="row nowrap">
+        <input className="mono" value={dir} onChange={(e) => setDir(e.target.value)} data-testid="cache-dir" />
+        <button className="btn small" onClick={() => setPick(true)}>Browse…</button>
+        <button className="btn small" disabled={busy || !dir.trim() || dir.trim() === info.dir} onClick={() => void save({ dir: dir.trim() }, "Moved the cache to the new folder.")} data-testid="cache-dir-save">Move here</button>
+      </div>
+      <div className="row nowrap small">
+        Size limit <input className="priority-cat-level" value={cap} onChange={(e) => setCap(e.target.value.replace(/\D/g, ""))} data-testid="cache-cap" /> MB (0: none)
+        <button className="btn small" disabled={busy || cap === String(info.cap_mb)} onClick={() => void save({ cap_mb: Number(cap) || 0 }, "Saved.")}>Save</button>
+      </div>
+      <div className="muted small">The pull requests opened longest ago go first; closed and merged ones after a week.</div>
+      <label className="small">
+        <input type="checkbox" checked={info.prefetch} disabled={busy} onChange={(e) => void save({ prefetch: e.target.checked }, e.target.checked ? "Prefetch on." : "Prefetch off.")} data-testid="cache-prefetch" />{" "}
+        Prefetch the PRs of the review list in the background (new or changed ones; pauses when GitHub's quota runs low)
+      </label>
+      <div className="row">
+        <button className="btn small" disabled={busy} onClick={async () => { setBusy(true); try { setInfo(await post<CacheInfo>("/github/cache/clear")); setNote("Cleared."); } catch (e) { setErr((e as ApiError).message); } finally { setBusy(false); } }} data-testid="cache-clear">Clear cache</button>
+        <button className="icon-btn small" onClick={() => void load()} title="Refresh">↻</button>
+      </div>
+      {note && <div className="small" data-testid="cache-note">{note}</div>}
+      {err && <div className="error-text small" role="alert" data-testid="cache-error">{err}</div>}
+      {pick && <FolderPicker title="Cache folder" hint="Where PR Review keeps its local copies (private: mode 0700)." confirmLabel="Use this folder"
+        onClose={() => setPick(false)} onChoose={(p) => { setPick(false); setDir(p); }} />}
+    </div>
   );
 }
