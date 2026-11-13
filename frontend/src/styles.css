@@ -1340,3 +1340,5 @@ body.resizing-h iframe { pointer-events: none; }
 .reviews-settings > .mode-switch { position: sticky; top: -8px; z-index: 2; align-self: flex-start; background: var(--card); padding: 2px 0; }
 .pr-fresh { white-space: nowrap; }
 .pr-fresh.updated { color: var(--green); }
+/* the settings box scrolls: its parts keep their size (the Priority / Repositories / Cache tabs were squeezed to 0) */
+.reviews-settings > * { flex-shrink: 0; }

@@ -2001,6 +2001,17 @@ test("GitHub review hub: priority requests, hide a repository, watch a repositor
   // the hard rule off: P2; on again
   await page.getByTestId("reviews-settings").click();
   await expect(page.getByTestId("priority-settings")).toBeVisible();
+  // the tabs stay visible and usable above the long Priority section
+  for (const t of ["reviews-settings-priority", "reviews-settings-repos", "reviews-settings-cache"]) {
+    await expect(page.getByTestId(t)).toBeVisible();
+    expect((await page.getByTestId(t).boundingBox())!.height).toBeGreaterThan(12);
+  }
+  await page.getByTestId("reviews-settings-cache").click();
+  await expect(page.getByTestId("cache-settings")).toBeVisible();
+  await page.getByTestId("reviews-settings-repos").click();
+  await expect(page.getByTestId("reviews-watch-input")).toBeVisible();
+  await page.getByTestId("reviews-settings-priority").click();
+  await expect(page.getByTestId("priority-settings")).toBeVisible();
   const meta = page.getByTestId("priority-rule").first();
   await meta.locator('input[type="checkbox"]').uncheck();
   await page.getByTestId("priority-save").click();
