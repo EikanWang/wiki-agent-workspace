@@ -118,7 +118,7 @@ export default function SessionPicker({
         <section>
           <div className="label">Sessions in this app</div>
           <div className="list">
-            {sessions.filter((s) => s.origin !== "preview").map((s) => (
+            {sessions.filter((s) => s.origin !== "preview" && s.origin !== "priority").map((s) => (
               <button key={s.id} className={`list-item ${s.id === defaultSessionId ? "selected" : ""}`} disabled={busy} onClick={() => void setDefault(s.id)}>
                 <span>{s.provider} · {s.display_name ?? "session"}{s.model ? <span className="muted small"> · {s.model}{s.variant ? ` (${s.variant})` : ""}</span> : null}</span>
                 <span className="muted small">{s.native_id ? `#${s.short_id}` : statusLabel(s.status)}{s.status !== "ready" && s.native_id ? ` · ${statusLabel(s.status)}` : ""}</span>

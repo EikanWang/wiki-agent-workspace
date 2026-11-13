@@ -148,6 +148,23 @@ def main(argv):
         session = f"ses_fake{len(sessions) + 1:04d}"
         sessions.append({"id": session, "title": title or prompt[:40], "updated": int(time.time() * 1000), "directory": directory})
         save(sessions)
+    if prompt.startswith("WAW-PRIORITY-SUMMARY") or prompt.startswith("WAW-PRIORITY-DECISION"):
+        # PR priority: summaries name each file; the decision follows a "prio-hint:<level|none>" in the prompt (P2 otherwise)
+        import re as _re
+        if prompt.startswith("WAW-PRIORITY-SUMMARY"):
+            items = [{"id": m.group(1), "summary": f"summary of {m.group(2)}"} for m in _re.finditer(r"^### FILE (\S+) (\S+)", prompt, _re.M)]
+            text = "```json\n" + json.dumps({"files": items}) + "\n```"
+        else:
+            h = _re.search(r"prio-hint:(\w+)", prompt)
+            level = None if h and h.group(1) == "none" else (h.group(1) if h else "P2")
+            text = json.dumps({"level": level, "reason": f"fake decision {level}", "matched": "fake description" if level else ""})
+        kind = "summary" if prompt.startswith("WAW-PRIORITY-SUMMARY") else "decision"
+        with (STATE / f"priority_{kind}_prompts.log").open("a") as fh:  # every prompt, separated
+            fh.write(prompt + "\n\0\n")
+        emit({"type": "step_start", "sessionID": session, "part": {"type": "step-start"}})
+        emit({"type": "text", "sessionID": session, "part": {"id": "prt_1", "type": "text", "text": text}})
+        emit({"type": "step_finish", "sessionID": session, "part": {"type": "step-finish", "reason": "stop"}})
+        return 0
     if prompt.startswith("You are receiving a REVIEW"):
         # Triage: comments containing "please change X to Y" are addressed by editing; questions get a reply; "[[skip]]" is skipped.
         import re as _re

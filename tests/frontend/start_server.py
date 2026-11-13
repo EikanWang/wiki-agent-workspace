@@ -248,7 +248,9 @@ def add_fake_review_queue(app) -> None:
             if src is None:  # not a pull request (e.g. issue #555)
                 return {"repository": {"nameWithOwner": "pytorch/pytorch", "isPrivate": False, "pullRequest": None}}
             return {"repository": {"nameWithOwner": src["repository"]["nameWithOwner"], "isPrivate": False, "pullRequest": {
-                **src, "id": f"PR_e2e{n}", "body": "This PR **fixes** the lazy stub.\n\n- adds a check\n\nFollows #103 (see `#999` in code), fixes #555. cc @bob, not mail@example.com", "state": "OPEN", "mergeable": "MERGEABLE",
+                **src, "id": f"PR_e2e{n}", "body": "This PR **fixes** the lazy stub.\n\n- adds a check\n\nFollows #103 (see `#999` in code), fixes #555. cc @bob, not mail@example.com"
+                + (" prio-hint:P0" if n == 201 else ""),  # (the fake agent's priority decision for #201)
+               "state": "OPEN", "mergeable": "MERGEABLE",
                 "baseRefName": "main", "headRefName": f"fix-{n}",
                 "latestReviews": {"nodes": [{"author": {"login": "bob"}, "state": "CHANGES_REQUESTED", "submittedAt": "2026-11-08T00:00:00Z", "url": "u"}]},
                 "commits": {"nodes": [{"commit": {"oid": "abc", "statusCheckRollup": {"state": "FAILURE", "contexts": {"nodes": [

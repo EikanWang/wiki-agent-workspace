@@ -104,7 +104,7 @@ export default function PreviewDialog({
             <div className="row">
               <select value={sessionChoice} onChange={(e) => setSessionChoice(e.target.value)}>
                 <option value="__default__">Default provider (new isolated session)</option>
-                {sessions.filter((s) => s.origin !== "preview").map((s) => (
+                {sessions.filter((s) => s.origin !== "preview" && s.origin !== "priority").map((s) => (
                   <option key={s.id} value={s.id}>Provider of {s.provider}</option>
                 ))}
               </select>

@@ -1929,12 +1929,14 @@ test("GitHub review hub: only the owner's GitHub sign-in sees it; queue grouped 
   // inside each repository: not reviewed yet (top), new activity since your comments (high), nothing new (medium)
   const sectionsOf = (repo: string) => page.locator(`[data-testid="review-group"][data-repo="${repo}"] [data-testid="review-section"]`)
     .evaluateAll((els) => els.map((e) => e.getAttribute("data-category")));
-  await expect.poll(() => sectionsOf("pytorch/pytorch")).toEqual(["todo"]);
+  await expect.poll(() => sectionsOf("pytorch/pytorch")).toEqual(["todo", "news"]);
   await expect.poll(() => sectionsOf("intel/torch-xpu-ops")).toEqual(["quiet"]);
   await expect(page.locator('[data-repo="intel/torch-xpu-ops"] [data-category="quiet"] [data-testid="review-pr"]')).toHaveAttribute("data-number", "201");
   await expect(page.locator('[data-repo="intel/torch-xpu-ops"]').getByTestId("review-quiet")).toBeVisible();
-  // the ★ priority request (new activity since your comment) says so
-  await expect(page.getByTestId("review-priority").getByTestId("review-since-mine")).toContainText("new comments");
+  // the Meta maintainer's request (new activity since your comment) says so, with its level from the hard rule
+  const r104 = page.locator('[data-repo="pytorch/pytorch"] [data-category="news"] [data-testid="review-pr"][data-number="104"]');
+  await expect(r104.getByTestId("review-since-mine")).toContainText("new comments");
+  await expect(r104.getByTestId("review-level")).toHaveAttribute("data-level", "P1");
   await expect(panel).toContainText("1 draft hidden");
   // auto-refresh from GitHub at an interval you choose (5 min by default; kept per browser)
   await expect(page.getByTestId("reviews-auto-refresh")).toHaveValue("5");
@@ -1957,7 +1959,7 @@ test("GitHub review hub: only the owner's GitHub sign-in sees it; queue grouped 
   // grouped by repository, most PRs first; drafts hidden by default
   await expect(page.getByTestId("review-group")).toHaveCount(2);
   await expect(page.getByTestId("review-group").first()).toHaveAttribute("data-repo", "pytorch/pytorch");
-  const prs = page.locator('[data-repo="pytorch/pytorch"] [data-testid="review-pr"]');
+  const prs = page.locator('[data-repo="pytorch/pytorch"] [data-category="todo"] [data-testid="review-pr"]');
   await expect(prs).toHaveCount(2);
   await expect(prs.first()).toHaveAttribute("data-number", "101"); // recently updated first
   await page.getByTestId("reviews-drafts").check();
@@ -1988,31 +1990,64 @@ test("GitHub review hub: priority requests, hide a repository, watch a repositor
   await page.getByTestId("login-github").click();
   await expect(page.getByTestId("view-document")).toBeVisible({ timeout: 15000 });
   await page.getByTestId("activity-reviews").click();
-  // a request from a PyTorch Meta maintainer is listed first, under Priority (not again under its repository)
-  const prio = page.getByTestId("review-priority");
-  await expect(prio.getByTestId("review-pr")).toHaveCount(1, { timeout: 15000 });
-  await expect(prio.getByTestId("review-pr")).toHaveAttribute("data-number", "104");
-  await expect(prio).toContainText("asked by metadev");
-  await expect(page.locator('[data-testid="review-group"] [data-number="104"]')).toHaveCount(0);
+  // priority levels: a request from a PyTorch Meta maintainer gets P1 from the hard rule (the default is P2)
+  const row = (n: number) => page.locator(`[data-testid="review-group"] [data-testid="review-pr"][data-number="${n}"]`);
+  const level = (n: number) => row(n).getByTestId("review-level");
+  await expect(level(104)).toHaveAttribute("data-level", "P1", { timeout: 15000 });
+  await expect(level(104)).toHaveAttribute("data-source", "rule");
+  await expect(level(101)).toHaveAttribute("data-level", "P2");
+  await expect(level(101)).toHaveAttribute("data-source", "default");
+  await expect(row(104)).toContainText("asked by metadev");
+  // the hard rule off: P2; on again
   await page.getByTestId("reviews-settings").click();
-  await page.getByTestId("reviews-priority-meta").click(); // saved on the server, then shown
-  await expect(page.getByTestId("reviews-priority-meta")).not.toBeChecked();
-  await expect(prio).toHaveCount(0);
-  await expect(page.locator('[data-testid="review-group"] [data-number="104"]')).toHaveCount(1);
-  await page.getByTestId("reviews-priority-meta").click();
-  await expect(page.getByTestId("reviews-priority-meta")).toBeChecked();
-  await expect(page.getByTestId("review-priority")).toHaveCount(1);
-  // status next to the CI signal; ☆ star a PR to make it priority, ★ un-star to take one out of Priority
+  await expect(page.getByTestId("priority-settings")).toBeVisible();
+  const meta = page.getByTestId("priority-rule").first();
+  await meta.locator('input[type="checkbox"]').uncheck();
+  await page.getByTestId("priority-save").click();
+  await expect(level(104)).toHaveAttribute("data-level", "P2", { timeout: 10000 });
+  await meta.locator('input[type="checkbox"]').check();
+  await page.getByTestId("priority-save").click();
+  await expect(level(104)).toHaveAttribute("data-level", "P1", { timeout: 10000 });
+  // status next to the CI signal; set a level by hand — it comes first in its section — and back to rules / agent
   await expect(page.locator('[data-testid="review-pr"][data-number="101"] [data-testid="pr-status"]')).toHaveText("Ready");
-  await page.locator('[data-testid="review-group"] [data-testid="review-pr"][data-number="101"] [data-testid="review-star"]').click();
-  await expect(prio.locator('[data-number="101"]')).toHaveCount(1);
-  await prio.locator('[data-number="104"] [data-testid="review-star"]').click();
-  await expect(prio.locator('[data-number="104"]')).toHaveCount(0);
-  await expect(page.locator('[data-testid="review-group"] [data-number="104"]')).toHaveCount(1);
-  await prio.locator('[data-number="101"] [data-testid="review-star"]').click(); // back as it was
-  await page.locator('[data-testid="review-group"] [data-number="104"] [data-testid="review-star"]').click();
-  await expect(prio.locator('[data-number="104"]')).toHaveCount(1);
-  await expect(prio.locator('[data-number="101"]')).toHaveCount(0);
+  await level(103).click();
+  await page.getByTestId("level-pop").locator('[data-testid="level-set"][data-level="P0"]').click();
+  await expect(level(103)).toHaveAttribute("data-source", "manual");
+  await expect(page.locator('[data-repo="pytorch/pytorch"] [data-category="todo"] [data-testid="review-pr"]').first()).toHaveAttribute("data-number", "103");
+  await level(103).click();
+  await page.getByTestId("level-auto").click();
+  await expect(level(103)).toHaveAttribute("data-source", "default");
+  // the agent: describe a level, turn it on — it decides from the PR (here: #201 is P0); hard rule OR agent, the more urgent wins
+  await page.getByTestId("priority-level").first().getByTestId("priority-desc-add").click();
+  await page.getByTestId("priority-desc").first().fill("Fixes to the GEMM kernels");
+  await page.getByTestId("priority-agent-on").check();
+  await page.getByTestId("priority-save").click();
+  await expect(page.getByTestId("priority-note")).toContainText("Saved");
+  await expect(level(201)).toHaveAttribute("data-level", "P0", { timeout: 20000 });
+  await expect(level(201)).toHaveAttribute("data-source", "agent");
+  await expect(level(201)).toHaveAttribute("title", /agent: fake decision P0/);
+  await expect(level(104)).toHaveAttribute("data-level", "P1"); // the agent said P2: the hard rule's P1 stays
+  // only the urgent ones
+  await page.getByTestId("reviews-level-filter").selectOption({ label: "only P0" });
+  await expect(page.locator('[data-testid="review-group"] [data-testid="review-pr"]')).toHaveCount(1);
+  await page.getByTestId("reviews-level-filter").selectOption({ label: "all levels" });
+  // the categories' order inside each repository
+  await page.locator('[data-testid="priority-category"][data-key="news"]').getByTestId("priority-category-up").click();
+  await page.getByTestId("priority-save").click();
+  await expect.poll(() => page.locator('[data-testid="review-group"][data-repo="pytorch/pytorch"] [data-testid="review-section"]')
+    .evaluateAll((els) => els.map((e) => e.getAttribute("data-category")))).toEqual(["news", "todo"]);
+  // in the PR tab: the same level menu, and what the agent read
+  await row(201).click();
+  await expect(page.getByTestId("pr-star").getByTestId("review-level")).toHaveAttribute("data-level", "P0");
+  await page.getByTestId("pr-agent-view").locator("summary").click();
+  await expect(page.getByTestId("pr-agent-view")).toContainText("fake decision P0");
+  await expect(page.getByTestId("pr-agent-view")).toContainText("read the whole diff");
+  await page.locator('[data-testid="doc-tab"][data-ws="github"]').getByTestId("doc-tab-close").click();
+  // back to the defaults (agent off, no descriptions, original category order)
+  await page.getByTestId("priority-reset").click();
+  await expect(page.getByTestId("priority-agent-on")).not.toBeChecked();
+  await expect(level(201)).toHaveAttribute("data-level", "P2");
+  await page.getByTestId("reviews-settings-repos").click(); // hidden / watched repositories
   // search pull requests on GitHub: open ones by default, closed / merged on request
   await page.getByTestId("reviews-search-open").click();
   await page.getByTestId("reviews-search").fill("gemm");

@@ -248,6 +248,8 @@ class JobManager:
             if locks_svc is not None and doc_path and kind == "turn":
                 lock = locks_svc.covering(doc_path)
             sandbox = self.codex_sandbox if provider == "codex" else None
+            if context.get("_read_only") and provider == "codex":
+                sandbox = "read-only"  # e.g. PR priority: the agent only reads
             if lock:
                 prompt = (prompt + "\n\nIMPORTANT: The user has LOCKED this document" + (f" (reason: {lock['reason']})" if lock.get("reason") else "")
                           + ". It is read-only for you: answer the question, but do NOT modify this file or anything under "

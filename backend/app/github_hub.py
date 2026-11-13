@@ -462,12 +462,21 @@ async def review_queue(refresh: bool = Query(False), auth: tuple[AppContext, str
     if (refresh and age >= 10) or age >= CACHE_SECONDS:  # < 10 s: rapid ↻ clicks do not burn the search quota
         _start_refresh(graphql, owner, prefs["watched_repos"])
         running = True
-    data = apply_prefs(hit[1], prefs)
+    from . import review_priority as rp
+
+    data = apply_prefs(hit[1], prefs, rp.results(ctx))
+    rp.schedule(ctx, data["items"] + data["watched"], prefs)  # the agent decides levels of new / changed PRs, in the background
     agent = agent_review_states(ctx)
     for key in ("items", "watched"):
         data[key] = [{**p, "agent_review": agent.get(f"{p['repo']}#{p['number']}".lower())} for p in data.get(key) or []]
     return {**data, "cached": True, "age_seconds": round(age), "refreshing": running, "refresh_error": _errors.get(owner),
-            "prefs": prefs, "rate": RATE.status()}
+            "prefs": prefs, "rate": RATE.status(), "priority_agent": rp.status()}
+
+
+def _priority_results(ctx: AppContext) -> dict[str, Any]:
+    from .review_priority import results
+
+    return results(ctx)
 
 
 def reset_cache() -> None:
@@ -1142,34 +1151,42 @@ DEFAULT_PREFS: dict[str, Any] = {"hidden_repos": [], "watched_repos": [], "prior
 
 
 def load_prefs(ctx: AppContext) -> dict[str, Any]:
-    return {**DEFAULT_PREFS, **kv_get(ctx, "github_hub_prefs", {})}
+    from .review_priority import normalize
+
+    return normalize({**DEFAULT_PREFS, **kv_get(ctx, "github_hub_prefs", {})})
 
 
 def pr_key(p: dict[str, Any]) -> str:
     return f"{p['repo']}#{p['number']}".lower()
 
 
+def with_level(p: dict[str, Any], prefs: dict[str, Any], agent_results: dict[str, Any] | None) -> dict[str, Any]:
+    """The PR with its priority level: by hand, else the most urgent of hard rules and agent, else the default."""
+    from .review_priority import final_level, normalize
+
+    if "priority_levels" not in prefs:
+        prefs = normalize(prefs)
+    lv = final_level(p, prefs, (agent_results or {}).get(pr_key(p)))
+    return {**p, "level": lv["level"], "level_rank": lv["rank"], "level_source": lv["source"], "level_reasons": lv["reasons"],
+            "priority": lv["priority"]}
+
+
 def is_priority(p: dict[str, Any], prefs: dict[str, Any]) -> bool:
-    """★ by hand wins both ways: starred PRs are priority, un-starred ones never are; otherwise the rules."""
-    k = pr_key(p)
-    if k in {x.lower() for x in prefs.get("starred") or []}:
-        return True
-    if k in {x.lower() for x in prefs.get("unstarred") or []}:
-        return False
-    by = (p.get("requested_by") or "").lower()
-    if by and by in {x.lower() for x in prefs.get("priority_requesters") or []}:
-        return True
-    return bool(prefs.get("priority_meta", True) and p.get("requested_by_meta"))
+    """More urgent than the default level (kept for older callers)."""
+    return with_level(p, prefs, None)["priority"]
 
 
-def apply_prefs(data: dict[str, Any], prefs: dict[str, Any]) -> dict[str, Any]:
-    """Hide removed repositories and mark priority requests (PyTorch Meta maintainers / chosen people)."""
+def apply_prefs(data: dict[str, Any], prefs: dict[str, Any], agent_results: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Hide removed repositories, leave out quiet approved PRs, and give each PR its priority level."""
+    from .review_priority import normalize
+
+    prefs = normalize(prefs) if "priority_levels" not in prefs else prefs
     hidden = {r.lower() for r in prefs.get("hidden_repos") or []}
     visible = [p for p in data.get("items", []) if p["repo"].lower() not in hidden]
     quiet = [p for p in visible if p.get("approved_no_news")] if not prefs.get("show_approved") else []
-    items = [{**p, "priority": is_priority(p, prefs)} for p in visible if p not in quiet]
+    items = [with_level(p, prefs, agent_results) for p in visible if p not in quiet]
     watching = {r.lower() for r in prefs.get("watched_repos") or []}  # a repository just unwatched disappears at once
-    watched = [{**p, "priority": False, "watched": True} for p in data.get("watched", [])
+    watched = [{**with_level(p, prefs, agent_results), "priority": False, "watched": True} for p in data.get("watched", [])
                if p["repo"].lower() not in hidden and p["repo"].lower() in watching and (prefs.get("show_approved") or not p.get("approved_no_news"))]
     return {**data, "items": items, "watched": watched, "hidden_count": len(data.get("items", [])) - len(visible),
             "approved_hidden": len(quiet)}
@@ -1181,8 +1198,16 @@ class PrefsIn(BaseModel):
     priority_requesters: list[str] | None = None
     priority_meta: bool | None = None
     show_approved: bool | None = None  # also list PRs you approved where nothing happened since
-    star: str | None = None    # "owner/repo#n": make it a priority PR
-    unstar: str | None = None  # "owner/repo#n": never priority (even when the rules say so)
+    star: str | None = None    # "owner/repo#n": level P1-like (the second level) by hand (older UI)
+    unstar: str | None = None  # "owner/repo#n": the default level by hand (older UI)
+    # priority: levels (with descriptions for the agent), default level, hard rules, agent models, category order
+    priority_levels: list[dict[str, Any]] | None = None
+    priority_default: str | None = None
+    priority_rules: list[dict[str, Any]] | None = None
+    priority_agent: dict[str, Any] | None = None
+    categories: list[dict[str, Any]] | None = None
+    set_level: dict[str, Any] | None = None  # {"pr": "owner/repo#n", "level": "P0" | null (back to rules / agent)}
+    reset_priority: bool = False  # levels, rules, agent and categories back to the defaults
 
 
 @router.put("/github/prefs")
@@ -1210,17 +1235,68 @@ async def put_prefs(body: PrefsIn, auth: tuple[AppContext, str] = Depends(requir
         prefs["priority_meta"] = body.priority_meta
     if body.show_approved is not None:
         prefs["show_approved"] = body.show_approved
-    for k, on in ((body.star, "starred"), (body.unstar, "unstarred")):
-        if k is None:
-            continue
-        m = re.fullmatch(r"([\w.-]+)/([\w.-]+)#(\d+)", k.strip())
-        if not m:
+    from . import review_priority as rp
+
+    if body.reset_priority:
+        for k in ("priority_levels", "priority_rules", "priority_agent", "categories", "priority_default"):
+            prefs.pop(k, None)
+        prefs["priority_meta"], prefs["priority_requesters"], prefs["starred"], prefs["unstarred"] = True, [], [], []
+        manual = prefs.get("priority_manual") or {}
+        prefs = rp.normalize({**prefs, "priority_manual": {}})
+        prefs["priority_manual"] = {k: v for k, v in manual.items() if v in [lv["id"] for lv in prefs["priority_levels"]]}
+    if body.priority_levels is not None:
+        prefs["priority_levels"] = rp.clean_levels(body.priority_levels)
+    ids = [lv["id"] for lv in prefs["priority_levels"]]
+    if body.priority_default is not None:
+        if body.priority_default not in ids:
+            raise ApiError(400, "INVALID_PRIORITY", f"default level: one of {', '.join(ids)}")
+        prefs["priority_default"] = body.priority_default
+    if body.priority_rules is not None:
+        prefs["priority_rules"] = rp.clean_rules(body.priority_rules, ids)
+    if body.priority_agent is not None:
+        prefs["priority_agent"] = rp.clean_agent(body.priority_agent)
+    if body.categories is not None:
+        prefs["categories"] = rp.clean_categories(body.categories)
+    if body.priority_rules is None and (body.priority_meta is not None or body.priority_requesters is not None):
+        # the older settings: "PyTorch Meta maintainers" and "priority people" are the hard rules meta / people (P1-like)
+        second = ids[min(1, len(ids) - 1)]
+        rules = [r for r in prefs.get("priority_rules") or [] if r.get("id") not in ("meta", "people")]
+        old = {r.get("id"): r for r in prefs.get("priority_rules") or []}
+        if prefs.get("priority_meta"):
+            rules.insert(0, old.get("meta") or {"id": "meta", "enabled": True, "level": second, "name": "",
+                                                "conditions": [{"field": "requested_by_meta", "op": "is", "value": True}]})
+        if prefs.get("priority_requesters"):
+            rules.insert(1 if prefs.get("priority_meta") else 0,
+                         {"id": "people", "enabled": True, "level": (old.get("people") or {}).get("level", second), "name": "",
+                          "conditions": [{"field": "requested_by", "op": "in", "value": list(prefs["priority_requesters"])}]})
+        prefs["priority_rules"] = rules
+    sets: list[tuple[str, str | None]] = []
+    if body.set_level is not None:
+        sets.append((str(body.set_level.get("pr") or ""), body.set_level.get("level")))
+    if body.star is not None:
+        sets.append((body.star, ids[min(1, len(ids) - 1)]))
+    if body.unstar is not None:
+        sets.append((body.unstar, prefs.get("priority_default")))
+    for k, on in ((body.star, "starred"), (body.unstar, "unstarred")):  # (the older lists, kept in step)
+        if k is not None and re.fullmatch(r"([\w.-]+)/([\w.-]+)#(\d+)", k.strip()):
+            key, off = k.strip().lower(), "unstarred" if on == "starred" else "starred"
+            prefs[off] = [x for x in prefs.get(off) or [] if x.lower() != key]
+            prefs[on] = ([x for x in prefs.get(on) or [] if x.lower() != key] + [key])[-500:]
+    for k, level in sets:
+        if not re.fullmatch(r"([\w.-]+)/([\w.-]+)#(\d+)", k.strip()):
             raise ApiError(400, "INVALID_PR", f"{k!r}: use owner/repo#number")
-        key = k.strip().lower()
-        off = "unstarred" if on == "starred" else "starred"
-        prefs[off] = [x for x in prefs.get(off) or [] if x.lower() != key]
-        prefs[on] = [x for x in prefs.get(on) or [] if x.lower() != key] + [key]
-        prefs[on] = prefs[on][-500:]
+        manual = dict(prefs.get("priority_manual") or {})
+        if level is None:
+            manual.pop(k.strip().lower(), None)
+        elif level not in ids:
+            raise ApiError(400, "INVALID_PRIORITY", f"level: one of {', '.join(ids)}")
+        else:
+            manual[k.strip().lower()] = level
+        prefs["priority_manual"] = dict(list(manual.items())[-1000:])
+    # levels removed: their hand-set PRs and rules go back to the default
+    prefs["priority_manual"] = {k: v for k, v in (prefs.get("priority_manual") or {}).items() if v in ids}
+    prefs["priority_rules"] = [r for r in prefs.get("priority_rules") or [] if r["level"] in ids]
+    prefs = rp.normalize(prefs)
     kv_put(ctx, "github_hub_prefs", prefs)
     if body.watched_repos is not None:  # watched PRs are fetched with the queue: refresh it in the background
         _start_refresh(_hooks(ctx)[0], owner, prefs["watched_repos"])
@@ -2001,7 +2077,7 @@ async def search_prs(q: str = Query(..., min_length=1, max_length=300), state: s
         items = [x for x in items if x["state"] == "OPEN"]
     elif state == "closed":
         items = [x for x in items if x["state"] != "OPEN"]
-    return {"query": query, "total": s.get("issueCount", 0), "items": [{**x, "priority": is_priority(x, prefs)} for x in items]}
+    return {"query": query, "total": s.get("issueCount", 0), "items": [with_level(x, prefs, _priority_results(ctx)) for x in items]}
 
 
 M_READY = "mutation MarkReady($id: ID!) { markPullRequestReadyForReview(input: {pullRequestId: $id}) { pullRequest { isDraft } } }"
@@ -2251,3 +2327,49 @@ async def pr_file_content(owner: str, repo: str, number: int, path: str = Query(
     if lines and lines[-1] == "":
         lines.pop()
     return {"path": path, "sha": sha, "lines": lines}
+
+
+# ---------------------------------------------------------------------- priority: the agent's work
+
+@router.get("/github/priority/status")
+def priority_status(auth: tuple[AppContext, str] = Depends(require_owner)):
+    """The agent's classification work: queued, running, last run, errors."""
+    from . import review_priority as rp
+
+    return rp.status()
+
+
+class ClassifyIn(BaseModel):
+    all: bool = False
+    pr: str | None = None  # "owner/repo#n"
+
+
+@router.post("/github/priority/classify")
+async def priority_classify(body: ClassifyIn, auth: tuple[AppContext, str] = Depends(require_owner_mutating)):
+    """Let the agent decide the level again: of every PR in the list, or of one."""
+    from . import review_priority as rp
+
+    ctx, owner = auth
+    prefs = load_prefs(ctx)
+    if not prefs["priority_agent"].get("enabled"):
+        raise ApiError(409, "PRIORITY_AGENT_OFF", "the agent is off: turn it on in Reviews ⚙ → Priority")
+    hit = _cache.get(owner)
+    data = apply_prefs(hit[1], prefs, rp.results(ctx)) if hit else {"items": [], "watched": []}
+    items = data["items"] + data["watched"]
+    if body.pr:
+        key = body.pr.strip().lower()
+        items = [p for p in items if pr_key(p) == key]
+        if not items:
+            raise ApiError(404, "PR_NOT_IN_LIST", f"{body.pr} is not in the review list")
+    rp.force([pr_key(p) for p in items])
+    return {"queued": rp.schedule(ctx, items, prefs), **rp.status()}
+
+
+@router.get("/github/priority/pr/{owner}/{repo}/{number}")
+def priority_of_pr(owner: str, repo: str, number: int, auth: tuple[AppContext, str] = Depends(require_owner)):
+    """The agent's decision for a PR and what it read: the file summaries (or that the diff was read in full)."""
+    from . import review_priority as rp
+
+    ctx, _ = auth
+    _check_names(owner, repo)
+    return {"result": rp.results(ctx).get(f"{owner}/{repo}#{number}".lower())}

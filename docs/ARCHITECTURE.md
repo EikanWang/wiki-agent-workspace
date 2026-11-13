@@ -29,6 +29,12 @@ backend/app/
                    (python-pptx: slide sections, nested bullets, tables, inline images, notes), .vsdx → HTML
                    (pages and shape text in reading order), the deterministic
                    text model (mirrors frontend/src/textmodel.ts)
+  review_priority.py  PR Review priority: levels (with descriptions), hard rules, set-by-hand levels, migration of
+                   the older ★ / Meta / people settings; final level = hand, else the more urgent of hard rules
+                   and agent, else default. The agent: queue of new / changed PRs (fingerprint), ≤2 at a time,
+                   small diff (≤12k chars) read in full, else per-file summaries (≤25k chars per turn, parts,
+                   60 files, cache by patch hash in kv pr_file_summaries) then a decision turn; results in kv
+                   pr_priority_results; read-only turns in <state_dir>/priority-work, sessions origin "priority"
   github_hub.py    GitHub review hub: owner gate (GitHub sign-in = gh account), review queue via one paginated
                    GraphQL search through the server's gh CLI (40 PRs/page; smaller on GitHub 502), partial
                    results (SAML-protected PRs), stale-while-revalidate cache; /github/hub, /github/reviews;

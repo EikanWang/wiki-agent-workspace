@@ -348,7 +348,7 @@ export default function DiscussionPanel({
           <select value={sessionChoice} onChange={(e) => setSessionChoice(e.target.value)} data-testid="reply-session">
             <option value="__last__">Last session of this thread{lastSess ? ` · ${lastSess.provider} ${lastSess.short_id ?? lastSess.status}` : ""}</option>
             <option value="new">New session</option>
-            {sessions.filter((s) => s.id !== thread.last_session_id && s.origin !== "preview").map((s) => (
+            {sessions.filter((s) => s.id !== thread.last_session_id && s.origin !== "preview" && s.origin !== "priority").map((s) => (
               <option key={s.id} value={s.id}>
                 {s.provider} · {s.display_name ?? s.short_id ?? s.id.slice(0, 8)} {s.status !== "ready" ? `(${s.status})` : ""}
               </option>
@@ -449,7 +449,7 @@ export function MessageView({ m, session, live, onRetry, onCancel, onPermission,
             <select className="retry-select" value={retrySession} onChange={(e) => setRetrySession(e.target.value)}>
               <option value="__same__">Retry with the same session</option>
               <option value="new">Retry with a new session</option>
-              {sessions.filter((s) => s.origin !== "preview").map((s) => (
+              {sessions.filter((s) => s.origin !== "preview" && s.origin !== "priority").map((s) => (
                 <option key={s.id} value={s.id}>{s.provider} · {s.display_name ?? s.short_id ?? s.id.slice(0, 8)}</option>
               ))}
             </select>
@@ -597,7 +597,7 @@ function FlatPanel({ threads, sessions, sessionsById, defaultSessionId, liveJob,
           <select value={sessionChoice} onChange={(e) => setSessionChoice(e.target.value)} data-testid="flat-reply-session">
             <option value="__last__">This discussion's last session{targetSess ? ` · ${targetSess.provider} ${targetSess.short_id ?? targetSess.status}` : ""}</option>
             <option value="new">New session</option>
-            {sessions.filter((s) => s.id !== target?.last_session_id && s.origin !== "preview").map((s) => (
+            {sessions.filter((s) => s.id !== target?.last_session_id && s.origin !== "preview" && s.origin !== "priority").map((s) => (
               <option key={s.id} value={s.id}>{s.provider} · {s.display_name ?? s.short_id ?? s.id.slice(0, 8)} {s.status !== "ready" ? `(${s.status})` : ""}</option>
             ))}
           </select>

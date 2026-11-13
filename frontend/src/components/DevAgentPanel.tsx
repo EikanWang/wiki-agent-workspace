@@ -198,7 +198,7 @@ export default function DevAgentPanel({ dev, sessions, threads, fileSessions = {
           <select value={fileSessionId ?? ""} onChange={(e) => void chooseFileSession(e.target.value)} title="The agent session this file's discussions use; switching files switches the session" data-testid="dev-file-session-select">
             <option value="">{fileSessionId ? "Forget (next: a new one)" : "New session on the first question"}</option>
             {fileSessionId && !sessionsById[fileSessionId] && <option value={fileSessionId}>{fileSessionId.slice(0, 8)}</option>}
-            {sessions.filter((x) => x.origin !== "preview" && x.origin !== "commit").map((x) => (
+            {sessions.filter((x) => x.origin !== "preview" && x.origin !== "priority" && x.origin !== "commit").map((x) => (
               <option key={x.id} value={x.id}>{x.provider} · {x.display_name ?? x.short_id ?? x.id.slice(0, 8)}{x.short_id ? ` #${x.short_id}` : ""}</option>
             ))}
             <option value="new">+ New session for this file</option>

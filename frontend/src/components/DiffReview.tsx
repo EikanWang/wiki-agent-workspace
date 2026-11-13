@@ -346,7 +346,7 @@ export default function DiffReview({
           <select value={sessionChoice} onChange={(e) => setSessionChoice(e.target.value)}>
             <option value="__default__">{defaultProvider ? `Document session (${defaultProvider})` : "No agent provider configured"}</option>
             <option value="new">New session</option>
-            {sessions.filter((s) => s.origin !== "preview").map((s) => (
+            {sessions.filter((s) => s.origin !== "preview" && s.origin !== "priority").map((s) => (
               <option key={s.id} value={s.id}>{s.provider} · {s.display_name ?? s.short_id ?? s.id.slice(0, 8)}</option>
             ))}
           </select>
@@ -838,7 +838,7 @@ function ReviewTray({ review, last, lastJob, summary, onSummary, sessions, onCha
           <div className="row">
             <select value={sessionChoice} onChange={(e) => setSessionChoice(e.target.value)}>
               <option value="__default__">Document sessions (default)</option>
-              {sessions.filter((s) => s.origin !== "preview").map((s) => (
+              {sessions.filter((s) => s.origin !== "preview" && s.origin !== "priority").map((s) => (
                 <option key={s.id} value={s.id}>{s.provider} · {s.display_name ?? s.short_id ?? s.id.slice(0, 8)}</option>
               ))}
             </select>

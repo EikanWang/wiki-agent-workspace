@@ -883,7 +883,7 @@ export function SelectionPopover({ anchor, style, sessions, defaultSessionId, de
             {defaultSess ? `Document session · ${defaultSess.provider} ${defaultSess.short_id ?? defaultSess.status}` : defaultProvider ? `Document session (created in ${defaultProvider} on first question)` : "No agent provider configured"}
           </option>
           <option value="new">New session</option>
-          {sessions.filter((s) => s.id !== defaultSessionId && s.origin !== "preview").map((s) => (
+          {sessions.filter((s) => s.id !== defaultSessionId && s.origin !== "preview" && s.origin !== "priority").map((s) => (
             <option key={s.id} value={s.id}>
               {s.provider} · {s.display_name ?? s.short_id ?? s.id.slice(0, 8)} {s.status !== "ready" ? `(${s.status})` : ""}
             </option>

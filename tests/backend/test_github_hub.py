@@ -382,7 +382,10 @@ async def test_review_prefs_priority_hidden_and_watched_repos(running_app):
     assert 5 not in by  # closed / merged meanwhile: dropped
     assert by[1]["priority"] and by[2]["priority"] and not by[3]["priority"] and not by[4]["priority"]
     assert by[1]["requested_by"] == "metaguy" and by[1]["requested_by_company"] == "@Meta"
-    assert r["prefs"] == {"hidden_repos": [], "watched_repos": [], "priority_requesters": [], "priority_meta": True, "show_approved": False, "starred": [], "unstarred": []} and r["watched"] == []
+    assert {k: r["prefs"][k] for k in ("hidden_repos", "watched_repos", "priority_requesters", "priority_meta", "show_approved", "starred", "unstarred")} == \
+        {"hidden_repos": [], "watched_repos": [], "priority_requesters": [], "priority_meta": True, "show_approved": False, "starred": [], "unstarred": []}
+    assert [lv["id"] for lv in r["prefs"]["priority_levels"]] == ["P0", "P1", "P2", "P3"] and r["prefs"]["priority_default"] == "P2"
+    assert r["prefs"]["priority_rules"][0]["conditions"] == [{"field": "requested_by_meta", "op": "is", "value": True}] and r["watched"] == []
     # priority people, no Meta rule; hide a repository; watch one
     assert (await api.put("/api/v1/github/prefs", json={"priority_requesters": ["chosen"], "priority_meta": False})).status_code == 200
     r = (await api.get("/api/v1/github/reviews")).json()

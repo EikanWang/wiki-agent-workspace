@@ -16,6 +16,8 @@ import GhUser from "./GhUser";
 import LocalRepo from "./LocalRepo";
 import RefreshButton from "./RefreshButton";
 import { GhRefreshSelect, useGhAutoRefresh } from "../ghRefresh";
+import { LevelMenu } from "./ReviewPriority";
+import { utc8 } from "../time";
 
 interface Check { name: string | null; state: string; url: string | null }
 export interface PrData {
@@ -314,6 +316,7 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
           <GhRefreshSelect kind="pr" testId="pr-auto-refresh" title="How often an open pull request (here and in PR Development) refreshes from GitHub on its own; ↻ refreshes now" />
         </div>
       </div>
+      <AgentView repo={p.repo} number={p.number} />
       {!data.wiki_workspace_id && (
         <div className="banner" data-testid="pr-choose-wiki">
           Which wiki should the agent use for <b>{p.repo}</b> pull requests? It reads that folder for background (asked once per repository).
@@ -723,19 +726,47 @@ function CiAsk({ apiBase, canAsk, onAsk, checks, label, compact = false }: {
   );
 }
 
-/** ★ this PR as a priority PR (or un-star it so it never is) — the same star as in Reviews. */
+/** The PR's priority level — the same menu as in Reviews: set it by hand, back to rules / agent, ask the agent again. */
 function PrStar({ repo, number }: { repo: string; number: number }) {
   const { queue } = useReviews();
   const key = `${repo}#${number}`.toLowerCase();
   const prefs = queue?.prefs;
-  if (!prefs) return null;
-  const inQueue = queue.items.find((x) => `${x.repo}#${x.number}`.toLowerCase() === key);
-  const on = (prefs.starred ?? []).includes(key) || (!!inQueue?.priority && !(prefs.unstarred ?? []).includes(key));
+  if (!queue || !prefs?.priority_levels) return null;
+  const it = [...queue.items, ...(queue.watched ?? [])].find((x) => `${x.repo}#${x.number}`.toLowerCase() === key);
+  const manual = prefs.priority_manual?.[key];
   return (
-    <button className={`btn small pr-star ${on ? "on" : ""}`} onClick={() => void savePrefs(on ? { unstar: key } : { star: key }).then(() => loadReviews(false))}
-      title={on ? "Priority PR — click to un-star (never priority)" : "Star as a priority PR"} data-testid="pr-star" aria-pressed={on}>
-      {on ? "★ Priority" : "☆ Star"}
-    </button>
+    <span className="pr-level" data-testid="pr-star">
+      <LevelMenu pr={key} level={it?.level ?? manual ?? prefs.priority_default} source={it?.level_source ?? (manual ? "manual" : "default")}
+        reasons={it?.level_reasons ?? (it ? [] : ["not in your review list"])} levels={prefs.priority_levels} agentOn={!!prefs.priority_agent?.enabled && !!it}
+        onSet={(lv) => savePrefs({ set_level: { pr: key, level: lv } })} />
+    </span>
+  );
+}
+
+/** What the agent read to decide the PR's level: its reason and the summary of each changed file. */
+function AgentView({ repo, number }: { repo: string; number: number }) {
+  const { queue } = useReviews();
+  const [res, setRes] = useState<{ level: string | null; reason: string; matched: string; at: string; mode: string; error?: string;
+    files?: { path: string; summary: string | null; note?: string; additions: number; deletions: number }[] } | null>(null);
+  const on = !!queue?.prefs?.priority_agent?.enabled;
+  const stamp = queue?.fetched_at;
+  useEffect(() => {
+    if (!on) return;
+    void get<{ result: typeof res }>(`/github/priority/pr/${repo}/${number}`).then((r) => setRes(r.result)).catch(() => undefined);
+  }, [repo, number, on, stamp]);
+  if (!on || !res) return null;
+  return (
+    <details className="pr-agent-view" data-testid="pr-agent-view">
+      <summary className="small">🤖 Agent's view of the changes — {res.error ? `failed: ${res.error}` : `${res.level ?? "no level"}: ${res.reason}`}{res.at ? ` · ${utc8(res.at)}` : ""}</summary>
+      {res.matched && <div className="small muted">Matches your description “{res.matched}”.</div>}
+      {res.mode === "diff" && <div className="small muted">A small change: the agent read the whole diff.</div>}
+      <ul className="pr-agent-files">
+        {(res.files ?? []).map((f) => (
+          <li key={f.path} className="small" data-testid="pr-agent-file"><code>{f.path}</code> <span className="add">+{f.additions}</span> <span className="del">−{f.deletions}</span>
+            {f.summary ? <div>{f.summary}</div> : <span className="muted"> — {f.note ?? "not summarized"}</span>}</li>
+        ))}
+      </ul>
+    </details>
   );
 }
 

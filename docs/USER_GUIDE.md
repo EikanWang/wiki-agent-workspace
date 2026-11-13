@@ -144,15 +144,42 @@ the number of PRs waiting for you, drafts not counted). Token logins and other G
 queue can include private repositories.
 
 **Reviews** lists the open pull requests that request your review, across every repository your GitHub account
-can see, grouped by repository (most PRs first; ★ priority requests in their own group on top). Inside each
-repository the PRs are in three sections by where you stand, most urgent first:
+can see, grouped by repository (most PRs first). Inside each repository the PRs are in three sections by where you
+stand (their order and names are yours to change, ⚙ → Priority → Categories); inside each section the **most urgent
+priority level first**, then your sort:
 1. **Not reviewed yet** (*top*) — you have not reviewed or commented on it;
 2. **New activity since your comments** (*high*) — since your latest review, review comment, reply or comment,
    someone else reviewed, replied or commented, new commits were pushed, or your review was requested again (bots and
    GitHub Actions do not count); the row says what (↻ new comments, new commits…);
 3. **Commented, nothing new** (*medium*) — ✓ commented, and nothing happened since.
 
-The ★ Priority group lists its PRs in the same order and marks each one (not reviewed yet / ↻ … / ✓ commented).
+**Priority levels.** Every row ends with its level badge (*P0 Urgent*, *P1 High*, *P2 Normal*, *P3 Low* by default; a
+pale badge is the default level, ✎ set by hand, 🤖 decided by the agent). Hover it for why; click it to **set the
+level by hand**, go **back to rules / agent**, or **ask the agent again**. A PR's level is:
+1. the one you set by hand; otherwise
+2. the **more urgent** of the **hard rules'** level and the **agent's** level (hard rules *or* agent); otherwise
+3. the default level.
+
+**⚙ → Priority** edits it all (Save to apply; **Reset to defaults** undoes everything):
+- **Levels** — add, remove, rename, recolour, reorder (most urgent first), pick the default; each level has any
+  number of **descriptions in plain language** ("Fixes a crash or memory error in the XPU runtime", "Docs-only
+  changes"…) that the agent judges PRs against.
+- **Hard rules** — *if* conditions (all must match) *then* a level: review asked by, asked by a PyTorch Meta
+  maintainer, author, repository, label, title contains, size, days since opened / last updated, CI (failing,
+  passing, running, none), draft, review decision, your activity (todo / news / quiet). When several match, the
+  most urgent wins. (The older "PyTorch Meta maintainers" / priority people became such rules, ★ / un-★ became
+  levels set by hand.)
+- **The agent** (off by default) — when on, it decides the level of new and changed PRs in the background
+  ("🤖 deciding levels of N PRs…" above the list). It reads the PR's details, description, changed files and diff:
+  a small diff (≤ 12k characters) in full; a larger one is first **summarized file by file** (one turn per ~25k
+  characters, a bigger file in parts, the 60 biggest files; lock / vendored / generated / binary files only named),
+  then it decides from the summaries. Summaries are kept until a file's change changes; editing your descriptions
+  re-runs only the decisions. Pick the agent and model for the **summaries** and for the **decision** separately
+  (e.g. a cheaper model for summaries). Its turns only read (Codex: read-only sandbox) and its sessions are hidden
+  from the session pickers. **Re-classify all** asks it again for every PR. In a PR tab, **🤖 Agent's view of the
+  changes** shows its reason and the summary of each file.
+- **Categories** — the order and names of the three sections.
+The level filter next to the sort (*only P0*, *P0–P1*…) shows only the more urgent PRs.
 **auto-refresh** (in the line above the list) sets how often the list and its badge refresh from GitHub on their
 own: off (only ↻), 1, 2, 5 (default), 10, 15, 30 minutes, or 1, 2, 4, 8 hours; ↻ refreshes now at any time. An open pull request has its own **auto-refresh**
 next to ↻ in its toolbar (off by default) — the same setting refreshes PR Development's checks in its Pull request
@@ -175,15 +202,13 @@ line above the list says how many are requested, how many are shown and how many
   happened since (*new commits*, *new comments*, *review requested again*) when there is news — or *changes requested*.
 - Each PR shows its status next to the CI dot: **Ready** (open, ready for review) or **Draft**; search results
   can also be **Merged** or **Closed**.
-- **☆ / ★** at the end of a row: star a PR to make it a **priority PR**, or un-star one to take it out of
-  Priority even when the rules (Meta maintainer, chosen people) would put it there. Also in the PR tab (*☆ Star*).
+- the **level badge** at the end of a row (see *Priority levels* above); the PR tab's toolbar has the same menu.
 - **🔍 Search pull requests on GitHub…**: GitHub's search syntax (`xpu repo:pytorch/pytorch`, `author:…`,
   `label:…`), `owner/repo#123` or a PR link; **Open** PRs by default — merged and closed ones only with *Closed /
   merged* (or *All*). Click a result to open it as a tab. Esc closes the search.
-- **★ Priority** at the top: requests from PyTorch Meta maintainers (the requester's GitHub profile company says
-  Meta / Facebook) and from people you name; each PR shows who *asked* you. Change it under **⚙**;
-- **⚙** (repositories and priority): **watch** a repository (`owner/name`) to also list all its open PRs (newest 40,
-  in a *Watched repositories* section), stop watching it, choose the priority people, and **show again** a
+- each PR shows who *asked* you for the review;
+- **⚙ → Repositories**: **watch** a repository (`owner/name`) to also list all its open PRs (newest 40,
+  in a *Watched repositories* section), stop watching it, and **show again** a
   hidden repository. Hover a repository and click **×** to **hide** it (after a confirmation; stopping watching
   a repository is confirmed too). Kept on the server (`kv_settings`);
 - clicking a PR opens it as a **tab** next to your documents (remembered like them):

@@ -5,6 +5,7 @@ import { confirmAction } from "./Confirm";
 import GhUser from "./GhUser";
 import { useRestoredScroll } from "../persist";
 import { GhRefreshSelect } from "../ghRefresh";
+import { AgentStatus, CATEGORY_HINT, Category, LevelMenu, PriorityAgent, PriorityLevel, PriorityRule, PrioritySettings } from "./ReviewPriority";
 
 export interface ReviewPR {
   repo: string;
@@ -41,14 +42,19 @@ export interface ReviewPR {
   since_mine?: string[];
   /** the agent's review of this PR: still running, or done and waiting for you to apply / discard its suggestions */
   agent_review?: { state: "running" | "waiting"; proposed: number; unread?: boolean } | null;
+  /** priority: the level (id), its rank (0 = most urgent), where it comes from, and why */
+  level?: string;
+  level_rank?: number;
+  level_source?: "manual" | "rule" | "agent" | "default";
+  level_reasons?: string[];
 }
 
-/** The queue's sections, in priority order. */
-const CATEGORIES = [
-  { key: "todo", title: "Not reviewed yet", level: "top", hint: "You have not reviewed or commented on these yet" },
-  { key: "news", title: "New activity since your comments", level: "high", hint: "Since your latest review or comment: a review, reply or comment from someone else, new commits, or your review requested again (bots do not count)" },
-  { key: "quiet", title: "Commented, nothing new", level: "medium", hint: "You reviewed or commented, and nothing happened since" },
-] as const;
+/** The queue's sections inside each repository, in your order (⚙ → Priority → Categories). */
+const DEFAULT_CATEGORIES: Category[] = [
+  { key: "todo", title: "Not reviewed yet", level: "top" },
+  { key: "news", title: "New activity since your comments", level: "high" },
+  { key: "quiet", title: "Commented, nothing new", level: "medium" },
+];
 const categoryOf = (p: ReviewPR) => p.my_activity ?? "todo";
 
 /** A checkbox kept per browser. */
@@ -64,6 +70,12 @@ export interface HubPrefs {
   show_approved: boolean;
   starred?: string[];
   unstarred?: string[];
+  priority_levels: PriorityLevel[];
+  priority_default: string;
+  priority_rules: PriorityRule[];
+  priority_agent: PriorityAgent;
+  priority_manual: Record<string, string>;
+  categories: Category[];
 }
 interface Queue {
   items: ReviewPR[];
@@ -80,6 +92,7 @@ interface Queue {
   hidden_count?: number;
   approved_hidden?: number;
   prefs?: HubPrefs;
+  priority_agent?: AgentStatus;
 }
 
 // ---- one shared copy of the queue (the activity-bar badge and the panel use the same data)
@@ -98,14 +111,15 @@ export async function loadReviews(refresh = false): Promise<void> {
   try {
     const q = await get<Queue>(`/github/reviews${refresh ? "?refresh=true" : ""}`);
     set({ queue: q, error: null, loading: false });
-    if (q.refreshing) poll = window.setTimeout(() => void loadReviews(false), 3000);
+    const deciding = q.priority_agent ? q.priority_agent.queued + q.priority_agent.running.length : 0;
+    if (q.refreshing || deciding) poll = window.setTimeout(() => void loadReviews(false), deciding && !q.refreshing ? 2500 : 3000); // new levels come in
   } catch (e) {
     set({ error: (e as ApiError).message, loading: false });
   }
 }
 
 /** Save Reviews preferences (hidden / watched repositories, priority requesters), then reload the list. */
-export async function savePrefs(change: Partial<HubPrefs> & { star?: string; unstar?: string }): Promise<void> {
+export async function savePrefs(change: Partial<HubPrefs> & Record<string, unknown>): Promise<void> {
   await put<HubPrefs>("/github/prefs", change);
   await loadReviews(false);
 }
@@ -142,6 +156,8 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
   const [filter, setFilter] = useState("");
   const [showDrafts, setShowDrafts] = useState(() => localStorage.getItem("waw.reviews.drafts") === "1");
   const [agentOnly, setAgentOnly] = usePersistedFlag("reviews.agentOnly");
+  const [maxRank, setMaxRank] = useState<number>(() => Number(localStorage.getItem("waw.reviews.maxRank") ?? "99"));
+  useEffect(() => localStorage.setItem("waw.reviews.maxRank", String(maxRank)), [maxRank]);
   const agentWaiting = [...(queue?.items ?? []), ...(queue?.watched ?? [])].filter((p) => p.agent_review?.state === "waiting").length;
   const [sort, setSort] = useState<Sort>(() => (localStorage.getItem("waw.reviews.sort") as Sort) || "updated");
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set(JSON.parse(localStorage.getItem("waw.reviews.collapsed") || "[]")));
@@ -174,28 +190,25 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
   const listScroll = useRestoredScroll("reviews.list", !!queue);
   const [busy, setBusy] = useState<string | null>(null);
   const prefs = queue?.prefs;
-  const { priority, groups, watchedGroups } = useMemo(() => {
+  const levels = prefs?.priority_levels ?? [];
+  const categories = prefs?.categories?.length ? prefs.categories : DEFAULT_CATEGORIES;
+  const { groups, watchedGroups } = useMemo(() => {
     const f = filter.trim().toLowerCase();
-    const keep = (p: ReviewPR) => (agentOnly ? p.agent_review?.state === "waiting" : showDrafts || !p.draft) && (!f || `${p.repo} #${p.number} ${p.title} ${p.author ?? ""} ${p.requested_by ?? ""} ${p.labels.map((l) => l.name).join(" ")}`.toLowerCase().includes(f));
+    const keep = (p: ReviewPR) => (agentOnly ? p.agent_review?.state === "waiting" : showDrafts || !p.draft) && (p.level_rank ?? 0) <= maxRank
+      && (!f || `${p.repo} #${p.number} ${p.title} ${p.author ?? ""} ${p.requested_by ?? ""} ${p.level ?? ""} ${p.labels.map((l) => l.name).join(" ")}`.toLowerCase().includes(f));
     const key = (p: ReviewPR) => (sort === "updated" ? -new Date(p.updated_at).getTime() : sort === "waiting" ? new Date(p.created_at).getTime() : p.additions + p.deletions);
+    // inside a repository (and a category): the most urgent level first, then your sort
+    const cmp = (a: ReviewPR, b: ReviewPR) => (a.level_rank ?? 99) - (b.level_rank ?? 99) || key(a) - key(b);
     const group = (list: ReviewPR[]) => {
       const by = new Map<string, ReviewPR[]>();
       for (const p of list) by.set(p.repo, [...(by.get(p.repo) ?? []), p]);
-      return [...by.entries()].map(([repo, prs]) => ({ repo, prs: prs.sort((a, b) => key(a) - key(b)) })).sort((a, b) => b.prs.length - a.prs.length || a.repo.localeCompare(b.repo));
+      return [...by.entries()].map(([repo, prs]) => ({ repo, prs: prs.sort(cmp) })).sort((a, b) => b.prs.length - a.prs.length || a.repo.localeCompare(b.repo));
     };
-    const items = (queue?.items ?? []).filter(keep);
-    const rank = (p: ReviewPR) => CATEGORIES.findIndex((c) => c.key === categoryOf(p));
-    return {
-      // ★ priority first (not reviewed yet, then new activity, then nothing new); then each repository, with the
-      // three categories inside it
-      priority: items.filter((p) => p.priority).sort((a, b) => rank(a) - rank(b) || key(a) - key(b)),
-      groups: group(items.filter((p) => !p.priority)),
-      watchedGroups: group((queue?.watched ?? []).filter(keep)),
-    };
-  }, [queue, filter, showDrafts, sort, agentOnly]);
+    return { groups: group((queue?.items ?? []).filter(keep)), watchedGroups: group((queue?.watched ?? []).filter(keep)) };
+  }, [queue, filter, showDrafts, sort, agentOnly, maxRank]);
   const drafts = queue?.items.filter((p) => p.draft).length ?? 0;
-  const shown = priority.length + groups.reduce((n, g) => n + g.prs.length, 0);
-  const change = async (what: string, c: Partial<HubPrefs> & { star?: string; unstar?: string }) => {
+  const shown = groups.reduce((n, g) => n + g.prs.length, 0);
+  const change = async (what: string, c: Partial<HubPrefs> & Record<string, unknown>) => {
     setBusy(what);
     try {
       await savePrefs(c);
@@ -217,7 +230,7 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
   };
   const toggle = (repo: string) => setCollapsed((s) => { const n = new Set(s); if (n.has(repo)) n.delete(repo); else n.add(repo); return n; });
   const prRow = (p: ReviewPR, showRepo = false) => (
-    <button key={`${p.repo}#${p.number}`} className={`review-pr ${p.draft ? "draft" : ""} ${p.priority ? "priority" : ""}`} onClick={() => onOpen(p)}
+    <button key={`${p.repo}#${p.number}`} className={`review-pr ${p.draft ? "draft" : ""} ${p.priority ? "priority" : ""}`} onClick={() => onOpen(p)} role="button"
       title={`${p.repo}#${p.number}\n${p.title}\n${CI_LABEL[p.ci ?? ""] ?? "no checks"}${p.requested_by ? `\nreview requested by ${p.requested_by}${p.requested_by_company ? ` (${p.requested_by_company})` : ""}` : ""}${p.teams.length ? `\nalso requested from: ${p.teams.join(", ")}` : ""}`}
       data-testid="review-pr" data-number={p.number} data-priority={p.priority ? "1" : "0"}>
       <span className={`ci-dot ${(p.ci ?? "none").toLowerCase()}`} aria-label={CI_LABEL[p.ci ?? ""] ?? "no checks"} />
@@ -255,11 +268,9 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
         </span>
       </span>
       {prefs && (
-        <span className={`review-star ${p.priority ? "on" : ""}`} role="button" tabIndex={-1} data-testid="review-star"
-          title={p.priority ? "Priority — click to un-star (never priority, even when the rules say so)" : "Star: mark as a priority PR"}
-          onClick={(e) => { e.stopPropagation(); void change(`star:${p.repo}#${p.number}`, p.priority ? { unstar: `${p.repo}#${p.number}` } : { star: `${p.repo}#${p.number}` }).then(() => { if (search) void runSearch(); }); }}>
-          {p.priority ? "★" : "☆"}
-        </span>
+        <LevelMenu pr={`${p.repo}#${p.number}`} level={p.level} source={p.level_source} reasons={p.level_reasons} levels={levels} compact
+          agentOn={!!prefs.priority_agent?.enabled}
+          onSet={(lv) => change(`level:${p.repo}#${p.number}`, { set_level: { pr: `${p.repo}#${p.number}`, level: lv } }).then(() => { if (search) void runSearch(); })} />
       )}
     </button>
   );
@@ -281,17 +292,17 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
             <button className="icon-btn small review-hide" onClick={() => void hideRepo(repo)} disabled={busy !== null} title={`Hide ${repo} from Reviews (undo under ⚙)`} aria-label={`Hide ${repo}`} data-testid="review-hide-repo">×</button>
           )}
         </div>
-        {open && (watched ? prs.map((p) => prRow(p)) : CATEGORIES.map((c) => {
+        {open && (watched ? prs.map((p) => prRow(p)) : categories.map((c) => {
           const list = prs.filter((p) => categoryOf(p) === c.key);
           if (!list.length) return null;
           const k = `${repo}|${c.key}`;
           const subOpen = !collapsed.has(k);
           return (
-            <div key={c.key} className={`review-section ${c.level}`} data-testid="review-section" data-category={c.key}>
-              <button className="review-section-head" onClick={() => toggle(k)} aria-expanded={subOpen} title={c.hint}>
+            <div key={c.key} className={`review-section ${["todo", "news", "quiet"].indexOf(c.key) === 0 ? "top" : c.key === "news" ? "high" : "medium"}`} data-testid="review-section" data-category={c.key}>
+              <button className="review-section-head" onClick={() => toggle(k)} aria-expanded={subOpen} title={CATEGORY_HINT[c.key]}>
                 <span className="chev">{subOpen ? "⌄" : "›"}</span>
                 <span className="review-section-title">{c.title}</span>
-                <span className={`review-level ${c.level}`}>{c.level}</span>
+                {c.level && <span className={`review-level ${["top", "high", "medium"].includes(c.level) ? c.level : "medium"}`}>{c.level}</span>}
                 <span className="spacer" />
                 <span className="git-badge clean">{list.length}</span>
               </button>
@@ -313,7 +324,7 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
         )}
         <RefreshButton onRefresh={() => loadReviews(true)} title="Refresh from GitHub" testId="reviews-refresh" />
       </div>
-      {settings && prefs && <ReviewsSettings prefs={prefs} busy={busy} change={change} problems={queue?.watch_problems ?? []} />}
+      {settings && prefs && <ReviewsSettings prefs={prefs} busy={busy} change={change} problems={queue?.watch_problems ?? []} status={queue?.priority_agent ?? null} />}
       <div className="reviews-search">
         {search === null ? (
           <button className="link-btn small" onClick={() => setSearch("")} data-testid="reviews-search-open">🔍 Search pull requests on GitHub…</button>
@@ -356,6 +367,12 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
           <label className="small" title="Only the PRs the agent reviewed whose suggested comments wait for you to apply or discard (drafts included)">
             <input type="checkbox" checked={agentOnly} onChange={(e) => setAgentOnly(e.target.checked)} data-testid="reviews-agent-waiting" /> 🤖 agent reviewed ({agentWaiting})
           </label>
+          {levels.length > 0 && (
+            <select className="reviews-sort" value={maxRank} onChange={(e) => setMaxRank(Number(e.target.value))} title="Only PRs at least this urgent" aria-label="Levels" data-testid="reviews-level-filter">
+              <option value={99}>all levels</option>
+              {levels.slice(0, -1).map((l, i) => <option key={l.id} value={i}>{i === 0 ? `only ${l.id}` : `${levels[0].id}–${l.id}`}</option>)}
+            </select>
+          )}
           <select className="reviews-sort" value={sort} onChange={(e) => setSort(e.target.value as Sort)} data-testid="reviews-sort" aria-label="Sort">
             <option value="updated">Recently updated</option>
             <option value="waiting">Waiting longest</option>
@@ -374,23 +391,15 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
             {!showDrafts && !agentOnly && drafts > 0 && <span title="Tick “drafts” to show them"> · {drafts} draft{drafts > 1 ? "s" : ""} hidden</span>}
             {filter.trim() && <span> · filtered</span>}
             {agentOnly && <span> · only those the agent reviewed, waiting for you</span>}
+            {maxRank < 99 && <span> · only {levels[0]?.id}–{levels[maxRank]?.id}</span>}
+            {queue.priority_agent && queue.priority_agent.running.length + queue.priority_agent.queued > 0 && (
+              <span data-testid="reviews-classifying"> · 🤖 deciding levels of {queue.priority_agent.running.length + queue.priority_agent.queued} PR(s){queue.priority_agent.files_summarizing ? ` (summarizing ${queue.priority_agent.files_summarizing} files)` : ""}…</span>
+            )}
             {queue.refreshing ? " · refreshing…" : ` · updated ${ago(queue.fetched_at)} ago`}
             {" · "}<GhRefreshSelect kind="reviews" testId="reviews-auto-refresh" title="How often the Reviews list (and its badge) refreshes from GitHub on its own; ↻ refreshes now" />
           </div>
         )}
         {queue && shown === 0 && <div className="tree-empty">{queue.items.length ? "Nothing matches the filter." : "No pull requests are waiting for your review. 🎉"}</div>}
-        {priority.length > 0 && (
-          <div className="review-group priority" data-testid="review-priority">
-            <button className="review-group-head" onClick={() => toggle("!priority")} aria-expanded={!collapsed.has("!priority")}
-              title={`Requests from ${prefs?.priority_meta ? "PyTorch Meta maintainers (GitHub profile company / public email)" : ""}${prefs?.priority_meta && prefs.priority_requesters.length ? " and " : ""}${prefs?.priority_requesters.length ? prefs.priority_requesters.join(", ") : ""}`}>
-              <span className="chev">{collapsed.has("!priority") ? "›" : "⌄"}</span>
-              <span className="review-repo">★ Priority</span>
-              <span className="spacer" />
-              <span className="git-badge clean">{priority.length}</span>
-            </button>
-            {!collapsed.has("!priority") && priority.map((p) => prRow(p, true))}
-          </div>
-        )}
         {groups.map(({ repo, prs }) => groupBox(repo, prs, false))}
         {watchedGroups.length > 0 && <div className="muted small reviews-meta" data-testid="reviews-watched-head">Watched repositories (all open PRs)</div>}
         {watchedGroups.map(({ repo, prs }) => groupBox(repo, prs, true))}
@@ -401,12 +410,12 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
   );
 }
 
-function ReviewsSettings({ prefs, busy, change, problems }: {
-  prefs: HubPrefs; busy: string | null; change: (what: string, c: Partial<HubPrefs>) => Promise<void>; problems: string[];
+function ReviewsSettings({ prefs, busy, change, problems, status }: {
+  prefs: HubPrefs; busy: string | null; change: (what: string, c: Partial<HubPrefs> & Record<string, unknown>) => Promise<void>; problems: string[]; status: AgentStatus | null;
 }) {
   const [repo, setRepo] = useState("");
-  const [people, setPeople] = useState(prefs.priority_requesters.join(", "));
-  useEffect(() => setPeople(prefs.priority_requesters.join(", ")), [prefs.priority_requesters]);
+  const [tab, setTab] = useState<"priority" | "repos">(() => (localStorage.getItem("waw.reviews.settingsTab") === "repos" ? "repos" : "priority"));
+  useEffect(() => localStorage.setItem("waw.reviews.settingsTab", tab), [tab]);
   const valid = /^[\w.-]+\/[\w.-]+$/.test(repo.trim());
   const watch = () => {
     const r = repo.trim();
@@ -415,16 +424,14 @@ function ReviewsSettings({ prefs, busy, change, problems }: {
   };
   return (
     <div className="reviews-settings" data-testid="reviews-settings-box">
-      <div className="small strong">Priority requests</div>
-      <label className="small">
-        <input type="checkbox" checked={prefs.priority_meta} disabled={busy !== null} onChange={(e) => void change("meta", { priority_meta: e.target.checked })} data-testid="reviews-priority-meta" />{" "}
-        PyTorch Meta maintainers (company or public email on their GitHub profile)
-      </label>
-      <div className="reviews-settings-row">
-        <input value={people} onChange={(e) => setPeople(e.target.value)} placeholder="Also these GitHub logins, comma-separated" data-testid="reviews-priority-people"
-          onKeyDown={(e) => { if (e.key === "Enter") void change("people", { priority_requesters: people.split(/[\s,]+/).filter(Boolean) }); }} />
-        <button className="btn small" disabled={busy !== null} onClick={() => void change("people", { priority_requesters: people.split(/[\s,]+/).filter(Boolean) })} data-testid="reviews-priority-save">Save</button>
-      </div>
+      <span className="mode-switch" role="tablist">
+        <button role="tab" aria-selected={tab === "priority"} className={tab === "priority" ? "active" : ""} onClick={() => setTab("priority")} data-testid="reviews-settings-priority">Priority</button>
+        <button role="tab" aria-selected={tab === "repos"} className={tab === "repos" ? "active" : ""} onClick={() => setTab("repos")} data-testid="reviews-settings-repos">Repositories</button>
+      </span>
+      {tab === "priority" && <PrioritySettings key="priority" prefs={prefs} status={status} save={async (c) => {
+        await savePrefs(c as Partial<HubPrefs>);
+      }} />}
+      {tab === "repos" && <>
       <div className="small strong">Watched repositories <span className="muted">(all their open PRs, besides your review requests)</span></div>
       {prefs.watched_repos.map((r) => (
         <div key={r} className="reviews-settings-item" data-testid="reviews-watched-item">
@@ -445,6 +452,7 @@ function ReviewsSettings({ prefs, busy, change, problems }: {
           <button className="btn small" disabled={busy !== null} onClick={() => void change(`unhide:${r}`, { hidden_repos: prefs.hidden_repos.filter((x) => x !== r) })} data-testid="reviews-unhide">Show again</button>
         </div>
       ))}
+      </>}
     </div>
   );
 }
