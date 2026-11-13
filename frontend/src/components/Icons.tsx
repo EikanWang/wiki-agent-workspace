@@ -18,4 +18,5 @@ export const SearchIcon = (p: { size?: number }) => <S {...p}><circle cx="7" cy=
 export const ProblemsIcon = (p: { size?: number }) => <S {...p}><circle cx="8" cy="8" r="6" /><path d="M8 4.8v3.8M8 11v.2" /></S>;
 export const WikiIcon = (p: { size?: number }) => <S {...p}><path d="M2.5 3.2c1.8-.6 3.8-.4 5.5.8 1.7-1.2 3.7-1.4 5.5-.8v9.6c-1.8-.6-3.8-.4-5.5.8-1.7-1.2-3.7-1.4-5.5-.8z" /><path d="M8 4v9.6" /></S>;
 export const TerminalIcon = (p: { size?: number }) => <S {...p}><rect x="1.8" y="2.8" width="12.4" height="10.4" rx="1.2" /><path d="M4.5 6.2L6.8 8l-2.3 1.8M8.3 10.2h3.2" /></S>;
+export const InsightsIcon = (p: { size?: number }) => <S {...p}><path d="M2.5 13.5h11" /><path d="M3.5 11l3-3.5 2.5 2 4-5" /><circle cx="12.5" cy="4.5" r="1.2" /></S>;
 export const DashboardIcon = (p: { size?: number }) => <S {...p}><path d="M2 13.5h12" /><path d="M3.5 13.5V9M6.5 13.5V5.5M9.5 13.5V7.5M12.5 13.5V3" /></S>;

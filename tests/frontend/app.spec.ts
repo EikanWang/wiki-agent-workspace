@@ -447,7 +447,7 @@ test("Terminal activity: its own list of terminals (home or a chosen folder), th
   await expect(page.getByTestId("folder-picker-choose")).toBeEnabled();
   await page.getByTestId("folder-picker-choose").click();
   await expect(page.getByTestId("terminals-item")).toHaveCount(n0 + 2);
-  await expect(page.getByTestId("terminals-item").last()).toContainText(path.basename(workspaceDir()));
+  await expect(page.getByTestId("terminals-item").filter({ hasText: path.basename(workspaceDir()) })).toHaveCount(1); // (any position)
   await expect(page.locator(".term-view.active")).toHaveAttribute("data-state", "connected", { timeout: 15000 });
   await expect(page.locator(".term-view.active .xterm-rows")).toContainText("$", { timeout: 15000 });
   await runInTerminal(page, "echo IN_$(pwd)", `IN_${workspaceDir()}`);
@@ -3407,6 +3407,83 @@ test("PR diff: copy the file path, expand hidden lines around a change, expand /
   await page.getByTestId("pr-layout-split").click();
   await expect(f.locator(".diff-line.split-row.expanded")).toHaveCount(36);
   await page.getByTestId("pr-layout-unified").click();
+  await page.getByTestId("activity-files").click();
+});
+
+test("Repo Insights: the history in the folder, a week's report (daily summaries made, commits, highlights), chat, settings", async ({ page }) => {
+  await login(page);
+  await page.getByTestId("activity-insights").click();
+  await expect(page.getByTestId("insights-panel")).toBeVisible();
+  await expect(page.getByTestId("view-document")).toHaveCount(0); // the wiki's tabs are not shown here
+  await expect(page.getByTestId("insights-repo")).toHaveCount(7);
+  await page.locator('[data-testid="insights-repo"][data-repo="pytorch/pytorch"]').click();
+  await expect(page.getByTestId("insights-view")).toContainText("daily summaries 2026-11-10 … 2026-11-10 (1)");
+  // a day of the history
+  await page.getByTestId("insights-tab-daily").click();
+  await page.locator('[data-testid="insights-day"][data-day="2026-11-10"]').click();
+  await expect(page.getByTestId("insights-file-view")).toContainText("Old day");
+  // XPU highlights of the history
+  await page.getByTestId("insights-tab-highlights").click();
+  await page.getByTestId("insights-highlights").locator('input[type="date"]').first().fill("2026-11-08");
+  await expect(page.getByTestId("insights-hl")).toHaveCount(1);
+  await expect(page.getByTestId("insights-hl")).toContainText("Inductor heuristic tuned for CUDA");
+  // a report of a custom week: the missing days are made from GitHub, the commits read, then the report
+  await page.getByTestId("insights-period-custom").click();
+  await page.getByTestId("insights-since").fill("2026-11-08");
+  await page.getByTestId("insights-until").fill("2026-11-12");
+  await page.getByTestId("insights-preset").selectOption("xpu");
+  await page.getByTestId("insights-create").click();
+  const view = page.getByTestId("insights-report-view");
+  await expect(view).toHaveAttribute("data-status", "done", { timeout: 30000 });
+  await expect(view).toContainText("Fake report");
+  await expect(view.locator("a", { hasText: "issue #777" })).toHaveAttribute("href", "https://github.com/pytorch/pytorch/issues/777");
+  await view.locator("summary", { hasText: "Material" }).click();
+  await expect(view).toContainText("Days with a summary of issues and PRs: 5");
+  await expect(view).toContainText("Commits on the default branch");
+  // the days it made are in the list now
+  await page.getByTestId("insights-tab-daily").click();
+  await expect(page.getByTestId("insights-day")).toHaveCount(5);
+  // a month of this year: its own category in the list
+  await page.getByTestId("insights-tab-reports").click();
+  await page.getByTestId("insights-period-month").click();
+  await expect(page.getByTestId("insights-year")).toHaveValue(String(new Date().getUTCFullYear()));
+  await page.getByTestId("insights-month").selectOption({ index: 0 }); // January
+  await page.getByTestId("insights-create").click();
+  await expect(view).toHaveAttribute("data-status", "done", { timeout: 60000 });
+  await expect(view).toContainText(`January ${new Date().getUTCFullYear()}`);
+  await expect(page.getByTestId("insights-group")).toHaveCount(2);
+  await expect(page.locator('[data-testid="insights-group"][data-kind="monthly"]')).toContainText("Monthly (1)");
+  await expect(page.locator('[data-testid="insights-group"][data-kind="dates"]')).toContainText("Dates (1)");
+  // the week list: calendar weeks of the year
+  await page.getByTestId("insights-period-week").click();
+  await expect(page.getByTestId("insights-week").locator("option").first()).toContainText(/^Week \d+ · /);
+  // continue in a chat
+  await page.locator('[data-testid="insights-group"][data-kind="dates"]').getByTestId("insights-report").first().click();
+  await page.getByTestId("insights-chat").click();
+  await expect(page.getByTestId("chats-page")).toBeVisible({ timeout: 15000 });
+  // settings
+  await page.getByTestId("activity-insights").click(); // (the chat opened the wiki side)
+  await page.getByTestId("insights-settings-open").click();
+  await expect(page.getByTestId("insights-settings")).toBeVisible();
+  await expect(page.getByTestId("insights-task")).toHaveCount(5);
+  // the agent for two tasks, one right after the other: both stay chosen (on the page and on the server)
+  const task = (t: string) => page.locator(`[data-testid="insights-task"][data-task="${t}"]`);
+  await task("report").getByTestId("insights-task-mode").selectOption("agent");
+  await task("daily").getByTestId("insights-task-mode").selectOption("agent");
+  await expect(task("report").getByTestId("insights-task-mode")).toHaveValue("agent");
+  await expect(task("report").getByTestId("model-choice")).toBeVisible();
+  await expect.poll(async () => { const x = (await (await page.request.get("/api/v1/insights/settings")).json()).llm; return `${x.report.mode} ${x.daily.mode}`; }).toBe("agent agent");
+  await task("report").getByTestId("model-choice-provider").selectOption("codex");
+  await expect.poll(async () => (await (await page.request.get("/api/v1/insights/settings")).json()).llm.report.provider).toBe("codex");
+  for (const t of ["report", "daily"]) await task(t).getByTestId("insights-task-mode").selectOption("api");
+  await expect.poll(async () => { const x = (await (await page.request.get("/api/v1/insights/settings")).json()).llm; return `${x.report.mode} ${x.daily.mode}`; }).toBe("api api");
+  await page.locator('[data-testid="insights-repo-cfg"][data-repo="vllm-project/vllm"]').getByTestId("insights-schedule").check();
+  await page.getByTestId("insights-repos-save").click();
+  await expect(page.getByTestId("insights-note")).toContainText("Saved");
+  const s = await (await page.request.get("/api/v1/insights/settings")).json();
+  expect(s.repos.find((r: any) => r.repo === "vllm-project/vllm").schedule.enabled).toBe(true);
+  await page.locator('[data-testid="insights-repo-cfg"][data-repo="vllm-project/vllm"]').getByTestId("insights-schedule").uncheck();
+  await page.getByTestId("insights-repos-save").click();
   await page.getByTestId("activity-files").click();
 });
 

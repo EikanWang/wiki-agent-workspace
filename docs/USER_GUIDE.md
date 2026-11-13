@@ -743,6 +743,16 @@ page — Ctrl+T, Ctrl+W, Ctrl+N, Ctrl+Tab and similar open/close tabs and window
 - On plain `http://` (not localhost) browsers only allow clipboard writes right after a click or key press. If a
   copy is refused, the note offers **Copy now**; the toolbar **Copy** button also re-copies the last terminal copy.
 
+## Repo Insights
+
+The chart icon in the activity bar. It shows what happened in GitHub repositories over a day, week, month, quarter, year or any dates.
+
+- **Repositories** (left): pytorch/pytorch, vllm, transformers, sglang, flashinfer, cutlass, triton by default; add any `owner/repo`.
+- **Summarize**: pick a period (or *Dates…*), the sources (Issues & PRs, Commits, RFCs, XPU highlights), an optional focus preset (*XPU (Intel GPU)*) and free-text focus. The report has fixed sections (Highlights, Changes by area, Issues and PRs, RFCs, XPU watch, Trends, Numbers) with links. Progress shows while it runs; *Continue in chat* opens a wiki chat with the report as material.
+- **How it is built**: one summary of issues and PRs per UTC day (kept in `summary/<owner>/<repo>/`; days without one are fetched from GitHub in one go and made); periods over two weeks are rolled up week by week (finished weeks are cached in `blocks/`); commits come from the connected checkout (⎇ in PR Review) or an app-owned blobless clone in `repos/`, fetched before each report; RFCs are the RFC repositories' issues/PRs plus issues labelled or titled as RFCs (per repository in ⚙).
+- **Daily** tab: every day's summary; *Make* fills a range now. **XPU highlights** tab: scored items of any dates (deduplicated, newest score wins), *Score now* scores a range.
+- **⚙ Settings**: the folder, the model endpoint (OpenAI-compatible; the key is stored in `<state_dir>/insights-secrets.json`, mode 0600, never sent to the browser), which tasks use the endpoint or the app's agent, the highlight threshold, per-repository sources / RFC rules / XPU highlights, and **every day at HH:MM** (UTC+8; off by default): the previous UTC day's summary and highlights, with up to a week caught up after downtime.
+
 ## Keyboard
 
 | Where | Key | Action |

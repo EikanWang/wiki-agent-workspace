@@ -235,9 +235,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except Exception as exc:  # pragma: no cover
             log.warning("provider detection failed: %s", exc)
         reg.start_all()
+        from .insights import scheduler as insights_scheduler
+
+        insights_scheduler.start(ctx)  # the daily runs (off for each repository until turned on)
         try:
             yield
         finally:
+            await insights_scheduler.stop()
             await reg.stop_all()
             await ctx.extra["dev_editor"].shutdown()
             await ctx.extra["dev_tasks"].shutdown()
@@ -297,6 +301,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from . import monitor
 
     api.include_router(monitor.router)
+    from .insights import routes as insights_routes
+
+    api.include_router(insights_routes.router)
     app.include_router(api)
     app.include_router(dev_proxy.router)  # /dev-editor/<id>/… (the editor, through the app's login)
 
