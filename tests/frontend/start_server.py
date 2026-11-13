@@ -243,6 +243,14 @@ def add_fake_review_queue(app) -> None:
                 {"commit": {"authors": {"nodes": [{"name": "Alice A.", "email": "alice@intel.com", "user": alice},
                                                   {"name": "Dan Helper", "email": "dan@example.org", "user": None}]}}},
                 {"commit": {"authors": {"nodes": [{"name": "Alice A.", "email": "alice@intel.com", "user": alice}]}}}]}}}}
+        if "query InsightsItems" in query:  # Repo Insights: issues / PRs active in a period
+            q = variables["q"]
+            day = re.search(r"updated:>=(\S+)", q).group(1)
+            items = [] if ("label:" in q or "in:title" in q or "repo:pytorch/rfcs" in q) else [
+                {"__typename": "Issue", "number": 777, "title": "XPU kernel crash", "url": "https://github.com/pytorch/pytorch/issues/777",
+                 "body": "crash", "state": "OPEN", "createdAt": f"{day}T03:00:00Z", "updatedAt": f"{day}T04:00:00Z", "author": {"login": "alice", "company": None},
+                 "labels": {"nodes": []}, "assignees": {"nodes": []}, "comments": {"nodes": []}}]
+            return {"search": {"issueCount": len(items), "pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": items}}
         if "query PrDetail" in query:
             n = int(variables["number"])
             src = next((x for x in nodes if x and x["number"] == n), None)
@@ -326,6 +334,9 @@ def add_fake_review_queue(app) -> None:
 
     app.router.routes.insert(0, _R("/fake-github/posted", show_posted))
     ctx.extra["gh_cache_prefetch"] = True  # the PR Review cache prefetches, as with the real gh (only GETs: nothing is posted)
+    # Repo Insights' model: a fake that names what it was given (no network)
+    ctx.extra["insights_llm"] = lambda task, prompt, as_json: (
+        '{"score": 80, "justification": "fake"}' if as_json else f"# Fake {task}\n\n- covered {len(prompt)} characters\n- [issue #777](https://github.com/pytorch/pytorch/issues/777)")
 
     async def rename_pr(request):  # a change on GitHub (the next fetch of the PR sees it)
         state["titles"][int(request.query_params["n"])] = request.query_params["title"]
@@ -361,6 +372,18 @@ def main() -> None:
     make_workspace(ws)
     settings = make_settings(tmp, ws)
     settings.port = int(os.environ.get("WAW_E2E_PORT", "8799"))
+    # Repo Insights: some history in the folder (as copied from the earlier jobs)
+    ins = settings.state_dir / "insights"
+    (ins / "summary" / "pytorch" / "pytorch").mkdir(parents=True, exist_ok=True)
+    (ins / "summary" / "pytorch" / "pytorch" / "summary_pytorch_pytorch_0D_2026-11-10_05-35-01.md").write_text(
+        "Summary of pytorch/pytorch from 2026-11-10 00-00-00 to 2026-11-10 23-59-59:\n\n# Old day\n\n- [PR #1](https://github.com/pytorch/pytorch/pull/1) did a thing.\n")
+    (ins / "highlight" / "pytorch" / "pytorch").mkdir(parents=True, exist_ok=True)
+    import json as _json
+
+    (ins / "highlight" / "pytorch" / "pytorch" / "highlight_pytorch_pytorch_2026-11-10_02-05-02.json").write_text(_json.dumps([
+        {"File Information": "Highlights of pytorch/pytorch from 2026-11-08_02:05:02 to 2026-11-10_02:05:02"},
+        {"title": "Inductor heuristic tuned for CUDA", "url": "https://github.com/pytorch/pytorch/pull/2", "xpu_relevance_score": 88,
+         "xpu_relevance_justification": "may regress XPU", "body": "Changes tiling.", "submitter": "bob", "state": "open"}]))
     # PR Development: the fake editor and a small C++/Python source checkout to branch from
     from backend.app.config import DevSettings
 
@@ -423,6 +446,7 @@ def main() -> None:
     app = create_app(settings)
     add_fake_github(app)
     add_fake_review_queue(app)
+    app.state.ctx.extra["insights_remote"] = {"pytorch/pytorch": str(src)}  # Repo Insights commits: the e2e checkout stands in for GitHub
     print(f"E2E workspace: {ws}", flush=True)
     (tmp / "WORKSPACE").write_text(str(ws))
     Path(f"/tmp/waw-e2e-workspace-{settings.port}").write_text(str(ws))

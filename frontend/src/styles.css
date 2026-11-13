@@ -1342,3 +1342,37 @@ body.resizing-h iframe { pointer-events: none; }
 .pr-fresh.updated { color: var(--green); }
 /* the settings box scrolls: its parts keep their size (the Priority / Repositories / Cache tabs were squeezed to 0) */
 .reviews-settings > * { flex-shrink: 0; }
+/* Repo Insights */
+.insights-panel { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.insights-repos { flex: 1; overflow: auto; display: flex; flex-direction: column; }
+.insights-repos .list-item { display: flex; flex-direction: column; align-items: flex-start; text-align: left; }
+.insights-repo-name { font-weight: 600; font-size: 13px; }
+.insights-center { min-width: 0; min-height: 0; overflow: hidden; display: flex; }
+.insights-view { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 8px; padding: 10px 14px; overflow: auto; }
+.insights-head { display: flex; align-items: baseline; gap: 10px; }
+.insights-head h2 { margin: 0; font-size: 18px; }
+.insights-new { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); }
+.insights-new input, .insights-new select, .insights-settings input, .insights-settings select, .insights-settings textarea, .insights-items input, .insights-report input {
+  border: 1px solid var(--border); border-radius: 6px; padding: 2px 6px; background: var(--bg); color: var(--fg); font-size: 12px; min-width: 0; }
+.insights-focus { flex: 1; min-width: 200px; }
+.insights-sources label { white-space: nowrap; }
+.insights-body { display: flex; gap: 10px; flex: 1; min-height: 0; }
+.insights-list { width: 300px; flex: none; display: flex; flex-direction: column; gap: 6px; min-height: 0; }
+.insights-items { overflow: auto; display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.insights-items .list-item { display: flex; gap: 6px; align-items: center; text-align: left; }
+.insights-item-main { display: flex; flex-direction: column; min-width: 0; }
+.insights-main { flex: 1; min-width: 0; min-height: 0; overflow: auto; border: 1px solid var(--border); border-radius: 8px; }
+.insights-report { padding: 10px 14px; display: flex; flex-direction: column; gap: 6px; }
+.insights-md { font-size: 14px; }
+.insights-progress pre { margin: 0; white-space: pre-wrap; }
+.insights-hl { display: flex; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+.insights-hl-main { min-width: 0; flex: 1; }
+.insights-score { flex: none; width: 34px; height: 24px; border-radius: 6px; background: var(--accent); text-align: center; font-weight: 700; line-height: 24px; }
+.insights-score.high { background: #d1600f; color: #fff; }
+.insights-score.crit { background: #cf222e; color: #fff; }
+.insights-num { width: 60px; }
+.insights-settings .row input:not([type=checkbox]) { flex: 1; }
+.insights-repo-cfg { border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; display: flex; flex-direction: column; gap: 4px; }
+.insights-preset { display: flex; gap: 6px; align-items: flex-start; }
+.insights-preset textarea { flex: 1; }
+.insights-task-name { width: 170px; }

@@ -55,7 +55,7 @@ export interface Prefs {
   /** the sidebar's list (folders, projects, PRs…) next to the activity bar; folded: only the activity bar shows */
   listOpen: boolean;
   /** what the sidebar shows (activity bar): the file tree or the GitHub review queue */
-  sidebarView: "files" | "reviews" | "development" | "local" | "agents" | "terminal";
+  sidebarView: "files" | "reviews" | "development" | "local" | "agents" | "terminal" | "insights";
   panelOpen: boolean;
   tocOpen: boolean;
   /** Discussion panel: one discussion at a time, or all discussions of the document as one stream. */
