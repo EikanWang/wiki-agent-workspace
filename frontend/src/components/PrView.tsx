@@ -2,7 +2,7 @@ import { Splitter, usePane } from "./Split";
 import { ModelChoiceValue } from "./ModelChoice";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { confirmAction } from "./Confirm";
-import { AgentSession, ApiError, WorkspaceInfo, get, post, put } from "../api";
+import { AgentSession, ApiError, WorkspaceInfo, get, post, put, subscribeGlobal } from "../api";
 import { renderGithubMarkdown } from "../markdown";
 import { loadReviews, savePrefs, useReviews } from "./ReviewsPanel";
 import { usePersistentState, useRestoredScroll } from "../persist";
@@ -31,6 +31,8 @@ export interface PrData {
   files: PrFile[];
   wiki_workspace_id: string | null;
   doc_path: string;
+  /** where this answer came from: the local cache (first load only), memory or GitHub; token: the PR's id in events */
+  cache?: { source: "cache" | "memory" | "github"; token: string; fetched_at: number };
 }
 
 const FOLD_LINES = 400; // longer diffs start folded
@@ -119,9 +121,9 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
   const [owner, name] = repo.split("/");
   const apiBase = `/github/pr/${owner}/${name}/${number}`;
   const [loadedComments, setLoadedComments] = useState(false);
-  const loadComments = async () => {
+  const loadComments = async (cached = false) => {
     try {
-      setReview(await get<Review>(`${apiBase}/comments`));
+      setReview(await get<Review>(`${apiBase}/comments${cached ? "?cached=true" : ""}`));
       setLoadedComments(true);
     } catch (e) {
       setError((e as ApiError).message);
@@ -129,12 +131,26 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
   };
 
   const [notPr, setNotPr] = useState(false);
-  const load = async (refresh = false) => {
+  // the local cache (PR Review ⚙ → Cache): only the first load may come from it; GitHub is checked right after, and a
+  // change reloads the tab the normal way (unless you are typing: then a note offers it)
+  const [cacheToken, setCacheToken] = useState<string | null>(null);
+  const [fresh, setFresh] = useState<"cache" | "current" | "updated" | null>(null);
+  const [pending, setPending] = useState<Set<string>>(new Set());
+  const [peopleTick, setPeopleTick] = useState(0);
+  const root = useRef<HTMLDivElement>(null);
+  const loadStart = useRef(Date.now());
+  const load = async (refresh = false, first = false) => {
     try {
-      const d = await get<PrData>(`/github/pr/${owner}/${name}/${number}${refresh ? "?refresh=true" : ""}`);
+      const d = await get<PrData>(`/github/pr/${owner}/${name}/${number}${refresh ? "?refresh=true" : first ? "?cached=true" : ""}`);
       setData(d);
       setError(null);
-      void loadComments();
+      if (d.cache) {
+        setCacheToken(d.cache.token);
+        if (first) setFresh(d.cache.source === "cache" ? "cache" : null);
+        else if (!refresh) setFresh((f) => (f === "cache" ? "cache" : f));
+      }
+      if (!first) setPending((x) => { const n = new Set(x); n.delete("pr"); n.delete("comments"); return n; });
+      void loadComments(first);
       if (d.wiki_workspace_id) onReady(d.wiki_workspace_id, d.doc_path, `#${d.pr.number} ${d.pr.title}`);
     } catch (e) {
       setError((e as ApiError).message);
@@ -143,9 +159,31 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
   };
   useEffect(() => {
     setData(null);
-    void load();
+    listenCacheEvents();
+    loadStart.current = Date.now();
+    void load(false, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [repo, number]);
+  const typing = () => [...(root.current?.querySelectorAll("textarea") ?? [])].some((t) => (t as HTMLTextAreaElement).value.trim() !== "");
+  const loadRef = useRef(load);
+  loadRef.current = load;
+  const commentsRef = useRef(loadComments);
+  commentsRef.current = loadComments;
+  useEffect(() => {
+    if (!cacheToken) return;
+    const handle = (ev: CacheEvent) => {
+      const part = String(ev.part);
+      if (part === "pr") setFresh((f) => (f === "cache" || f === "current" || f === "updated" ? (ev.changed ? "updated" : f === "cache" ? "current" : f) : f));
+      if (!ev.changed) return;
+      if (part === "people") return setPeopleTick((n) => n + 1);
+      if (typing()) return setPending((x) => new Set(x).add(part)); // not while you write: a note offers the reload
+      if (part === "pr") void loadRef.current();
+      else if (part === "comments") void commentsRef.current();
+    };
+    // the check on GitHub may finish before this tab listens: the events that came since it started loading first
+    for (const ev of cacheEvents.filter((e) => e.token === cacheToken && e.at >= loadStart.current)) handle(ev);
+    return onCacheEvent((ev) => { if (ev.token === cacheToken) handle(ev); });
+  }, [cacheToken]);
   const autoRefresh = useCallback(() => void load(true), [repo, number]); // eslint-disable-line react-hooks/exhaustive-deps
   useGhAutoRefresh("pr", autoRefresh, !notPr);
 
@@ -245,7 +283,7 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
   const failing = p.checks.filter((c) => STATE_CLASS[c.state] === "failure").length;
 
   return (
-    <div className="pr-view" data-testid="pr-view" onClick={(e) => {
+    <div className="pr-view" data-testid="pr-view" ref={root} onClick={(e) => {
       // links to pull requests (#123, owner/repo#123, github.com/…/pull/123) open here; Ctrl/⌘/Shift-click: on GitHub
       const a = (e.target as HTMLElement).closest?.("a[data-pr]");
       if (!a || !onOpenPr || e.ctrlKey || e.metaKey || e.shiftKey || e.button !== 0) return;
@@ -312,10 +350,23 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
           <PrStar repo={p.repo} number={p.number} />
           <PrStateMenu apiBase={apiBase} state={p.state} draft={p.draft} number={p.number} onDone={() => load(true)} onError={setError} />
           <a className="btn small" href={p.url} target="_blank" rel="noreferrer">Open on GitHub</a>
+          {fresh && (
+            <span className={`muted small pr-fresh ${fresh}`} data-testid="pr-fresh" data-state={fresh}
+              title={fresh === "cache" ? "Opened from the local cache; checking GitHub for changes…" : fresh === "updated" ? "Updated from GitHub just now" : "The same as on GitHub"}>
+              {fresh === "cache" ? "cached · checking…" : fresh === "updated" ? "updated" : "up to date"}
+            </span>
+          )}
           <RefreshButton className="btn small" onRefresh={() => load(true)} title="Reload from GitHub" testId="pr-refresh" />
           <GhRefreshSelect kind="pr" testId="pr-auto-refresh" title="How often an open pull request (here and in PR Development) refreshes from GitHub on its own; ↻ refreshes now" />
         </div>
       </div>
+      {pending.size > 0 && (
+        <div className="banner small" data-testid="pr-updated-note">
+          This pull request changed on GitHub.{" "}
+          <button className="btn small" onClick={() => { const parts = new Set(pending); setPending(new Set()); if (parts.has("pr")) void load(); else void loadComments(); }} data-testid="pr-updated-reload">Reload</button>
+          <span className="muted"> (your unsent text stays)</span>
+        </div>
+      )}
       <AgentView repo={p.repo} number={p.number} />
       {!data.wiki_workspace_id && (
         <div className="banner" data-testid="pr-choose-wiki">
@@ -392,7 +443,7 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
             </div>
             <Splitter dir="x" side="after" pane={sidePane} label="side column" className="pr-side-splitter" testId="pr-side-splitter" />
             {!sidePane.folded && <aside className="pr-side">
-              <Contributors apiBase={apiBase} />
+              <Contributors apiBase={apiBase} tick={peopleTick} />
               <Reviewers apiBase={apiBase} reviews={p.reviews} requested={p.requested.filter(Boolean) as string[]} onChanged={() => void load(true)} onError={setError} />
               <section>
                 <h4>Checks {p.checks.length ? <span className={`ci-dot ${STATE_CLASS[p.ci ?? ""] ?? "none"}`} /> : null}</h4>
@@ -470,7 +521,8 @@ interface Contributor {
 interface People { contributors: Contributor[]; commits_total: number; commits_listed: number; details?: boolean }
 
 /** Who made the PR (author, commit authors, co-authors); per person, optional details from the public GitHub profile. */
-function Contributors({ apiBase }: { apiBase: string }) {
+function Contributors({ apiBase, tick = 0 }: { apiBase: string; tick?: number }) {
+  const firstLoad = useRef(true);
   const [data, setData] = useState<People | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [open, setOpen] = useState<Set<string>>(new Set());
@@ -480,12 +532,14 @@ function Contributors({ apiBase }: { apiBase: string }) {
   useEffect(() => {
     let live = true;
     setBusy(true);
-    get<People>(`${apiBase}/contributors${details ? "?details=true" : ""}`)
+    const cached = firstLoad.current && !details && tick === 0; // the first time, from the local cache (checked right after)
+    firstLoad.current = false;
+    get<People>(`${apiBase}/contributors${details ? "?details=true" : cached ? "?cached=true" : ""}`)
       .then((d) => { if (live) { setData(d); setErr(null); } })
       .catch((e) => { if (live) setErr((e as ApiError).message); })
       .finally(() => { if (live) setBusy(false); });
     return () => { live = false; };
-  }, [apiBase, details]);
+  }, [apiBase, details, tick]);
   const key = (c: Contributor) => c.login ?? `~${c.name}`;
   const toggle = (k: string) => setOpen((s) => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n; });
   return (
@@ -724,6 +778,27 @@ function CiAsk({ apiBase, canAsk, onAsk, checks, label, compact = false }: {
       </div>
     </div>
   );
+}
+
+/** Events of the local PR cache (a background check on GitHub finished): kept a minute, so a tab that starts
+ * listening after its check finished still gets it. */
+interface CacheEvent { token: string; part: string; changed: boolean; at: number }
+const cacheEvents: CacheEvent[] = [];
+const cacheListeners = new Set<(ev: CacheEvent) => void>();
+let cacheSub: (() => void) | null = null;
+function listenCacheEvents() {
+  if (cacheSub) return;
+  cacheSub = subscribeGlobal((ev) => {
+    if (ev.type !== "github_cache") return;
+    const e: CacheEvent = { token: String(ev.token), part: String(ev.part), changed: !!ev.changed, at: Date.now() };
+    cacheEvents.push(e);
+    while (cacheEvents.length && Date.now() - cacheEvents[0].at > 60_000) cacheEvents.shift();
+    cacheListeners.forEach((f) => f(e));
+  });
+}
+function onCacheEvent(f: (ev: CacheEvent) => void): () => void {
+  cacheListeners.add(f);
+  return () => { cacheListeners.delete(f); };
 }
 
 /** The PR's priority level — the same menu as in Reviews: set it by hand, back to rules / agent, ask the agent again. */

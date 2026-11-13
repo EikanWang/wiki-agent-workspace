@@ -5,7 +5,7 @@ import { confirmAction } from "./Confirm";
 import GhUser from "./GhUser";
 import { useRestoredScroll } from "../persist";
 import { GhRefreshSelect } from "../ghRefresh";
-import { AgentStatus, CATEGORY_HINT, Category, LevelMenu, PriorityAgent, PriorityLevel, PriorityRule, PrioritySettings } from "./ReviewPriority";
+import { AgentStatus, CATEGORY_HINT, CacheSettings, Category, LevelMenu, PriorityAgent, PriorityLevel, PriorityRule, PrioritySettings } from "./ReviewPriority";
 
 export interface ReviewPR {
   repo: string;
@@ -414,7 +414,7 @@ function ReviewsSettings({ prefs, busy, change, problems, status }: {
   prefs: HubPrefs; busy: string | null; change: (what: string, c: Partial<HubPrefs> & Record<string, unknown>) => Promise<void>; problems: string[]; status: AgentStatus | null;
 }) {
   const [repo, setRepo] = useState("");
-  const [tab, setTab] = useState<"priority" | "repos">(() => (localStorage.getItem("waw.reviews.settingsTab") === "repos" ? "repos" : "priority"));
+  const [tab, setTab] = useState<"priority" | "repos" | "cache">(() => { const t = localStorage.getItem("waw.reviews.settingsTab"); return t === "repos" || t === "cache" ? t : "priority"; });
   useEffect(() => localStorage.setItem("waw.reviews.settingsTab", tab), [tab]);
   const valid = /^[\w.-]+\/[\w.-]+$/.test(repo.trim());
   const watch = () => {
@@ -427,10 +427,12 @@ function ReviewsSettings({ prefs, busy, change, problems, status }: {
       <span className="mode-switch" role="tablist">
         <button role="tab" aria-selected={tab === "priority"} className={tab === "priority" ? "active" : ""} onClick={() => setTab("priority")} data-testid="reviews-settings-priority">Priority</button>
         <button role="tab" aria-selected={tab === "repos"} className={tab === "repos" ? "active" : ""} onClick={() => setTab("repos")} data-testid="reviews-settings-repos">Repositories</button>
+        <button role="tab" aria-selected={tab === "cache"} className={tab === "cache" ? "active" : ""} onClick={() => setTab("cache")} data-testid="reviews-settings-cache">Cache</button>
       </span>
       {tab === "priority" && <PrioritySettings key="priority" prefs={prefs} status={status} save={async (c) => {
         await savePrefs(c as Partial<HubPrefs>);
       }} />}
+      {tab === "cache" && <CacheSettings />}
       {tab === "repos" && <>
       <div className="small strong">Watched repositories <span className="muted">(all their open PRs, besides your review requests)</span></div>
       {prefs.watched_repos.map((r) => (

@@ -180,6 +180,18 @@ level by hand**, go **back to rules / agent**, or **ask the agent again**. A PR'
   changes** shows its reason and the summary of each file.
 - **Categories** — the order and names of the three sections.
 The level filter next to the sort (*only P0*, *P0–P1*…) shows only the more urgent PRs.
+**Opening a PR quickly (⚙ → Cache).** PR Review keeps a local copy of each pull request — details, files and diffs,
+viewed marks, checks, review threads, conversation, contributors, and the files you expand — in a folder
+(`<state_dir>/github-cache` by default; private: mode 0700/0600). A PR's tab opens at once from it, shows **cached ·
+checking…** next to ↻, and GitHub is checked right away: **up to date**, or the tab **updates itself** (**updated**).
+While you are writing a comment it does not reload: a note offers **Reload** (your text stays). Everything else works
+exactly as before — ↻, auto-refresh, the reloads after your actions, your drafts and the agent's suggestions always
+come from GitHub / the app; your actions mark the cached copy stale. With **prefetch** on (default) the PRs of your
+review list that are new or changed are fetched in the background after each refresh of the list (2 at a time,
+pausing when fewer than 1000 GitHub requests remain), so most open from the cache. ⚙ → Cache shows its size, moves it
+to another folder (**Move here**; not inside a wiki), sets the size limit (2048 MB by default: the PRs opened longest
+ago go first; closed and merged ones after a week), turns prefetch off and **clears** it.
+
 **auto-refresh** (in the line above the list) sets how often the list and its badge refresh from GitHub on their
 own: off (only ↻), 1, 2, 5 (default), 10, 15, 30 minutes, or 1, 2, 4, 8 hours; ↻ refreshes now at any time. An open pull request has its own **auto-refresh**
 next to ↻ in its toolbar (off by default) — the same setting refreshes PR Development's checks in its Pull request

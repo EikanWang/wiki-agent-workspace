@@ -175,6 +175,7 @@ def add_fake_review_queue(app) -> None:
              "comments": {"totalCount": 1, "nodes": [{"databaseId": 6001, "author": {"login": "dan"}, "body": "Same here.", "createdAt": "2026-11-02T00:00:00Z", "url": None}]}}
     posted: list = []  # what "GitHub" received (inspected by tests via /fake-github/posted)
     state = {
+        "titles": {},  # PR number -> a new title on "GitHub" (the PR changed while the app had it cached)
         "viewed": {},
         "threads": [{"id": "PRRT_bob", "isResolved": False, "isOutdated": False, "path": "c10/xpu/stub.cpp", "line": 11, "originalLine": 11,
                      "startLine": None, "diffSide": "RIGHT", "startDiffSide": None, "subjectType": "LINE", "resolvedBy": None,
@@ -247,6 +248,7 @@ def add_fake_review_queue(app) -> None:
             src = next((x for x in nodes if x and x["number"] == n), None)
             if src is None:  # not a pull request (e.g. issue #555)
                 return {"repository": {"nameWithOwner": "pytorch/pytorch", "isPrivate": False, "pullRequest": None}}
+            src = {**src, **({"title": state["titles"][n]} if n in state["titles"] else {})}  # (renamed by a test)
             return {"repository": {"nameWithOwner": src["repository"]["nameWithOwner"], "isPrivate": False, "pullRequest": {
                 **src, "id": f"PR_e2e{n}", "body": "This PR **fixes** the lazy stub.\n\n- adds a check\n\nFollows #103 (see `#999` in code), fixes #555. cc @bob, not mail@example.com"
                 + (" prio-hint:P0" if n == 201 else ""),  # (the fake agent's priority decision for #201)
@@ -323,6 +325,21 @@ def add_fake_review_queue(app) -> None:
         return _J(posted)
 
     app.router.routes.insert(0, _R("/fake-github/posted", show_posted))
+    ctx.extra["gh_cache_prefetch"] = True  # the PR Review cache prefetches, as with the real gh (only GETs: nothing is posted)
+
+    async def rename_pr(request):  # a change on GitHub (the next fetch of the PR sees it)
+        state["titles"][int(request.query_params["n"])] = request.query_params["title"]
+        return _J({"ok": True})
+
+    async def forget_memory(request):  # as after a restart: only the local cache (on disk) has the PRs
+        from backend.app import github_hub as _gh
+
+        _gh._pr_cache.clear()
+        _gh._people_cache.clear()
+        return _J({"ok": True})
+
+    app.router.routes.insert(0, _R("/fake-github/rename-pr", rename_pr))
+    app.router.routes.insert(0, _R("/fake-github/forget-memory", forget_memory))
     ctx.extra["gh_pr_files"] = lambda o, r, n: [
         {"filename": "c10/xpu/stub.cpp", "status": "modified", "additions": 2, "deletions": 1,
          "patch": "@@ -10,3 +10,4 @@ void init() {\n   load();\n-  call();\n+  if (ok)\n+    call();\n }"},

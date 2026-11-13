@@ -589,6 +589,10 @@ async def dev_pr_state(owner: str, name: str, number: int, body: PrStateIn, ctx:
 
     repo = _pr_args(owner, name, number)
     await service.set_pr_state(repo, number, body.action, (body.comment or "").strip() or None)
+    from .. import github_cache, github_hub  # PR Review's copies of it are out of date now
+
+    github_hub._pr_cache.pop(f"{repo}#{number}".lower(), None)
+    github_cache.mark_stale(ctx, f"{repo}#{number}")
     for r in _svc(ctx).list():
         if (r.get("github_repo") or "").lower() == repo.lower() and r.get("pr_number") == number and ctx.events:
             ctx.events.publish("global", {"type": "dev_changed", "dev_id": r["id"]})

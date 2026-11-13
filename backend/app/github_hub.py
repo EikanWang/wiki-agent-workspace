@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from fastapi import APIRouter, Depends, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .deps import AppContext, require_auth, require_auth_mutating
 from .errors import ApiError
@@ -466,6 +466,9 @@ async def review_queue(refresh: bool = Query(False), auth: tuple[AppContext, str
 
     data = apply_prefs(hit[1], prefs, rp.results(ctx))
     rp.schedule(ctx, data["items"] + data["watched"], prefs)  # the agent decides levels of new / changed PRs, in the background
+    from . import github_cache as gc
+
+    gc.prefetch(ctx, data["items"] + data["watched"], lambda r, n: _fetch_all(ctx, r, n), RATE)  # PRs ready to open
     agent = agent_review_states(ctx)
     for key in ("items", "watched"):
         data[key] = [{**p, "agent_review": agent.get(f"{p['repo']}#{p['number']}".lower())} for p in data.get(key) or []]
@@ -480,6 +483,10 @@ def _priority_results(ctx: AppContext) -> dict[str, Any]:
 
 
 def reset_cache() -> None:
+    from . import github_cache as gc
+
+    gc.reset()
+    _content_cache.clear()
     _cache.clear()
     _errors.clear()
     _tasks.clear()
@@ -758,35 +765,55 @@ def repo_wiki(ctx: AppContext, repo: str) -> str | None:
 
 
 @router.get("/github/pr/{owner}/{repo}/{number}")
-async def get_pull_request(owner: str, repo: str, number: int, refresh: bool = Query(False),
+async def get_pull_request(owner: str, repo: str, number: int, refresh: bool = Query(False), cached: bool = Query(False),
                            auth: tuple[AppContext, str] = Depends(require_owner)):
-    """A pull request for its tab: details, checks, reviews, changed files; writes the copy the agent discusses."""
+    """A pull request for its tab: details, checks, reviews, changed files; writes the copy the agent discusses.
+    cached=true (a tab's first load): a copy from the local cache when there is one, refreshed in the background."""
+    from . import github_cache as gc
+
     ctx, _ = auth
     _check_names(owner, repo)
     key = f"{owner}/{repo}#{number}".lower()
     hit = _pr_cache.get(key)
+    graphql = _hooks(ctx)[0]
+    files_fn = ctx.extra.get("gh_pr_files", _gh_files)
+    disk = gc.get(ctx, key, "pr") if cached and not refresh and not (hit and time.time() - hit[0] < PR_CACHE_SECONDS) else None
+    source = "github"
     if hit and not refresh and time.time() - hit[0] < PR_CACHE_SECONDS:
         data = hit[1]
+        source = "memory"
+        if not gc.has(ctx, key, "pr"):  # (filled by another reader): keep a copy for the next first load
+            await asyncio.to_thread(gc.put, ctx, key, "pr", data)
+    elif disk is not None:
+        data, fetched = disk  # not put into _pr_cache: actions keep using data fetched in this process
+        hit = (fetched, data)
+        source = "cache"
+
+        def fresh(new: dict[str, Any], changed: bool) -> None:
+            _pr_cache[key] = (time.time(), new)  # fetched now, in this process: the tab's reload and actions use it
+        gc.revalidate(ctx, key, "pr", lambda: fetch_pr(owner, repo, number, graphql, files_fn), fresh)
     else:
         hit = None
-        graphql = _hooks(ctx)[0]
-        files_fn = ctx.extra.get("gh_pr_files", _gh_files)
         data = await asyncio.to_thread(fetch_pr, owner, repo, number, graphql, files_fn)
         _pr_cache[key] = (time.time(), data)
-        hit = None
+        await asyncio.to_thread(gc.put, ctx, key, "pr", data)
     # the copy the agent reads; discussions attach to it like to a document of the repo's wiki (also written when
     # the PR came into the cache another way, e.g. a local sync, before its tab was opened)
+    # (rewritten only here, during a load — the tab re-opens it right after — and only when its text changes, so the
+    # version a discussion is asked against always matches)
     snap = ctx.settings.snapshots_dir / "github" / owner.lower() / repo.lower()
-    if hit is None or not (snap / f"{number}.md").is_file():
+    raw = [{"filename": f["path"], "status": f["status"], "additions": f["additions"], "deletions": f["deletions"],
+            "patch": f["unified"].split("\n", 2)[2].rstrip("\n") if f["unified"] else None} for f in data["files"]]
+    text = pr_markdown(data["pr"], raw)
+    target = snap / f"{number}.md"
+    if hit is None or not target.is_file() or target.read_text(encoding="utf-8") != text:
         snap.mkdir(parents=True, exist_ok=True)
-        raw = [{"filename": f["path"], "status": f["status"], "additions": f["additions"], "deletions": f["deletions"],
-                "patch": f["unified"].split("\n", 2)[2].rstrip("\n") if f["unified"] else None} for f in data["files"]]
-        text = pr_markdown(data["pr"], raw)
-        (snap / f"{number}.md").write_text(text, encoding="utf-8")
+        target.write_text(text, encoding="utf-8")
     wiki = repo_wiki(ctx, data["pr"]["repo"])
     if wiki and ctx.workspaces is not None and wiki not in ctx.workspaces.runtimes:
         wiki = None  # that folder is not open in this window (any more): ask again
-    return {**data, "wiki_workspace_id": wiki, "doc_path": f".waw-github/{owner.lower()}/{repo.lower()}/{number}.md"}
+    return {**data, "wiki_workspace_id": wiki, "doc_path": f".waw-github/{owner.lower()}/{repo.lower()}/{number}.md",
+            "cache": {"source": source, "token": gc.token(ctx, key), "fetched_at": hit[0] if hit else time.time()}}
 
 
 class RepoWikiIn(BaseModel):
@@ -899,7 +926,7 @@ def _draft_dict(d: Any) -> dict[str, Any]:
 
 
 @router.get("/github/pr/{owner}/{repo}/{number}/comments")
-async def pr_comments(owner: str, repo: str, number: int, auth: tuple[AppContext, str] = Depends(require_owner)):
+async def pr_comments(owner: str, repo: str, number: int, cached: bool = Query(False), auth: tuple[AppContext, str] = Depends(require_owner)):
     """Everything reviewers said: review threads (resolved/outdated, line or file), the conversation (review
     summaries and general comments), your unpublished drafts, and your pending review started on github.com."""
     from .models import GithubPrDraft
@@ -907,20 +934,52 @@ async def pr_comments(owner: str, repo: str, number: int, auth: tuple[AppContext
     ctx, _ = auth
     _check_names(owner, repo)
     graphql = _hooks(ctx)[0]
+    from . import github_cache as gc
+
+    key = f"{owner}/{repo}#{number}".lower()
     agent_reviews = await asyncio.to_thread(import_agent_reviews, ctx, owner, repo, number)
-    threads, conv = await asyncio.gather(asyncio.to_thread(fetch_threads, graphql, owner, repo, number),
-                                         asyncio.to_thread(fetch_conversation, graphql, owner, repo, number))
+    disk = gc.get(ctx, key, "comments") if cached else None
+    snap = ctx.settings.snapshots_dir / "github" / owner.lower() / repo.lower()
+
+    def fetch_both() -> dict[str, Any]:
+        return {"threads": fetch_threads(graphql, owner, repo, number), "conv": fetch_conversation(graphql, owner, repo, number)}
+    if disk is not None:
+        threads, conv = disk[0]["threads"], disk[0]["conv"]
+
+        def fresh(new: dict[str, Any], changed: bool) -> None:
+            if changed:  # the agent reads the review discussion next to the PR copy
+                snap.mkdir(parents=True, exist_ok=True)
+                (snap / f"{number}.discussion.md").write_text(discussion_markdown(new["threads"], new["conv"]), encoding="utf-8")
+        gc.revalidate(ctx, key, "comments", fetch_both, fresh)
+    else:
+        threads, conv = await asyncio.gather(asyncio.to_thread(fetch_threads, graphql, owner, repo, number),
+                                             asyncio.to_thread(fetch_conversation, graphql, owner, repo, number))
+        await asyncio.to_thread(gc.put, ctx, key, "comments", {"threads": threads, "conv": conv})
     with ctx.db.read() as s:
         drafts = s.query(GithubPrDraft).filter_by(repo=f"{owner}/{repo}".lower(), number=number).order_by(GithubPrDraft.created_at).all()
         dd = [_draft_dict(d) for d in drafts]
     _remember_participants(f"{owner}/{repo}#{number}".lower(), [(c.get("author"), "commenter") for c in conv["items"]]
                            + [(c.get("author"), "commenter") for t in threads for c in t.get("comments") or []])
     # the agent reads the review discussion next to the PR copy
-    snap = ctx.settings.snapshots_dir / "github" / owner.lower() / repo.lower()
     snap.mkdir(parents=True, exist_ok=True)
     (snap / f"{number}.discussion.md").write_text(discussion_markdown(threads, conv), encoding="utf-8")
     return {"threads": threads, "conversation": conv["items"], "older_hidden": conv["older_hidden"], "drafts": dd,
-            "pending_on_github": conv["pending_comments"] if conv["pending_review_id"] else None, "agent_reviews": agent_reviews}
+            "pending_on_github": conv["pending_comments"] if conv["pending_review_id"] else None, "agent_reviews": agent_reviews,
+            "cache": {"source": "cache" if disk is not None else "github", "token": gc.token(ctx, key)}}
+
+
+def _fetch_all(ctx: AppContext, repo_full: str, number: int) -> dict[str, Any]:
+    """Prefetch: what a PR's tab first loads (details, files, viewed, checks; threads and conversation)."""
+    owner, repo = repo_full.split("/", 1)
+    graphql = _hooks(ctx)[0]
+    return {"pr": fetch_pr(owner, repo, number, graphql, ctx.extra.get("gh_pr_files", _gh_files)),
+            "comments": {"threads": fetch_threads(graphql, owner, repo, number), "conv": fetch_conversation(graphql, owner, repo, number)}}
+
+
+def _cache_stale(ctx: AppContext, owner: str, repo: str, number: int, parts: tuple[str, ...] = ("pr", "comments", "people")) -> None:
+    from . import github_cache as gc
+
+    gc.mark_stale(ctx, f"{owner}/{repo}#{number}", parts)
 
 
 def _pr_node(ctx: AppContext, owner: str, repo: str, number: int) -> dict[str, Any]:
@@ -952,6 +1011,9 @@ async def set_viewed(owner: str, repo: str, number: int, body: ViewedIn, auth: t
         for f in hit[1]["files"]:
             if f["path"] == body.path:
                 f["viewed"] = "VIEWED" if body.viewed else "UNVIEWED"
+    from . import github_cache as gc
+
+    await asyncio.to_thread(gc.set_viewed, ctx, f"{owner}/{repo}#{number}", body.path, "VIEWED" if body.viewed else "UNVIEWED")
     return {"path": body.path, "viewed": "VIEWED" if body.viewed else "UNVIEWED"}
 
 
@@ -1123,6 +1185,7 @@ async def submit_review(owner: str, repo: str, number: int, body: SubmitIn, auth
     with ctx.db.write() as s:
         s.query(GithubPrDraft).filter(GithubPrDraft.id.in_([d["id"] for d in dd] + discarded)).delete(synchronize_session=False)
     _pr_cache.pop(f"{owner}/{repo}#{number}".lower(), None)
+    _cache_stale(ctx, owner, repo, number)
     _cache.pop(owner_login, None)  # the review queue changes too
     log.info("published review on %s/%s#%d (%s, %d comments, %d from github.com)", owner, repo, number, body.event, len(dd), pending_n)
     return {"published": len(dd), "from_github": pending_n, "event": body.event, "url": url, "undecided": undecided}
@@ -1449,20 +1512,35 @@ def user_details(rest: Callable[..., Any], login: str) -> dict[str, Any]:
 
 @router.get("/github/pr/{owner}/{repo}/{number}/contributors")
 async def pr_contributors(owner: str, repo: str, number: int, refresh: bool = Query(False), details: bool = Query(False),
-                          auth: tuple[AppContext, str] = Depends(require_owner)):
+                          cached: bool = Query(False), auth: tuple[AppContext, str] = Depends(require_owner)):
     """Who contributed to the PR (author, commit authors, co-authors) with their public GitHub profile: name, commit
     emails, company, organizations, location, … and a guessed affiliation. details=true adds the public email and
     other REST-only profile fields (one request per person, cached)."""
     ctx, _ = auth
     _check_names(owner, repo)
     key = f"{owner}/{repo}#{number}".lower()
+    from . import github_cache as gc
+
     hit = _people_cache.get(key)
+    disk = gc.get(ctx, key, "people") if cached and not refresh and not (hit and time.time() - hit[0] < 600) else None
     if hit and not refresh and time.time() - hit[0] < 600:
         data = hit[1]
+        if not gc.has(ctx, key, "people"):
+            await asyncio.to_thread(gc.put, ctx, key, "people", data)
+    elif disk is not None:
+        data = disk[0]
+        _remember_participants(key, [(c["login"], "contributor") for c in data["contributors"]])
+        graphql = _hooks(ctx)[0]
+
+        def fresh(new: dict[str, Any], changed: bool) -> None:
+            _people_cache[key] = (time.time(), new)
+            _remember_participants(key, [(c["login"], "contributor") for c in new["contributors"]])
+        gc.revalidate(ctx, key, "people", lambda: fetch_people(graphql, owner, repo, number), fresh)
     else:
         data = await asyncio.to_thread(fetch_people, _hooks(ctx)[0], owner, repo, number)
         _people_cache[key] = (time.time(), data)
         _remember_participants(key, [(c["login"], "contributor") for c in data["contributors"]])
+        await asyncio.to_thread(gc.put, ctx, key, "people", data)
     if details:
         rest = _rest(ctx)
         people = [dict(x) for x in data["contributors"]]
@@ -1946,6 +2024,7 @@ async def change_reviewers(owner: str, repo: str, number: int, body: ReviewersIn
     if body.remove:
         await asyncio.to_thread(rest, "DELETE", path, {"reviewers": body.remove})
     _pr_cache.pop(f"{owner}/{repo}#{number}".lower(), None)
+    _cache_stale(ctx, owner, repo, number)
     pr = await asyncio.to_thread(_pr_node, ctx, owner, repo, number)
     return {"requested": pr.get("requested") or [], "reviews": pr.get("reviews") or []}
 
@@ -2102,6 +2181,7 @@ async def pr_state(owner: str, repo: str, number: int, body: PrStateIn, auth: tu
         q, key = (M_READY, "markPullRequestReadyForReview") if body.action == "ready" else (M_DRAFT, "convertPullRequestToDraft")
         await asyncio.to_thread(_mutate, _hooks(ctx)[0], q, {"id": pr["node_id"]}, key)
     _pr_cache.pop(f"{owner}/{repo}#{number}".lower(), None)
+    _cache_stale(ctx, owner, repo, number)
     _cache.pop(owner_login, None)
     pr = await asyncio.to_thread(_pr_node, ctx, owner, repo, number)
     return {"state": pr.get("state"), "draft": pr.get("draft")}
@@ -2255,6 +2335,7 @@ async def trigger_ci(owner: str, repo: str, number: int, body: CiTriggerIn, auth
     else:
         raise ApiError(400, "INVALID_ACTION", "action must be rerun_failed, rerun, cancel, dispatch, label or unlabel")
     _pr_cache.pop(f"{owner}/{repo}#{number}".lower(), None)
+    _cache_stale(ctx, owner, repo, number)
     return {"ok": True, "action": a}
 
 
@@ -2266,10 +2347,15 @@ MAX_EXPAND_BYTES = 5 * 1024 * 1024
 
 def _file_at(ctx: AppContext, repo: str, number: int, sha: str, path: str) -> str:
     """The file at the PR's head commit: from the connected local checkout when it has the PR fetched, else GitHub."""
+    from . import github_cache as gc
+
     key = (repo.lower(), sha, path)
     if key in _content_cache:
         return _content_cache[key]
-    text: str | None = None
+    text: str | None = gc.file_get(ctx, repo, sha, path)
+    if text is not None:
+        _content_cache[key] = text
+        return text
     from .local_repos import get_link, sync_state
 
     link = get_link(ctx, repo)
@@ -2304,6 +2390,7 @@ def _file_at(ctx: AppContext, repo: str, number: int, sha: str, path: str) -> st
     if len(_content_cache) > 200:
         _content_cache.clear()
     _content_cache[key] = text
+    gc.file_put(ctx, repo, sha, path, text)
     return text
 
 
@@ -2373,3 +2460,50 @@ def priority_of_pr(owner: str, repo: str, number: int, auth: tuple[AppContext, s
     ctx, _ = auth
     _check_names(owner, repo)
     return {"result": rp.results(ctx).get(f"{owner}/{repo}#{number}".lower())}
+
+
+# ---------------------------------------------------------------------- the local cache of PR Review (⚙ → Cache)
+
+class CacheIn(BaseModel):
+    dir: str | None = Field(None, max_length=4096)
+    cap_mb: int | None = Field(None, ge=0, le=1_000_000)  # 0: no limit
+    prefetch: bool | None = None
+
+
+@router.get("/github/cache")
+def cache_info(auth: tuple[AppContext, str] = Depends(require_owner)):
+    from . import github_cache as gc
+
+    ctx, _ = auth
+    return {**gc.settings(ctx), **gc.usage(ctx), **gc.status()}
+
+
+@router.put("/github/cache")
+def cache_settings(body: CacheIn, auth: tuple[AppContext, str] = Depends(require_owner_mutating)):
+    """The cache folder (the cached PRs move there), its size cap and the background prefetch."""
+    from pathlib import Path as _P
+
+    from . import github_cache as gc
+
+    ctx, _ = auth
+    cur = kv_get(ctx, gc.SETTINGS_KEY, {}) or {}
+    if body.cap_mb is not None:
+        cur["cap_mb"] = body.cap_mb
+    if body.prefetch is not None:
+        cur["prefetch"] = body.prefetch
+    kv_put(ctx, gc.SETTINGS_KEY, cur)
+    if body.dir is not None and body.dir.strip():
+        roots = [_P(w["root"]) for w in ctx.workspaces.list()] if ctx.workspaces is not None else [_P(ctx.settings.workspace_root)]
+        gc.change_dir(ctx, body.dir.strip(), roots)
+    if body.cap_mb is not None:
+        gc.cleanup(ctx)
+    return {**gc.settings(ctx), **gc.usage(ctx), **gc.status()}
+
+
+@router.post("/github/cache/clear")
+def cache_clear(auth: tuple[AppContext, str] = Depends(require_owner_mutating)):
+    from . import github_cache as gc
+
+    ctx, _ = auth
+    gc.clear(ctx)
+    return {**gc.settings(ctx), **gc.usage(ctx), **gc.status()}

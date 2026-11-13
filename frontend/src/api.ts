@@ -390,7 +390,7 @@ export function subscribeJob(jobId: string, after: number, onEvent: (ev: JobEven
 // One shared EventSource for every subscriber (browsers allow only a few connections per host over HTTP/1.1).
 const globalListeners = new Set<(ev: Record<string, any>) => void>();
 let globalSource: EventSource | null = null;
-const GLOBAL_TYPES = ["file_changed", "tree_changed", "job_event", "terminal_state", "preview_update", "watcher_ready", "workspaces_changed",
+const GLOBAL_TYPES = ["github_cache", "file_changed", "tree_changed", "job_event", "terminal_state", "preview_update", "watcher_ready", "workspaces_changed",
   "review_finished", "commit", "dev_changed", "dev_task", "message"];
 
 export function subscribeGlobal(onEvent: (ev: Record<string, any>) => void): () => void {
