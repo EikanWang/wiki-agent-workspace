@@ -271,7 +271,7 @@ export function LevelMenu({ pr, level, source, reasons, levels, agentOn, onSet, 
   );
 }
 
-interface CacheInfo { dir: string; cap_mb: number; prefetch: boolean; bytes: number; prs: number; queued: number; prefetching: number; prefetched: number }
+interface CacheInfo { dir: string; cap_mb: number; prefetch: boolean; bytes: number; prs: number; issues?: number; queued: number; prefetching: number; prefetched: number }
 
 /** ⚙ → Cache: where PR Review keeps its local copies (opened at once, checked on GitHub right after), size, prefetch. */
 export function CacheSettings() {
@@ -318,7 +318,7 @@ export function CacheSettings() {
         something changed. Your actions, ↻ and polling always go to GitHub.
       </div>
       <div className="small" data-testid="cache-usage">
-        {info.prs} pull request(s) · {mb(info.bytes)}{info.queued + info.prefetching > 0 ? ` · prefetching ${info.queued + info.prefetching}…` : ""}
+        {info.prs} pull request(s){info.issues ? ` · ${info.issues} issue(s)` : ""} · {mb(info.bytes)}{info.queued + info.prefetching > 0 ? ` · prefetching ${info.queued + info.prefetching}…` : ""}
       </div>
       <div className="small strong">Folder</div>
       <div className="row nowrap">

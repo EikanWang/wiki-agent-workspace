@@ -2116,6 +2116,14 @@ test("GitHub review hub: priority requests, hide a repository, watch a repositor
   await page.getByTestId("confirm-ok").click();
   await expect(page.getByTestId("issue-state")).toContainText("Closed (not planned)");
   await page.locator('[data-testid="doc-tab"][data-ws="github"]').filter({ hasText: "#555" }).getByTestId("doc-tab-close").click();
+  // opened again: from the local issue cache at once, checked on GitHub right after
+  const firstLoad = page.waitForResponse((r) => r.url().includes("/github/issue/pytorch/pytorch/555?cached=true"));
+  await page.locator('[data-testid="review-pr"][data-number="101"]').click();
+  await page.getByTestId("pr-description").locator('a[data-pr="pytorch/pytorch/555"]').click();
+  expect((await (await firstLoad).json()).cache.source).toBe("cache");
+  await expect(page.getByTestId("issue-view")).toContainText("XPU OOM on large batch");
+  await expect(page.getByTestId("issue-checking")).toHaveCount(0, { timeout: 15000 }); // the check on GitHub finished
+  await page.locator('[data-testid="doc-tab"][data-ws="github"]').filter({ hasText: "#555" }).getByTestId("doc-tab-close").click();
   // a PR's contributors, with details from their GitHub profile on demand
   await page.locator('[data-testid="review-pr"][data-number="101"]').click();
   const people = page.getByTestId("pr-contributors");
@@ -3407,6 +3415,26 @@ test("PR diff: copy the file path, expand hidden lines around a change, expand /
   await page.getByTestId("pr-layout-split").click();
   await expect(f.locator(".diff-line.split-row.expanded")).toHaveCount(36);
   await page.getByTestId("pr-layout-unified").click();
+  await page.getByTestId("activity-files").click();
+});
+
+test("GitHub quota: the chip shows when GitHub requests are slowed down or waiting, and says when they go on", async ({ page }) => {
+  await login(page);
+  await page.getByTestId("activity-insights").click();
+  await expect(page.getByTestId("insights-view")).toBeVisible();
+  await expect(page.getByTestId("gh-rate")).toHaveCount(0); // plain RUNNING: nothing shown
+  expect(await (await page.request.get("/fake-github/rate?remaining=0")).json()).toBe("WAITING_FOR_RATE_LIMIT");
+  const r = await (await page.request.get("/api/v1/github/rate")).json();
+  expect(r.buckets.graphql).toMatchObject({ limit: 5000, remaining: 0 });
+  await page.reload();
+  await expect(page.getByTestId("gh-rate")).toBeVisible({ timeout: 15000 });
+  await expect(page.getByTestId("gh-rate")).toHaveAttribute("data-state", "WAITING_FOR_RATE_LIMIT");
+  await expect(page.getByTestId("gh-rate")).toContainText(/waiting for the rate limit · goes on at \d\d:\d\d/);
+  await expect(page.getByTestId("gh-rate")).toHaveAttribute("title", /graphql 0\/5000/);
+  await page.request.get("/fake-github/rate?remaining=5000");
+  await page.reload();
+  await expect(page.getByTestId("insights-view")).toBeVisible();
+  await expect(page.getByTestId("gh-rate")).toHaveCount(0);
   await page.getByTestId("activity-files").click();
 });
 

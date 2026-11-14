@@ -88,11 +88,14 @@ def server_owner(settings: Settings) -> str:
 
     login = ""
     if shutil.which("gh"):
+        from . import gh_limits
+
         try:
-            p = subprocess.run(["gh", "api", "user", "--jq", ".login"], capture_output=True, text=True, timeout=15, check=False)
-            login = p.stdout.strip() if p.returncode == 0 else ""
-        except (OSError, subprocess.SubprocessError):
+            p = gh_limits.run_gh(["api", "user", "--jq", ".login"], timeout=15, dedupe=True)
+            login = p.out.strip() if p.rc == 0 else ""
+        except (OSError, subprocess.SubprocessError, gh_limits.ApiError):
             login = ""
+        gh_limits.LIMITER.set_identity(login)
     _owner_cache["gh"] = (time.time(), login)
     return login
 

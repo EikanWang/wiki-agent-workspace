@@ -33,7 +33,7 @@ VENDORS: dict[str, dict[str, list[str]]] = {
 INTEL_LOGINS = VENDORS["Intel"]["logins"]
 
 _USER = "login ... on User { company }"
-_COMMENTS = f"comments(last: 100) {{ nodes {{ createdAt body author {{ {_USER} }} }} }}"
+_COMMENTS = f"comments(last: 50) {{ nodes {{ createdAt body author {{ {_USER} }} }} }}"
 _COMMON = (f"number title url body state createdAt updatedAt author {{ {_USER} }} labels(first: 20) {{ nodes {{ name }} }} "
            f"assignees(first: 10) {{ nodes {{ login }} }} {_COMMENTS}")
 QUERY = f"""
@@ -46,7 +46,7 @@ query InsightsItems($q: String!, $after: String) {{
       __typename
       ... on Issue {{ {_COMMON} }}
       ... on PullRequest {{ {_COMMON} mergedAt
-        reviews(last: 50) {{ nodes {{ submittedAt body author {{ {_USER} }} comments(first: 30) {{ nodes {{ createdAt body author {{ login }} }} }} }} }} }}
+        reviews(last: 20) {{ nodes {{ submittedAt body author {{ {_USER} }} comments(first: 10) {{ nodes {{ createdAt body author {{ login }} }} }} }} }} }}
     }}
   }}
 }}
@@ -208,6 +208,33 @@ async def fetch_range(ctx: Any, repo: str, since: str, until: str, extra: str = 
     return items
 
 
+def _local_range(ctx: Any, repo: str, since: str, until: str) -> list[dict[str, Any]] | None:
+    """The items active in since..until from the local copies, when every day was fetched after it ended."""
+    import datetime as _dt
+
+    d, out = _dt.date.fromisoformat(since), {}
+    while d <= _dt.date.fromisoformat(until):
+        f = _dir(ctx, repo) / "days" / f"{d.isoformat()}.json"
+        if not f.is_file():
+            return None
+        for n in json.loads(f.read_text()):
+            it = _load_item(ctx, repo, n)
+            if it is None:
+                return None
+            out[n] = it
+        d += _dt.timedelta(days=1)
+    return list(out.values())
+
+
+async def items_of_range(ctx: Any, repo: str, since: str, until: str) -> list[dict[str, Any]]:
+    """Items active in since..until: from the local copies when the days were fetched, else one search for the range."""
+    got = _local_range(ctx, repo, since, until)
+    if got is not None:
+        return got
+    a, b = f"{since}T00:00:00Z", f"{until}T23:59:59Z"
+    return [it for it in await fetch_range(ctx, repo, since, until) if active(it, a, b)]
+
+
 async def items_of_day(ctx: Any, repo: str, day: str) -> list[dict[str, Any]]:
     """Items active on a day: from the local copies when the day was fetched after it ended, else from GitHub."""
     f = _dir(ctx, repo) / "days" / f"{day}.json"
@@ -250,15 +277,23 @@ def rfc_text(it: dict[str, Any], a: str, b: str) -> str:
 
 
 def diff_of(ctx: Any, repo: str, number: int, limit: int = 60_000) -> str:
-    from ..github_hub import _gh_files
+    """The PR's diff for scoring: one REST page (the first 100 files; enough for a judgement, and a huge PR does not
+    spend many requests)."""
+    from .. import gh_limits
 
-    owner, name = repo.split("/", 1)
-    try:
-        files = ctx.extra.get("gh_pr_files", _gh_files)(owner, name, number)
-    except Exception as exc:  # noqa: BLE001 - a diff is a nice-to-have for scoring
-        log.info("diff of %s#%d: %s", repo, number, exc)
-        return ""
-    out = "".join(f"--- a/{f['filename']}\n+++ b/{f['filename']}\n{f.get('patch') or '(binary or large)'}\n" for f in files)
+    if "gh_pr_files" in ctx.extra:  # tests
+        try:
+            files = ctx.extra["gh_pr_files"](*repo.split("/", 1), number)
+        except Exception:  # noqa: BLE001
+            files = []
+    else:
+        try:
+            r = gh_limits.run_gh(["api", f"repos/{repo}/pulls/{number}/files?per_page=100"], timeout=60)
+            files = json.loads(r.out) if r.rc == 0 else []
+        except (ValueError, gh_limits.ApiError) as exc:
+            log.info("diff of %s#%d: %s", repo, number, exc)
+            files = []
+    out = "".join(f"--- a/{f['filename']}\n+++ b/{f['filename']}\n{f.get('patch') or '(binary or large)'}\n" for f in files if isinstance(f, dict))
     return out[:limit]
 
 

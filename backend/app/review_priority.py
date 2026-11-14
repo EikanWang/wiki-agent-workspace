@@ -548,7 +548,11 @@ async def _fetch_pr(ctx: Any, item: dict[str, Any]) -> dict[str, Any]:
         return hit[1]
     graphql = gh._hooks(ctx)[0]
     files_fn = ctx.extra.get("gh_pr_files", gh._gh_files)
-    data = await asyncio.to_thread(gh.fetch_pr, owner, repo, item["number"], graphql, files_fn)
+    from . import gh_limits
+
+    # background work: it waits for the GitHub quota rather than spending what people need
+    data = await asyncio.to_thread(gh_limits.in_priority, gh_limits.BACKGROUND, True, "review-priority", gh.fetch_pr, owner, repo,
+                                   item["number"], graphql, files_fn)
     gh._pr_cache[key] = (time.time(), data)
     return data
 

@@ -218,6 +218,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from .development.tasks import TaskRunner
 
     ctx.extra["dev_editor"] = EditorManager(ctx)
+    from . import gh_limits
+    from .github_hub import _files_memo
+
+    _files_memo.clear()  # (a new app: nothing remembered from another one)
+    gh_limits.configure(settings.state_dir, settings.gh_rate)  # GitHub rate-limit state, shared with the other processes of this data folder
     ctx.extra["dev_tasks"] = TaskRunner(ctx)
 
     @asynccontextmanager

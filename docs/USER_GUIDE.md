@@ -192,6 +192,11 @@ pausing when fewer than 1000 GitHub requests remain), so most open from the cach
 to another folder (**Move here**; not inside a wiki), sets the size limit (2048 MB by default: the PRs opened longest
 ago go first; closed and merged ones after a week), turns prefetch off and **clears** it.
 
+**Issues** (a `#123` link that is not a pull request) are cached the same way, in the same folder: an issue you opened
+before shows at once from its local copy (**from the local copy · checking GitHub…**) and updates itself when GitHub has
+something newer; commenting, closing or reopening marks the copy stale, so the next open comes from GitHub. Closed issues
+are removed after a week like closed PRs; ⚙ → Cache counts them separately.
+
 **auto-refresh** (in the line above the list) sets how often the list and its badge refresh from GitHub on their
 own: off (only ↻), 1, 2, 5 (default), 10, 15, 30 minutes, or 1, 2, 4, 8 hours; ↻ refreshes now at any time. An open pull request has its own **auto-refresh**
 next to ↻ in its toolbar (off by default) — the same setting refreshes PR Development's checks in its Pull request

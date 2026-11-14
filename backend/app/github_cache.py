@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from .errors import ApiError
+from . import gh_limits
 from .kv import kv_get, kv_put
 
 log = logging.getLogger("waw.ghcache")
@@ -36,6 +37,7 @@ log = logging.getLogger("waw.ghcache")
 SETTINGS_KEY = "github_cache_settings"
 DEFAULTS: dict[str, Any] = {"dir": None, "cap_mb": 2048, "prefetch": True}
 PARTS = ("pr", "comments", "people")
+ISSUE_PARTS = ("issue",)  # an issue (a #N that is not a PR) is kept in the same folder layout: <owner>/<repo>/<N>/issue.json
 CLOSED_DAYS = 7
 PREFETCH_CONCURRENCY = 2
 PREFETCH_RESERVE = 1000
@@ -107,6 +109,7 @@ def get(ctx: Any, key: str, part: str) -> tuple[Any, float] | None:
     if part in (m.get("stale") or []):
         return None
     data = _read(_pr_dir(ctx, key) / f"{part}.json")
+    gh_limits.LIMITER.cache(data is not None)
     if data is None:
         return None
     m.setdefault("opened", {})
@@ -116,6 +119,11 @@ def get(ctx: Any, key: str, part: str) -> tuple[Any, float] | None:
     except OSError:
         pass
     return data, float((m.get("fetched") or {}).get(part) or 0)
+
+
+def peek(ctx: Any, key: str, part: str) -> Any:
+    """A part as stored (also when stale), without counting as opened."""
+    return _read(_pr_dir(ctx, key.lower()) / f"{part}.json")
 
 
 def has(ctx: Any, key: str, part: str) -> bool:
@@ -139,6 +147,8 @@ def put(ctx: Any, key: str, part: str, data: Any) -> bool:
         if part == "pr":
             pr = (data or {}).get("pr") or {}
             m.update(state=pr.get("state"), updated_at=pr.get("updated_at"), head_sha=pr.get("head_sha"), ci=pr.get("ci"))
+        elif part == "issue":  # (closed issues are cleaned up like closed PRs)
+            m.update(kind="issue", state=(data or {}).get("state"), updated_at=(data or {}).get("updated_at"))
         m.setdefault("opened_at", time.time())
         _write(d / "meta.json", m)
     except OSError as exc:
@@ -217,8 +227,8 @@ def usage(ctx: Any) -> dict[str, Any]:
                 size += p.stat().st_size
         except OSError:
             pass
-    prs = sum(1 for _ in r.glob("*/*/*/meta.json"))
-    return {"bytes": size, "prs": prs}
+    kinds = [(_read(m) or {}).get("kind") for m in r.glob("*/*/*/meta.json")]
+    return {"bytes": size, "prs": sum(1 for k in kinds if k != "issue"), "issues": sum(1 for k in kinds if k == "issue")}
 
 
 def cleanup(ctx: Any) -> dict[str, int]:
@@ -322,7 +332,8 @@ def revalidate(ctx: Any, key: str, part: str, fetch, on_fresh=None) -> None:
 
     async def run() -> None:
         try:
-            data = await asyncio.to_thread(fetch)
+            # the tab already shows the cached copy: no waiting for the GitHub quota here
+            data = await asyncio.to_thread(gh_limits.in_priority, gh_limits.INTERACTIVE, False, f"revalidate:{part}", fetch)
             changed = put(ctx, key, part, data)
             if on_fresh is not None:
                 on_fresh(data, changed)
@@ -370,10 +381,13 @@ async def _prefetch_worker(ctx: Any, fetch_all, rate: Any) -> None:
         job = _prefetch_queue.pop(0)
         _state["prefetching"] += 1
         try:
-            parts = await asyncio.to_thread(fetch_all, job["repo"], job["number"])
+            parts = await asyncio.to_thread(gh_limits.in_priority, gh_limits.BACKGROUND, False, "prefetch", fetch_all, job["repo"], job["number"])
             for part, data in parts.items():
                 put(ctx, job["key"], part, data)
             _state["prefetched"] += 1
+        except gh_limits.RateLimited as exc:  # the quota is for people now: stop; the list's next refresh queues again
+            log.info("prefetch paused: %s", exc.message)
+            _prefetch_queue.clear()
         except Exception as exc:  # noqa: BLE001 - prefetch is best effort
             log.info("prefetching %s failed: %s", job["key"], exc)
         finally:

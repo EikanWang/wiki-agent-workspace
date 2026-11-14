@@ -14,7 +14,7 @@ import asyncio
 import json
 import re
 import logging
-import shutil
+import shutil  # noqa: F401 - (tests replace shutil.which here; gh_limits uses the same module)
 import subprocess
 import time
 from pathlib import Path
@@ -37,7 +37,7 @@ OWNER_CACHE_SECONDS = 600
 router = APIRouter()
 
 REVIEW_QUERY = """
-query($q: String!, $after: String, $n: Int!, $me: String!) {
+query ReviewQueue($q: String!, $after: String, $n: Int!, $me: String!) {
   rateLimit { remaining resetAt }
   search(query: $q, type: ISSUE, first: $n, after: $after) {
     issueCount
@@ -65,101 +65,30 @@ query($q: String!, $after: String, $n: Int!, $me: String!) {
 
 # ---------------------------------------------------------------------- gh access (replaceable in tests)
 
-class RateGuard:
-    """Stay below GitHub's API limits (after ai_tools/github_item.py secure_github_actions): the remaining quota is
-    read from `gh api rate_limit` (free) every minute; at <= LOW_WATER requests left, calls wait for the reset when it
-    is near, otherwise fail with a clear message instead of being blocked by GitHub. Mutations are spaced >= 1 s
-    apart (GitHub's guidance against secondary rate limits)."""
+# the central rate-limit management (gh_limits): every call below goes through it
+from . import gh_limits  # noqa: E402
 
-    LOW_WATER = 100
-    REFRESH_SECONDS = 60
-    MAX_WAIT = 90
-    MUTATION_GAP = 1.0
-
-    def __init__(self) -> None:
-        import threading
-
-        self.lock = threading.Lock()
-        self.limits: dict[str, dict[str, int]] = {}
-        self.checked = 0.0
-        self.last_mutation = 0.0
-
-    def _refresh(self) -> None:
-        gh = shutil.which("gh")
-        if not gh:
-            return
-        try:
-            p = subprocess.run([gh, "api", "rate_limit"], capture_output=True, text=True, timeout=20, check=False)
-            res = json.loads(p.stdout).get("resources", {}) if p.returncode == 0 else {}
-        except (OSError, ValueError, subprocess.SubprocessError):
-            res = {}
-        self.limits = {k: {"remaining": int(v.get("remaining", 0)), "reset": int(v.get("reset", 0)), "limit": int(v.get("limit", 0))}
-                       for k, v in res.items() if isinstance(v, dict)}
-        self.checked = time.time()
-
-    def before(self, resource: str, mutation: bool = False) -> None:
-        with self.lock:
-            if time.time() - self.checked > self.REFRESH_SECONDS:
-                self._refresh()
-            lim = self.limits.get(resource)
-            if lim and lim["remaining"] <= self.LOW_WATER:
-                wait = lim["reset"] - time.time() + 2
-                if 0 < wait <= self.MAX_WAIT:
-                    log.warning("GitHub %s quota low (%d left): waiting %.0f s for the reset", resource, lim["remaining"], wait)
-                    time.sleep(wait)
-                    self._refresh()
-                elif wait > self.MAX_WAIT:
-                    at = time.strftime("%H:%M", time.localtime(lim["reset"]))
-                    raise ApiError(429, "GH_RATE_LIMITED", f"GitHub API quota almost used up ({lim['remaining']} of {lim['limit']} left); it resets at {at}")
-            if lim:
-                lim["remaining"] -= 1
-            if mutation:
-                gap = self.MUTATION_GAP - (time.time() - self.last_mutation)
-                if gap > 0:
-                    time.sleep(gap)
-                self.last_mutation = time.time()
-
-    def status(self) -> dict[str, Any]:
-        return {k: v for k, v in self.limits.items() if k in ("core", "graphql", "search")}
+RATE = gh_limits.LIMITER
 
 
-RATE = RateGuard()
+def _run_gh(args: list[str], timeout: float = 60, *, partial_json: bool = False, mutation: bool = False, reconcile=None) -> str:
+    """Run gh (under the rate limiter). partial_json: GraphQL answers with data *and* errors make gh exit 1; return
+    that JSON anyway."""
+    res = gh_limits.run_gh(args, timeout=timeout, mutation=mutation, reconcile=reconcile, dedupe=not mutation)
+    if res.rc != 0 and partial_json and res.out.strip().startswith("{") and '"data"' in res.out:
+        return res.out
+    gh_limits.raise_for(res)
+    return res.out
 
 
-def _run_gh(args: list[str], timeout: float = 60, *, partial_json: bool = False) -> str:
-    """Run gh. partial_json: GraphQL answers with data *and* errors make gh exit 1; return that JSON anyway."""
-    gh = shutil.which("gh")
-    if not gh:
-        raise ApiError(503, "GH_UNAVAILABLE", "the GitHub CLI (gh) is not installed on the server")
-    try:
-        p = subprocess.run([gh, *args], capture_output=True, text=True, timeout=timeout, check=False)
-    except subprocess.TimeoutExpired:
-        raise ApiError(504, "GH_TIMEOUT", "GitHub did not answer in time")
-    if p.returncode != 0 and partial_json and p.stdout.strip().startswith("{") and '"data"' in p.stdout:
-        return p.stdout
-    if p.returncode != 0:
-        err = (p.stderr or p.stdout).strip()
-        low = err.lower()
-        if "http 502" in low or "http 504" in low or "invalid character '<'" in low:  # GitHub's HTML error page
-            raise ApiError(502, "GH_BUSY", "GitHub took too long to answer (HTTP 502)", {"detail": err[-300:]})
-        if "rate limit" in low:
-            raise ApiError(429, "GH_RATE_LIMITED", "GitHub's rate limit is reached; try again in a minute", {"detail": err[-300:]})
-        if "http 401" in low or "bad credentials" in low or "gh auth login" in low or "not logged" in low:
-            raise ApiError(503, "GH_AUTH", "the server's gh CLI is not logged in to GitHub (run `gh auth login` in a terminal)", {"detail": err[-300:]})
-        if "could not resolve host" in low or "timeout" in low or "connection" in low:
-            raise ApiError(503, "GH_UNREACHABLE", "the server cannot reach GitHub (network or proxy)", {"detail": err[-300:]})
-        raise ApiError(502, "GH_ERROR", f"gh failed: {err[-300:]}")
-    return p.stdout
-
-
-def gh_graphql(query: str, variables: dict[str, Any]) -> dict[str, Any]:
-    RATE.before("graphql", mutation=query.lstrip().startswith("mutation"))
+def gh_graphql(query: str, variables: dict[str, Any], reconcile=None) -> dict[str, Any]:
+    mutation = query.lstrip().startswith("mutation")
     args = ["api", "graphql", "-f", f"query={query}"]
     for k, v in variables.items():
         if v is None:
             continue
         args += ["-F" if isinstance(v, int) else "-f", f"{k}={v}"]  # -F: typed (Int), -f: string
-    data = json.loads(_run_gh(args, partial_json=True))
+    data = json.loads(_run_gh(args, partial_json=True, mutation=mutation, reconcile=reconcile))
     errors = data.get("errors") or []
     if errors and not data.get("data"):
         raise ApiError(502, "GH_ERROR", "; ".join(e.get("message", "") for e in errors)[:300])
@@ -183,6 +112,7 @@ def gh_owner() -> str:
     except ApiError:
         login = ""
     _owner = (time.time(), login)
+    RATE.set_identity(login)
     return login
 
 
@@ -473,7 +403,7 @@ async def review_queue(refresh: bool = Query(False), auth: tuple[AppContext, str
     for key in ("items", "watched"):
         data[key] = [{**p, "agent_review": agent.get(f"{p['repo']}#{p['number']}".lower())} for p in data.get(key) or []]
     return {**data, "cached": True, "age_seconds": round(age), "refreshing": running, "refresh_error": _errors.get(owner),
-            "prefs": prefs, "rate": RATE.status(), "priority_agent": rp.status()}
+            "prefs": prefs, "rate": RATE.status(), "rate_state": RATE.state()["state"], "priority_agent": rp.status()}
 
 
 def _priority_results(ctx: AppContext) -> dict[str, Any]:
@@ -491,6 +421,7 @@ def reset_cache() -> None:
     _errors.clear()
     _tasks.clear()
     _pr_cache.clear()
+    _files_memo.clear()
     _people_cache.clear()
     _user_cache.clear()
     _mention_cache.clear()
@@ -718,6 +649,41 @@ def pr_markdown(pr: dict[str, Any], files: list[dict[str, Any]]) -> str:
     return "\n".join(lines) + "\n"
 
 
+_files_memo: dict[str, tuple[str, list[dict[str, Any]]]] = {}  # "o/r#n" -> (head sha, files): a PR's files change only with its head
+FILES_MEMO_MAX = 300
+
+
+def remember_files(key: str, data: dict[str, Any] | None) -> None:
+    """Keep the changed files of a fetched / cached PR for its head commit (so re-opening it does not page them again)."""
+    try:
+        sha = (data or {}).get("pr", {}).get("head_sha")
+        raw = (data or {}).get("_raw_files")
+    except AttributeError:
+        return
+    if sha and raw is not None:
+        _files_memo[key.lower()] = (sha, raw)
+        while len(_files_memo) > FILES_MEMO_MAX:
+            _files_memo.pop(next(iter(_files_memo)))
+
+
+def seed_files(key: str, data: dict[str, Any] | None) -> None:
+    """The memo from a cached copy of a PR (its files as shown, turned back into GitHub's form)."""
+    try:
+        sha = data["pr"]["head_sha"]
+        files = data["files"]
+    except (KeyError, TypeError):
+        return
+    if not sha or key.lower() in _files_memo:
+        return
+    raw = []
+    for f in files:
+        u = f.get("unified") or ""
+        patch = u.split("\n", 2)[2].rstrip("\n") if u.count("\n") >= 2 and not f.get("binary_or_large") else None
+        raw.append({"filename": f["path"], "previous_filename": f.get("previous_path"), "status": f.get("status"),
+                    "additions": f.get("additions", 0), "deletions": f.get("deletions", 0), "patch": patch})
+    remember_files(key, {"pr": data["pr"], "_raw_files": raw})
+
+
 def fetch_pr(owner: str, repo: str, number: int, graphql: Callable[[str, dict], dict], files_fn: Callable[[str, str, int], list]) -> dict[str, Any]:
     d = graphql(PR_QUERY, {"owner": owner, "name": repo, "number": number})
     r = d.get("repository") or {}
@@ -739,7 +705,16 @@ def fetch_pr(owner: str, repo: str, number: int, graphql: Callable[[str, dict], 
         "head_sha": ((((p.get("commits") or {}).get("nodes") or [{}])[0] or {}).get("commit") or {}).get("oid"),
         "ci": ci, "checks": checks, "node_id": p.get("id"),
     }
-    files = files_fn(owner, repo, number)
+    key = f"{owner}/{repo}#{number}".lower()
+    memo = _files_memo.get(key)
+    if memo and pr["head_sha"] and memo[0] == pr["head_sha"]:
+        files = memo[1]
+        gh_limits.LIMITER.cache(True)
+    else:
+        files = files_fn(owner, repo, number)
+        gh_limits.LIMITER.cache(False)
+        if pr["head_sha"]:
+            remember_files(key, {"pr": pr, "_raw_files": files})
     viewed = fetch_viewed(graphql, owner, repo, number)
     return {"pr": pr, "files": [
         {"path": f["filename"], "previous_path": f.get("previous_filename"), "status": f["status"], "additions": f.get("additions", 0),
@@ -786,6 +761,7 @@ async def get_pull_request(owner: str, repo: str, number: int, refresh: bool = Q
             await asyncio.to_thread(gc.put, ctx, key, "pr", data)
     elif disk is not None:
         data, fetched = disk  # not put into _pr_cache: actions keep using data fetched in this process
+        seed_files(key, data)  # the check on GitHub reuses these files when the head has not moved
         hit = (fetched, data)
         source = "cache"
 
@@ -854,34 +830,29 @@ def list_repo_wikis(auth: tuple[AppContext, str] = Depends(require_owner)):
 
 # ---------------------------------------------------------------------- review comments: read, draft, publish
 
-def gh_rest(method: str, path: str, body: dict[str, Any] | None = None) -> Any:
-    """`gh api` REST call; JSON body on stdin. Lists are fetched with --paginate."""
-    gh = shutil.which("gh")
-    if not gh:
-        raise ApiError(503, "GH_UNAVAILABLE", "the GitHub CLI (gh) is not installed on the server")
-    RATE.before("core", mutation=method != "GET")
-    args = [gh, "api", "-X", method, path]
+def gh_rest(method: str, path: str, body: dict[str, Any] | None = None, reconcile=None) -> Any:
+    """`gh api` REST call (under the rate limiter); JSON body on stdin. Lists are fetched with --paginate."""
+    args = ["api", "-X", method, path]
     if method == "GET":
-        args.insert(2, "--paginate")
+        args.insert(1, "--paginate")
     if body is not None:
         args += ["--input", "-"]
-    try:
-        p = subprocess.run(args, input=json.dumps(body) if body is not None else None, capture_output=True, text=True, timeout=90, check=False)
-    except subprocess.TimeoutExpired:
-        raise ApiError(504, "GH_TIMEOUT", "GitHub did not answer in time")
-    if p.returncode != 0:
-        out = (p.stdout or "").strip()
-        msg = (p.stderr or out).strip()
+    p = gh_limits.run_gh(args, input=json.dumps(body) if body is not None else None, timeout=90, mutation=method != "GET",
+                         reconcile=reconcile, dedupe=method == "GET")
+    if p.rc != 0:
+        kind = gh_limits.classify(p.status, gh_limits.error_text(p), p.last)
+        if kind in ("primary", "secondary", "auth"):
+            gh_limits.raise_for(p)
+        out = (p.out or "").strip()
+        msg = (p.err or out).strip()
         try:  # GitHub's JSON error: {"message": ..., "errors": [...]}
             j = json.loads(out)
             detail = "; ".join(str(e.get("message", e)) if isinstance(e, dict) else str(e) for e in j.get("errors") or [])
             msg = j.get("message", msg) + (f": {detail}" if detail else "")
         except (ValueError, AttributeError):
             pass
-        if "rate limit" in msg.lower():
-            raise ApiError(429, "GH_RATE_LIMITED", "GitHub's rate limit is reached; try again in a minute")
         raise ApiError(502, "GH_ERROR", f"GitHub refused: {msg[-400:]}")
-    out = p.stdout.strip()
+    out = p.out.strip()
     if not out:
         return None
     if method == "GET":
@@ -970,8 +941,11 @@ async def pr_comments(owner: str, repo: str, number: int, cached: bool = Query(F
 
 def _fetch_all(ctx: AppContext, repo_full: str, number: int) -> dict[str, Any]:
     """Prefetch: what a PR's tab first loads (details, files, viewed, checks; threads and conversation)."""
+    from . import github_cache as gc
+
     owner, repo = repo_full.split("/", 1)
     graphql = _hooks(ctx)[0]
+    seed_files(f"{repo_full}#{number}", gc.peek(ctx, f"{repo_full}#{number}", "pr"))
     return {"pr": fetch_pr(owner, repo, number, graphql, ctx.extra.get("gh_pr_files", _gh_files)),
             "comments": {"threads": fetch_threads(graphql, owner, repo, number), "conv": fetch_conversation(graphql, owner, repo, number)}}
 
@@ -2039,20 +2013,15 @@ _ERR = re.compile(r"(##\[error\]|\berror\b|Error:|FAILED|FAIL:|Traceback|Asserti
 
 def gh_job_log(owner: str, repo: str, job_id: int) -> str:
     """The raw log of a GitHub Actions job (gh follows the redirect to the log file)."""
-    gh = shutil.which("gh")
-    if not gh:
-        raise ApiError(503, "GH_UNAVAILABLE", "the GitHub CLI (gh) is not installed on the server")
-    RATE.before("core")
-    try:
-        p = subprocess.run([gh, "api", f"repos/{owner}/{repo}/actions/jobs/{job_id}/logs"], capture_output=True, timeout=180, check=False)
-    except subprocess.TimeoutExpired:
-        raise ApiError(504, "GH_TIMEOUT", "GitHub did not send the log in time")
-    if p.returncode != 0:
-        err = p.stderr.decode("utf-8", "replace").strip()
+    p = gh_limits.run_gh(["api", f"repos/{owner}/{repo}/actions/jobs/{job_id}/logs"], timeout=180, binary=True)
+    if p.rc != 0:
+        err = p.err.strip()
         if "410" in err or "404" in err:
             raise ApiError(410, "LOG_GONE", "the log is no longer on GitHub (expired or deleted)")
+        if gh_limits.classify(None, err, {}) in ("primary", "secondary"):
+            gh_limits.raise_for(p)
         raise ApiError(502, "GH_ERROR", f"no log: {err[-300:]}")
-    return p.stdout[:30_000_000].decode("utf-8", "replace")
+    return p.out[:30_000_000].decode("utf-8", "replace")
 
 
 def log_excerpt(text: str, max_chars: int = 6000) -> tuple[str, int]:
@@ -2197,12 +2166,8 @@ query Issue($owner: String!, $name: String!, $number: Int!) {
 }"""
 
 
-@router.get("/github/issue/{owner}/{repo}/{number}")
-async def get_issue(owner: str, repo: str, number: int, auth: tuple[AppContext, str] = Depends(require_owner)):
-    """An issue (for links like #123 that are not pull requests): details and comments."""
-    ctx, _ = auth
-    _check_names(owner, repo)
-    d = await asyncio.to_thread(_hooks(ctx)[0], ISSUE_QUERY, {"owner": owner, "name": repo, "number": number})
+def fetch_issue(graphql: Callable[[str, dict], dict], owner: str, repo: str, number: int) -> dict[str, Any]:
+    d = graphql(ISSUE_QUERY, {"owner": owner, "name": repo, "number": number})
     r = d.get("repository") or {}
     i = r.get("issue")
     if not i:
@@ -2210,11 +2175,34 @@ async def get_issue(owner: str, repo: str, number: int, auth: tuple[AppContext, 
     comments = (i.get("comments") or {}).get("nodes") or []
     return {"repo": r.get("nameWithOwner"), "number": i["number"], "title": i["title"], "url": i["url"], "body": i.get("body") or "",
             "state": i.get("state"), "state_reason": i.get("stateReason"), "author": (i.get("author") or {}).get("login"),
-            "created_at": i.get("createdAt"), "labels": [{"name": x["name"], "color": x.get("color")} for x in (i.get("labels") or {}).get("nodes") or []],
+            "created_at": i.get("createdAt"), "updated_at": i.get("updatedAt"),
+            "labels": [{"name": x["name"], "color": x.get("color")} for x in (i.get("labels") or {}).get("nodes") or []],
             "assignees": [x["login"] for x in (i.get("assignees") or {}).get("nodes") or [] if x],
             "comments": [{"id": c.get("databaseId"), "author": (c.get("author") or {}).get("login"), "body": c.get("body") or "",
                           "created_at": c.get("createdAt"), "url": c.get("url")} for c in comments if c],
             "older_hidden": max(0, (i.get("comments") or {}).get("totalCount", 0) - len(comments))}
+
+
+@router.get("/github/issue/{owner}/{repo}/{number}")
+async def get_issue(owner: str, repo: str, number: int, cached: bool = Query(False), refresh: bool = Query(False),
+                    auth: tuple[AppContext, str] = Depends(require_owner)):
+    """An issue (for links like #123 that are not pull requests): details and comments. cached=true (a tab's first
+    load): the copy in the local cache when there is one, checked on GitHub right after (a github_cache event tells
+    the tab when the check finished and whether it changed)."""
+    from . import github_cache as gc
+
+    ctx, _ = auth
+    _check_names(owner, repo)
+    key = f"{owner}/{repo}#{number}".lower()
+    graphql = _hooks(ctx)[0]
+    hit = gc.get(ctx, key, "issue") if cached and not refresh else None
+    if hit is not None:
+        data, fetched = hit
+        gc.revalidate(ctx, key, "issue", lambda: fetch_issue(graphql, owner, repo, number))
+        return {**data, "cache": {"source": "cache", "token": gc.token(ctx, key), "fetched_at": fetched}}
+    data = await asyncio.to_thread(fetch_issue, graphql, owner, repo, number)
+    await asyncio.to_thread(gc.put, ctx, key, "issue", data)
+    return {**data, "cache": {"source": "github", "token": gc.token(ctx, key), "fetched_at": time.time()}}
 
 
 class IssueStateIn(BaseModel):
@@ -2230,6 +2218,7 @@ async def issue_state(owner: str, repo: str, number: int, body: IssueStateIn, au
         raise ApiError(400, "INVALID_ACTION", "action must be close or reopen; reason completed or not_planned")
     patch = {"state": "closed", "state_reason": body.reason} if body.action == "close" else {"state": "open"}
     res = await asyncio.to_thread(_rest(ctx), "PATCH", f"repos/{owner}/{repo}/issues/{number}", patch)
+    _cache_stale(ctx, owner, repo, number, ("issue",))
     return {"state": ((res or {}).get("state") or patch["state"]).upper(), "state_reason": (res or {}).get("state_reason")}
 
 
@@ -2244,6 +2233,7 @@ async def issue_comment(owner: str, repo: str, number: int, body: IssueCommentIn
     if not body.body.strip():
         raise ApiError(400, "INVALID_COMMENT", "a comment needs text")
     res = await asyncio.to_thread(_rest(ctx), "POST", f"repos/{owner}/{repo}/issues/{number}/comments", {"body": body.body.strip()})
+    _cache_stale(ctx, owner, repo, number, ("issue",))
     return {"id": (res or {}).get("id"), "body": body.body.strip()}
 
 
@@ -2468,6 +2458,16 @@ class CacheIn(BaseModel):
     dir: str | None = Field(None, max_length=4096)
     cap_mb: int | None = Field(None, ge=0, le=1_000_000)  # 0: no limit
     prefetch: bool | None = None
+
+
+@router.get("/github/rate")
+def github_rate(ctx: AppContext = Depends(require_auth)):
+    """The GitHub API quota and what the app does about it: RUNNING / THROTTLED / WAITING_FOR_RATE_LIMIT / RESUMING /
+    FAILED, the buckets (limit, remaining, reset), waiting operations and when they go on, queued work, metrics."""
+    from . import gh_queue
+
+    return {**RATE.state(), "queued": [{"id": o["id"], "kind": o["kind"], "state": o.get("state"), "resumes": o["resumes"]}
+                                       for o in gh_queue.pending(ctx)]}
 
 
 @router.get("/github/cache")

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, del, get, post, put } from "../api";
 import MarkdownView from "./MarkdownView";
+import GithubRate from "./GithubRate";
 import ModelChoice, { ModelChoiceValue } from "./ModelChoice";
 import { utc8 } from "../time";
 import { confirmAction } from "./Confirm";
@@ -140,6 +141,7 @@ function RepoPage({ repo, onOpenChat }: { repo: string; onOpenChat: (ws: string,
           {ov.highlight_files.length ? ` · ${ov.highlight_files.length} highlight files` : ""}
         </span>
         <span className="spacer" />
+        <GithubRate />
         <a className="btn small" href={`https://github.com/${repo}`} target="_blank" rel="noreferrer">GitHub</a>
       </div>
       {err && <div className="banner warn small">{err}</div>}
@@ -396,6 +398,26 @@ function Highlights({ repo, onRan, enabled }: { repo: string; onRan: () => void;
   );
 }
 
+interface SchedulePlan { running: string | null; due: string[]; deferred: string | null }
+function ScheduleState() {
+  const [p, setP] = useState<SchedulePlan | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const load = () => void get<{ schedule: SchedulePlan }>("/insights/status").then((r) => alive && setP(r.schedule)).catch(() => undefined);
+    load();
+    const t = setInterval(load, 20_000);
+    return () => { alive = false; clearInterval(t); };
+  }, []);
+  return (
+    <div className="muted small" data-testid="insights-schedule-state">
+      Scheduled runs go one repository at a time, start only with at least half of the GitHub quota left, and use at most 40% of
+      each hourly quota, evenly paced — the rest stays for your own work.
+      {p?.running && <div>Running now: <b>{p.running}</b>{p.due.filter((r) => r !== p.running).length ? ` · next: ${p.due.filter((r) => r !== p.running).join(", ")}` : ""}</div>}
+      {!p?.running && p?.deferred && <div className="warn">Waiting: {p.deferred} · due: {p.due.join(", ")}</div>}
+    </div>
+  );
+}
+
 function InsightsSettings() {
   const [s, setS] = useState<Settings | null>(null);
   const [key, setKey] = useState("");
@@ -466,6 +488,7 @@ function InsightsSettings() {
         · model requests at once <input type="number" className="insights-num" defaultValue={s.concurrency} onBlur={(e) => void save({ concurrency: Number(e.target.value) })} /></div>
 
       <div className="small strong">Repositories <span className="muted">(daily times in UTC+{s.timezone_offset}; each summarizes the previous UTC day)</span></div>
+      <ScheduleState />
       {s.repos.map((r, i) => (
         <div key={r.repo} className="insights-repo-cfg" data-testid="insights-repo-cfg" data-repo={r.repo}>
           <div className="row nowrap"><b className="mono">{r.repo}</b><span className="spacer" />

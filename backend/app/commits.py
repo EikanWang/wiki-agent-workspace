@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
@@ -89,10 +90,7 @@ class CommitService:
         gh = shutil.which("gh")
         gh_ready = False
         if gh and origin and "github.com" in origin:
-            try:
-                gh_ready = subprocess.run([gh, "auth", "status"], capture_output=True, timeout=15, check=False).returncode == 0
-            except (OSError, subprocess.TimeoutExpired):
-                gh_ready = False
+            gh_ready = _gh_logged_in(gh)
         return {
             "branch": info.branch, "head": info.commit, "upstream": upstream, "ahead": ahead, "behind": behind,
             "origin": origin, "origin_is_github": bool(origin and "github.com" in origin), "gh_available": gh_ready,
@@ -258,22 +256,44 @@ class CommitService:
         title = body.title.strip()
         if not title or title.startswith("-"):
             raise bad_request("PR title is required", "INVALID_TITLE")
-        args = [gh, "pr", "create", "--title", title, "--body", body.body or "", "--head", branch]
+        from . import gh_limits
+
+        args = ["pr", "create", "--title", title, "--body", body.body or "", "--head", branch]
         if base:
             args += ["--base", base]
         if body.draft:
             args.append("--draft")
-        try:
-            p = subprocess.run(args, cwd=str(self.root), capture_output=True, text=True, timeout=120, check=False)
-        except subprocess.TimeoutExpired:
-            raise ApiError(504, "GH_TIMEOUT", "gh pr create timed out")
-        if p.returncode != 0:
-            msg = (p.stderr or p.stdout).strip()
+
+        def existing() -> str | None:  # an unclear answer: is there a PR for this branch on GitHub now?
+            r = gh_limits.run_gh(["pr", "list", "--head", branch, "--state", "open", "--json", "url", "--jq", ".[0].url // empty"],
+                                 cwd=str(self.root), timeout=60)
+            return r.out.strip() if r.rc == 0 and "/pull/" in r.out else None
+        p = gh_limits.run_gh(args, cwd=str(self.root), timeout=120, mutation=True, reconcile=existing)
+        if p.rc != 0:
+            msg = (p.err or p.out).strip()
             if "already exists" in msg:
                 raise conflict("PR_EXISTS", msg[-500:])
+            if gh_limits.classify(None, p.err, {}) in ("primary", "secondary"):
+                gh_limits.raise_for(p)
             raise ApiError(400, "GH_ERROR", f"gh pr create failed: {msg[-600:]}")
-        url = p.stdout.strip().splitlines()[-1] if p.stdout.strip() else ""
+        url = p.out.strip().splitlines()[-1] if p.out.strip() else ""
         return {"url": url, "head": branch, "base": base or None, "draft": body.draft}
+
+_gh_auth: dict[str, tuple[float, bool]] = {}
+
+
+def _gh_logged_in(gh: str) -> bool:
+    """`gh auth status` (an API call) at most every 5 minutes."""
+    hit = _gh_auth.get(gh)
+    if hit and time.time() - hit[0] < 300:
+        return hit[1]
+    try:
+        ok = subprocess.run([gh, "auth", "status"], capture_output=True, timeout=15, check=False, stdin=subprocess.DEVNULL).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        ok = False
+    _gh_auth[gh] = (time.time(), ok)
+    return ok
+
 
 # ---------------------------------------------------------------------- schemas
 
