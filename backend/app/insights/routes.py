@@ -213,5 +213,7 @@ def status(ctx: AppContext = Depends(require_auth)):
     from ..kv import kv_get
     from .scheduler import RUNS_KEY
 
-    return {"jobs": [_public(j) for j in pl.jobs() if j["status"] == "running"], "runs": kv_get(ctx, RUNS_KEY, {}) or {},
+    from .scheduler import plan
+
+    return {"jobs": [_public(j) for j in pl.jobs() if j["status"] == "running"], "runs": kv_get(ctx, RUNS_KEY, {}) or {}, "schedule": plan,
             "data_dir": str(st.data_dir(ctx)), "endpoint": st.llm_public(ctx)}

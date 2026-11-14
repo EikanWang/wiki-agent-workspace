@@ -66,6 +66,20 @@ login, but are still counted against this server's identity (conservative).
    again"). `gh pr create` answering "already exists" adopts the existing PR — no second PR.
 6. **Identical reads in flight** (same `gh` arguments) run once; the other callers get the same answer.
 
+## Background budget and the schedule
+
+- Background work (Insights reports and runs, the daily schedule, prefetch, the priority agent) spends at most
+  `background_share` (40%) of each hourly quota, evenly paced (a token bucket refilled at 40% of the limit per hour, bursts
+  up to `background_burst`, 10%). It is charged what GitHub really took: the drop in `X-RateLimit-Remaining` (a GraphQL
+  search page costs about 6 points, not 1) and one per page of paginated REST calls. Your own pages and actions do not wait
+  for this pace.
+- The daily schedule runs **one repository at a time**, in the order of their times; a run starts only when at least half
+  of the `core` and `graphql` quota is left (else it waits and tries again every minute; the settings page says why).
+- Catch-up days are fetched in one search; the day's XPU highlights read the day's local copies (no second search); a PR's
+  diff for scoring is one REST page (the first 100 files).
+- The Insights search asks for the last 50 comments and 20 reviews × 10 comments per item: 6 points per page of 25 instead
+  of 14. Measured: a pytorch day (≈ 1100 items updated since) ≈ 46 pages ≈ 280 points, plus one REST request per PR scored.
+
 ## Sharing the quota
 
 The buckets and secondary-limit blocks are written to `<state_dir>/github-rate.json` (under a file lock) and read before each
@@ -115,6 +129,8 @@ max_retries = 4
 secondary_min = 60           # seconds, a secondary limit without Retry-After
 backoff_cap = 900            # seconds
 mutation_gap = 1.0           # seconds between mutations
+background_share = 0.40      # background work: at most this share of each hourly quota, evenly paced
+background_burst = 0.10      # … bursts up to this share
 ```
 
 ## Troubleshooting

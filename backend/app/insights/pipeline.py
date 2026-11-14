@@ -178,6 +178,7 @@ async def run_days(ctx: Any, j: dict[str, Any], repo: str, kind: str, since: str
         return await highlights(ctx, repo, since, until, j)
     done_days = set(next((o["progress"].get("done", []) for o in gh_queue.pending(ctx) if o["id"] == j["id"]), []))
     days = days_of(since, until)
+    await prefetch_days(ctx, repo, [d for d in days if d not in done_days and not (store.daily(ctx, repo, d) and not force)], j)
     for d in days:
         if d in done_days:
             continue
@@ -269,6 +270,16 @@ async def ensure_dailies(ctx: Any, repo: str, days: list[str], j: dict[str, Any]
             step(j, f"day {i + 1}/{len(days)} ({d}): no summary yet — making it")
             out[d] = await daily_summary(ctx, repo, d, j)
     return out
+
+
+async def prefetch_days(ctx: Any, repo: str, days: list[str], j: dict[str, Any] | None) -> None:
+    """Days about to be summarized: one GitHub search for all the past ones not fetched yet (each day alone would
+    search the same recent items again and again)."""
+    folder = st.data_dir(ctx) / "items" / repo / "days"
+    need = [d for d in days if dt.date.fromisoformat(d) < today() and not (folder / f"{d}.json").is_file()]
+    if len(need) > 1:
+        step(j, f"fetching the issues and PRs of {need[0]} … {need[-1]} from GitHub in one search")
+        await gh.fetch_range(ctx, repo, need[0], need[-1])
 
 
 # ---------------------------------------------------------------------- building blocks
@@ -529,9 +540,8 @@ async def highlights(ctx: Any, repo: str, since: str, until: str, j: dict[str, A
     and those the model could not score; one-sentence summaries; written as a highlight file."""
     cfg = st.load(ctx)
     th, ccer = cfg["highlight"]["threshold"], cfg["highlight"]["number_of_ccer"]
-    a, b = f"{since}T00:00:00Z", f"{until}T23:59:59Z"
-    step(j, f"highlights {since} … {until}: reading GitHub")
-    items = [it for it in await gh.fetch_range(ctx, repo, since, until) if gh.active(it, a, b)]
+    step(j, f"highlights {since} … {until}: reading the issues and PRs (local copies when the days were fetched)")
+    items = await gh.items_of_range(ctx, repo, since, until)
     sem = asyncio.Semaphore(max(1, int(cfg["concurrency"])))
     done = 0
 

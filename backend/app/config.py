@@ -271,7 +271,7 @@ class Settings:
 
 
 RATE_KEYS = ("warn", "suspend", "reserve", "reserve_min", "max_interactive_wait", "max_background_wait", "max_retries", "secondary_min",
-             "backoff_cap", "mutation_gap")
+             "backoff_cap", "mutation_gap", "background_share", "background_burst")
 
 
 def _provider_from(d: dict[str, Any]) -> ProviderConfig:

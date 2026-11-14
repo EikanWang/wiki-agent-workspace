@@ -111,6 +111,8 @@ class Config:
     mutation_gap: float = 1.0
     refresh_after: float = 120.0   # re-read `gh api rate_limit` when nothing newer is known
     max_gap: float = 30.0          # longest spacing of throttled background requests
+    background_share: float = 0.40  # background work spends at most this share of each hourly quota, evenly paced …
+    background_burst: float = 0.10  # … with bursts up to this share (a review-list prefetch, the start of a run)
 
 
 class RateLimited(ApiError):
@@ -212,6 +214,7 @@ class Limiter:
         self.metrics: dict[str, Any] = {"requests": 0, "by_op": {}, "by_resource": {}, "throttled": 0, "waited": 0, "retries": 0,
                                         "blocked_seconds": 0.0, "rate_limited": 0, "errors": {}, "deduped": 0, "cache_hits": 0, "cache_misses": 0}
         self.inflight: dict[str, tuple[threading.Event, list[Any]]] = {}
+        self.bg: dict[str, tuple[float, float]] = {}  # resource -> (tokens, at): the background budget
         self.refresher: Callable[[], dict[str, Any] | None] | None = None
 
     # ------------------------------------------------------------------ state
@@ -306,6 +309,22 @@ class Limiter:
             self.buckets[self.key(resource)] = b
         return b
 
+    def _budget(self, resource: str) -> tuple[float, float, float]:
+        """(tokens now, refill per second, capacity) of the background budget of a resource."""
+        b = self.buckets.get(self.key(resource))
+        limit = b.limit if b and b.limit else (30 if resource == "search" else 5000)
+        window = 60.0 if resource == "search" else 3600.0
+        rate = limit * self.cfg.background_share / window
+        cap = max(2.0, limit * self.cfg.background_burst)
+        tokens, at = self.bg.get(resource, (cap, self.clock()))
+        return min(cap, tokens + (self.clock() - at) * rate), rate, cap
+
+    def charge(self, resource: str, cost: float) -> None:
+        """Spend background budget (the real cost, known after the call, may be more than the 1 taken before)."""
+        with self.lock:
+            tokens, _, cap = self._budget(resource)
+            self.bg[resource] = (max(-cap, tokens - cost), self.clock())
+
     def decide(self, resource: str, level: int, mutation: bool) -> tuple[float, str, str]:
         """(seconds to wait, state, why) for one request now."""
         c, now = self.cfg, self.clock()
@@ -329,6 +348,11 @@ class Limiter:
                 gap = min(c.max_gap, max(0.5, (to_reset - c.margin) / spare))
                 wait = max(0.0, self.last_bg.get(resource, 0) + gap - now)
                 state, reason = (THROTTLED, f"{b.remaining} of {b.limit} {resource} requests left: background requests spread out") if wait else (THROTTLED, "")
+        if level == BACKGROUND and wait <= 0:
+            tokens, rate, _ = self._budget(resource)
+            if tokens < 1:
+                wait = (1 - tokens) / rate
+                state, reason = THROTTLED, f"background pace: at most {int(c.background_share * 100)}% of the {resource} quota per hour"
         if mutation:
             wait = max(wait, self.last_mutation + c.mutation_gap - now)
         return wait, state, reason
@@ -365,6 +389,8 @@ class Limiter:
                             b.source = "estimate"
                     if level == BACKGROUND:
                         self.last_bg[resource] = self.clock()
+                        tokens, _, _ = self._budget(resource)
+                        self.bg[resource] = (tokens - cost, self.clock())
                     if mutation:
                         self.last_mutation = self.clock()
                     if waited:
@@ -372,7 +398,9 @@ class Limiter:
                         self.resuming_until = self.clock() + 5
                     self.waiting.pop(threading.get_ident(), None)
                     break
-                if waited + wait > self.max_wait(level, may_wait) + 0.5:
+                # (speculative background work may still wait a few seconds for its pace)
+                allowed = self.max_wait(level, may_wait) if may_wait or state != THROTTLED else 5.0
+                if waited + wait > allowed + 0.5:
                     self.waiting.pop(threading.get_ident(), None)
                     self.metrics["rate_limited"] += 1
                     at = self.clock() + wait
@@ -467,6 +495,8 @@ class Limiter:
         level = CRITICAL if mutation else _prio.get()[0]
         for attempt in range(self.cfg.max_retries + 1):
             self.acquire(resource, mutation=mutation)
+            before = self.buckets.get(self.key(resource))
+            before = (before.remaining, before.reset) if before and before.source == "headers" else None
             t0 = self.clock()
             res = fn()
             dt = self.clock() - t0
@@ -474,6 +504,14 @@ class Limiter:
             for h in res.headers:
                 seen = self.observe(h, resource) or seen
             res_name = seen or resource
+            after = self.buckets.get(self.key(res_name))
+            pages = max(1, len(res.headers))
+            if level == BACKGROUND and after and before and res_name == resource and abs(after.reset - before[1]) < 5:
+                extra = (before[0] + 1) - after.remaining - pages  # what GitHub charged beyond 1 per page
+                if 0 < extra < 500:
+                    self.charge(resource, extra)
+            if level == BACKGROUND and pages > 1:
+                self.charge(res_name, pages - 1)
             m = self.metrics
             m["requests"] += max(1, len(res.headers))
             m["by_op"][op] = m["by_op"].get(op, 0) + max(1, len(res.headers))
@@ -562,10 +600,15 @@ class Limiter:
         else:
             overall = RUNNING
         nxt = min([w["until"] for w in waits] + [v["until"] for v in blocked.values()] + empty, default=None)
-        return {"state": overall, "identity": self.identity, "skew_seconds": round(self.skew, 1), "buckets": buckets, "blocked": blocked,
+        budget = {}
+        with self.lock:
+            for r in ("core", "graphql", "search"):
+                tk, rate, cap = self._budget(r)
+                budget[r] = {"tokens": round(tk, 1), "per_hour": round(rate * (60 if r == "search" else 3600)), "burst": round(cap)}
+        return {"state": overall, "identity": self.identity, "background_budget": budget, "skew_seconds": round(self.skew, 1), "buckets": buckets, "blocked": blocked,
                 "waiting": [{**w, "until_at": _iso(w["until"])} for w in waits], "next_retry_at": _iso(nxt) if nxt else None,
                 "failed": self.failed, "metrics": self.metrics_view(),
-                "config": {k: v for k, v in asdict(self.cfg).items() if k in ("warn", "suspend", "reserve", "max_interactive_wait")}}
+                "config": {k: v for k, v in asdict(self.cfg).items() if k in ("warn", "suspend", "reserve", "max_interactive_wait", "background_share")}}
 
     def metrics_view(self) -> dict[str, Any]:
         m = self.metrics
@@ -619,7 +662,7 @@ def configure(state_dir: Path | None, overrides: dict[str, float] | None = None)
             setattr(base, k, type(getattr(base, k))(v))
     LIMITER.cfg = base
     fresh = Limiter(LIMITER.cfg)  # (a new app: start clean, then take what the other processes know)
-    for k in ("buckets", "blocked", "metrics", "inflight", "waiting", "last_bg"):
+    for k in ("buckets", "blocked", "metrics", "inflight", "waiting", "last_bg", "bg"):
         setattr(LIMITER, k, getattr(fresh, k))
     LIMITER.failed, LIMITER.checked, LIMITER.skew, LIMITER.last_mutation = None, 0.0, 0.0, 0.0
     LIMITER.shared = Path(state_dir) / "github-rate.json" if state_dir else None

@@ -297,3 +297,32 @@ async def test_long_periods_go_through_month_summaries(running_app, tmp_path):
     r0 = model.count("rollup")
     await pl.issue_material(h.ctx, "acme/proj", "2026-08-01", "2026-11-05", None)
     assert model.count("rollup") == r0  # finished weeks and months reused
+
+
+async def test_the_schedule_runs_one_repository_at_a_time_and_waits_for_quota(running_app, tmp_path):
+    from backend.app import gh_limits
+
+    h, gh, _ = await make(running_app, tmp_path, proj_nodes())
+    st.save(h.ctx, {"repos": [{"repo": "acme/proj", "highlights": True, "schedule": {"enabled": True, "time": "05:00"}},
+                              {"repo": "acme/other", "schedule": {"enabled": True, "time": "05:30"}}]})
+    late = dt.datetime(2026, 11, 4, 1, 0, tzinfo=dt.timezone.utc)  # 09:00 UTC+8: both due (for Nov 3)
+    L = gh_limits.LIMITER
+    L.buckets[L.key("graphql")] = gh_limits.Bucket(5000, 1000, 4000, 2e9, 2e9, "headers")
+    L.checked = 2e9
+    try:
+        assert await scheduler.tick(h.ctx, late) == []  # 20% left: not started
+        assert "1000 of 5000 graphql" in scheduler.plan["deferred"] and scheduler.plan["due"] == ["acme/proj", "acme/other"]
+        L.buckets[L.key("graphql")] = gh_limits.Bucket(5000, 4000, 1000, 2e9, 2e9, "headers")
+        n0 = len(gh.queries)
+        assert await scheduler.tick(h.ctx, late) == ["acme/proj"]  # the earliest first …
+        assert await scheduler.tick(h.ctx, late) == []  # … and nothing else while it runs
+        for _ in range(200):
+            if not [j for j in pl.jobs() if j.get("scheduled") and j["status"] == "running"]:
+                break
+            await asyncio.sleep(0.05)
+        main = [q for q in gh.queries[n0:] if q.startswith("repo:acme/proj ")]
+        assert len(main) == 1  # the day's summary and its XPU highlights: one search
+        assert await scheduler.tick(h.ctx, late) == ["acme/other"]  # then the next one
+    finally:
+        L.buckets.clear()
+        L.checked = 0.0

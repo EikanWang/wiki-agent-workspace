@@ -419,3 +419,39 @@ def test_state_a_used_up_quota_is_waiting_with_its_reset():
     g.observe(hdr(0, clock=c, reset_in=900, resource="graphql"))
     st = g.state()
     assert st["state"] == "WAITING_FOR_RATE_LIMIT" and st["next_retry_at"]
+
+
+def test_background_work_is_paced_to_its_share_of_the_hourly_quota_people_are_not():
+    g, c = lim()
+    g.observe(hdr(5000, clock=c, reset_in=3600, resource="graphql"))
+    with priority(BACKGROUND):
+        for _ in range(600):  # a burst of 500 (10%), then 2000/h (40%): ~0.56 per second
+            g.acquire("graphql")
+    assert 150 <= c.t - T0 <= 200
+    t = c.t
+    with priority(INTERACTIVE):
+        for _ in range(100):
+            g.acquire("graphql")
+    assert c.t == t  # your pages do not wait for the background pace
+    assert g.state()["background_budget"]["graphql"]["per_hour"] == 2000
+
+
+def test_the_real_cost_github_reports_is_charged_to_the_background_budget():
+    g, c = lim()
+    g.observe(hdr(4000, clock=c, reset_in=3000, resource="graphql"))
+    tokens0 = g._budget("graphql")[0]
+    with priority(BACKGROUND):
+        g.call(lambda: ok(hdr(3986, clock=c, reset_in=3000, resource="graphql")), "graphql")  # a search page cost 14 points
+    assert round(tokens0 - g._budget("graphql")[0]) == 14
+
+
+def test_speculative_background_work_may_wait_a_few_seconds_for_its_pace():
+    g, c = lim()
+    g.observe(hdr(5000, clock=c, resource="core"))
+    g.bg["core"] = (0.0, c.t)
+    with priority(BACKGROUND, wait=False):
+        g.acquire("core")  # ~2 s: waited
+    assert 1 <= c.t - T0 <= 3
+    g.bg["core"] = (-50.0, c.t)
+    with priority(BACKGROUND, wait=False), pytest.raises(ApiError):
+        g.acquire("core")  # far behind: stops instead
