@@ -37,6 +37,7 @@ log = logging.getLogger("waw.ghcache")
 SETTINGS_KEY = "github_cache_settings"
 DEFAULTS: dict[str, Any] = {"dir": None, "cap_mb": 2048, "prefetch": True}
 PARTS = ("pr", "comments", "people")
+ISSUE_PARTS = ("issue",)  # an issue (a #N that is not a PR) is kept in the same folder layout: <owner>/<repo>/<N>/issue.json
 CLOSED_DAYS = 7
 PREFETCH_CONCURRENCY = 2
 PREFETCH_RESERVE = 1000
@@ -146,6 +147,8 @@ def put(ctx: Any, key: str, part: str, data: Any) -> bool:
         if part == "pr":
             pr = (data or {}).get("pr") or {}
             m.update(state=pr.get("state"), updated_at=pr.get("updated_at"), head_sha=pr.get("head_sha"), ci=pr.get("ci"))
+        elif part == "issue":  # (closed issues are cleaned up like closed PRs)
+            m.update(kind="issue", state=(data or {}).get("state"), updated_at=(data or {}).get("updated_at"))
         m.setdefault("opened_at", time.time())
         _write(d / "meta.json", m)
     except OSError as exc:
@@ -224,8 +227,8 @@ def usage(ctx: Any) -> dict[str, Any]:
                 size += p.stat().st_size
         except OSError:
             pass
-    prs = sum(1 for _ in r.glob("*/*/*/meta.json"))
-    return {"bytes": size, "prs": prs}
+    kinds = [(_read(m) or {}).get("kind") for m in r.glob("*/*/*/meta.json")]
+    return {"bytes": size, "prs": sum(1 for k in kinds if k != "issue"), "issues": sum(1 for k in kinds if k == "issue")}
 
 
 def cleanup(ctx: Any) -> dict[str, int]:

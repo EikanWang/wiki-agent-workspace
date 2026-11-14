@@ -2116,6 +2116,14 @@ test("GitHub review hub: priority requests, hide a repository, watch a repositor
   await page.getByTestId("confirm-ok").click();
   await expect(page.getByTestId("issue-state")).toContainText("Closed (not planned)");
   await page.locator('[data-testid="doc-tab"][data-ws="github"]').filter({ hasText: "#555" }).getByTestId("doc-tab-close").click();
+  // opened again: from the local issue cache at once, checked on GitHub right after
+  const firstLoad = page.waitForResponse((r) => r.url().includes("/github/issue/pytorch/pytorch/555?cached=true"));
+  await page.locator('[data-testid="review-pr"][data-number="101"]').click();
+  await page.getByTestId("pr-description").locator('a[data-pr="pytorch/pytorch/555"]').click();
+  expect((await (await firstLoad).json()).cache.source).toBe("cache");
+  await expect(page.getByTestId("issue-view")).toContainText("XPU OOM on large batch");
+  await expect(page.getByTestId("issue-checking")).toHaveCount(0, { timeout: 15000 }); // the check on GitHub finished
+  await page.locator('[data-testid="doc-tab"][data-ws="github"]').filter({ hasText: "#555" }).getByTestId("doc-tab-close").click();
   // a PR's contributors, with details from their GitHub profile on demand
   await page.locator('[data-testid="review-pr"][data-number="101"]').click();
   const people = page.getByTestId("pr-contributors");

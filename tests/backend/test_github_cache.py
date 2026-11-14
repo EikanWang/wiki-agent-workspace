@@ -203,3 +203,36 @@ async def test_folder_permissions_cleanup_clear_and_moving(running_app, tmp_path
     # a token login never sees it
     as_github(h, "someone-else")
     assert (await api.get("/api/v1/github/cache")).status_code == 403
+
+
+async def test_issues_are_cached_like_pull_requests(running_app):
+    h, _, events = await setup(running_app)
+    state = {"title": "XPU crash", "comments": [], "n": 0}
+
+    def graphql(q, v):
+        assert "query Issue" in q
+        state["n"] += 1
+        return {"repository": {"nameWithOwner": "pytorch/pytorch", "issue": {
+            "number": v["number"], "title": state["title"], "url": "https://github.com/pytorch/pytorch/issues/55", "body": "b", "state": "OPEN",
+            "stateReason": None, "createdAt": "2026-11-01T00:00:00Z", "updatedAt": "2026-11-02T00:00:00Z", "author": {"login": "alice"},
+            "labels": {"nodes": []}, "assignees": {"nodes": []},
+            "comments": {"totalCount": len(state["comments"]), "nodes": state["comments"]}}}}
+    h.ctx.extra["gh_graphql"] = graphql
+    posted = []
+    h.ctx.extra["gh_rest"] = lambda m, p, b=None: (posted.append((m, p)), {"id": 9})[1]
+    url = "/api/v1/github/issue/pytorch/pytorch/55"
+    api = h.api
+    first = (await api.get(url, params={"cached": "true"})).json()  # nothing cached: GitHub
+    assert first["cache"]["source"] == "github" and first["title"] == "XPU crash" and state["n"] == 1
+    again = (await api.get(url, params={"cached": "true"})).json()  # the local copy, checked on GitHub right after
+    assert again["cache"]["source"] == "cache" and again["title"] == "XPU crash"
+    ev = await wait_event(events, "issue")
+    assert ev["token"] == first["cache"]["token"] and ev["changed"] is False and state["n"] == 2
+    state["title"] = "XPU crash on resize"  # changed on GitHub: the check says so, the next first load shows it
+    (await api.get(url, params={"cached": "true"})).json()
+    assert (await wait_event(events, "issue", 2))["changed"] is True
+    assert (await api.get(url, params={"cached": "true"})).json()["title"] == "XPU crash on resize"
+    # your comment: the cached copy is not used again until fetched
+    assert (await api.post(f"{url}/comments", json={"body": "looking"})).status_code == 201
+    assert (await api.get(url, params={"cached": "true"})).json()["cache"]["source"] == "github"
+    assert gc.usage(h.ctx)["issues"] == 1 and gc.usage(h.ctx)["prs"] == 0

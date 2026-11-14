@@ -2166,12 +2166,8 @@ query Issue($owner: String!, $name: String!, $number: Int!) {
 }"""
 
 
-@router.get("/github/issue/{owner}/{repo}/{number}")
-async def get_issue(owner: str, repo: str, number: int, auth: tuple[AppContext, str] = Depends(require_owner)):
-    """An issue (for links like #123 that are not pull requests): details and comments."""
-    ctx, _ = auth
-    _check_names(owner, repo)
-    d = await asyncio.to_thread(_hooks(ctx)[0], ISSUE_QUERY, {"owner": owner, "name": repo, "number": number})
+def fetch_issue(graphql: Callable[[str, dict], dict], owner: str, repo: str, number: int) -> dict[str, Any]:
+    d = graphql(ISSUE_QUERY, {"owner": owner, "name": repo, "number": number})
     r = d.get("repository") or {}
     i = r.get("issue")
     if not i:
@@ -2179,11 +2175,34 @@ async def get_issue(owner: str, repo: str, number: int, auth: tuple[AppContext, 
     comments = (i.get("comments") or {}).get("nodes") or []
     return {"repo": r.get("nameWithOwner"), "number": i["number"], "title": i["title"], "url": i["url"], "body": i.get("body") or "",
             "state": i.get("state"), "state_reason": i.get("stateReason"), "author": (i.get("author") or {}).get("login"),
-            "created_at": i.get("createdAt"), "labels": [{"name": x["name"], "color": x.get("color")} for x in (i.get("labels") or {}).get("nodes") or []],
+            "created_at": i.get("createdAt"), "updated_at": i.get("updatedAt"),
+            "labels": [{"name": x["name"], "color": x.get("color")} for x in (i.get("labels") or {}).get("nodes") or []],
             "assignees": [x["login"] for x in (i.get("assignees") or {}).get("nodes") or [] if x],
             "comments": [{"id": c.get("databaseId"), "author": (c.get("author") or {}).get("login"), "body": c.get("body") or "",
                           "created_at": c.get("createdAt"), "url": c.get("url")} for c in comments if c],
             "older_hidden": max(0, (i.get("comments") or {}).get("totalCount", 0) - len(comments))}
+
+
+@router.get("/github/issue/{owner}/{repo}/{number}")
+async def get_issue(owner: str, repo: str, number: int, cached: bool = Query(False), refresh: bool = Query(False),
+                    auth: tuple[AppContext, str] = Depends(require_owner)):
+    """An issue (for links like #123 that are not pull requests): details and comments. cached=true (a tab's first
+    load): the copy in the local cache when there is one, checked on GitHub right after (a github_cache event tells
+    the tab when the check finished and whether it changed)."""
+    from . import github_cache as gc
+
+    ctx, _ = auth
+    _check_names(owner, repo)
+    key = f"{owner}/{repo}#{number}".lower()
+    graphql = _hooks(ctx)[0]
+    hit = gc.get(ctx, key, "issue") if cached and not refresh else None
+    if hit is not None:
+        data, fetched = hit
+        gc.revalidate(ctx, key, "issue", lambda: fetch_issue(graphql, owner, repo, number))
+        return {**data, "cache": {"source": "cache", "token": gc.token(ctx, key), "fetched_at": fetched}}
+    data = await asyncio.to_thread(fetch_issue, graphql, owner, repo, number)
+    await asyncio.to_thread(gc.put, ctx, key, "issue", data)
+    return {**data, "cache": {"source": "github", "token": gc.token(ctx, key), "fetched_at": time.time()}}
 
 
 class IssueStateIn(BaseModel):
@@ -2199,6 +2218,7 @@ async def issue_state(owner: str, repo: str, number: int, body: IssueStateIn, au
         raise ApiError(400, "INVALID_ACTION", "action must be close or reopen; reason completed or not_planned")
     patch = {"state": "closed", "state_reason": body.reason} if body.action == "close" else {"state": "open"}
     res = await asyncio.to_thread(_rest(ctx), "PATCH", f"repos/{owner}/{repo}/issues/{number}", patch)
+    _cache_stale(ctx, owner, repo, number, ("issue",))
     return {"state": ((res or {}).get("state") or patch["state"]).upper(), "state_reason": (res or {}).get("state_reason")}
 
 
@@ -2213,6 +2233,7 @@ async def issue_comment(owner: str, repo: str, number: int, body: IssueCommentIn
     if not body.body.strip():
         raise ApiError(400, "INVALID_COMMENT", "a comment needs text")
     res = await asyncio.to_thread(_rest(ctx), "POST", f"repos/{owner}/{repo}/issues/{number}/comments", {"body": body.body.strip()})
+    _cache_stale(ctx, owner, repo, number, ("issue",))
     return {"id": (res or {}).get("id"), "body": body.body.strip()}
 
 

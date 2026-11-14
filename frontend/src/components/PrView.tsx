@@ -878,7 +878,7 @@ function PrStateMenu({ apiBase, state, draft, number, onDone, onError }: {
 interface IssueData {
   repo: string; number: number; title: string; url: string; body: string; state: string; state_reason: string | null; author: string | null;
   labels: { name: string; color: string | null }[]; assignees: string[]; comments: { id: number; author: string | null; body: string; created_at: string; url: string | null }[];
-  older_hidden: number;
+  older_hidden: number; cache?: { source: string; token: string; fetched_at: number };
 }
 
 /** An issue (a #123 link that is not a pull request): read it, comment, close or reopen it on GitHub. */
@@ -889,15 +889,32 @@ function IssueView({ repo, number }: { repo: string; number: number }) {
   const [err, setErr] = useState<string | null>(null);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
-  const load = async () => {
+  const [checking, setChecking] = useState(false);
+  const load = async (first = false) => {
     try {
-      setD(await get<IssueData>(base));
+      const r = await get<IssueData>(first ? `${base}?cached=true` : base);
+      setD(r);
       setErr(null);
+      if (first && r.cache?.source === "cache") {
+        // shown from the local cache: GitHub is checked right now; reload when the check says it changed
+        setChecking(true);
+        const tok = r.cache.token;
+        listenCacheEvents();
+        const done = (ev: CacheEvent) => {
+          if (ev.token !== tok || ev.part !== "issue") return false;
+          setChecking(false);
+          if (ev.changed) void load();
+          return true;
+        };
+        if (cacheEvents.some((ev) => done(ev) && Date.now() - ev.at < 60_000)) return;
+        const off = onCacheEvent((ev) => { if (done(ev)) off(); });
+        setTimeout(() => { off(); setChecking(false); }, 60_000);
+      }
     } catch (e) {
       setErr((e as ApiError).message);
     }
   };
-  useEffect(() => { void load(); }, [base]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { void load(true); }, [base]); // eslint-disable-line react-hooks/exhaustive-deps
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true);
     try {
@@ -933,6 +950,7 @@ function IssueView({ repo, number }: { repo: string; number: number }) {
             <button className="btn small" disabled={busy} onClick={() => void run(() => post(`${base}/state`, { action: "reopen" }))} data-testid="issue-reopen">Reopen</button>
           )}
           <span className="spacer" />
+          {checking && <span className="muted small" data-testid="issue-checking">from the local copy · checking GitHub…</span>}
           <a className="btn small" href={d.url} target="_blank" rel="noreferrer">Open on GitHub</a>
         </div>
       </div>
