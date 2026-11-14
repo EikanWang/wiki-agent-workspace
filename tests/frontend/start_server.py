@@ -346,6 +346,9 @@ def add_fake_review_queue(app) -> None:
         return _J(L.state()["state"])
 
     app.router.routes.insert(0, _R("/fake-github/rate", set_rate))
+    # who maintains pytorch/pytorch (its governance page): metadev is a core maintainer
+    ctx.extra["maintainer_files"] = {"pytorch/pytorch": {"docs/source/community/persons_of_interest.md":
+                                     "## Core Maintainers\n\n- Meta Dev ([metadev](https://github.com/metadev))\n"}}
     ctx.extra["gh_cache_prefetch"] = True  # the PR Review cache prefetches, as with the real gh (only GETs: nothing is posted)
     # Repo Insights' model: a fake that names what it was given (no network)
     ctx.extra["insights_llm"] = lambda task, prompt, as_json: (

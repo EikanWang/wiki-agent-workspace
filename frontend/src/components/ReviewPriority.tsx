@@ -21,7 +21,10 @@ export const CATEGORY_HINT: Record<string, string> = {
 type Kind = "list" | "text" | "number" | "bool";
 export const FIELDS: { key: string; label: string; kind: Kind; hint?: string }[] = [
   { key: "requested_by", label: "review asked by", kind: "list", hint: "GitHub logins" },
-  { key: "requested_by_meta", label: "asked by a PyTorch Meta maintainer", kind: "bool" },
+  { key: "requested_by_core", label: "asked by a core maintainer of the repository", kind: "bool" },
+  { key: "requested_by_maintainer", label: "asked by a maintainer or code owner of the repository", kind: "bool" },
+  { key: "requested_by_meta", label: "asked by someone at Meta (GitHub profile's company)", kind: "bool" },
+  { key: "author_maintainer", label: "author is a maintainer or code owner", kind: "bool" },
   { key: "author", label: "author", kind: "list", hint: "GitHub logins" },
   { key: "repo", label: "repository", kind: "list", hint: "owner/name" },
   { key: "label", label: "label", kind: "list", hint: "label names" },

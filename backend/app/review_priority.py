@@ -54,7 +54,8 @@ DEFAULT_AGENT: dict[str, Any] = {"enabled": False, "summary": {"provider": None,
 
 # hard-rule fields: kind decides the operators and the value's type
 FIELDS: dict[str, str] = {
-    "requested_by": "list", "requested_by_meta": "bool", "author": "list", "repo": "list", "label": "list",
+    "requested_by": "list", "requested_by_meta": "bool", "requested_by_core": "bool", "requested_by_maintainer": "bool",
+    "author_maintainer": "bool", "author": "list", "repo": "list", "label": "list",
     "title": "text", "size": "number", "age_days": "number", "idle_days": "number", "ci": "list",
     "draft": "bool", "review_decision": "list", "my_activity": "list",
 }
@@ -207,8 +208,8 @@ def _value(p: dict[str, Any], field: str) -> Any:
         return [lb["name"] for lb in p.get("labels") or []]
     if field == "draft":
         return bool(p.get("draft"))
-    if field == "requested_by_meta":
-        return bool(p.get("requested_by_meta"))
+    if field in ("requested_by_meta", "requested_by_core", "requested_by_maintainer", "author_maintainer"):
+        return bool(p.get(field))
     return p.get({"review_decision": "review_decision", "my_activity": "my_activity"}.get(field, field))
 
 
@@ -376,11 +377,21 @@ def levels_text(prefs: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def person(login: str | None, roles: str | None, company: str | None) -> str:
+    """"alice (company: Meta; core maintainer of the repository; module maintainer: TorchInductor)" — what the
+    repository publishes about the person (its maintainer list / CODEOWNERS) and their GitHub profile's company."""
+    if not login:
+        return "unknown"
+    bits = [f"company: {company}"] if company else []
+    bits.append(f"in this repository: {roles}" if roles else "not listed as a maintainer or code owner of this repository")
+    return f"{login} ({'; '.join(bits)})"
+
+
 def decision_prompt(pr: dict[str, Any], item: dict[str, Any], prefs: dict[str, Any], files: list[dict[str, Any]],
                     diff: str | None, summaries: list[dict[str, Any]] | None) -> str:
     order = [lv["id"] for lv in prefs["priority_levels"]]
-    meta = [f"Repository: {pr['repo']}", f"Pull request: #{pr['number']} {pr['title']}", f"Author: {pr.get('author')}",
-            f"Review requested by: {item.get('requested_by') or 'unknown'}", f"Draft: {'yes' if pr.get('draft') else 'no'}",
+    meta = [f"Repository: {pr['repo']}", f"Pull request: #{pr['number']} {pr['title']}", f"Author: {person(pr.get('author'), item.get('author_roles'), None)}",
+            f"Review requested by: {person(item.get('requested_by'), item.get('requested_by_roles'), item.get('requested_by_company'))}", f"Draft: {'yes' if pr.get('draft') else 'no'}",
             f"Labels: {', '.join(lb['name'] for lb in pr.get('labels') or []) or 'none'}",
             f"Size: +{pr.get('additions', 0)} −{pr.get('deletions', 0)} in {pr.get('changed_files', len(files))} files",
             f"CI: {pr.get('ci') or 'none'}", f"Review decision: {pr.get('review_decision') or 'none'}",
@@ -425,7 +436,9 @@ _state: dict[str, Any] = {"last_run": None, "classified": 0, "files_summarizing"
 def fingerprint(item: dict[str, Any], prefs: dict[str, Any]) -> str:
     desc = json.dumps([[lv["id"], lv["name"], lv["descriptions"]] for lv in prefs["priority_levels"]], ensure_ascii=False)
     pr = json.dumps([item.get("updated_at"), item.get("title"), item.get("draft"), sorted(lb["name"] for lb in item.get("labels") or []),
-                     item.get("additions"), item.get("deletions")], ensure_ascii=False)
+                     item.get("additions"), item.get("deletions"),
+                     *([item.get("requested_by"), item.get("requested_by_roles"), item.get("author_roles")] if item.get("requested_by_roles") or item.get("author_roles") else [])],
+                    ensure_ascii=False)
     return hashlib.sha256((pr + "\0" + desc + "\0" + json.dumps(prefs["priority_agent"]["decision"])).encode()).hexdigest()[:20]
 
 

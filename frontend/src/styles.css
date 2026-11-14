@@ -1381,3 +1381,5 @@ body.resizing-h iframe { pointer-events: none; }
 .gh-rate { font-size: 11px; padding: 1px 6px; border-radius: 10px; white-space: nowrap; }
 .gh-rate.warn { background: #fff4d6; color: #7a5300; }
 .gh-rate.bad { background: #ffe0e0; color: #8a1010; }
+.review-role { font-size: 11px; color: var(--muted); }
+.review-role.core { color: #8a4b00; font-weight: 600; }
