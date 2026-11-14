@@ -191,14 +191,8 @@ async def run_now(body: RunIn, ctx: AppContext = Depends(require_auth_mutating))
     if len(days) > 62:
         raise ApiError(400, "INVALID_DATE", "at most 62 days at a time")
     j = pl.new_job(body.kind, repo, since=since, until=until)
-
-    async def run() -> dict[str, Any]:
-        if body.kind == "highlights":
-            return await pl.highlights(ctx, repo, since, until, j)
-        for d in days:
-            await pl.daily_summary(ctx, repo, d, j, force=body.force)
-        return {"days": days}
-    pl.start(ctx, j, run())
+    pl.start(ctx, j, pl.run_days(ctx, j, repo, body.kind, since, until, body.force),
+             durable=("insights.run", {"repo": repo, "kind": body.kind, "since": since, "until": until, "force": body.force}))
     return _public(j)
 
 

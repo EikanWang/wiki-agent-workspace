@@ -168,6 +168,10 @@ scripts/           setup.sh, start.sh, test.sh
 docs/              USER_GUIDE, DEPLOYMENT, CONFIGURATION, OPERATIONS, SCHEMA, ARCHITECTURE (this file)
 ```
 
+### GitHub access
+
+Every GitHub API call goes through `backend/app/gh_limits.py` (rate limits, retries, shared quota, status); long GitHub work is kept in `backend/app/gh_queue.py` and resumed after restarts. See [GITHUB_RATE_LIMITS.md](GITHUB_RATE_LIMITS.md).
+
 ## Runtime picture
 
 ```

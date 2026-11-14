@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, del, get, post, put } from "../api";
 import MarkdownView from "./MarkdownView";
+import GithubRate from "./GithubRate";
 import ModelChoice, { ModelChoiceValue } from "./ModelChoice";
 import { utc8 } from "../time";
 import { confirmAction } from "./Confirm";
@@ -140,6 +141,7 @@ function RepoPage({ repo, onOpenChat }: { repo: string; onOpenChat: (ws: string,
           {ov.highlight_files.length ? ` · ${ov.highlight_files.length} highlight files` : ""}
         </span>
         <span className="spacer" />
+        <GithubRate />
         <a className="btn small" href={`https://github.com/${repo}`} target="_blank" rel="noreferrer">GitHub</a>
       </div>
       {err && <div className="banner warn small">{err}</div>}

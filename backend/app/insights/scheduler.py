@@ -63,6 +63,11 @@ async def _loop(ctx: Any) -> None:
 
 
 def start(ctx: Any) -> None:
+    from .. import gh_queue
+
+    gh_queue.register("insights.report", pl.resume)
+    gh_queue.register("insights.run", pl.resume)
+    gh_queue.resume_all(ctx)  # what a restart interrupted goes on by itself
     global _task
     if _task is None or _task.done():
         _task = asyncio.get_running_loop().create_task(_loop(ctx))

@@ -252,6 +252,10 @@ model = "openai.gpt-oss-20b"
 api_key_env = "AWS_BEARER_TOKEN_BEDROCK"
 ```
 
+## `[github.rate]` — GitHub API rate limits
+
+Thresholds and waits of the central GitHub rate-limit management; defaults and meaning in [GITHUB_RATE_LIMITS.md](GITHUB_RATE_LIMITS.md#configuration).
+
 ## Full example
 
 ```toml

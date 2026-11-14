@@ -98,8 +98,8 @@ def _hash(*parts: str) -> str:
 
 # ---------------------------------------------------------------------- jobs
 
-def new_job(kind: str, repo: str, **info: Any) -> dict[str, Any]:
-    j = {"id": new_id(), "kind": kind, "repo": repo, "status": "running", "step": "starting", "log": [], "error": None,
+def new_job(kind: str, repo: str, jid: str | None = None, **info: Any) -> dict[str, Any]:
+    j = {"id": jid or new_id(), "kind": kind, "repo": repo, "status": "running", "state": "RUNNING", "step": "starting", "log": [], "error": None,
          "started_at": time.time(), "finished_at": None, **info}
     _jobs[j["id"]] = j
     return j
@@ -119,22 +119,108 @@ def jobs(repo: str | None = None) -> list[dict[str, Any]]:
     return [j for j in _jobs.values() if not repo or j["repo"].lower() == repo.lower()]
 
 
-def start(ctx: Any, j: dict[str, Any], coro) -> None:
+def start(ctx: Any, j: dict[str, Any], coro, durable: tuple[str, dict[str, Any]] | None = None, resumed: bool = False) -> None:
+    """Run a job in the background, at background priority for GitHub (it waits for the quota rather than spending
+    what people need, and says so in its step). durable=(kind, params): kept in the GitHub work queue until it ends, so
+    it resumes after a restart."""
+    from .. import gh_limits, gh_queue
+
+    if durable and not resumed:  # (a resumed one is in the queue already, with its progress)
+        gh_queue.add(ctx, j["id"], durable[0], durable[1])
+
+    def on_wait(info: dict[str, Any] | None) -> None:
+        if info is None:
+            j["state"], j["gh_wait"] = "RESUMING", None
+            step(j, "GitHub allows requests again: going on")
+            if durable:
+                gh_queue.state(ctx, j["id"], "RESUMING")
+            return
+        j["state"], j["gh_wait"] = info["state"], {k: info[k] for k in ("resource", "why", "until")}
+        step(j, f"waiting for GitHub: {info['why']}; goes on by itself at {time.strftime('%H:%M', time.gmtime(info['until'] + 8 * 3600))} (UTC+8)")
+        if durable:
+            gh_queue.state(ctx, j["id"], info["state"])
+
     async def run() -> None:
+        with gh_limits.priority(gh_limits.BACKGROUND, wait=True), gh_limits.operation(f"insights:{j['kind']}", on_wait=on_wait):
+            try:
+                j["result"] = await coro
+                j["status"], j["state"] = "done", "RUNNING"
+                step(j, "done")
+                if durable:
+                    gh_queue.done(ctx, j["id"])
+            except asyncio.CancelledError:  # the server stops: stays in the queue, resumes at the next start
+                j["status"] = "interrupted"
+                raise
+            except Exception as exc:  # noqa: BLE001 - shown in the job
+                j["status"], j["state"] = "failed", "FAILED"
+                j["error"] = getattr(exc, "message", None) or f"{exc.__class__.__name__}: {exc}"
+                step(j, f"failed: {j['error']}")
+                log.warning("insights %s %s failed: %s", j["kind"], j["repo"], j["error"])
+                if durable:
+                    gh_queue.done(ctx, j["id"])
+            finally:
+                j["finished_at"] = time.time()
+                if j.get("on_done"):
+                    j.pop("on_done")(j)
+    _tasks.add(t := asyncio.get_running_loop().create_task(run()))
+    t.add_done_callback(_tasks.discard)
+
+
+_tasks: set[asyncio.Task] = set()
+
+
+async def run_days(ctx: Any, j: dict[str, Any], repo: str, kind: str, since: str, until: str, force: bool = False) -> dict[str, Any]:
+    """`Make` / `Score now`: the daily summaries of each day of the range, or the XPU highlights of the range. The days
+    done are recorded, so a resumed run goes on with the next one."""
+    from .. import gh_queue
+
+    if kind == "highlights":
+        return await highlights(ctx, repo, since, until, j)
+    done_days = set(next((o["progress"].get("done", []) for o in gh_queue.pending(ctx) if o["id"] == j["id"]), []))
+    days = days_of(since, until)
+    for d in days:
+        if d in done_days:
+            continue
+        await daily_summary(ctx, repo, d, j, force=force)
+        done_days.add(d)
+        gh_queue.progress(ctx, j["id"], done=sorted(done_days))
+    return {"days": days}
+
+
+def resume(ctx: Any, op: dict[str, Any]) -> None:
+    """gh_queue resumer for Insights work interrupted by a restart."""
+    p = op["params"]
+    if op["kind"] == "insights.report":
         try:
-            j["result"] = await coro
-            j["status"] = "done"
-            step(j, "done")
-        except Exception as exc:  # noqa: BLE001 - shown in the job
-            j["status"] = "failed"
-            j["error"] = getattr(exc, "message", None) or f"{exc.__class__.__name__}: {exc}"
-            step(j, f"failed: {j['error']}")
-            log.warning("insights %s %s failed: %s", j["kind"], j["repo"], j["error"])
-        finally:
-            j["finished_at"] = time.time()
-            if j.get("on_done"):
-                j.pop("on_done")(j)
-    asyncio.get_running_loop().create_task(run())
+            meta = json.loads((_reports_dir(ctx, p["repo"]) / f"{op['id']}.json").read_text())
+        except (OSError, ValueError):
+            from .. import gh_queue
+
+            gh_queue.done(ctx, op["id"])
+            return
+        if meta.get("status") == "done":
+            from .. import gh_queue
+
+            gh_queue.done(ctx, op["id"])
+            return
+        meta["status"] = "running"
+        _meta_write(ctx, meta)
+        j = new_job("report", p["repo"], jid=op["id"], since=meta["since"], until=meta["until"])
+        step(j, f"resumed after a restart (resume {op['resumes']})")
+        j["on_done"] = _report_done(ctx, meta)
+        start(ctx, j, make_report(ctx, meta, j), durable=(op["kind"], p), resumed=True)
+    elif op["kind"] == "insights.run":
+        j = new_job(p["kind"], p["repo"], jid=op["id"], since=p["since"], until=p["until"])
+        step(j, f"resumed after a restart (resume {op['resumes']})")
+        start(ctx, j, run_days(ctx, j, p["repo"], p["kind"], p["since"], p["until"], p.get("force", False)), durable=(op["kind"], p), resumed=True)
+
+
+def _report_done(ctx: Any, meta: dict[str, Any]):
+    def done(job_: dict[str, Any]) -> None:
+        if job_["status"] == "failed":
+            meta.update(status="failed", error=job_["error"], finished_at=time.time())
+            _meta_write(ctx, meta)
+    return done
 
 
 # ---------------------------------------------------------------------- daily summaries
@@ -324,7 +410,7 @@ def reports(ctx: Any, repo: str | None = None) -> list[dict[str, Any]]:
         m.setdefault("kind", "daily" if m.get("since") == m.get("until") else "dates")  # reports made before categories
         live = _jobs.get(m.get("job_id") or "")
         if live and m.get("status") == "running":
-            m = {**m, "step": live["step"], "status": live["status"]}
+            m = {**m, "step": live["step"], "status": live["status"], "state": live.get("state")}
         elif m.get("status") == "running" and not live:
             m = {**m, "status": "interrupted"}
         out.append(m)
@@ -339,7 +425,8 @@ def report(ctx: Any, repo: str, rid: str) -> dict[str, Any]:
     md = p.with_suffix(".md")
     live = _jobs.get(m.get("job_id") or "")
     if live:
-        m.update(step=live["step"], log=live["log"], status=live["status"] if m["status"] == "running" else m["status"])
+        m.update(step=live["step"], log=live["log"], status=live["status"] if m["status"] == "running" else m["status"],
+                 state=live.get("state"), gh_wait=live.get("gh_wait"))
     return {**m, "text": md.read_text(encoding="utf-8") if md.is_file() else None}
 
 
@@ -410,13 +497,8 @@ def new_report(ctx: Any, repo: str, since: str, until: str, sources: dict[str, b
     meta = {"id": j["id"], "job_id": j["id"], "repo": repo, "since": since, "until": until, "label": label, "kind": kind, "sources": sources,
             "focus": focus, "preset": preset, "status": "running", "created_at": dt.datetime.now(dt.timezone.utc).isoformat()}
     _meta_write(ctx, meta)
-
-    def done(job_: dict[str, Any]) -> None:
-        if job_["status"] == "failed":
-            meta.update(status="failed", error=job_["error"], finished_at=time.time())
-            _meta_write(ctx, meta)
-    j["on_done"] = done
-    start(ctx, j, make_report(ctx, meta, j))
+    j["on_done"] = _report_done(ctx, meta)
+    start(ctx, j, make_report(ctx, meta, j), durable=("insights.report", {"repo": repo}))
     return meta
 
 

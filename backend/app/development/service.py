@@ -211,17 +211,16 @@ async def fetch_pr_meta(repo: str, number: int) -> dict[str, Any]:
     gh = shutil.which("gh")
     if not gh:
         raise ApiError(409, "GH_UNAVAILABLE", "the GitHub CLI (gh) is not installed on the server; it is needed to open an existing pull request")
-    proc = await asyncio.create_subprocess_exec(
-        gh, "pr", "view", str(number), "--repo", repo, "--json",
-        "headRefName,headRepository,headRepositoryOwner,baseRefName,isCrossRepository,maintainerCanModify,title,url,state",
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-    try:
-        out, err = await asyncio.wait_for(proc.communicate(), timeout=60)
-    except TimeoutError:
-        proc.kill()
-        raise ApiError(504, "GH_TIMEOUT", "gh pr view timed out")
-    if proc.returncode != 0:
-        raise ApiError(502, "GH_FAILED", f"gh pr view failed: {err.decode('utf-8', 'replace').strip()[:300]}")
+    from .. import gh_limits
+
+    res = await gh_limits.run_gh_async(["pr", "view", str(number), "--repo", repo, "--json",
+                                        "headRefName,headRepository,headRepositoryOwner,baseRefName,isCrossRepository,maintainerCanModify,title,url,state"],
+                                       timeout=60, dedupe=True)
+    if res.rc != 0:
+        if gh_limits.classify(None, res.err, {}) in ("primary", "secondary"):
+            gh_limits.raise_for(res)
+        raise ApiError(502, "GH_FAILED", f"gh pr view failed: {res.err.strip()[:300]}")
+    out = res.out
     d = json.loads(out)
     owner = (d.get("headRepositoryOwner") or {}).get("login")
     name = (d.get("headRepository") or {}).get("name")
@@ -250,16 +249,21 @@ async def set_pr_state(repo: str, number: int, action: str, comment: str | None)
     gh = shutil.which("gh")
     if not gh:
         raise ApiError(409, "GH_UNAVAILABLE", "the GitHub CLI (gh) is not installed on the server")
-    args = [gh, "pr", action, str(number), "--repo", repo, *(["--comment", comment] if comment else [])]
-    proc = await asyncio.create_subprocess_exec(*args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-                                                stdin=asyncio.subprocess.DEVNULL)
-    try:
-        out, err = await asyncio.wait_for(proc.communicate(), timeout=90)
-    except TimeoutError:
-        proc.kill()
-        raise ApiError(504, "GH_TIMEOUT", f"gh pr {action} timed out")
-    if proc.returncode != 0:
-        raise ApiError(502, "GH_FAILED", f"gh pr {action} failed: {(err or out).decode('utf-8', 'replace').strip()[:300]}")
+    from .. import gh_limits
+
+    def reconcile() -> str | None:  # unclear outcome: does GitHub show the PR in the wanted state now?
+        r = gh_limits.run_gh(["pr", "view", str(number), "--repo", repo, "--json", "state"], timeout=60)
+        try:
+            state = json.loads(r.out).get("state") if r.rc == 0 else None
+        except ValueError:
+            state = None
+        return "ok" if state == ("CLOSED" if action == "close" else "OPEN") else None
+    res = await gh_limits.run_gh_async(["pr", action, str(number), "--repo", repo, *(["--comment", comment] if comment else [])],
+                                       timeout=90, mutation=True, reconcile=reconcile)
+    if res.rc != 0:
+        if gh_limits.classify(None, res.err, {}) in ("primary", "secondary"):
+            gh_limits.raise_for(res)
+        raise ApiError(502, "GH_FAILED", f"gh pr {action} failed: {(res.err or res.out).strip()[:300]}")
 
 
 async def list_my_prs(repo: str, state: str = "open") -> list[dict[str, Any]]:
@@ -270,18 +274,17 @@ async def list_my_prs(repo: str, state: str = "open") -> list[dict[str, Any]]:
     gh = shutil.which("gh")
     if not gh:
         raise ApiError(409, "GH_UNAVAILABLE", "the GitHub CLI (gh) is not installed on the server (run gh auth login after installing it)")
-    proc = await asyncio.create_subprocess_exec(
-        gh, "pr", "list", "--repo", repo, "--author", "@me", "--state", state, "--limit", "100", "--json",
-        "number,title,url,isDraft,state,headRefName,baseRefName,updatedAt,reviewDecision,statusCheckRollup",
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, stdin=asyncio.subprocess.DEVNULL)
-    try:
-        out, err = await asyncio.wait_for(proc.communicate(), timeout=90)
-    except TimeoutError:
-        proc.kill()
-        raise ApiError(504, "GH_TIMEOUT", "gh pr list timed out")
-    if proc.returncode != 0:
-        raise ApiError(502, "GH_FAILED", f"gh pr list failed: {err.decode('utf-8', 'replace').strip()[:300]}")
-    items = json.loads(out or b"[]")
+    from .. import gh_limits
+
+    res = await gh_limits.run_gh_async(["pr", "list", "--repo", repo, "--author", "@me", "--state", state, "--limit", "100", "--json",
+                                        "number,title,url,isDraft,state,headRefName,baseRefName,updatedAt,reviewDecision,statusCheckRollup"],
+                                       timeout=90, dedupe=True)
+    if res.rc != 0:
+        if gh_limits.classify(None, res.err, {}) in ("primary", "secondary"):
+            gh_limits.raise_for(res)
+        raise ApiError(502, "GH_FAILED", f"gh pr list failed: {res.err.strip()[:300]}")
+    out = res.out
+    items = json.loads(out or "[]")
     for p in items:
         checks = p.pop("statusCheckRollup", None) or []
         states = {(c.get("conclusion") or c.get("state") or c.get("status") or "").upper() for c in checks}
@@ -983,9 +986,21 @@ class DevService:
                 "--title", title.strip(), "--body", body or ""]
         if draft:
             args.append("--draft")
-        rc, out, err = await t.run(args, cwd=row.worktree_path, timeout=120)
+        from .. import gh_limits
+
+        head = row.push_branch or row.branch
+
+        async def existing() -> tuple[int, str, str] | None:  # a PR for this branch on GitHub already (made by an unclear attempt)
+            rc2, out2, _ = await t.run(["gh", "pr", "list", "--repo", row.github_repo, "--head", head, "--state", "open", "--json", "url",
+                                        "--jq", ".[0].url // empty"], cwd=row.worktree_path, timeout=60)
+            return (0, out2.strip(), "") if rc2 == 0 and "/pull/" in out2 else None
+        rc, out, err = await gh_limits.run_with(lambda: t.run(args, cwd=row.worktree_path, timeout=120), args[1:], mutation=True, reconcile=existing)
         if rc != 0:
-            raise ApiError(400, "PR_CREATE_FAILED", f"gh pr create failed: {(err or out).strip()[:500]}")
+            m0 = re.search(r"https://github\.com/\S+/pull/\d+", err or out)
+            if "already exists" in (err or out) and m0:  # never a second PR for the branch: take the one GitHub has
+                out, rc = m0.group(0), 0
+            else:
+                raise ApiError(400, "PR_CREATE_FAILED", f"gh pr create failed: {(err or out).strip()[:500]}")
         url = next((ln.strip() for ln in out.splitlines() if "/pull/" in ln), out.strip())
         m = re.search(r"/pull/(\d+)", url)
         if m:
@@ -996,8 +1011,13 @@ class DevService:
         row, t = self._ready(dev_id)
         if not row.pr_number or not row.github_repo:
             return {"checks": [], "note": "no pull request yet"}
-        rc, out, err = await t.run(["gh", "pr", "checks", str(row.pr_number), "--repo", row.github_repo, "--json", "name,state,link,workflow"],
-                                   timeout=60)
+        from .. import gh_limits
+
+        cargs = ["gh", "pr", "checks", str(row.pr_number), "--repo", row.github_repo, "--json", "name,state,link,workflow"]
+        try:
+            rc, out, err = await gh_limits.run_with(lambda: t.run(cargs, timeout=60), cargs[1:])
+        except gh_limits.RateLimited as exc:
+            return {"checks": [], "note": exc.message}
         if rc not in (0, 8) or not out.strip().startswith("["):  # 8 = some checks pending
             return {"checks": [], "note": (err or out).strip()[:300] or "gh pr checks failed"}
         return {"checks": json.loads(out), "note": None}

@@ -100,6 +100,10 @@ dismissed.
 - Inspect data directly: `sqlite3 ~/.local/share/wiki-agent-workspace/workspace.sqlite3` (see queries in
   [SCHEMA.md](SCHEMA.md)). Prefer the API or a stopped server for writes.
 
+## GitHub API quota
+
+`GET /api/v1/github/rate` shows the quota, what waits and the top consumers; the log lines are `waw.github.rate`. Details: [GITHUB_RATE_LIMITS.md](GITHUB_RATE_LIMITS.md).
+
 ## Troubleshooting
 
 | Symptom | Cause / fix |

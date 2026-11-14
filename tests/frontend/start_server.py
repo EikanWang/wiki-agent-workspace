@@ -333,6 +333,19 @@ def add_fake_review_queue(app) -> None:
         return _J(posted)
 
     app.router.routes.insert(0, _R("/fake-github/posted", show_posted))
+
+    async def set_rate(request):  # the GitHub quota as the limiter sees it: ?remaining=0 (used up) / ?remaining=5000
+        import time as _t
+
+        from backend.app import gh_limits
+
+        n = int(request.query_params.get("remaining", "5000"))
+        L = gh_limits.LIMITER
+        L.buckets[L.key("graphql")] = gh_limits.Bucket(5000, n, 5000 - n, _t.time() + 1800, _t.time() + 10**6, "headers")
+        L.checked = _t.time() + 10**6
+        return _J(L.state()["state"])
+
+    app.router.routes.insert(0, _R("/fake-github/rate", set_rate))
     ctx.extra["gh_cache_prefetch"] = True  # the PR Review cache prefetches, as with the real gh (only GETs: nothing is posted)
     # Repo Insights' model: a fake that names what it was given (no network)
     ctx.extra["insights_llm"] = lambda task, prompt, as_json: (

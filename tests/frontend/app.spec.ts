@@ -3410,6 +3410,26 @@ test("PR diff: copy the file path, expand hidden lines around a change, expand /
   await page.getByTestId("activity-files").click();
 });
 
+test("GitHub quota: the chip shows when GitHub requests are slowed down or waiting, and says when they go on", async ({ page }) => {
+  await login(page);
+  await page.getByTestId("activity-insights").click();
+  await expect(page.getByTestId("insights-view")).toBeVisible();
+  await expect(page.getByTestId("gh-rate")).toHaveCount(0); // plain RUNNING: nothing shown
+  expect(await (await page.request.get("/fake-github/rate?remaining=0")).json()).toBe("WAITING_FOR_RATE_LIMIT");
+  const r = await (await page.request.get("/api/v1/github/rate")).json();
+  expect(r.buckets.graphql).toMatchObject({ limit: 5000, remaining: 0 });
+  await page.reload();
+  await expect(page.getByTestId("gh-rate")).toBeVisible({ timeout: 15000 });
+  await expect(page.getByTestId("gh-rate")).toHaveAttribute("data-state", "WAITING_FOR_RATE_LIMIT");
+  await expect(page.getByTestId("gh-rate")).toContainText(/waiting for the rate limit · goes on at \d\d:\d\d/);
+  await expect(page.getByTestId("gh-rate")).toHaveAttribute("title", /graphql 0\/5000/);
+  await page.request.get("/fake-github/rate?remaining=5000");
+  await page.reload();
+  await expect(page.getByTestId("insights-view")).toBeVisible();
+  await expect(page.getByTestId("gh-rate")).toHaveCount(0);
+  await page.getByTestId("activity-files").click();
+});
+
 test("Repo Insights: the history in the folder, a week's report (daily summaries made, commits, highlights), chat, settings", async ({ page }) => {
   await login(page);
   await page.getByTestId("activity-insights").click();

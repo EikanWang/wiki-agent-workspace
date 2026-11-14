@@ -439,21 +439,22 @@ async def test_extra_context_folders_reach_the_agent_prompt(running_app, workspa
     assert "Additional reference folders the user added for more accurate answers" in prompt and str(ref.resolve()) in prompt
 
 
-def test_rate_guard_waits_or_refuses_near_the_limit(monkeypatch):
-    import time as _t
+def test_rate_guard_waits_or_refuses_near_the_limit():
+    """(RateGuard is now gh_limits.Limiter, behind the same RATE.before / RATE.status.) A person waiting: a reset that
+    is near is waited for, a far one is refused with 429; mutations are spaced out."""
+    from backend.app.gh_limits import Bucket, Limiter
 
-    g = github_hub.RateGuard()
+    now = [1_000_000.0]
     slept: list = []
-    monkeypatch.setattr(github_hub.time, "sleep", lambda s: slept.append(s))
-    monkeypatch.setattr(g, "_refresh", lambda: setattr(g, "checked", _t.time()))
-    g.checked = _t.time()
-    g.limits = {"graphql": {"remaining": 5000, "reset": int(_t.time()) + 3000, "limit": 5000}}
+    g = Limiter(clock=lambda: now[0], sleep=lambda s: (slept.append(s), now.__setitem__(0, now[0] + s)))
+    g.checked = now[0]
+    g.buckets[g.key("graphql")] = Bucket(5000, 5000, 0, now[0] + 3000, now[0], "headers")
     g.before("graphql")
-    assert slept == [] and g.limits["graphql"]["remaining"] == 4999
-    g.limits["graphql"] = {"remaining": 50, "reset": int(_t.time()) + 30, "limit": 5000}
+    assert slept == [] and g.buckets[g.key("graphql")].remaining == 4999
+    g.buckets[g.key("graphql")] = Bucket(5000, 50, 4950, now[0] + 30, now[0], "headers")
     g.before("graphql")  # reset is near: wait for it
-    assert slept and 25 < slept[0] <= 33
-    g.limits["graphql"] = {"remaining": 50, "reset": int(_t.time()) + 1800, "limit": 5000}
+    assert slept and 25 < sum(slept) <= 40
+    g.buckets[g.key("graphql")] = Bucket(5000, 50, 4950, now[0] + 1800, now[0], "headers")
     try:
         g.before("graphql")
     except ApiError as e:
@@ -461,7 +462,6 @@ def test_rate_guard_waits_or_refuses_near_the_limit(monkeypatch):
     else:
         raise AssertionError("not refused")
     slept.clear()
-    g.limits = {}
     g.before("core", mutation=True)
     g.before("core", mutation=True)  # mutations are spaced out
     assert slept and slept[-1] > 0.5

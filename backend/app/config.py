@@ -127,6 +127,8 @@ class Settings:
     google_token_url: str = "https://oauth2.googleapis.com/token"
     google_userinfo_url: str = "https://openidconnect.googleapis.com/v1/userinfo"
     tmux_history_limit: int = 10000
+    # [github.rate] — GitHub API rate-limit management (gh_limits); fractions of each quota
+    gh_rate: dict[str, float] = field(default_factory=dict)
     # [office] — Layout view of Word / PowerPoint / Visio files, rendered to PDF by LibreOffice
     office_soffice: str | None = None  # path to soffice; default: found on PATH
     office_max_parallel: int = 2
@@ -231,6 +233,8 @@ class Settings:
             if self.google_callback_url:
                 go["callback_url"] = self.google_callback_url
             d["auth"]["google"] = go
+        if self.gh_rate:
+            d["github"] = {"rate": dict(self.gh_rate)}
         if self.workspaces:
             d["workspaces"] = [{k: v for k, v in w.items() if v} for w in self.workspaces]
         if self.frontend_dist:
@@ -264,6 +268,10 @@ class Settings:
                 entry["profile"] = p.profile
             d["agents"][name] = entry
         return d
+
+
+RATE_KEYS = ("warn", "suspend", "reserve", "reserve_min", "max_interactive_wait", "max_background_wait", "max_retries", "secondary_min",
+             "backoff_cap", "mutation_gap")
 
 
 def _provider_from(d: dict[str, Any]) -> ProviderConfig:
@@ -331,6 +339,7 @@ def load_settings(path: Path | None = None, env: dict[str, str] | None = None) -
     ws = raw.get("workspace", {})
     term = raw.get("terminal", {})
     office = raw.get("office", {}) or {}
+    gh_rate = ((raw.get("github", {}) or {}).get("rate", {}) or {})
     auth = raw.get("auth", {})
     agents = raw.get("agents", {})
 
@@ -384,6 +393,7 @@ def load_settings(path: Path | None = None, env: dict[str, str] | None = None) -
         google_allowed_emails=[str(u).strip().lower() for u in (go.get("allowed_emails") or []) if str(u).strip()],
         google_callback_url=str(go.get("callback_url", "") or ""),
         tmux_history_limit=int(term.get("tmux_history_limit", 10000)),
+        gh_rate={k: float(v) for k, v in gh_rate.items() if k in RATE_KEYS},
         office_soffice=str(office.get("soffice") or "") or None,
         office_max_parallel=int(office.get("max_parallel", 2)),
         office_timeout=int(office.get("timeout", 180)),

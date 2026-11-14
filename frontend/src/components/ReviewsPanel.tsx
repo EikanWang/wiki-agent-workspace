@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import GithubRate from "./GithubRate";
 import { ApiError, get, put } from "../api";
 import RefreshButton from "./RefreshButton";
 import { confirmAction } from "./Confirm";
@@ -324,6 +325,7 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
         )}
         <RefreshButton onRefresh={() => loadReviews(true)} title="Refresh from GitHub" testId="reviews-refresh" />
       </div>
+      <div className="pad-x"><GithubRate /></div>
       {settings && prefs && <ReviewsSettings prefs={prefs} busy={busy} change={change} problems={queue?.watch_problems ?? []} status={queue?.priority_agent ?? null} />}
       <div className="reviews-search">
         {search === null ? (
