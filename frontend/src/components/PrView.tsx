@@ -5,6 +5,7 @@ import { confirmAction } from "./Confirm";
 import { AgentSession, ApiError, WorkspaceInfo, get, post, put, subscribeGlobal } from "../api";
 import { renderGithubMarkdown } from "../markdown";
 import { loadReviews, savePrefs, useReviews } from "./ReviewsPanel";
+import DeferMenu, { deferLabel } from "./DeferMenu";
 import { usePersistentState, useRestoredScroll } from "../persist";
 import { SelectionAnchor, wholeDocument } from "../textmodel";
 import { GhDraft, GhThread, PrFile, PrFileDiff, SubmitReview } from "./PrDiff";
@@ -814,6 +815,17 @@ function PrStar({ repo, number }: { repo: string; number: number }) {
       <LevelMenu pr={key} level={it?.level ?? manual ?? prefs.priority_default} source={it?.level_source ?? (manual ? "manual" : "default")}
         reasons={it?.level_reasons ?? (it ? [] : ["not in your review list"])} levels={prefs.priority_levels} agentOn={!!prefs.priority_agent?.enabled && !!it}
         onSet={(lv) => savePrefs({ set_level: { pr: key, level: lv } })} />
+      {(() => {
+        const d = (queue.deferred ?? []).find((x) => `${x.repo}#${x.number}`.toLowerCase() === key)?.deferred;
+        if (d) {
+          return (
+            <span className="small" data-testid="pr-deferred"> ⏰ deferred {deferLabel(d)}{" "}
+              <button className="link-btn small" onClick={() => void savePrefs({ undefer: key })} data-testid="pr-undefer">back now</button>
+            </span>
+          );
+        }
+        return it ? <DeferMenu pr={key} onDefer={(x) => savePrefs({ defer: x })} /> : null;
+      })()}
     </span>
   );
 }

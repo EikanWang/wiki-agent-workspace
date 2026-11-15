@@ -170,6 +170,13 @@ level by hand**, go **back to rules / agent**, or **ask the agent again**. A PR'
   passing, running, none), draft, review decision, your activity (todo / news / quiet). When several match, the
   most urgent wins. (The older "PyTorch Meta maintainers" / priority people became such rules, ★ / un-★ became
   levels set by hand.)
+- **Defer a review** — ⏰ on a PR (on hover in the list, or next to its level in the PR tab): in 3 hours, tomorrow
+  09:00, next Monday 09:00, in a week, in a month, a date and time you pick, or *until there is new activity*; with
+  *back earlier when there is new activity* (on by default) it also returns when someone reviews, comments, pushes
+  commits or asks for your review again (bots and you do not count). An optional note says why. Deferred PRs leave
+  the list and its badge for the folded **⏰ Deferred** section at the bottom (with when they come back and the note);
+  **Back now** returns one at once; a PR that came back shows **⏰ back**. Deferrals are kept with your Reviews
+  settings (on the server, for every browser).
 - **Maintainers** — who maintains a repository comes from what the repository publishes, read once a day: its
   governance page (`docs/source/community/persons_of_interest.md`: lead / core maintainers, module maintainers;
   emeritus and sunsetted modules do not count) and `CODEOWNERS` (users, not teams), plus the logins you add in

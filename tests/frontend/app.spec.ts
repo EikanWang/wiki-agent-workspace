@@ -1943,6 +1943,20 @@ test("GitHub review hub: only the owner's GitHub sign-in sees it; queue grouped 
     return [...q.items, ...q.watched].find((x: any) => x.number === 104)?.requested_by_roles;
   }, { timeout: 15000 }).toBe("core maintainer");
   await expect(panel).toContainText("1 draft hidden");
+  // defer a review: it leaves the list for the Deferred section, and comes back by "Back now"
+  const r103 = page.locator('[data-testid="review-group"] [data-testid="review-pr"][data-number="103"]');
+  await r103.hover();
+  await r103.getByTestId("review-defer").click();
+  await page.getByTestId("defer-note").fill("after the XPU sync");
+  await page.locator('[data-testid="defer-choice"][data-choice="Tomorrow 09:00"]').click();
+  await expect(page.locator('[data-testid="review-group"] [data-testid="review-pr"][data-number="103"]')).toHaveCount(0);
+  await expect(page.getByTestId("reviews-deferred-count")).toContainText("1 deferred");
+  const deferred = page.getByTestId("reviews-deferred");
+  await deferred.locator(".review-group-head").click();
+  await expect(deferred.getByTestId("review-deferred-until")).toContainText("or new activity · after the XPU sync");
+  await deferred.getByTestId("review-undefer").click();
+  await expect(page.getByTestId("reviews-deferred")).toHaveCount(0);
+  await expect(page.locator('[data-testid="review-group"] [data-testid="review-pr"][data-number="103"]')).toHaveCount(1);
   // auto-refresh from GitHub at an interval you choose (5 min by default; kept per browser)
   await expect(page.getByTestId("reviews-auto-refresh")).toHaveValue("5");
   await page.clock.install();

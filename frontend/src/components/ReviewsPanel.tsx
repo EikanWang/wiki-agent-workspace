@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import DeferMenu, { Deferral, deferLabel } from "./DeferMenu";
 import GithubRate from "./GithubRate";
 import { ApiError, get, put } from "../api";
 import RefreshButton from "./RefreshButton";
@@ -30,6 +31,9 @@ export interface ReviewPR {
   requested_by_company?: string | null;
   /** what the repository publishes about the requester / author (maintainer list, CODEOWNERS, your list) */
   requested_by_roles?: string;
+  /** deferred by you (only in `deferred`); a deferral that just ended (back in the list) */
+  deferred?: Deferral;
+  deferred_ended?: Deferral;
   requested_by_core?: boolean;
   author_roles?: string;
   priority?: boolean;
@@ -98,6 +102,7 @@ interface Queue {
   watched?: ReviewPR[];
   watch_problems?: string[];
   maintainers?: MaintainerSource[];
+  deferred?: ReviewPR[];
   hidden_count?: number;
   approved_hidden?: number;
   prefs?: HubPrefs;
@@ -271,11 +276,20 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
           {p.my_activity === "quiet" && p.my_review !== "APPROVED" && (
             <span className="git-badge clean" title={`Your latest review / comment: ${p.my_last_at ? new Date(p.my_last_at).toLocaleString() : ""}; nothing since`} data-testid="review-quiet"> ✓ commented</span>
           )}
+          {p.deferred_ended && <span className="git-badge approved-news" title={`You deferred it (${deferLabel(p.deferred_ended)}); it is back${p.deferred_ended.note ? `\nnote: ${p.deferred_ended.note}` : ""}`} data-testid="review-defer-ended"> ⏰ back</span>}
+          {p.deferred && <span className="git-badge" title={p.deferred.note || undefined} data-testid="review-deferred-until"> ⏰ {deferLabel(p.deferred)}{p.deferred.note ? ` · ${p.deferred.note}` : ""}</span>}
           {p.labels.slice(0, 2).map((l) => (
             <span key={l.name} className="review-label" style={l.color ? { borderColor: `#${l.color}` } : undefined}>{l.name}</span>
           ))}
         </span>
       </span>
+      {prefs && !p.deferred && (
+        <DeferMenu pr={`${p.repo}#${p.number}`} onDefer={(d) => change(`defer:${p.repo}#${p.number}`, { defer: d })} />
+      )}
+      {prefs && p.deferred && (
+        <span role="button" tabIndex={0} className="btn small" onClick={(e) => { e.stopPropagation(); void change(`undefer:${p.repo}#${p.number}`, { undefer: `${p.repo}#${p.number}` }); }}
+          title="Back in the list now" data-testid="review-undefer">Back now</span>
+      )}
       {prefs && (
         <LevelMenu pr={`${p.repo}#${p.number}`} level={p.level} source={p.level_source} reasons={p.level_reasons} levels={levels} compact
           agentOn={!!prefs.priority_agent?.enabled}
@@ -398,6 +412,7 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
         {queue && (
           <div className="muted small reviews-meta">
             Requested from you: {queue.items.length}{queue.truncated ? `+ (of ${queue.total})` : ""} · showing {shown}
+            {(queue.deferred?.length ?? 0) > 0 && <span data-testid="reviews-deferred-count"> · {queue.deferred!.length} deferred</span>}
             {!showDrafts && !agentOnly && drafts > 0 && <span title="Tick “drafts” to show them"> · {drafts} draft{drafts > 1 ? "s" : ""} hidden</span>}
             {filter.trim() && <span> · filtered</span>}
             {agentOnly && <span> · only those the agent reviewed, waiting for you</span>}
@@ -413,6 +428,19 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
         {groups.map(({ repo, prs }) => groupBox(repo, prs, false))}
         {watchedGroups.length > 0 && <div className="muted small reviews-meta" data-testid="reviews-watched-head">Watched repositories (all open PRs)</div>}
         {watchedGroups.map(({ repo, prs }) => groupBox(repo, prs, true))}
+        {(queue?.deferred?.length ?? 0) > 0 && (
+          <div className="review-group" data-testid="reviews-deferred">
+            <div className="review-group-head-row">
+              <button className="review-group-head" onClick={() => toggle("deferred:open")} aria-expanded={collapsed.has("deferred:open")} title="Reviews you deferred: back by themselves at their time, or when someone does something on the PR (if you chose that)">
+                <span className="chev">{collapsed.has("deferred:open") ? "⌄" : "›"}</span>
+                <span className="review-repo">⏰ Deferred</span>
+                <span className="spacer" />
+                <span className="git-badge clean">{queue!.deferred!.length}</span>
+              </button>
+            </div>
+            {collapsed.has("deferred:open") && [...queue!.deferred!].sort((a, b) => (a.deferred?.until ?? "9").localeCompare(b.deferred?.until ?? "9")).map((p) => prRow(p, true))}
+          </div>
+        )}
         {(queue?.approved_hidden ?? 0) > 0 && <div className="muted small reviews-meta" data-testid="reviews-approved-hidden">{queue!.approved_hidden} PR(s) you approved with nothing new since are not listed (tick “approved” to show them).</div>}
         {(queue?.hidden_count ?? 0) > 0 && <div className="muted small reviews-meta">{queue!.hidden_count} request(s) in hidden repositories (⚙ to show them)</div>}
       </div>

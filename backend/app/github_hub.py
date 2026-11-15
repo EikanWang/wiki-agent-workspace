@@ -17,6 +17,7 @@ import logging
 import shutil  # noqa: F401 - (tests replace shutil.which here; gh_limits uses the same module)
 import subprocess
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -219,8 +220,16 @@ def _activity(pr: dict[str, Any], owner: str) -> dict[str, Any]:
     comments = [n for n in (pr.get("comments") or {}).get("nodes") or [] if n]
     my_comments = [n["createdAt"] for n in comments if n.get("createdAt") and ((n.get("author") or {}).get("login") or "").lower() == me]
     times = [n["submittedAt"] for n in mine] + my_comments
+    head0 = ((((pr.get("commits") or {}).get("nodes") or [None])[0] or {}).get("commit") or {})
+    human = [n.get("submittedAt") for n in (pr.get("others") or {}).get("nodes") or [] if n and not is_bot(n.get("author"))
+             and ((n.get("author") or {}).get("login") or "").lower() != me]
+    human += [n.get("createdAt") for n in comments if not is_bot(n.get("author")) and ((n.get("author") or {}).get("login") or "").lower() != me]
+    human += [head0.get("committedDate")]
+    human += [(n or {}).get("createdAt") for n in (pr.get("timelineItems") or {}).get("nodes") or []
+              if ((n or {}).get("requestedReviewer") or {}).get("login", "").lower() == me]
+    last_human = max([t for t in human if t], default=None)  # people's latest activity (deferrals end on it)
     if not times:
-        return {"my_activity": "todo", "my_last_at": None, "since_mine": []}
+        return {"my_activity": "todo", "my_last_at": None, "since_mine": [], "last_activity_at": last_human}
     last = max(times)
 
     def news(at: str | None, author: dict[str, Any] | None) -> bool:
@@ -237,7 +246,7 @@ def _activity(pr: dict[str, Any], owner: str) -> dict[str, Any]:
                        for n in (pr.get("timelineItems") or {}).get("nodes") or [])
     since = [x for x, on in (("new reviews or replies", reviews), ("new comments", talk), ("new commits", new_commits),
                              ("review requested again", re_requested)) if on]
-    return {"my_activity": "news" if since else "quiet", "my_last_at": last, "since_mine": since}
+    return {"my_activity": "news" if since else "quiet", "my_last_at": last, "since_mine": since, "last_activity_at": last_human}
 
 
 # "Meta" for prioritising review requests: the Company of the requester's GitHub profile. (An email is matched too
@@ -1191,7 +1200,7 @@ async def reply_comment(owner: str, repo: str, number: int, comment_id: int, bod
 
 
 DEFAULT_PREFS: dict[str, Any] = {"hidden_repos": [], "watched_repos": [], "priority_requesters": [], "priority_meta": True, "show_approved": False,
-                                 "starred": [], "unstarred": [], "core_maintainers": []}
+                                 "starred": [], "unstarred": [], "core_maintainers": [], "deferred": {}}
 
 
 def load_prefs(ctx: AppContext) -> dict[str, Any]:
@@ -1232,8 +1241,33 @@ def apply_prefs(data: dict[str, Any], prefs: dict[str, Any], agent_results: dict
     watching = {r.lower() for r in prefs.get("watched_repos") or []}  # a repository just unwatched disappears at once
     watched = [{**with_level(p, prefs, agent_results), "priority": False, "watched": True} for p in data.get("watched", [])
                if p["repo"].lower() not in hidden and p["repo"].lower() in watching and (prefs.get("show_approved") or not p.get("approved_no_news"))]
-    return {**data, "items": items, "watched": watched, "hidden_count": len(data.get("items", [])) - len(visible),
+    deferred: list[dict[str, Any]] = []
+    rules = prefs.get("deferred") or {}
+    if rules:
+        def split(lst: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            keep = []
+            for p in lst:
+                d = rules.get(f"{p['repo']}#{p['number']}".lower())
+                if d and deferral_active(d, p):
+                    deferred.append({**p, "deferred": d})
+                else:
+                    keep.append({**p, "deferred_ended": d} if d else p)
+            return keep
+        items, watched = split(items), split(watched)
+    return {**data, "items": items, "watched": watched, "deferred": deferred, "hidden_count": len(data.get("items", [])) - len(visible),
             "approved_hidden": len(quiet)}
+
+
+def deferral_active(d: dict[str, Any], p: dict[str, Any] | None) -> bool:
+    """A deferral lasts until its time (if any) and — when asked — until someone does something on the PR (a review,
+    a comment, new commits, your review requested again; bots and you do not count)."""
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    if d.get("until") and now >= d["until"]:
+        return False
+    return not (d.get("on_activity") and p is not None and (p.get("last_activity_at") or "") > (d.get("at") or ""))
+
+
+DEFER_MAX = 500
 
 
 class PrefsIn(BaseModel):
@@ -1252,6 +1286,9 @@ class PrefsIn(BaseModel):
     priority_agent: dict[str, Any] | None = None
     categories: list[dict[str, Any]] | None = None
     set_level: dict[str, Any] | None = None  # {"pr": "owner/repo#n", "level": "P0" | null (back to rules / agent)}
+    # defer a review: {"pr": "owner/repo#n", "until": ISO time | null, "on_activity": bool, "note": str}
+    defer: dict[str, Any] | None = None
+    undefer: str | None = None  # "owner/repo#n": back in the list now
     reset_priority: bool = False  # levels, rules, agent and categories back to the defaults
 
 
@@ -1315,6 +1352,33 @@ async def put_prefs(body: PrefsIn, auth: tuple[AppContext, str] = Depends(requir
                          {"id": "people", "enabled": True, "level": (old.get("people") or {}).get("level", second), "name": "",
                           "conditions": [{"field": "requested_by", "op": "in", "value": list(prefs["priority_requesters"])}]})
         prefs["priority_rules"] = rules
+    if body.defer is not None or body.undefer is not None:
+        deferred = dict(prefs.get("deferred") or {})
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        deferred = {k: v for k, v in deferred.items() if not (v.get("until") and v["until"] <= now and not v.get("on_activity"))}  # ended
+        if body.undefer is not None:
+            deferred.pop(body.undefer.strip().lower(), None)
+        if body.defer is not None:
+            k = str(body.defer.get("pr") or "").strip().lower()
+            if not re.fullmatch(r"([\w.-]+)/([\w.-]+)#(\d+)", k):
+                raise ApiError(400, "INVALID_PR", f"{k!r}: use owner/repo#number")
+            until = body.defer.get("until")
+            on_activity = bool(body.defer.get("on_activity"))
+            if until:
+                try:
+                    t = datetime.fromisoformat(str(until).replace("Z", "+00:00"))
+                except ValueError:
+                    raise ApiError(400, "INVALID_DATE", "until: an ISO date and time")
+                if t.tzinfo is None:
+                    t = t.replace(tzinfo=timezone.utc)
+                until = t.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                if until <= now:
+                    raise ApiError(400, "INVALID_DATE", "defer until a time in the future")
+            elif not on_activity:
+                raise ApiError(400, "INVALID_DEFER", "defer until a time, until there is new activity, or both")
+            deferred.pop(k, None)
+            deferred[k] = {"until": until or None, "on_activity": on_activity, "at": now, "note": str(body.defer.get("note") or "")[:300]}
+        prefs["deferred"] = dict(list(deferred.items())[-DEFER_MAX:])
     sets: list[tuple[str, str | None]] = []
     if body.set_level is not None:
         sets.append((str(body.set_level.get("pr") or ""), body.set_level.get("level")))

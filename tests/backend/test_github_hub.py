@@ -956,3 +956,48 @@ def test_review_categories_by_your_latest_activity():
     assert got[4]["since_mine"] == ["new comments"] and got[5]["since_mine"] == ["new reviews or replies"]
     assert got[6]["since_mine"] == ["new commits"] and got[9]["since_mine"] == ["review requested again"]
     assert got[3]["my_last_at"] == t1 and got[8]["my_last_at"] == t3
+
+
+async def test_defer_a_review_until_a_time_or_new_activity(running_app):
+    github_hub.reset_cache()
+    h = await running_app()
+    as_github(h, "EikanWang")
+    h.ctx.extra["gh_owner"] = lambda: "EikanWang"
+    nodes = [pr(1), pr(2), pr(3)]
+
+    def graphql(q, v):
+        page = [] if "repo:" in v["q"] else nodes
+        return {"search": {"issueCount": len(page), "pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": page}}
+    h.ctx.extra["gh_graphql"] = graphql
+    api = h.api
+    assert len((await api.get("/api/v1/github/reviews")).json()["items"]) == 3
+    soon = "2099-01-01T09:00:00Z"
+    assert (await api.put("/api/v1/github/prefs", json={"defer": {"pr": "pytorch/pytorch#1", "until": soon, "note": "after the RFC"}})).status_code == 200
+    assert (await api.put("/api/v1/github/prefs", json={"defer": {"pr": "pytorch/pytorch#2", "on_activity": True}})).status_code == 200
+    r = (await api.get("/api/v1/github/reviews")).json()
+    assert [p["number"] for p in r["items"]] == [3]
+    d = {p["number"]: p["deferred"] for p in r["deferred"]}
+    assert d[1]["until"] == soon and d[1]["note"] == "after the RFC" and not d[1]["on_activity"]
+    assert d[2]["until"] is None and d[2]["on_activity"]
+    # someone comments on #2 after it was deferred: back in the list, marked
+    nodes[1]["comments"] = {"nodes": [{"createdAt": "2099-01-01T00:00:00Z", "author": {"__typename": "User", "login": "bob"}}]}
+    github_hub._cache.clear()
+    r = (await api.get("/api/v1/github/reviews")).json()
+    back = {p["number"]: p for p in r["items"]}
+    assert set(back) == {2, 3} and back[2]["deferred_ended"]["on_activity"] is True
+    # a bot's comment would not have counted
+    nodes[1]["comments"] = {"nodes": [{"createdAt": "2099-01-01T00:00:00Z", "author": {"__typename": "Bot", "login": "pytorch-bot"}}]}
+    github_hub._cache.clear()
+    assert 2 not in {p["number"] for p in (await api.get("/api/v1/github/reviews")).json()["items"]}
+    # back now; a time that has passed ends a deferral
+    assert (await api.put("/api/v1/github/prefs", json={"undefer": "pytorch/pytorch#1"})).status_code == 200
+    from backend.app.kv import kv_get, kv_put
+
+    prefs = kv_get(h.ctx, "github_hub_prefs", {})
+    prefs["deferred"]["pytorch/pytorch#3"] = {"until": "2020-01-01T00:00:00Z", "on_activity": False, "at": "2019-12-31T00:00:00Z", "note": ""}
+    kv_put(h.ctx, "github_hub_prefs", prefs)
+    r = (await api.get("/api/v1/github/reviews")).json()
+    assert {p["number"] for p in r["items"]} == {1, 3} and [p["number"] for p in r["deferred"]] == [2]
+    for bad in ({"pr": "nope", "until": soon}, {"pr": "pytorch/pytorch#1"}, {"pr": "pytorch/pytorch#1", "until": "2001-01-01T00:00:00Z"},
+                {"pr": "pytorch/pytorch#1", "until": "tomorrow"}):
+        assert (await api.put("/api/v1/github/prefs", json={"defer": bad})).status_code == 400, bad
