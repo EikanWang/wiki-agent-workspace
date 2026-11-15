@@ -675,7 +675,11 @@ mark.waw-hl.review.needs_review { border-bottom: 2px dashed var(--warn); }
 .review-pr { display: flex; gap: 8px; align-items: flex-start; width: 100%; border: none; background: transparent; padding: 5px 8px 5px 24px; cursor: pointer; text-align: left; color: inherit; border-radius: 6px; }
 .review-pr:hover { background: var(--accent); }
 .review-pr.draft .review-pr-title { color: var(--muted); }
-.review-pr-main { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
+.review-pr-main { display: flex; flex-direction: column; min-width: 0; gap: 1px; flex: 1 1 auto; }
+/* the right edge of a PR row: ⏰ / Back now, then the priority level — the levels line up in every row */
+.review-pr-side { margin-left: auto; flex: none; display: inline-flex; align-items: center; justify-content: flex-end; gap: 4px; }
+.review-pr-side .level-menu { order: 2; }
+.review-pr-side .level-badge { min-width: 26px; }
 .review-pr-title { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.3; }
 .review-pr-meta { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
 .review-pr-meta .add { color: var(--green); }

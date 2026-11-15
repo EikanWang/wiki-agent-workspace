@@ -283,18 +283,20 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
           ))}
         </span>
       </span>
-      {prefs && !p.deferred && (
-        <DeferMenu pr={`${p.repo}#${p.number}`} onDefer={(d) => change(`defer:${p.repo}#${p.number}`, { defer: d })} />
-      )}
-      {prefs && p.deferred && (
-        <span role="button" tabIndex={0} className="btn small" onClick={(e) => { e.stopPropagation(); void change(`undefer:${p.repo}#${p.number}`, { undefer: `${p.repo}#${p.number}` }); }}
-          title="Back in the list now" data-testid="review-undefer">Back now</span>
-      )}
-      {prefs && (
-        <LevelMenu pr={`${p.repo}#${p.number}`} level={p.level} source={p.level_source} reasons={p.level_reasons} levels={levels} compact
-          agentOn={!!prefs.priority_agent?.enabled}
-          onSet={(lv) => change(`level:${p.repo}#${p.number}`, { set_level: { pr: `${p.repo}#${p.number}`, level: lv } }).then(() => { if (search) void runSearch(); })} />
-      )}
+      <span className="review-pr-side" data-testid="review-pr-side">
+        {prefs && !p.deferred && (
+          <DeferMenu pr={`${p.repo}#${p.number}`} onDefer={(d) => change(`defer:${p.repo}#${p.number}`, { defer: d })} />
+        )}
+        {prefs && p.deferred && (
+          <span role="button" tabIndex={0} className="btn small" onClick={(e) => { e.stopPropagation(); void change(`undefer:${p.repo}#${p.number}`, { undefer: `${p.repo}#${p.number}` }); }}
+            title="Back in the list now" data-testid="review-undefer">Back now</span>
+        )}
+        {prefs && (
+          <LevelMenu pr={`${p.repo}#${p.number}`} level={p.level} source={p.level_source} reasons={p.level_reasons} levels={levels} compact
+            agentOn={!!prefs.priority_agent?.enabled}
+            onSet={(lv) => change(`level:${p.repo}#${p.number}`, { set_level: { pr: `${p.repo}#${p.number}`, level: lv } }).then(() => { if (search) void runSearch(); })} />
+        )}
+      </span>
     </button>
   );
   const groupBox = (repo: string, prs: ReviewPR[], watched: boolean) => {

@@ -1937,6 +1937,14 @@ test("GitHub review hub: only the owner's GitHub sign-in sees it; queue grouped 
   const r104 = page.locator('[data-repo="pytorch/pytorch"] [data-category="news"] [data-testid="review-pr"][data-number="104"]');
   await expect(r104.getByTestId("review-since-mine")).toContainText("new comments");
   await expect(r104.getByTestId("review-level")).toHaveAttribute("data-level", "P1");
+  // every priority label sits at the right edge of its row (short titles, long titles, badges): one right edge
+  await expect.poll(async () => {
+    const rights = await page.locator('[data-testid="review-group"] [data-testid="review-pr"]').evaluateAll((rows) => rows.map((r) => {
+      const lv = r.querySelector('[data-testid="review-level"]')!.getBoundingClientRect();
+      return Math.round(r.getBoundingClientRect().right - lv.right);
+    }));
+    return rights.length > 2 && new Set(rights).size === 1 && rights[0] < 16;
+  }).toBe(true);
   // who asked: the repository's governance page says metadev is a core maintainer (read in the background, then shown)
   await expect.poll(async () => {
     const q = await (await page.request.get("/api/v1/github/reviews")).json();
