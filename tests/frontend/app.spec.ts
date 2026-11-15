@@ -2235,8 +2235,12 @@ test("GitHub PR tab: overview, files, choose the wiki once, ask about the PR and
   await expect(convBox).toHaveValue("cc @ezyang ");
   await expect(page.getByTestId("mention-list")).toHaveCount(0);
   await page.getByTestId("pr-conv-text").fill("Thanks, looking now.");
+  await page.evaluate(() => { (window as any).__noReload = true; });
   await page.getByTestId("pr-conv-send").click();
   await expect(conv.getByTestId("pr-conv-item")).toHaveCount(3);
+  // your comment moves the PR to "Commented, nothing new" in the Reviews list at once — without reloading the page
+  await expect(page.locator('[data-testid="review-section"][data-category="quiet"] [data-testid="review-pr"][data-number="101"]')).toHaveCount(1, { timeout: 10000 });
+  expect(await page.evaluate(() => (window as any).__noReload)).toBe(true);
   await expect(conv.getByTestId("pr-conv-item").last()).toContainText("Thanks, looking now.");
   // first PR of this repository: choose the wiki the agent works in (once)
   await expect(page.getByTestId("pr-ask")).toBeDisabled();

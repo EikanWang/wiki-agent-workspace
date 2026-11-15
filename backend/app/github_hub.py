@@ -117,6 +117,32 @@ def gh_owner() -> str:
     return login
 
 
+_mine: dict[str, tuple[str, str | None, float]] = {}  # "o/r#n" -> (when, review state, epoch) of your review / comment here
+MINE_SECONDS = 1800
+
+
+def note_mine(owner: str, repo: str, number: int, review_state: str | None = None) -> None:
+    """You just reviewed / commented: the Reviews list shows it at once (category "Commented, nothing new"), even
+    before GitHub's next answer says so — and an older answer cannot move it back."""
+    now = time.time()
+    _mine[f"{owner}/{repo}#{number}".lower()] = (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)), review_state, now)
+    for k in [k for k, v in _mine.items() if now - v[2] > MINE_SECONDS]:
+        _mine.pop(k, None)
+
+
+def with_mine(p: dict[str, Any]) -> dict[str, Any]:
+    hit = _mine.get(f"{p['repo']}#{p['number']}".lower())
+    if not hit or (p.get("my_last_at") or "") >= hit[0]:
+        return p
+    at, state, _ = hit
+    out = {**p, "my_activity": "quiet", "my_last_at": at, "since_mine": []}
+    if state:
+        out["my_review"] = state
+        if state == "APPROVED":
+            out.update(approved_no_news=True, since_approval=[])
+    return out
+
+
 def _hooks(ctx: AppContext) -> tuple[Callable[[str, dict], dict], Callable[[], str]]:
     return ctx.extra.get("gh_graphql", gh_graphql), ctx.extra.get("gh_owner", gh_owner)
 
@@ -407,8 +433,8 @@ async def review_queue(refresh: bool = Query(False), auth: tuple[AppContext, str
     from . import review_priority as rp
 
     extra = prefs.get("core_maintainers") or []
-    raw = {**hit[1], "items": maintainers.annotate(ctx, hit[1].get("items") or [], extra),
-           "watched": maintainers.annotate(ctx, hit[1].get("watched") or [], extra)}
+    raw = {**hit[1], "items": [with_mine(p) for p in maintainers.annotate(ctx, hit[1].get("items") or [], extra)],
+           "watched": [with_mine(p) for p in maintainers.annotate(ctx, hit[1].get("watched") or [], extra)]}
     data = apply_prefs(raw, prefs, rp.results(ctx))
     rp.schedule(ctx, data["items"] + data["watched"], prefs)  # the agent decides levels of new / changed PRs, in the background
     from . import github_cache as gc
@@ -438,6 +464,7 @@ def reset_cache() -> None:
     _tasks.clear()
     _pr_cache.clear()
     _files_memo.clear()
+    _mine.clear()
     _people_cache.clear()
     _user_cache.clear()
     _mention_cache.clear()
@@ -1034,6 +1061,7 @@ async def add_conversation_comment(owner: str, repo: str, number: int, body: Con
     if not body.body.strip():
         raise ApiError(400, "INVALID_COMMENT", "a comment needs text")
     res = await asyncio.to_thread(_rest(ctx), "POST", f"repos/{owner}/{repo}/issues/{number}/comments", {"body": body.body.strip()})
+    note_mine(owner, repo, number)
     return {"kind": "comment", "id": (res or {}).get("id"), "author": ((res or {}).get("user") or {}).get("login"),
             "body": (res or {}).get("body", body.body.strip()), "created_at": (res or {}).get("created_at"), "url": (res or {}).get("html_url")}
 
@@ -1176,7 +1204,9 @@ async def submit_review(owner: str, repo: str, number: int, body: SubmitIn, auth
         s.query(GithubPrDraft).filter(GithubPrDraft.id.in_([d["id"] for d in dd] + discarded)).delete(synchronize_session=False)
     _pr_cache.pop(f"{owner}/{repo}#{number}".lower(), None)
     _cache_stale(ctx, owner, repo, number)
-    _cache.pop(owner_login, None)  # the review queue changes too
+    # the review list: this PR moves at once (no waiting for GitHub), and the list is checked on GitHub in the background
+    note_mine(owner, repo, number, {"APPROVE": "APPROVED", "REQUEST_CHANGES": "CHANGES_REQUESTED", "COMMENT": "COMMENTED"}.get(body.event))
+    _start_refresh(_hooks(ctx)[0], owner_login, load_prefs(ctx)["watched_repos"])
     log.info("published review on %s/%s#%d (%s, %d comments, %d from github.com)", owner, repo, number, body.event, len(dd), pending_n)
     return {"published": len(dd), "from_github": pending_n, "event": body.event, "url": url, "undecided": undecided}
 
@@ -1193,6 +1223,7 @@ async def reply_comment(owner: str, repo: str, number: int, comment_id: int, bod
     if not body.body.strip():
         raise ApiError(400, "INVALID_COMMENT", "a reply needs text")
     res = await asyncio.to_thread(_rest(ctx), "POST", f"repos/{owner}/{repo}/pulls/{number}/comments/{comment_id}/replies", {"body": body.body.strip()})
+    note_mine(owner, repo, number)
     return _comment_dict(res or {"id": 0})
 
 

@@ -1001,3 +1001,38 @@ async def test_defer_a_review_until_a_time_or_new_activity(running_app):
     for bad in ({"pr": "nope", "until": soon}, {"pr": "pytorch/pytorch#1"}, {"pr": "pytorch/pytorch#1", "until": "2001-01-01T00:00:00Z"},
                 {"pr": "pytorch/pytorch#1", "until": "tomorrow"}):
         assert (await api.put("/api/v1/github/prefs", json={"defer": bad})).status_code == 400, bad
+
+
+async def test_your_review_or_comment_moves_the_pr_to_commented_nothing_new_at_once(running_app):
+    github_hub.reset_cache()
+    h = await running_app()
+    as_github(h, "EikanWang")
+    h.ctx.extra["gh_owner"] = lambda: "EikanWang"
+    nodes = [pr(1), pr(2)]
+    calls = []
+
+    def graphql(q, v):
+        calls.append(v.get("q"))
+        page = [] if "repo:" in (v.get("q") or "") else nodes
+        return {"search": {"issueCount": len(page), "pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": page}}
+    h.ctx.extra["gh_graphql"] = graphql
+    h.ctx.extra["gh_rest"] = lambda m, p, b=None: {"id": 5, "user": {"login": "EikanWang"}, "body": (b or {}).get("body"), "created_at": "x", "html_url": "u"}
+    api = h.api
+    cat = lambda r: {p["number"]: p["my_activity"] for p in r["items"]}  # noqa: E731
+    assert cat((await api.get("/api/v1/github/reviews")).json()) == {1: "todo", 2: "todo"}
+    n = len(calls)
+    assert (await api.post("/api/v1/github/pr/pytorch/pytorch/1/conversation", json={"body": "LGTM after the nit"})).status_code == 201
+    r = (await api.get("/api/v1/github/reviews")).json()
+    assert cat(r) == {1: "quiet", 2: "todo"} and len(calls) == n  # moved at once, from the list the server already had
+    assert next(p for p in r["items"] if p["number"] == 1)["since_mine"] == []
+    github_hub._cache.clear()  # GitHub's next answer does not know yet (search lag): it stays moved
+    assert cat((await api.get("/api/v1/github/reviews")).json())[1] == "quiet"
+    # GitHub knows newer activity of yours: GitHub's view wins
+    nodes[0]["comments"] = {"nodes": [{"createdAt": "2099-01-01T00:00:00Z", "author": {"__typename": "User", "login": "EikanWang"}},
+                                      {"createdAt": "2099-01-02T00:00:00Z", "author": {"__typename": "User", "login": "bob"}}]}
+    github_hub._cache.clear()
+    assert cat((await api.get("/api/v1/github/reviews")).json())[1] == "news"
+    # an approval: approved, nothing new (left out of the list unless "approved" is ticked)
+    github_hub.note_mine("pytorch", "pytorch", 2, "APPROVED")
+    r = (await api.get("/api/v1/github/reviews")).json()
+    assert 2 not in cat(r) and r["approved_hidden"] == 1

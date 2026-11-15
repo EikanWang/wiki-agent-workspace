@@ -5,6 +5,7 @@ import { renderGithubMarkdown } from "../markdown";
 import { COMPOSER_HINT, composerKeyDown } from "./keys";
 import MentionTextarea from "./MentionTextarea";
 import GhUser from "./GhUser";
+import { loadReviews } from "./ReviewsPanel";
 import { Line, SplitCols, UnifiedCols, buildSplitRows, numColStyle, parseUnified } from "./DiffReview";
 
 /** A review thread on GitHub (line or whole-file), with all its comments. */
@@ -519,9 +520,9 @@ function ThreadBox({ thread, apiBase, onChanged, onError, canAsk, onAsk }: {
           {reply !== null && (
             <div className="gh-reply-box">
               <MentionTextarea apiBase={apiBase} autoFocus rows={2} value={reply} onValue={setReply} placeholder={`Reply on GitHub (${COMPOSER_HINT})`}
-                onKeyDown={(e) => composerKeyDown(e, () => void run(async () => { await post(`${apiBase}/comments/${first.id}/reply`, { body: reply }); setReply(null); await onChanged(); }), (v) => setReply(v), () => setReply(null))} data-testid="gh-reply-text" />
+                onKeyDown={(e) => composerKeyDown(e, () => void run(async () => { await post(`${apiBase}/comments/${first.id}/reply`, { body: reply }); setReply(null); void loadReviews(false); await onChanged(); }), (v) => setReply(v), () => setReply(null))} data-testid="gh-reply-text" />
               <div className="row">
-                <button className="btn small primary" disabled={busy || !reply.trim()} onClick={() => void run(async () => { await post(`${apiBase}/comments/${first.id}/reply`, { body: reply }); setReply(null); await onChanged(); })} title="Posted to GitHub right away" data-testid="gh-reply-send">Reply on GitHub</button>
+                <button className="btn small primary" disabled={busy || !reply.trim()} onClick={() => void run(async () => { await post(`${apiBase}/comments/${first.id}/reply`, { body: reply }); setReply(null); void loadReviews(false); await onChanged(); })} title="Posted to GitHub right away" data-testid="gh-reply-send">Reply on GitHub</button>
                 <button className="btn small" onClick={() => setReply(null)}>Cancel</button>
               </div>
             </div>
@@ -631,6 +632,7 @@ export function SubmitReview({ apiBase, drafts, undecided = 0, fromGithub = 0, o
       const r = await post<{ url: string | null }>(`${apiBase}/review`, { event, body });
       setOpen(false);
       setBody("");
+      void loadReviews(false); // the Reviews list moves this PR at once (only the list reloads)
       await onDone(r.url);
     } catch (e) {
       onError((e as ApiError).message);

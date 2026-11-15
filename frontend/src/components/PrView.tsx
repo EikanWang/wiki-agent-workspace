@@ -264,6 +264,7 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
     try {
       await post(`${apiBase}/conversation`, { body: convText });
       setConvText("");
+      void loadReviews(false); // the Reviews list moves this PR at once
       await loadComments();
     } catch (e) {
       setError((e as ApiError).message);
