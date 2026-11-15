@@ -2201,6 +2201,15 @@ test("GitHub PR tab: overview, files, choose the wiki once, ask about the PR and
   await expect(tab).toContainText("#101");
   await expect(page.getByTestId("pr-title")).toContainText("[xpu] Fix the lazy Level Zero stub");
   await expect(page.getByTestId("pr-description")).toContainText("This PR fixes the lazy stub.");
+  // defer the review from the PR's own page: it says until when there, the list moves it to Deferred; Back now
+  await page.getByTestId("pr-defer").click();
+  await page.locator('[data-testid="defer-choice"][data-choice="Next Monday 09:00"]').click();
+  await expect(page.getByTestId("pr-deferred")).toContainText("Deferred until");
+  await expect(page.locator('[data-testid="review-group"] [data-testid="review-pr"][data-number="101"]')).toHaveCount(0);
+  await expect(page.getByTestId("reviews-deferred")).toBeVisible();
+  await page.getByTestId("pr-undefer").click();
+  await expect(page.getByTestId("pr-defer")).toBeVisible();
+  await expect(page.locator('[data-testid="review-group"] [data-testid="review-pr"][data-number="101"]')).toHaveCount(1);
   // GitHub logins open the account's page, like on github.com: the author, @mentions, reviewers, commenters
   await expect(page.locator('.pr-meta [data-testid="gh-user"]')).toHaveAttribute("href", "https://github.com/alice");
   await expect(page.getByTestId("pr-description").locator('a.gh-user[data-login="bob"]')).toHaveAttribute("href", "https://github.com/bob");

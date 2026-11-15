@@ -18,7 +18,7 @@ export function deferLabel(d: Deferral): string {
   return d.until && d.on_activity ? `until ${t} or new activity` : d.until ? `until ${t}` : "until new activity";
 }
 
-export default function DeferMenu({ pr, onDefer }: { pr: string; onDefer: (d: { pr: string; until: string | null; on_activity: boolean; note: string }) => Promise<void> }) {
+export default function DeferMenu({ pr, onDefer, label = false }: { pr: string; onDefer: (d: { pr: string; until: string | null; on_activity: boolean; note: string }) => Promise<void>; label?: boolean }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [activity, setActivity] = useState(true);
@@ -42,8 +42,8 @@ export default function DeferMenu({ pr, onDefer }: { pr: string; onDefer: (d: { 
   };
   return (
     <span className="level-menu defer-menu" ref={ref} onClick={(e) => e.stopPropagation()}>
-      <span role="button" tabIndex={0} className="icon-btn small defer-btn" title="Defer this review (it leaves the list for a while)" aria-label="Defer review"
-        onClick={() => setOpen((v) => !v)} onKeyDown={(e) => { if (e.key === "Enter") setOpen((v) => !v); }} data-testid="review-defer">⏰</span>
+      <span role="button" tabIndex={0} className={label ? "btn small defer-btn labeled" : "icon-btn small defer-btn"} title="Defer this review (it leaves the list for a while)" aria-label="Defer review"
+        onClick={() => setOpen((v) => !v)} onKeyDown={(e) => { if (e.key === "Enter") setOpen((v) => !v); }} data-testid={label ? "pr-defer" : "review-defer"}>⏰{label ? " Defer review" : ""}</span>
       {open && (
         <span className="level-pop defer-pop" data-testid="defer-pop">
           <span className="muted small">Defer the review of {pr}</span>

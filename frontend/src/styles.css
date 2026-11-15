@@ -1383,8 +1383,11 @@ body.resizing-h iframe { pointer-events: none; }
 .gh-rate.bad { background: #ffe0e0; color: #8a1010; }
 .review-role { font-size: 11px; color: var(--muted); }
 .review-role.core { color: #8a4b00; font-weight: 600; }
-.defer-btn { opacity: 0; font-size: 12px; padding: 0 3px; }
-.review-pr:hover .defer-btn, .defer-menu:focus-within .defer-btn { opacity: 1; }
+.defer-btn { font-size: 12px; padding: 0 3px; }
+.review-pr .defer-btn { opacity: 0; }
+.review-pr:hover .defer-btn, .review-pr .defer-menu:focus-within .defer-btn { opacity: 1; }
+.defer-btn.labeled { opacity: 1; }
+.pr-deferred-banner { display: flex; gap: 8px; align-items: center; }
 .defer-pop { min-width: 230px; }
 .defer-custom { display: flex; gap: 4px; align-items: center; }
 .defer-custom input, .defer-note { font-size: 12px; border: 1px solid var(--border); border-radius: 6px; padding: 1px 4px; background: var(--bg); color: var(--fg); }

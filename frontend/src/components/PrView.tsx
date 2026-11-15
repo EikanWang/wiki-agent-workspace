@@ -350,6 +350,7 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
             {reviewing ? "Agent reviewing…" : "Agent review"}
           </button>
           <PrStar repo={p.repo} number={p.number} />
+          <PrDefer repo={p.repo} number={p.number} />
           <PrStateMenu apiBase={apiBase} state={p.state} draft={p.draft} number={p.number} onDone={() => load(true)} onError={setError} />
           <a className="btn small" href={p.url} target="_blank" rel="noreferrer">Open on GitHub</a>
           {fresh && (
@@ -816,19 +817,27 @@ function PrStar({ repo, number }: { repo: string; number: number }) {
       <LevelMenu pr={key} level={it?.level ?? manual ?? prefs.priority_default} source={it?.level_source ?? (manual ? "manual" : "default")}
         reasons={it?.level_reasons ?? (it ? [] : ["not in your review list"])} levels={prefs.priority_levels} agentOn={!!prefs.priority_agent?.enabled && !!it}
         onSet={(lv) => savePrefs({ set_level: { pr: key, level: lv } })} />
-      {(() => {
-        const d = (queue.deferred ?? []).find((x) => `${x.repo}#${x.number}`.toLowerCase() === key)?.deferred;
-        if (d) {
-          return (
-            <span className="small" data-testid="pr-deferred"> ⏰ deferred {deferLabel(d)}{" "}
-              <button className="link-btn small" onClick={() => void savePrefs({ undefer: key })} data-testid="pr-undefer">back now</button>
-            </span>
-          );
-        }
-        return it ? <DeferMenu pr={key} onDefer={(x) => savePrefs({ defer: x })} /> : null;
-      })()}
     </span>
   );
+}
+
+/** Defer the review from the PR's page: a "⏰ Defer review" button; when deferred, a line saying until when, with
+ * "Back now". (A PR that is not in your review list cannot be deferred.) */
+function PrDefer({ repo, number }: { repo: string; number: number }) {
+  const { queue } = useReviews();
+  if (!queue?.prefs) return null;
+  const key = `${repo}#${number}`.toLowerCase();
+  const d = (queue.deferred ?? []).find((x) => `${x.repo}#${x.number}`.toLowerCase() === key)?.deferred;
+  if (d) {
+    return (
+      <span className="git-badge pr-deferred-banner" title={d.note || undefined} data-testid="pr-deferred">
+        ⏰ Deferred {deferLabel(d)}{d.note ? ` · ${d.note}` : ""}
+        <button className="link-btn small" onClick={() => void savePrefs({ undefer: key })} data-testid="pr-undefer">Back now</button>
+      </span>
+    );
+  }
+  const inList = [...queue.items, ...(queue.watched ?? [])].some((x) => `${x.repo}#${x.number}`.toLowerCase() === key);
+  return inList ? <DeferMenu pr={key} label onDefer={(x) => savePrefs({ defer: x })} /> : null;
 }
 
 /** What the agent read to decide the PR's level: its reason and the summary of each changed file. */
