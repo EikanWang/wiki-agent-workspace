@@ -28,6 +28,10 @@ export interface ReviewPR {
   teams: string[];
   requested_by?: string | null;
   requested_by_company?: string | null;
+  /** what the repository publishes about the requester / author (maintainer list, CODEOWNERS, your list) */
+  requested_by_roles?: string;
+  requested_by_core?: boolean;
+  author_roles?: string;
   priority?: boolean;
   watched?: boolean;
   /** OPEN | CLOSED | MERGED */
@@ -58,6 +62,8 @@ const DEFAULT_CATEGORIES: Category[] = [
 ];
 const categoryOf = (p: ReviewPR) => p.my_activity ?? "todo";
 
+export interface MaintainerSource { repo: string; people: number; sources: string[]; fetched: number | null; error?: string | null }
+
 /** A checkbox kept per browser. */
 function usePersistedFlag(key: string): [boolean, (v: boolean) => void] {
   const [v, setV] = useState(() => localStorage.getItem(`waw.${key}`) === "1");
@@ -67,6 +73,7 @@ export interface HubPrefs {
   hidden_repos: string[];
   watched_repos: string[];
   priority_requesters: string[];
+  core_maintainers?: string[];
   priority_meta: boolean;
   show_approved: boolean;
   starred?: string[];
@@ -90,6 +97,7 @@ interface Queue {
   refresh_error: { code: string; message: string } | null;
   watched?: ReviewPR[];
   watch_problems?: string[];
+  maintainers?: MaintainerSource[];
   hidden_count?: number;
   approved_hidden?: number;
   prefs?: HubPrefs;
@@ -232,7 +240,7 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
   const toggle = (repo: string) => setCollapsed((s) => { const n = new Set(s); if (n.has(repo)) n.delete(repo); else n.add(repo); return n; });
   const prRow = (p: ReviewPR, showRepo = false) => (
     <button key={`${p.repo}#${p.number}`} className={`review-pr ${p.draft ? "draft" : ""} ${p.priority ? "priority" : ""}`} onClick={() => onOpen(p)} role="button"
-      title={`${p.repo}#${p.number}\n${p.title}\n${CI_LABEL[p.ci ?? ""] ?? "no checks"}${p.requested_by ? `\nreview requested by ${p.requested_by}${p.requested_by_company ? ` (${p.requested_by_company})` : ""}` : ""}${p.teams.length ? `\nalso requested from: ${p.teams.join(", ")}` : ""}`}
+      title={`${p.repo}#${p.number}\n${p.title}\n${CI_LABEL[p.ci ?? ""] ?? "no checks"}${p.requested_by ? `\nreview requested by ${p.requested_by}${p.requested_by_company ? ` (${p.requested_by_company})` : ""}${p.requested_by_roles ? ` — ${p.requested_by_roles}` : ""}` : ""}${p.author_roles ? `\nauthor ${p.author}: ${p.author_roles}` : ""}${p.teams.length ? `\nalso requested from: ${p.teams.join(", ")}` : ""}`}
       data-testid="review-pr" data-number={p.number} data-priority={p.priority ? "1" : "0"}>
       <span className={`ci-dot ${(p.ci ?? "none").toLowerCase()}`} aria-label={CI_LABEL[p.ci ?? ""] ?? "no checks"} />
       <span className="review-pr-main">
@@ -241,7 +249,7 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
         </span>
         <span className="review-pr-meta muted small">
           {showRepo ? `${p.repo}` : ""}#{p.number} · <GhUser login={p.author} bold={false} inButton /> · {ago(p.updated_at)} · <span className="add">+{p.additions}</span> <span className="del">−{p.deletions}</span>
-          {p.requested_by && <span className="review-by" data-testid="review-by"> · asked by <GhUser login={p.requested_by} bold={false} inButton /></span>}
+          {p.requested_by && <span className="review-by" data-testid="review-by"> · asked by <GhUser login={p.requested_by} bold={false} inButton />{p.requested_by_roles ? <span className={`review-role ${p.requested_by_core ? "core" : ""}`} data-testid="review-role">{p.requested_by_core ? " · core maintainer" : " · maintainer"}</span> : null}</span>}
           {p.my_review === "APPROVED" && (
             <span className={`git-badge ${p.approved_no_news ? "clean" : "approved-news"}`} title={p.approved_no_news ? "You approved; nothing new since" : `You approved; since then: ${(p.since_approval ?? []).join(", ")}`} data-testid="review-approved">
               {p.approved_no_news ? " ✓ approved" : ` ✓ approved · ${(p.since_approval ?? []).join(", ")}`}
@@ -326,7 +334,7 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
         <RefreshButton onRefresh={() => loadReviews(true)} title="Refresh from GitHub" testId="reviews-refresh" />
       </div>
       <div className="pad-x"><GithubRate /></div>
-      {settings && prefs && <ReviewsSettings prefs={prefs} busy={busy} change={change} problems={queue?.watch_problems ?? []} status={queue?.priority_agent ?? null} />}
+      {settings && prefs && <ReviewsSettings prefs={prefs} busy={busy} change={change} problems={queue?.watch_problems ?? []} status={queue?.priority_agent ?? null} maintainers={queue?.maintainers ?? []} />}
       <div className="reviews-search">
         {search === null ? (
           <button className="link-btn small" onClick={() => setSearch("")} data-testid="reviews-search-open">🔍 Search pull requests on GitHub…</button>
@@ -412,10 +420,12 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
   );
 }
 
-function ReviewsSettings({ prefs, busy, change, problems, status }: {
+function ReviewsSettings({ prefs, busy, change, problems, status, maintainers }: {
   prefs: HubPrefs; busy: string | null; change: (what: string, c: Partial<HubPrefs> & Record<string, unknown>) => Promise<void>; problems: string[]; status: AgentStatus | null;
+  maintainers: MaintainerSource[];
 }) {
   const [repo, setRepo] = useState("");
+  const [cm, setCm] = useState((prefs.core_maintainers ?? []).join(", "));
   const [tab, setTab] = useState<"priority" | "repos" | "cache">(() => { const t = localStorage.getItem("waw.reviews.settingsTab"); return t === "repos" || t === "cache" ? t : "priority"; });
   useEffect(() => localStorage.setItem("waw.reviews.settingsTab", tab), [tab]);
   const valid = /^[\w.-]+\/[\w.-]+$/.test(repo.trim());
@@ -456,6 +466,19 @@ function ReviewsSettings({ prefs, busy, change, problems, status }: {
           <button className="btn small" disabled={busy !== null} onClick={() => void change(`unhide:${r}`, { hidden_repos: prefs.hidden_repos.filter((x) => x !== r) })} data-testid="reviews-unhide">Show again</button>
         </div>
       ))}
+      <div className="small strong">Maintainers <span className="muted">(who asked for your review: for priority rules and the agent)</span></div>
+      <div className="muted small">Read from each repository once a day: its governance page (docs/source/community/persons_of_interest.md) and CODEOWNERS.</div>
+      {maintainers.map((m) => (
+        <div key={m.repo} className="reviews-settings-item small" data-testid="reviews-maintainers-repo">
+          <span className="mono">{m.repo}</span>
+          <span className="muted">{m.error ? `not read: ${m.error}` : m.sources.length ? `${m.people} people · ${m.sources.map((x) => x.split("/").pop()).join(", ")}` : "publishes no maintainer list or CODEOWNERS"}</span>
+        </div>
+      ))}
+      <div className="small">Also core maintainers, in every repository (GitHub logins):</div>
+      <div className="reviews-settings-row">
+        <input value={cm} onChange={(e) => setCm(e.target.value)} placeholder="login, login, …" data-testid="reviews-core-maintainers" />
+        <button className="btn small" disabled={busy !== null} onClick={() => void change("maintainers", { core_maintainers: cm.split(/[\s,]+/).map((x) => x.replace(/^@/, "")).filter(Boolean) })} data-testid="reviews-core-maintainers-save">Save</button>
+      </div>
       </>}
     </div>
   );

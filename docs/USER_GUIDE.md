@@ -164,11 +164,18 @@ level by hand**, go **back to rules / agent**, or **ask the agent again**. A PR'
 - **Levels** — add, remove, rename, recolour, reorder (most urgent first), pick the default; each level has any
   number of **descriptions in plain language** ("Fixes a crash or memory error in the XPU runtime", "Docs-only
   changes"…) that the agent judges PRs against.
-- **Hard rules** — *if* conditions (all must match) *then* a level: review asked by, asked by a PyTorch Meta
-  maintainer, author, repository, label, title contains, size, days since opened / last updated, CI (failing,
+- **Hard rules** — *if* conditions (all must match) *then* a level: review asked by, asked by a **core maintainer**
+  of the repository, asked by a **maintainer or code owner**, asked by someone at Meta (the GitHub profile's company),
+  author is a maintainer, author, repository, label, title contains, size, days since opened / last updated, CI (failing,
   passing, running, none), draft, review decision, your activity (todo / news / quiet). When several match, the
   most urgent wins. (The older "PyTorch Meta maintainers" / priority people became such rules, ★ / un-★ became
   levels set by hand.)
+- **Maintainers** — who maintains a repository comes from what the repository publishes, read once a day: its
+  governance page (`docs/source/community/persons_of_interest.md`: lead / core maintainers, module maintainers;
+  emeritus and sunsetted modules do not count) and `CODEOWNERS` (users, not teams), plus the logins you add in
+  ⚙ → Repositories → *Also core maintainers*. The list shows "asked by alice · core maintainer"; the item's tooltip and
+  the agent's prompt say exactly what (e.g. "core maintainer; module maintainer: TorchInductor") and the GitHub
+  profile's company. ⚙ → Repositories shows what each repository published.
 - **The agent** (off by default) — when on, it decides the level of new and changed PRs in the background
   ("🤖 deciding levels of N PRs…" above the list). It reads the PR's details, description, changed files and diff:
   a small diff (≤ 12k characters) in full; a larger one is first **summarized file by file** (one turn per ~25k

@@ -240,7 +240,9 @@ def _activity(pr: dict[str, Any], owner: str) -> dict[str, Any]:
     return {"my_activity": "news" if since else "quiet", "my_last_at": last, "since_mine": since}
 
 
-# Who counts as a "PyTorch Meta maintainer" for prioritising review requests (after ai_tools HARDWARE_VENDORS META)
+# "Meta" for prioritising review requests: the Company of the requester's GitHub profile. (An email is matched too
+# when one is given, but the review query cannot ask for it: that needs the read:user scope, which the server's gh
+# login does not have. maintainers.py says who actually maintains a repository.)
 META_COMPANY = ("meta", "facebook")
 META_EMAIL = ("@meta.com", "@fb.com")
 
@@ -392,9 +394,13 @@ async def review_queue(refresh: bool = Query(False), auth: tuple[AppContext, str
     if (refresh and age >= 10) or age >= CACHE_SECONDS:  # < 10 s: rapid ↻ clicks do not burn the search quota
         _start_refresh(graphql, owner, prefs["watched_repos"])
         running = True
+    from . import maintainers
     from . import review_priority as rp
 
-    data = apply_prefs(hit[1], prefs, rp.results(ctx))
+    extra = prefs.get("core_maintainers") or []
+    raw = {**hit[1], "items": maintainers.annotate(ctx, hit[1].get("items") or [], extra),
+           "watched": maintainers.annotate(ctx, hit[1].get("watched") or [], extra)}
+    data = apply_prefs(raw, prefs, rp.results(ctx))
     rp.schedule(ctx, data["items"] + data["watched"], prefs)  # the agent decides levels of new / changed PRs, in the background
     from . import github_cache as gc
 
@@ -403,7 +409,8 @@ async def review_queue(refresh: bool = Query(False), auth: tuple[AppContext, str
     for key in ("items", "watched"):
         data[key] = [{**p, "agent_review": agent.get(f"{p['repo']}#{p['number']}".lower())} for p in data.get(key) or []]
     return {**data, "cached": True, "age_seconds": round(age), "refreshing": running, "refresh_error": _errors.get(owner),
-            "prefs": prefs, "rate": RATE.status(), "rate_state": RATE.state()["state"], "priority_agent": rp.status()}
+            "prefs": prefs, "rate": RATE.status(), "rate_state": RATE.state()["state"], "priority_agent": rp.status(),
+            "maintainers": maintainers.status(ctx)}
 
 
 def _priority_results(ctx: AppContext) -> dict[str, Any]:
@@ -1184,7 +1191,7 @@ async def reply_comment(owner: str, repo: str, number: int, comment_id: int, bod
 
 
 DEFAULT_PREFS: dict[str, Any] = {"hidden_repos": [], "watched_repos": [], "priority_requesters": [], "priority_meta": True, "show_approved": False,
-                                 "starred": [], "unstarred": []}
+                                 "starred": [], "unstarred": [], "core_maintainers": []}
 
 
 def load_prefs(ctx: AppContext) -> dict[str, Any]:
@@ -1233,6 +1240,7 @@ class PrefsIn(BaseModel):
     hidden_repos: list[str] | None = None
     watched_repos: list[str] | None = None
     priority_requesters: list[str] | None = None
+    core_maintainers: list[str] | None = None  # logins that count as core maintainers in every repository
     priority_meta: bool | None = None
     show_approved: bool | None = None  # also list PRs you approved where nothing happened since
     star: str | None = None    # "owner/repo#n": level P1-like (the second level) by hand (older UI)
@@ -1252,13 +1260,13 @@ async def put_prefs(body: PrefsIn, auth: tuple[AppContext, str] = Depends(requir
     """Repositories shown / hidden / watched in Reviews, and who counts as a priority requester."""
     ctx, owner = auth
     prefs = load_prefs(ctx)
-    for k in ("hidden_repos", "watched_repos", "priority_requesters"):
+    for k in ("hidden_repos", "watched_repos", "priority_requesters", "core_maintainers"):
         v = getattr(body, k)
         if v is not None:
             clean = []
             for x in v:
                 x = x.strip()
-                if k != "priority_requesters":
+                if k not in ("priority_requesters", "core_maintainers"):
                     parts = x.split("/")
                     if len(parts) != 2:
                         raise ApiError(400, "INVALID_REPO", f"{x!r}: use owner/name")

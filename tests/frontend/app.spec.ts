@@ -1937,6 +1937,11 @@ test("GitHub review hub: only the owner's GitHub sign-in sees it; queue grouped 
   const r104 = page.locator('[data-repo="pytorch/pytorch"] [data-category="news"] [data-testid="review-pr"][data-number="104"]');
   await expect(r104.getByTestId("review-since-mine")).toContainText("new comments");
   await expect(r104.getByTestId("review-level")).toHaveAttribute("data-level", "P1");
+  // who asked: the repository's governance page says metadev is a core maintainer (read in the background, then shown)
+  await expect.poll(async () => {
+    const q = await (await page.request.get("/api/v1/github/reviews")).json();
+    return [...q.items, ...q.watched].find((x: any) => x.number === 104)?.requested_by_roles;
+  }, { timeout: 15000 }).toBe("core maintainer");
   await expect(panel).toContainText("1 draft hidden");
   // auto-refresh from GitHub at an interval you choose (5 min by default; kept per browser)
   await expect(page.getByTestId("reviews-auto-refresh")).toHaveValue("5");
