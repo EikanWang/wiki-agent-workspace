@@ -14,6 +14,7 @@ import MentionTextarea from "./MentionTextarea";
 import { SelectionPopover } from "./Reader";
 import ContextFolders from "./ContextFolders";
 import GhUser from "./GhUser";
+import CopyLink from "./CopyLink";
 import LocalRepo from "./LocalRepo";
 import RefreshButton from "./RefreshButton";
 import { GhRefreshSelect, useGhAutoRefresh } from "../ghRefresh";
@@ -352,6 +353,7 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
           <PrStar repo={p.repo} number={p.number} />
           <PrDefer repo={p.repo} number={p.number} />
           <PrStateMenu apiBase={apiBase} state={p.state} draft={p.draft} number={p.number} onDone={() => load(true)} onError={setError} />
+          <CopyLink url={p.url} title={p.title} label={`${p.repo}#${p.number}`} testId="pr-copy-link" />
           <a className="btn small" href={p.url} target="_blank" rel="noreferrer">Open on GitHub</a>
           {fresh && (
             <span className={`muted small pr-fresh ${fresh}`} data-testid="pr-fresh" data-state={fresh}
@@ -973,6 +975,7 @@ function IssueView({ repo, number }: { repo: string; number: number }) {
           )}
           <span className="spacer" />
           {checking && <span className="muted small" data-testid="issue-checking">from the local copy · checking GitHub…</span>}
+          <CopyLink url={d.url} title={d.title} label={`${d.repo}#${d.number}`} testId="issue-copy-link" />
           <a className="btn small" href={d.url} target="_blank" rel="noreferrer">Open on GitHub</a>
         </div>
       </div>

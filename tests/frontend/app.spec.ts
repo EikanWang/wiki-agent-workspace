@@ -2201,6 +2201,17 @@ test("GitHub PR tab: overview, files, choose the wiki once, ask about the PR and
   await expect(tab).toContainText("#101");
   await expect(page.getByTestId("pr-title")).toContainText("[xpu] Fix the lazy Level Zero stub");
   await expect(page.getByTestId("pr-description")).toContainText("This PR fixes the lazy stub.");
+  // copy the PR's link to share it: the link, the title and link, a Markdown link
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.getByTestId("pr-copy-link").click();
+  await expect(page.getByTestId("pr-copy-link-done")).toContainText("Copied the link");
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("https://github.com/pytorch/pytorch/pull/101");
+  await page.getByTestId("pr-copy-link-more").click();
+  await page.getByTestId("pr-copy-link-md").click();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("[pytorch/pytorch#101: \\[xpu\\] Fix the lazy Level Zero stub](https://github.com/pytorch/pytorch/pull/101)");
+  await page.getByTestId("pr-copy-link-more").click();
+  await page.getByTestId("pr-copy-link-titled").click();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("pytorch/pytorch#101: [xpu] Fix the lazy Level Zero stub\nhttps://github.com/pytorch/pytorch/pull/101");
   // defer the review from the PR's own page: it says until when there, the list moves it to Deferred; Back now
   await page.getByTestId("pr-defer").click();
   await page.locator('[data-testid="defer-choice"][data-choice="Next Monday 09:00"]').click();

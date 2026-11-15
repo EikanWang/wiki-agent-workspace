@@ -1391,3 +1391,9 @@ body.resizing-h iframe { pointer-events: none; }
 .defer-pop { min-width: 230px; }
 .defer-custom { display: flex; gap: 4px; align-items: center; }
 .defer-custom input, .defer-note { font-size: 12px; border: 1px solid var(--border); border-radius: 6px; padding: 1px 4px; background: var(--bg); color: var(--fg); }
+.copy-link { display: inline-flex; align-items: center; gap: 6px; }
+.copy-link .btn-group { display: inline-flex; }
+.copy-link .btn-group .btn:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.copy-link .btn-group .btn:last-child { border-top-left-radius: 0; border-bottom-left-radius: 0; border-left: 0; padding: 0 5px; }
+.copy-link-menu { display: flex; flex-direction: column; min-width: 260px; }
+.copy-link-menu .list-item { text-align: left; }
