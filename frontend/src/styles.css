@@ -254,15 +254,18 @@ mark.waw-hl.review.needs_review { border-bottom: 2px dashed var(--warn); }
 .term-tab .dot.connected, .term-tab .dot.live { background: var(--green); }
 .term-tab .dot.detached, .term-tab .dot.connecting { background: #e0a800; }
 .term-tab .dot.exited, .term-tab .dot.error, .term-tab .dot.closed { background: var(--red); }
-.term-views { flex: 1; position: relative; min-height: 0; }
+.term-views { flex: 1; position: relative; min-height: 0; overflow: hidden; }
 .term-view { position: absolute; inset: 0; display: none; flex-direction: column; }
 .term-view.active { display: flex; }
 .term-status { display: flex; align-items: center; gap: 8px; padding: 2px 10px; font-size: 12px; background: #16181d; color: #aaa; }
 .term-status.connected { color: var(--green); }
 .term-status.exited, .term-status.error { color: var(--red); }
 .term-status .btn { background: #22252c; color: #ddd; border-color: rgba(255, 255, 255, 0.12); }
-.xterm-host { flex: 1; min-height: 0; padding: 4px; background: #0f1115; }
-.xterm-host .xterm { height: 100%; }
+/* The padding is on .xterm, not on the host: the fit addon measures the host's computed size, which with
+   border-box includes the host's own padding, and subtracts only .xterm's. Padding on the host made it propose a
+   terminal 8px too big; the overflow made a page scrollbar come and go, and the terminal re-fit endlessly. */
+.xterm-host { flex: 1; min-height: 0; min-width: 0; padding: 0; overflow: hidden; background: #0f1115; }
+.xterm-host .xterm { height: 100%; padding: 4px; }
 .terminal-panel .error-text { color: #ff8080; }
 .terminal-panel .banner { background: #2a2e37; color: #ddd; border: none; }
 .terminal-panel .banner.warn { color: var(--warn); }
@@ -675,7 +678,11 @@ mark.waw-hl.review.needs_review { border-bottom: 2px dashed var(--warn); }
 .review-pr { display: flex; gap: 8px; align-items: flex-start; width: 100%; border: none; background: transparent; padding: 5px 8px 5px 24px; cursor: pointer; text-align: left; color: inherit; border-radius: 6px; }
 .review-pr:hover { background: var(--accent); }
 .review-pr.draft .review-pr-title { color: var(--muted); }
-.review-pr-main { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
+.review-pr-main { display: flex; flex-direction: column; min-width: 0; gap: 1px; flex: 1 1 auto; }
+/* the right edge of a PR row: ⏰ / Back now, then the priority level — the levels line up in every row */
+.review-pr-side { margin-left: auto; flex: none; display: inline-flex; align-items: center; justify-content: flex-end; gap: 4px; }
+.review-pr-side .level-menu { order: 2; }
+.review-pr-side .level-badge { min-width: 26px; }
 .review-pr-title { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.3; }
 .review-pr-meta { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
 .review-pr-meta .add { color: var(--green); }
@@ -1383,3 +1390,21 @@ body.resizing-h iframe { pointer-events: none; }
 .gh-rate.bad { background: #ffe0e0; color: #8a1010; }
 .review-role { font-size: 11px; color: var(--muted); }
 .review-role.core { color: #8a4b00; font-weight: 600; }
+.defer-btn { font-size: 12px; padding: 0 3px; }
+.review-pr .defer-btn { opacity: 0; }
+.review-pr:hover .defer-btn, .review-pr .defer-menu:focus-within .defer-btn { opacity: 1; }
+.defer-btn.labeled { opacity: 1; }
+.pr-deferred-banner { display: flex; gap: 8px; align-items: center; }
+.defer-pop { min-width: 230px; }
+.defer-custom { display: flex; gap: 4px; align-items: center; }
+.defer-custom input, .defer-note { font-size: 12px; border: 1px solid var(--border); border-radius: 6px; padding: 1px 4px; background: var(--bg); color: var(--fg); }
+.copy-link { display: inline-flex; align-items: center; gap: 6px; }
+.copy-link .btn-group { display: inline-flex; }
+.copy-link .btn-group .btn:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.copy-link .btn-group .btn:last-child { border-top-left-radius: 0; border-bottom-left-radius: 0; border-left: 0; padding: 0 5px; }
+.copy-link-menu { display: flex; flex-direction: column; min-width: 260px; }
+.copy-link-menu .list-item { text-align: left; }
+.insights-hl[data-seen="1"] { opacity: 0.7; }
+/* Reports · Daily · XPU highlights (and Per day · All) fill the list's width */
+.mode-switch.insights-tabs { display: flex; width: 100%; box-sizing: border-box; }
+.mode-switch.insights-tabs button { flex: 1 1 0; min-width: 0; padding: 4px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

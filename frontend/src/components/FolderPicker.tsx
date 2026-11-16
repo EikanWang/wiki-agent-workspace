@@ -61,7 +61,7 @@ export default function FolderPicker({ title, hint, start, requireGit = false, c
   onClose: () => void;
 }) {
   const [path, setPath] = useState(start || "~");
-  const [typed, setTyped] = useState(start || "");
+  const [typed, setTyped] = useState(start || "");  // (empty at home: placeholder; Enter on it goes home)
   const [listing, setListing] = useState<DirListing | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [hidden, setHidden] = useState(false);
@@ -71,7 +71,7 @@ export default function FolderPicker({ title, hint, start, requireGit = false, c
   const input = useRef<HTMLInputElement>(null);
   // the listing shown may update the path box when a folder was asked for (Go, a click); a listing that comes by
   // itself (the fallback to home) does not touch the box while you are in it (it would mix with what you type)
-  const asked = useRef(true);
+  const asked = useRef(false);  // (the start folder's listing was not asked for: it must not overwrite what you type)
   const go = (p: string) => {
     edited.current = false;
     asked.current = true;
@@ -86,7 +86,9 @@ export default function FolderPicker({ title, hint, start, requireGit = false, c
       .then((l) => {
         if (!alive) return;
         setListing(l);
-        if (!edited.current && (asked.current || document.activeElement !== input.current)) setTyped(l.path);
+        // only a folder you went to (Go, Enter, a click) is written into the box — never the first listing, which can
+        // arrive while you type and would mix with it ("Selected:" and the breadcrumbs show where you are)
+        if (asked.current && !edited.current) setTyped(l.path);
         asked.current = false;
         setError(null);
       })
@@ -106,7 +108,8 @@ export default function FolderPicker({ title, hint, start, requireGit = false, c
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
   const entries = (listing?.entries ?? []).filter((e) => !filter || e.name.toLowerCase().includes(filter.toLowerCase()));
-  const ok = !!listing && !loading && (!requireGit || listing.is_git);
+  // a folder that could not be listed is not chosen: "Choose" takes only the folder shown, after a successful listing
+  const ok = !!listing && !loading && !error && (!requireGit || listing.is_git);
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal folder-picker" onClick={(e) => e.stopPropagation()} role="dialog" aria-label={title} data-testid="folder-picker">

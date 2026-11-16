@@ -5,6 +5,7 @@ import { confirmAction } from "./Confirm";
 import { AgentSession, ApiError, WorkspaceInfo, get, post, put, subscribeGlobal } from "../api";
 import { renderGithubMarkdown } from "../markdown";
 import { loadReviews, savePrefs, useReviews } from "./ReviewsPanel";
+import DeferMenu, { deferLabel } from "./DeferMenu";
 import { usePersistentState, useRestoredScroll } from "../persist";
 import { SelectionAnchor, wholeDocument } from "../textmodel";
 import { GhDraft, GhThread, PrFile, PrFileDiff, SubmitReview } from "./PrDiff";
@@ -13,6 +14,7 @@ import MentionTextarea from "./MentionTextarea";
 import { SelectionPopover } from "./Reader";
 import ContextFolders from "./ContextFolders";
 import GhUser from "./GhUser";
+import CopyLink from "./CopyLink";
 import LocalRepo from "./LocalRepo";
 import RefreshButton from "./RefreshButton";
 import { GhRefreshSelect, useGhAutoRefresh } from "../ghRefresh";
@@ -263,6 +265,7 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
     try {
       await post(`${apiBase}/conversation`, { body: convText });
       setConvText("");
+      void loadReviews(false); // the Reviews list moves this PR at once
       await loadComments();
     } catch (e) {
       setError((e as ApiError).message);
@@ -348,7 +351,9 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
             {reviewing ? "Agent reviewing…" : "Agent review"}
           </button>
           <PrStar repo={p.repo} number={p.number} />
+          <PrDefer repo={p.repo} number={p.number} />
           <PrStateMenu apiBase={apiBase} state={p.state} draft={p.draft} number={p.number} onDone={() => load(true)} onError={setError} />
+          <CopyLink url={p.url} title={p.title} label={`${p.repo}#${p.number}`} testId="pr-copy-link" />
           <a className="btn small" href={p.url} target="_blank" rel="noreferrer">Open on GitHub</a>
           {fresh && (
             <span className={`muted small pr-fresh ${fresh}`} data-testid="pr-fresh" data-state={fresh}
@@ -818,6 +823,25 @@ function PrStar({ repo, number }: { repo: string; number: number }) {
   );
 }
 
+/** Defer the review from the PR's page: a "⏰ Defer review" button; when deferred, a line saying until when, with
+ * "Back now". (A PR that is not in your review list cannot be deferred.) */
+function PrDefer({ repo, number }: { repo: string; number: number }) {
+  const { queue } = useReviews();
+  if (!queue?.prefs) return null;
+  const key = `${repo}#${number}`.toLowerCase();
+  const d = (queue.deferred ?? []).find((x) => `${x.repo}#${x.number}`.toLowerCase() === key)?.deferred;
+  if (d) {
+    return (
+      <span className="git-badge pr-deferred-banner" title={d.note || undefined} data-testid="pr-deferred">
+        ⏰ Deferred {deferLabel(d)}{d.note ? ` · ${d.note}` : ""}
+        <button className="link-btn small" onClick={() => void savePrefs({ undefer: key })} data-testid="pr-undefer">Back now</button>
+      </span>
+    );
+  }
+  const inList = [...queue.items, ...(queue.watched ?? [])].some((x) => `${x.repo}#${x.number}`.toLowerCase() === key);
+  return inList ? <DeferMenu pr={key} label onDefer={(x) => savePrefs({ defer: x })} /> : null;
+}
+
 /** What the agent read to decide the PR's level: its reason and the summary of each changed file. */
 function AgentView({ repo, number }: { repo: string; number: number }) {
   const { queue } = useReviews();
@@ -951,6 +975,7 @@ function IssueView({ repo, number }: { repo: string; number: number }) {
           )}
           <span className="spacer" />
           {checking && <span className="muted small" data-testid="issue-checking">from the local copy · checking GitHub…</span>}
+          <CopyLink url={d.url} title={d.title} label={`${d.repo}#${d.number}`} testId="issue-copy-link" />
           <a className="btn small" href={d.url} target="_blank" rel="noreferrer">Open on GitHub</a>
         </div>
       </div>

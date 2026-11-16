@@ -105,12 +105,14 @@ export function InsightsPanel({ active, onOpen }: { active: string | null; onOpe
 }
 
 /** Main page: a repository (reports, daily summaries, highlights) or the settings. */
-export default function InsightsView({ repo, onOpenChat }: { repo: string | null; onOpenChat: (ws: string, path: string) => void }) {
+type OpenPr = (repo: string, number: number, title?: string) => void;
+
+export default function InsightsView({ repo, onOpenChat, onOpenPrReview }: { repo: string | null; onOpenChat: (ws: string, path: string) => void; onOpenPrReview?: OpenPr }) {
   if (!repo) return <InsightsSettings />;
-  return <RepoPage key={repo} repo={repo} onOpenChat={onOpenChat} />;
+  return <RepoPage key={repo} repo={repo} onOpenChat={onOpenChat} onOpenPrReview={onOpenPrReview} />;
 }
 
-function RepoPage({ repo, onOpenChat }: { repo: string; onOpenChat: (ws: string, path: string) => void }) {
+function RepoPage({ repo, onOpenChat, onOpenPrReview }: { repo: string; onOpenChat: (ws: string, path: string) => void; onOpenPrReview?: OpenPr }) {
   const [ov, setOv] = useState<Overview | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [tab, setTab] = useState<"reports" | "daily" | "highlights">(() => (localStorage.getItem("waw.insights.tab") as "reports") || "reports");
@@ -132,6 +134,16 @@ function RepoPage({ repo, onOpenChat }: { repo: string; onOpenChat: (ws: string,
     return () => clearInterval(t);
   }, [running, load]);
   if (!ov) return <div className="muted pad">{err ?? "Loading…"}</div>;
+  // Reports · Daily · XPU highlights: across the whole width of the list
+  const tabs = (
+    <span className="mode-switch insights-tabs" role="tablist">
+      {(["reports", "daily", "highlights"] as const).map((t) => (
+        <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? "active" : ""} onClick={() => setTab(t)} data-testid={`insights-tab-${t}`}>
+          {t === "reports" ? `Reports (${ov.reports.length})` : t === "daily" ? `Daily (${ov.daily_count})` : "XPU highlights"}
+        </button>
+      ))}
+    </span>
+  );
   return (
     <div className="insights-view" data-testid="insights-view">
       <div className="insights-head">
@@ -147,24 +159,20 @@ function RepoPage({ repo, onOpenChat }: { repo: string; onOpenChat: (ws: string,
       {err && <div className="banner warn small">{err}</div>}
       <NewReport repo={repo} cfg={ov.config} onCreated={(id) => { setTab("reports"); setOpen({ kind: "report", id }); void load(); }} />
       <div className="insights-body">
-        <div className="insights-list">
-          <span className="mode-switch" role="tablist">
-            {(["reports", "daily", "highlights"] as const).map((t) => (
-              <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? "active" : ""} onClick={() => setTab(t)} data-testid={`insights-tab-${t}`}>
-                {t === "reports" ? `Reports (${ov.reports.length})` : t === "daily" ? `Daily (${ov.daily_count})` : "XPU highlights"}
-              </button>
-            ))}
-          </span>
-          {tab === "reports" && <ReportList reports={ov.reports} openId={open?.kind === "report" ? open.id : null} onOpen={(id) => setOpen({ kind: "report", id })} />}
-          {tab === "daily" && <DailyList ov={ov} openPath={open?.kind === "file" ? open.path : null} onOpen={(p) => setOpen({ kind: "file", path: p })} onRan={load} />}
-          {tab === "highlights" && <div className="muted small pad">Pick dates on the right.</div>}
-        </div>
-        <div className="insights-main">
-          {tab === "highlights" ? <Highlights repo={repo} onRan={load} enabled={ov.config.highlights} />
-            : open?.kind === "report" ? <ReportViewer repo={repo} id={open.id} onOpenChat={onOpenChat} onDeleted={() => { setOpen(null); void load(); }} />
-            : open?.kind === "file" ? <FileViewer path={open.path} />
-            : <div className="muted pad">Choose a report or a day.</div>}
-        </div>
+        {tab === "highlights" ? <Highlights repo={repo} tabs={tabs} onRan={load} enabled={ov.config.highlights} onOpenPr={onOpenPrReview} /> : (
+          <>
+            <div className="insights-list">
+              {tabs}
+              {tab === "reports" && <ReportList reports={ov.reports} openId={open?.kind === "report" ? open.id : null} onOpen={(id) => setOpen({ kind: "report", id })} />}
+              {tab === "daily" && <DailyList ov={ov} openPath={open?.kind === "file" ? open.path : null} onOpen={(p) => setOpen({ kind: "file", path: p })} onRan={load} />}
+            </div>
+            <div className="insights-main">
+              {open?.kind === "report" ? <ReportViewer repo={repo} id={open.id} onOpenChat={onOpenChat} onDeleted={() => { setOpen(null); void load(); }} />
+                : open?.kind === "file" ? <FileViewer path={open.path} />
+                : <div className="muted pad">Choose a report or a day.</div>}
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -357,44 +365,131 @@ function DailyList({ ov, openPath, onOpen, onRan }: { ov: Overview; openPath: st
   );
 }
 
-function Highlights({ repo, onRan, enabled }: { repo: string; onRan: () => void; enabled: boolean }) {
+interface HlDay { day: string; files: { name: string; since: string; until: string }[]; items: (Highlight & { seen_before?: boolean })[] }
+
+/** owner/repo and number of a github.com pull request / issue link */
+function ghRef(url: string): [string, number, "pr" | "issue"] | null {
+  const m = /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/(pull|issues)\/(\d+)/.exec(url);
+  return m ? [m[1], Number(m[3]), m[2] === "pull" ? "pr" : "issue"] : null;
+}
+
+function HlItem({ x, extra, onOpenPr }: { x: Highlight & { seen_before?: boolean; days?: string[] }; extra?: React.ReactNode; onOpenPr?: OpenPr }) {
+  const ref = ghRef(x.url);
+  return (
+    <div className="insights-hl" data-testid="insights-hl" data-seen={x.seen_before ? "1" : "0"}>
+      <span className={`insights-score ${x.xpu_relevance_score >= 90 ? "crit" : x.xpu_relevance_score >= 75 ? "high" : ""}`}>{x.xpu_relevance_score < 0 ? "?" : x.xpu_relevance_score}</span>
+      <div className="insights-hl-main">
+        {ref && onOpenPr ? (
+          <a href={x.url} onClick={(e) => { if (e.ctrlKey || e.metaKey || e.shiftKey || e.button !== 0) return; e.preventDefault(); onOpenPr(ref[0], ref[1], x.title); }}
+            title={`Open ${ref[0]}#${ref[1]} in PR Review (Ctrl/⌘-click: on GitHub)`} data-testid="insights-hl-open"><b>{x.title}</b></a>
+        ) : <a href={x.url} target="_blank" rel="noreferrer"><b>{x.title}</b></a>}
+        {ref && <span className="muted small"> {ref[2] === "pr" ? "PR" : "issue"} #{ref[1]}</span>}
+        {ref && onOpenPr && <a className="link-btn small" href={x.url} target="_blank" rel="noreferrer" title="Open on GitHub" data-testid="insights-hl-github"> ↗</a>}
+        {extra}
+        <div className="small">{x.body}</div>
+        <details className="small muted"><summary>why</summary>{x.xpu_relevance_justification}</details>
+        <div className="muted small">{x.submitter} · {x.state}{x.vendor_involvement?.length ? ` · ${x.vendor_involvement.join(", ")}` : ""}</div>
+      </div>
+    </div>
+  );
+}
+
+/** XPU highlights of a period, two views: per day (each day's run; items an earlier day already had are marked and
+ * can be hidden), or flat (each item once, duplicates across days removed, with the days it was on). Like Daily, the
+ * list (dates, the days) is on the left and the chosen day's highlights on the right. */
+function Highlights({ repo, tabs, onRan, enabled, onOpenPr }: { repo: string; tabs: React.ReactNode; onRan: () => void; enabled: boolean; onOpenPr?: OpenPr }) {
   const [since, setSince] = useState(daysAgo(7));
   const [until, setUntil] = useState(todayIso());
   const [min, setMin] = useState(70);
-  const [items, setItems] = useState<Highlight[] | null>(null);
+  const [view, setView] = useState<"day" | "flat">(() => (localStorage.getItem("waw.insights.hlView") === "flat" ? "flat" : "day"));
+  useEffect(() => localStorage.setItem("waw.insights.hlView", view), [view]);
+  const [onlyNew, setOnlyNew] = useState(() => localStorage.getItem("waw.insights.hlOnlyNew") === "1");
+  useEffect(() => localStorage.setItem("waw.insights.hlOnlyNew", onlyNew ? "1" : "0"), [onlyNew]);
+  const [items, setItems] = useState<(Highlight & { days?: string[] })[] | null>(null);
+  const [days, setDays] = useState<HlDay[] | null>(null);
+  // the day shown on the right: the newest one (today's, or the latest day there are highlights for) unless you pick another
+  const [picked, setPicked] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const load = useCallback(async () => {
+    setErr(null);
     try {
-      setItems((await get<{ items: Highlight[] }>(`/insights/repos/${repo}/highlights?since=${since}&until=${until}`)).items);
+      const q = `/insights/repos/${repo}/highlights?since=${since}&until=${until}&view=${view}`;
+      if (view === "day") {
+        const d = (await get<{ days: HlDay[] }>(q)).days;
+        setDays(d);
+        setPicked((p) => (p && d.some((x) => x.day === p) ? p : d[0]?.day ?? null));
+      }
+      else setItems((await get<{ items: Highlight[] }>(q)).items);
     } catch (e) {
       setErr((e as ApiError).message);
     }
-  }, [repo, since, until]);
+  }, [repo, since, until, view]);
   useEffect(() => { void load(); }, [load]);
-  const shown = useMemo(() => (items ?? []).filter((x) => x.xpu_relevance_score >= min || x.xpu_relevance_score < 0), [items, min]);
+  const keep = (x: Highlight) => x.xpu_relevance_score >= min || x.xpu_relevance_score < 0;
+  const shown = useMemo(() => (items ?? []).filter(keep), [items, min]); // eslint-disable-line react-hooks/exhaustive-deps
+  const dayList = useMemo(() => (days ?? []).map((d) => ({ ...d, shown: d.items.filter((x) => keep(x) && (!onlyNew || !x.seen_before)) })), [days, min, onlyNew]); // eslint-disable-line react-hooks/exhaustive-deps
+  const day = view === "day" ? dayList.find((d) => d.day === picked) ?? null : null;
+  const total = view === "day" ? day?.shown.length ?? 0 : shown.length;
   return (
-    <div className="insights-report" data-testid="insights-highlights">
-      <div className="row nowrap small">
-        <input type="date" value={since} onChange={(e) => setSince(e.target.value)} /> – <input type="date" value={until} onChange={(e) => setUntil(e.target.value)} />
-        score ≥ <input type="number" min={0} max={100} value={min} onChange={(e) => setMin(Number(e.target.value) || 0)} className="insights-num" data-testid="insights-hl-min" />
-        <span className="muted">{shown.length} of {items?.length ?? 0}</span>
-        <span className="spacer" />
-        <button className="btn small" onClick={async () => { setErr(null); try { await post("/insights/run", { repo, kind: "highlights", since, until }); onRan(); } catch (e) { setErr((e as ApiError).message); } }}
-          title={enabled ? "Score every issue and PR active in these days now" : "XPU highlights are off for this repository (⚙); you can still score now"} data-testid="insights-run-hl">Score now</button>
-      </div>
-      {err && <div className="error-text small">{err}</div>}
-      {shown.map((x) => (
-        <div key={x.url} className="insights-hl" data-testid="insights-hl">
-          <span className={`insights-score ${x.xpu_relevance_score >= 90 ? "crit" : x.xpu_relevance_score >= 75 ? "high" : ""}`}>{x.xpu_relevance_score < 0 ? "?" : x.xpu_relevance_score}</span>
-          <div className="insights-hl-main">
-            <a href={x.url} target="_blank" rel="noreferrer"><b>{x.title}</b></a>
-            <div className="small">{x.body}</div>
-            <details className="small muted"><summary>why</summary>{x.xpu_relevance_justification}</details>
-            <div className="muted small">{x.submitter} · {x.state}{x.vendor_involvement?.length ? ` · ${x.vendor_involvement.join(", ")}` : ""}</div>
+    <>
+      <div className="insights-list">
+        {tabs}
+        <div className="insights-items">
+          <div className="row nowrap small pad-x">
+            <input type="date" value={since} onChange={(e) => setSince(e.target.value)} data-testid="insights-hl-since" /> – <input type="date" value={until} onChange={(e) => setUntil(e.target.value)} data-testid="insights-hl-until" />
           </div>
+          <div className="pad-x">
+            <span className="mode-switch insights-tabs" role="tablist">
+              <button role="tab" aria-selected={view === "day"} className={view === "day" ? "active" : ""} onClick={() => setView("day")} data-testid="insights-hl-view-day">Per day</button>
+              <button role="tab" aria-selected={view === "flat"} className={view === "flat" ? "active" : ""} onClick={() => setView("flat")} data-testid="insights-hl-view-flat">All, no duplicates</button>
+            </span>
+          </div>
+          {view === "day" && dayList.length === 0 && days && <div className="muted small pad">No highlights in these days.</div>}
+          {view === "day" && dayList.map((d) => {
+            const seen = d.shown.filter((x) => x.seen_before).length;
+            return (
+              <button key={d.day} className={`list-item ${d.day === picked ? "selected" : ""}`} onClick={() => setPicked(d.day)} aria-selected={d.day === picked}
+                title={d.files.map((f) => `${f.name}: ${f.since} – ${f.until}`).join("\n")} data-testid="insights-hl-day" data-day={d.day}>
+                <span className="mono small">{d.day}</span>{d.day === todayIso() && <span className="chip">today</span>}
+                <span className="muted small">{d.shown.length}{d.shown.length !== d.items.length ? ` of ${d.items.length}` : ""}{seen ? ` · ${seen} seen before` : ""}</span>
+              </button>
+            );
+          })}
+          {view === "flat" && <div className="muted small pad">Each item once, over all the days of these dates.</div>}
         </div>
-      ))}
-    </div>
+      </div>
+      <div className="insights-main">
+        <div className="insights-report" data-testid="insights-highlights">
+          <div className="row nowrap small">
+            {view === "day" && <b data-testid="insights-hl-day-title">{day ? `${day.day}${day.day === todayIso() ? " (today)" : ""}` : "No day"}</b>}
+            {view === "flat" && <b>{since} – {until}</b>}
+            score ≥ <input type="number" min={0} max={100} value={min} onChange={(e) => setMin(Number(e.target.value) || 0)} className="insights-num" data-testid="insights-hl-min" />
+            {view === "day" && (
+              <label title="Hide the items an earlier day of the period already had (the daily runs' windows overlap)">
+                <input type="checkbox" checked={onlyNew} onChange={(e) => setOnlyNew(e.target.checked)} data-testid="insights-hl-only-new" /> only new each day
+              </label>
+            )}
+            <span className="muted" data-testid="insights-hl-count">{total} shown</span>
+            <span className="spacer" />
+            <button className="btn small" onClick={async () => { setErr(null); try { await post("/insights/run", { repo, kind: "highlights", since, until }); onRan(); } catch (e) { setErr((e as ApiError).message); } }}
+              title={enabled ? "Score every issue and PR active in these days now" : "XPU highlights are off for this repository (⚙); you can still score now"} data-testid="insights-run-hl">Score now</button>
+          </div>
+          {err && <div className="error-text small">{err}</div>}
+          {view === "flat" && shown.map((x) => (
+            <HlItem key={x.url} x={x} onOpenPr={onOpenPr} extra={x.days && x.days.length > 1 ? <span className="chip" title={`On ${x.days.join(", ")}`} data-testid="insights-hl-days"> on {x.days.length} days</span> : null} />
+          ))}
+          {view === "day" && !day && days && <div className="muted small">No highlights in these days.</div>}
+          {day && (
+            <div className="insights-hl-day-list" data-testid="insights-hl-day-list" data-day={day.day}>
+              {day.shown.map((x) => (
+                <HlItem key={x.url} x={x} onOpenPr={onOpenPr} extra={x.seen_before ? <span className="chip muted" title="An earlier day of this period already had it" data-testid="insights-hl-seen"> seen before</span> : null} />
+              ))}
+              {day.shown.length === 0 && <div className="muted small">Nothing above the score{onlyNew ? " that is new this day" : ""}.</div>}
+            </div>
+          )}
+        </div>
+      </div>
+    </>
   );
 }
 

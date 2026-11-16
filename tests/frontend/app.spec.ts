@@ -473,6 +473,40 @@ test("Terminal activity: its own list of terminals (home or a chosen folder), th
   await page.getByTestId("activity-files").click();
 });
 
+test("terminal fits its box: no page scrollbar, so it does not re-fit (resize) over and over", async ({ browser }) => {
+  // the fit addon measures the host's border-box size: padding on the host made the terminal 8px too big, a page
+  // scrollbar came and went, and every change re-fit the terminal (it flickered and took no input)
+  const page = await browser.newPage({ viewport: { width: 2560, height: 1400 } });
+  const resizes: string[] = [];
+  page.on("websocket", (ws) => ws.on("framesent", (f) => { if (String(f.payload).includes('"resize"')) resizes.push(String(f.payload)); }));
+  await login(page);
+  await page.getByTestId("activity-terminal").click();
+  const n0 = await page.getByTestId("terminals-item").count();
+  await page.getByTestId("terminals-new").click();
+  await expect(page.getByTestId("terminals-item")).toHaveCount(n0 + 1);
+  const view = page.locator(".term-view.active");
+  await expect(view).toHaveAttribute("data-state", "connected", { timeout: 15000 });
+  await page.waitForTimeout(800);
+  resizes.length = 0;
+  await page.waitForTimeout(2000);
+  const r = await page.evaluate(() => {
+    const host = document.querySelector(".term-view.active .xterm-host")!.getBoundingClientRect();
+    const scr = document.querySelector(".term-view.active .xterm-screen")!.getBoundingClientRect();
+    const de = document.documentElement;
+    return { overflow: de.scrollHeight > innerHeight || de.scrollWidth > innerWidth, fits: scr.right <= host.right + 0.5 && scr.bottom <= host.bottom + 0.5 };
+  });
+  expect(r).toEqual({ overflow: false, fits: true });
+  expect(resizes).toEqual([]);
+  // leave no terminal behind for the next tests
+  const item = page.getByTestId("terminals-item").last();
+  await item.hover();
+  await item.getByTestId("terminals-close").click();
+  await page.getByTestId("confirm-ok").click();
+  await expect(page.getByTestId("terminals-item")).toHaveCount(n0);
+  await page.getByTestId("activity-files").click();
+  await page.close();
+});
+
 test("terminal on a Mac: ⌘← / ⌘→ move to the start / end of the input line like Home / End", async ({ browser }) => {
   const context = await browser.newContext();
   await context.addInitScript(() => Object.defineProperty(Navigator.prototype, "platform", { get: () => "MacIntel" }));
@@ -1937,12 +1971,34 @@ test("GitHub review hub: only the owner's GitHub sign-in sees it; queue grouped 
   const r104 = page.locator('[data-repo="pytorch/pytorch"] [data-category="news"] [data-testid="review-pr"][data-number="104"]');
   await expect(r104.getByTestId("review-since-mine")).toContainText("new comments");
   await expect(r104.getByTestId("review-level")).toHaveAttribute("data-level", "P1");
+  // every priority label sits at the right edge of its row (short titles, long titles, badges): one right edge
+  await expect.poll(async () => {
+    const rights = await page.locator('[data-testid="review-group"] [data-testid="review-pr"]').evaluateAll((rows) => rows.map((r) => {
+      const lv = r.querySelector('[data-testid="review-level"]')!.getBoundingClientRect();
+      return Math.round(r.getBoundingClientRect().right - lv.right);
+    }));
+    return rights.length > 2 && new Set(rights).size === 1 && rights[0] < 16;
+  }).toBe(true);
   // who asked: the repository's governance page says metadev is a core maintainer (read in the background, then shown)
   await expect.poll(async () => {
     const q = await (await page.request.get("/api/v1/github/reviews")).json();
     return [...q.items, ...q.watched].find((x: any) => x.number === 104)?.requested_by_roles;
   }, { timeout: 15000 }).toBe("core maintainer");
   await expect(panel).toContainText("1 draft hidden");
+  // defer a review: it leaves the list for the Deferred section, and comes back by "Back now"
+  const r103 = page.locator('[data-testid="review-group"] [data-testid="review-pr"][data-number="103"]');
+  await r103.hover();
+  await r103.getByTestId("review-defer").click();
+  await page.getByTestId("defer-note").fill("after the XPU sync");
+  await page.locator('[data-testid="defer-choice"][data-choice="Tomorrow 09:00"]').click();
+  await expect(page.locator('[data-testid="review-group"] [data-testid="review-pr"][data-number="103"]')).toHaveCount(0);
+  await expect(page.getByTestId("reviews-deferred-count")).toContainText("1 deferred");
+  const deferred = page.getByTestId("reviews-deferred");
+  await deferred.locator(".review-group-head").click();
+  await expect(deferred.getByTestId("review-deferred-until")).toContainText("or new activity · after the XPU sync");
+  await deferred.getByTestId("review-undefer").click();
+  await expect(page.getByTestId("reviews-deferred")).toHaveCount(0);
+  await expect(page.locator('[data-testid="review-group"] [data-testid="review-pr"][data-number="103"]')).toHaveCount(1);
   // auto-refresh from GitHub at an interval you choose (5 min by default; kept per browser)
   await expect(page.getByTestId("reviews-auto-refresh")).toHaveValue("5");
   await page.clock.install();
@@ -2187,6 +2243,35 @@ test("GitHub PR tab: overview, files, choose the wiki once, ask about the PR and
   await expect(tab).toContainText("#101");
   await expect(page.getByTestId("pr-title")).toContainText("[xpu] Fix the lazy Level Zero stub");
   await expect(page.getByTestId("pr-description")).toContainText("This PR fixes the lazy stub.");
+  // Repo Insights: a highlight opens its PR here, in PR Review (Ctrl/⌘-click or ↗: on GitHub)
+  await page.getByTestId("activity-insights").click();
+  await page.locator('[data-testid="insights-repo"][data-repo="pytorch/pytorch"]').click();
+  await page.getByTestId("insights-tab-highlights").click();
+  await page.getByTestId("insights-hl-view-day").click();
+  await page.getByTestId("insights-hl-since").fill("2026-11-08");
+  await page.getByTestId("insights-hl-open").filter({ hasText: "Fix the lazy Level Zero stub" }).click();
+  await expect(page.getByTestId("pr-title")).toContainText("[xpu] Fix the lazy Level Zero stub");
+  await expect(page.getByTestId("reviews-panel")).toBeVisible();
+  // copy the PR's link to share it: the link, the title and link, a Markdown link
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.getByTestId("pr-copy-link").click();
+  await expect(page.getByTestId("pr-copy-link-done")).toContainText("Copied the link");
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("https://github.com/pytorch/pytorch/pull/101");
+  await page.getByTestId("pr-copy-link-more").click();
+  await page.getByTestId("pr-copy-link-md").click();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("[pytorch/pytorch#101: \\[xpu\\] Fix the lazy Level Zero stub](https://github.com/pytorch/pytorch/pull/101)");
+  await page.getByTestId("pr-copy-link-more").click();
+  await page.getByTestId("pr-copy-link-titled").click();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("pytorch/pytorch#101: [xpu] Fix the lazy Level Zero stub\nhttps://github.com/pytorch/pytorch/pull/101");
+  // defer the review from the PR's own page: it says until when there, the list moves it to Deferred; Back now
+  await page.getByTestId("pr-defer").click();
+  await page.locator('[data-testid="defer-choice"][data-choice="Next Monday 09:00"]').click();
+  await expect(page.getByTestId("pr-deferred")).toContainText("Deferred until");
+  await expect(page.locator('[data-testid="review-group"] [data-testid="review-pr"][data-number="101"]')).toHaveCount(0);
+  await expect(page.getByTestId("reviews-deferred")).toBeVisible();
+  await page.getByTestId("pr-undefer").click();
+  await expect(page.getByTestId("pr-defer")).toBeVisible();
+  await expect(page.locator('[data-testid="review-group"] [data-testid="review-pr"][data-number="101"]')).toHaveCount(1);
   // GitHub logins open the account's page, like on github.com: the author, @mentions, reviewers, commenters
   await expect(page.locator('.pr-meta [data-testid="gh-user"]')).toHaveAttribute("href", "https://github.com/alice");
   await expect(page.getByTestId("pr-description").locator('a.gh-user[data-login="bob"]')).toHaveAttribute("href", "https://github.com/bob");
@@ -2221,8 +2306,12 @@ test("GitHub PR tab: overview, files, choose the wiki once, ask about the PR and
   await expect(convBox).toHaveValue("cc @ezyang ");
   await expect(page.getByTestId("mention-list")).toHaveCount(0);
   await page.getByTestId("pr-conv-text").fill("Thanks, looking now.");
+  await page.evaluate(() => { (window as any).__noReload = true; });
   await page.getByTestId("pr-conv-send").click();
   await expect(conv.getByTestId("pr-conv-item")).toHaveCount(3);
+  // your comment moves the PR to "Commented, nothing new" in the Reviews list at once — without reloading the page
+  await expect(page.locator('[data-testid="review-section"][data-category="quiet"] [data-testid="review-pr"][data-number="101"]')).toHaveCount(1, { timeout: 10000 });
+  expect(await page.evaluate(() => (window as any).__noReload)).toBe(true);
   await expect(conv.getByTestId("pr-conv-item").last()).toContainText("Thanks, looking now.");
   // first PR of this repository: choose the wiki the agent works in (once)
   await expect(page.getByTestId("pr-ask")).toBeDisabled();
@@ -3457,9 +3546,41 @@ test("Repo Insights: the history in the folder, a week's report (daily summaries
   await expect(page.getByTestId("insights-file-view")).toContainText("Old day");
   // XPU highlights of the history
   await page.getByTestId("insights-tab-highlights").click();
-  await page.getByTestId("insights-highlights").locator('input[type="date"]').first().fill("2026-11-08");
+  await page.getByTestId("insights-hl-view-day").click();
+  await page.getByTestId("insights-hl-since").fill("2026-11-08");
+  // the three tabs fill the list's width
+  const tabsBox = (await page.locator(".insights-list .insights-tabs").first().boundingBox())!;
+  const listBox = (await page.locator(".insights-list").boundingBox())!;
+  expect(Math.abs(tabsBox.width - listBox.width)).toBeLessThan(2);
+  // per day: the days are listed on the left like Daily (newest first), the chosen day's highlights on the right;
+  // what an earlier day already had is marked (and can be hidden)
+  await expect(page.locator(".insights-list").getByTestId("insights-hl-day")).toHaveCount(2);
+  await expect(page.getByTestId("insights-hl-day").first()).toHaveAttribute("data-day", "2026-11-10");
+  await expect(page.getByTestId("insights-hl-day").last()).toHaveAttribute("data-day", "2026-11-09");
+  // the newest day is shown first
+  await expect(page.getByTestId("insights-hl-day").first()).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByTestId("insights-hl-day").last()).toHaveAttribute("aria-selected", "false");
+  await expect(page.locator(".insights-main").getByTestId("insights-hl-day-list")).toHaveAttribute("data-day", "2026-11-10");
+  await expect(page.getByTestId("insights-hl")).toHaveCount(3);
+  await expect(page.getByTestId("insights-hl-seen")).toHaveCount(1);
+  await page.getByTestId("insights-hl-only-new").check();
+  await expect(page.getByTestId("insights-hl")).toHaveCount(2);
+  await page.getByTestId("insights-hl-only-new").uncheck();
+  await page.getByTestId("insights-hl-day").last().click();
+  await expect(page.getByTestId("insights-hl-day-list")).toHaveAttribute("data-day", "2026-11-09");
   await expect(page.getByTestId("insights-hl")).toHaveCount(1);
-  await expect(page.getByTestId("insights-hl")).toContainText("Inductor heuristic tuned for CUDA");
+  // flat: each item once (the newest run's score), with the days it was on
+  await page.getByTestId("insights-hl-view-flat").click();
+  await expect(page.getByTestId("insights-hl")).toHaveCount(3);
+  await expect(page.getByTestId("insights-hl").first()).toContainText("XCCL all-gather");
+  const inductor = page.getByTestId("insights-hl").filter({ hasText: "Inductor heuristic tuned for CUDA" });
+  await expect(inductor.getByTestId("insights-hl-days")).toContainText("on 2 days");
+  await expect(inductor.locator(".insights-score")).toHaveText("90");
+  await page.getByTestId("insights-hl-view-day").click();
+  await page.getByTestId("insights-hl-day").first().click();
+  // without GitHub sign-in (no PR Review) the links go to GitHub
+  await expect(page.getByTestId("insights-hl-open")).toHaveCount(0);
+  await expect(page.getByTestId("insights-hl").first().locator('a[href^="https://github.com/"]').first()).toHaveAttribute("target", "_blank");
   // a report of a custom week: the missing days are made from GitHub, the commits read, then the report
   await page.getByTestId("insights-period-custom").click();
   await page.getByTestId("insights-since").fill("2026-11-08");

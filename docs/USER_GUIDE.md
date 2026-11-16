@@ -170,6 +170,13 @@ level by hand**, go **back to rules / agent**, or **ask the agent again**. A PR'
   passing, running, none), draft, review decision, your activity (todo / news / quiet). When several match, the
   most urgent wins. (The older "PyTorch Meta maintainers" / priority people became such rules, ★ / un-★ became
   levels set by hand.)
+- **Defer a review** — ⏰ on a PR (on hover in the list, or **⏰ Defer review** in the PR tab's buttons, where a deferred PR says until when, with **Back now**): in 3 hours, tomorrow
+  09:00, next Monday 09:00, in a week, in a month, a date and time you pick, or *until there is new activity*; with
+  *back earlier when there is new activity* (on by default) it also returns when someone reviews, comments, pushes
+  commits or asks for your review again (bots and you do not count). An optional note says why. Deferred PRs leave
+  the list and its badge for the folded **⏰ Deferred** section at the bottom (with when they come back and the note);
+  **Back now** returns one at once; a PR that came back shows **⏰ back**. Deferrals are kept with your Reviews
+  settings (on the server, for every browser).
 - **Maintainers** — who maintains a repository comes from what the repository publishes, read once a day: its
   governance page (`docs/source/community/persons_of_interest.md`: lead / core maintainers, module maintainers;
   emeritus and sunsetted modules do not count) and `CODEOWNERS` (users, not teams), plus the logins you add in
@@ -762,7 +769,7 @@ The chart icon in the activity bar. It shows what happened in GitHub repositorie
 - **Repositories** (left): pytorch/pytorch, vllm, transformers, sglang, flashinfer, cutlass, triton by default; add any `owner/repo`.
 - **Summarize**: pick a period (or *Dates…*), the sources (Issues & PRs, Commits, RFCs, XPU highlights), an optional focus preset (*XPU (Intel GPU)*) and free-text focus. The report has fixed sections (Highlights, Changes by area, Issues and PRs, RFCs, XPU watch, Trends, Numbers) with links. Progress shows while it runs; *Continue in chat* opens a wiki chat with the report as material.
 - **How it is built**: one summary of issues and PRs per UTC day (kept in `summary/<owner>/<repo>/`; days without one are fetched from GitHub in one go and made); periods over two weeks are rolled up week by week (finished weeks are cached in `blocks/`); commits come from the connected checkout (⎇ in PR Review) or an app-owned blobless clone in `repos/`, fetched before each report; RFCs are the RFC repositories' issues/PRs plus issues labelled or titled as RFCs (per repository in ⚙).
-- **Daily** tab: every day's summary; *Make* fills a range now. **XPU highlights** tab: scored items of any dates (deduplicated, newest score wins), *Score now* scores a range.
+- **Daily** tab: every day's summary; *Make* fills a range now. **XPU highlights** tab: scored items of any dates in two views — **Per day** (like Daily: the days are listed on the left, newest first, and the chosen day's highlights show on the right; items an earlier day already had are marked *seen before*, and *only new each day* hides them — the daily runs' windows overlap) and **All, no duplicates** (each item once with the newest score and "on N days"); *Score now* scores a range.
 - **⚙ Settings**: the folder, the model endpoint (OpenAI-compatible; the key is stored in `<state_dir>/insights-secrets.json`, mode 0600, never sent to the browser), which tasks use the endpoint or the app's agent, the highlight threshold, per-repository sources / RFC rules / XPU highlights, and **every day at HH:MM** (UTC+8; off by default): the previous UTC day's summary and highlights, with up to a week caught up after downtime.
 
 ## Keyboard
