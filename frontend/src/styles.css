@@ -1404,4 +1404,5 @@ body.resizing-h iframe { pointer-events: none; }
 .insights-hl-day { border-bottom: 1px solid var(--border); padding-bottom: 4px; }
 .insights-hl[data-seen="1"] { opacity: 0.7; }
 /* each day's highlights scroll on their own, so the next days stay in reach */
-.insights-hl-day-list { max-height: 55vh; overflow-y: auto; overscroll-behavior: contain; padding-right: 4px; }
+/* (the wheel goes on to the page at a list's end, so you are never stuck in one) */
+.insights-hl-day-list { max-height: max(240px, calc(100vh - 330px)); overflow-y: auto; padding-right: 4px; }

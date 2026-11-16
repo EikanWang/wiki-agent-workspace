@@ -400,13 +400,18 @@ function Highlights({ repo, onRan, enabled, onOpenPr }: { repo: string; onRan: (
   useEffect(() => localStorage.setItem("waw.insights.hlOnlyNew", onlyNew ? "1" : "0"), [onlyNew]);
   const [items, setItems] = useState<(Highlight & { days?: string[] })[] | null>(null);
   const [days, setDays] = useState<HlDay[] | null>(null);
-  const [folded, setFolded] = useState<Set<string>>(new Set());
+  // open days: only the newest one (today's, or the latest day there are highlights for) unless you open others
+  const [opened, setOpened] = useState<Set<string>>(new Set());
   const [err, setErr] = useState<string | null>(null);
   const load = useCallback(async () => {
     setErr(null);
     try {
       const q = `/insights/repos/${repo}/highlights?since=${since}&until=${until}&view=${view}`;
-      if (view === "day") setDays((await get<{ days: HlDay[] }>(q)).days);
+      if (view === "day") {
+        const d = (await get<{ days: HlDay[] }>(q)).days;
+        setDays(d);
+        setOpened(new Set(d.length ? [d[0].day] : []));
+      }
       else setItems((await get<{ items: Highlight[] }>(q)).items);
     } catch (e) {
       setErr((e as ApiError).message);
@@ -443,11 +448,11 @@ function Highlights({ repo, onRan, enabled, onOpenPr }: { repo: string; onRan: (
       {view === "day" && dayList.length === 0 && days && <div className="muted small pad">No highlights in these days.</div>}
       {view === "day" && dayList.map((d) => (
         <div key={d.day} className="insights-hl-day" data-testid="insights-hl-day" data-day={d.day}>
-          <button className="insights-group-head" onClick={() => setFolded((f) => { const n = new Set(f); if (n.has(d.day)) n.delete(d.day); else n.add(d.day); return n; })}
-            aria-expanded={!folded.has(d.day)} title={d.files.map((f) => `${f.name}: ${f.since} – ${f.until}`).join("\n")}>
-            {folded.has(d.day) ? "▸" : "▾"} {d.day} <span className="muted">({d.shown.length}{d.shown.length !== d.items.length ? ` of ${d.items.length}` : ""}{(() => { const n = d.shown.filter((x) => x.seen_before).length; return n ? ` · ${n} seen before` : ""; })()})</span>
+          <button className="insights-group-head" onClick={() => setOpened((f) => { const n = new Set(f); if (n.has(d.day)) n.delete(d.day); else n.add(d.day); return n; })}
+            aria-expanded={opened.has(d.day)} title={d.files.map((f) => `${f.name}: ${f.since} – ${f.until}`).join("\n")} data-testid="insights-hl-day-head">
+            {opened.has(d.day) ? "▾" : "▸"} {d.day}{d.day === todayIso() ? " (today)" : ""} <span className="muted">({d.shown.length}{d.shown.length !== d.items.length ? ` of ${d.items.length}` : ""}{(() => { const n = d.shown.filter((x) => x.seen_before).length; return n ? ` · ${n} seen before` : ""; })()})</span>
           </button>
-          {!folded.has(d.day) && <div className="insights-hl-day-list" data-testid="insights-hl-day-list">{d.shown.map((x) => (
+          {opened.has(d.day) && <div className="insights-hl-day-list" data-testid="insights-hl-day-list">{d.shown.map((x) => (
             <HlItem key={x.url} x={x} onOpenPr={onOpenPr} extra={x.seen_before ? <span className="chip muted" title="An earlier day of this period already had it" data-testid="insights-hl-seen"> seen before</span> : null} />
           ))}</div>}
         </div>

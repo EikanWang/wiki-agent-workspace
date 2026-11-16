@@ -3518,11 +3518,17 @@ test("Repo Insights: the history in the folder, a week's report (daily summaries
   await expect(page.getByTestId("insights-hl-day")).toHaveCount(2);
   await expect(page.getByTestId("insights-hl-day").first()).toHaveAttribute("data-day", "2026-11-10");
   await expect(page.getByTestId("insights-hl-day").last()).toHaveAttribute("data-day", "2026-11-09");
-  await expect(page.getByTestId("insights-hl")).toHaveCount(4);
+  // only the newest day is open; the others are folded until you open them
+  await expect(page.getByTestId("insights-hl-day-head").first()).toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByTestId("insights-hl-day-head").last()).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByTestId("insights-hl-day-list")).toHaveCount(1);
+  await expect(page.getByTestId("insights-hl")).toHaveCount(3);
   await expect(page.getByTestId("insights-hl-seen")).toHaveCount(1);
   await page.getByTestId("insights-hl-only-new").check();
-  await expect(page.getByTestId("insights-hl")).toHaveCount(3);
+  await expect(page.getByTestId("insights-hl")).toHaveCount(2);
   await page.getByTestId("insights-hl-only-new").uncheck();
+  await page.getByTestId("insights-hl-day-head").last().click();
+  await expect(page.getByTestId("insights-hl")).toHaveCount(4);
   // flat: each item once (the newest run's score), with the days it was on
   await page.getByTestId("insights-hl-view-flat").click();
   await expect(page.getByTestId("insights-hl")).toHaveCount(3);
