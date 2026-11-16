@@ -400,6 +400,12 @@ def main() -> None:
         {"File Information": "Highlights of pytorch/pytorch from 2026-11-08_02:05:02 to 2026-11-10_02:05:02"},
         {"title": "Inductor heuristic tuned for CUDA", "url": "https://github.com/pytorch/pytorch/pull/2", "xpu_relevance_score": 88,
          "xpu_relevance_justification": "may regress XPU", "body": "Changes tiling.", "submitter": "bob", "state": "open"}]))
+    (ins / "highlight" / "pytorch" / "pytorch" / "highlight_pytorch_pytorch_2026-11-11_02-05-02.json").write_text(_json.dumps([  # the next day's run (48 h window)
+        {"File Information": "Highlights of pytorch/pytorch from 2026-11-09_02:05:02 to 2026-11-11_02:05:02"},
+        {"title": "Inductor heuristic tuned for CUDA", "url": "https://github.com/pytorch/pytorch/pull/2", "xpu_relevance_score": 90,
+         "xpu_relevance_justification": "may regress XPU (more data)", "body": "Changes tiling.", "submitter": "bob", "state": "open"},
+        {"title": "XCCL all-gather", "url": "https://github.com/pytorch/pytorch/pull/3", "xpu_relevance_score": 95,
+         "xpu_relevance_justification": "XPU distributed", "body": "Adds it.", "submitter": "carol", "state": "open"}]))
     # PR Development: the fake editor and a small C++/Python source checkout to branch from
     from backend.app.config import DevSettings
 

@@ -3503,9 +3503,25 @@ test("Repo Insights: the history in the folder, a week's report (daily summaries
   await expect(page.getByTestId("insights-file-view")).toContainText("Old day");
   // XPU highlights of the history
   await page.getByTestId("insights-tab-highlights").click();
-  await page.getByTestId("insights-highlights").locator('input[type="date"]').first().fill("2026-11-08");
-  await expect(page.getByTestId("insights-hl")).toHaveCount(1);
-  await expect(page.getByTestId("insights-hl")).toContainText("Inductor heuristic tuned for CUDA");
+  await page.getByTestId("insights-hl-view-day").click();
+  await page.getByTestId("insights-hl-since").fill("2026-11-08");
+  // per day: each day's run, newest first; what an earlier day already had is marked (and can be hidden)
+  await expect(page.getByTestId("insights-hl-day")).toHaveCount(2);
+  await expect(page.getByTestId("insights-hl-day").first()).toHaveAttribute("data-day", "2026-11-10");
+  await expect(page.getByTestId("insights-hl-day").last()).toHaveAttribute("data-day", "2026-11-09");
+  await expect(page.getByTestId("insights-hl")).toHaveCount(3);
+  await expect(page.getByTestId("insights-hl-seen")).toHaveCount(1);
+  await page.getByTestId("insights-hl-only-new").check();
+  await expect(page.getByTestId("insights-hl")).toHaveCount(2);
+  await page.getByTestId("insights-hl-only-new").uncheck();
+  // flat: each item once (the newest run's score), with the days it was on
+  await page.getByTestId("insights-hl-view-flat").click();
+  await expect(page.getByTestId("insights-hl")).toHaveCount(2);
+  await expect(page.getByTestId("insights-hl").first()).toContainText("XCCL all-gather");
+  const inductor = page.getByTestId("insights-hl").filter({ hasText: "Inductor heuristic tuned for CUDA" });
+  await expect(inductor.getByTestId("insights-hl-days")).toContainText("on 2 days");
+  await expect(inductor.locator(".insights-score")).toHaveText("90");
+  await page.getByTestId("insights-hl-view-day").click();
   // a report of a custom week: the missing days are made from GitHub, the commits read, then the report
   await page.getByTestId("insights-period-custom").click();
   await page.getByTestId("insights-since").fill("2026-11-08");

@@ -357,41 +357,84 @@ function DailyList({ ov, openPath, onOpen, onRan }: { ov: Overview; openPath: st
   );
 }
 
+interface HlDay { day: string; files: { name: string; since: string; until: string }[]; items: (Highlight & { seen_before?: boolean })[] }
+
+function HlItem({ x, extra }: { x: Highlight & { seen_before?: boolean; days?: string[] }; extra?: React.ReactNode }) {
+  return (
+    <div className="insights-hl" data-testid="insights-hl" data-seen={x.seen_before ? "1" : "0"}>
+      <span className={`insights-score ${x.xpu_relevance_score >= 90 ? "crit" : x.xpu_relevance_score >= 75 ? "high" : ""}`}>{x.xpu_relevance_score < 0 ? "?" : x.xpu_relevance_score}</span>
+      <div className="insights-hl-main">
+        <a href={x.url} target="_blank" rel="noreferrer"><b>{x.title}</b></a>{extra}
+        <div className="small">{x.body}</div>
+        <details className="small muted"><summary>why</summary>{x.xpu_relevance_justification}</details>
+        <div className="muted small">{x.submitter} · {x.state}{x.vendor_involvement?.length ? ` · ${x.vendor_involvement.join(", ")}` : ""}</div>
+      </div>
+    </div>
+  );
+}
+
+/** XPU highlights of a period, two views: per day (each day's run; items an earlier day already had are marked and
+ * can be hidden), or flat (each item once, duplicates across days removed, with the days it was on). */
 function Highlights({ repo, onRan, enabled }: { repo: string; onRan: () => void; enabled: boolean }) {
   const [since, setSince] = useState(daysAgo(7));
   const [until, setUntil] = useState(todayIso());
   const [min, setMin] = useState(70);
-  const [items, setItems] = useState<Highlight[] | null>(null);
+  const [view, setView] = useState<"day" | "flat">(() => (localStorage.getItem("waw.insights.hlView") === "flat" ? "flat" : "day"));
+  useEffect(() => localStorage.setItem("waw.insights.hlView", view), [view]);
+  const [onlyNew, setOnlyNew] = useState(() => localStorage.getItem("waw.insights.hlOnlyNew") === "1");
+  useEffect(() => localStorage.setItem("waw.insights.hlOnlyNew", onlyNew ? "1" : "0"), [onlyNew]);
+  const [items, setItems] = useState<(Highlight & { days?: string[] })[] | null>(null);
+  const [days, setDays] = useState<HlDay[] | null>(null);
+  const [folded, setFolded] = useState<Set<string>>(new Set());
   const [err, setErr] = useState<string | null>(null);
   const load = useCallback(async () => {
+    setErr(null);
     try {
-      setItems((await get<{ items: Highlight[] }>(`/insights/repos/${repo}/highlights?since=${since}&until=${until}`)).items);
+      const q = `/insights/repos/${repo}/highlights?since=${since}&until=${until}&view=${view}`;
+      if (view === "day") setDays((await get<{ days: HlDay[] }>(q)).days);
+      else setItems((await get<{ items: Highlight[] }>(q)).items);
     } catch (e) {
       setErr((e as ApiError).message);
     }
-  }, [repo, since, until]);
+  }, [repo, since, until, view]);
   useEffect(() => { void load(); }, [load]);
-  const shown = useMemo(() => (items ?? []).filter((x) => x.xpu_relevance_score >= min || x.xpu_relevance_score < 0), [items, min]);
+  const keep = (x: Highlight) => x.xpu_relevance_score >= min || x.xpu_relevance_score < 0;
+  const shown = useMemo(() => (items ?? []).filter(keep), [items, min]); // eslint-disable-line react-hooks/exhaustive-deps
+  const dayList = useMemo(() => (days ?? []).map((d) => ({ ...d, shown: d.items.filter((x) => keep(x) && (!onlyNew || !x.seen_before)) })), [days, min, onlyNew]); // eslint-disable-line react-hooks/exhaustive-deps
+  const total = view === "day" ? dayList.reduce((n, d) => n + d.shown.length, 0) : shown.length;
   return (
     <div className="insights-report" data-testid="insights-highlights">
       <div className="row nowrap small">
-        <input type="date" value={since} onChange={(e) => setSince(e.target.value)} /> – <input type="date" value={until} onChange={(e) => setUntil(e.target.value)} />
+        <span className="mode-switch" role="tablist">
+          <button role="tab" aria-selected={view === "day"} className={view === "day" ? "active" : ""} onClick={() => setView("day")} data-testid="insights-hl-view-day">Per day</button>
+          <button role="tab" aria-selected={view === "flat"} className={view === "flat" ? "active" : ""} onClick={() => setView("flat")} data-testid="insights-hl-view-flat">All, no duplicates</button>
+        </span>
+        <input type="date" value={since} onChange={(e) => setSince(e.target.value)} data-testid="insights-hl-since" /> – <input type="date" value={until} onChange={(e) => setUntil(e.target.value)} data-testid="insights-hl-until" />
         score ≥ <input type="number" min={0} max={100} value={min} onChange={(e) => setMin(Number(e.target.value) || 0)} className="insights-num" data-testid="insights-hl-min" />
-        <span className="muted">{shown.length} of {items?.length ?? 0}</span>
+        {view === "day" && (
+          <label title="Hide the items an earlier day of the period already had (the daily runs' windows overlap)">
+            <input type="checkbox" checked={onlyNew} onChange={(e) => setOnlyNew(e.target.checked)} data-testid="insights-hl-only-new" /> only new each day
+          </label>
+        )}
+        <span className="muted" data-testid="insights-hl-count">{total} shown</span>
         <span className="spacer" />
         <button className="btn small" onClick={async () => { setErr(null); try { await post("/insights/run", { repo, kind: "highlights", since, until }); onRan(); } catch (e) { setErr((e as ApiError).message); } }}
           title={enabled ? "Score every issue and PR active in these days now" : "XPU highlights are off for this repository (⚙); you can still score now"} data-testid="insights-run-hl">Score now</button>
       </div>
       {err && <div className="error-text small">{err}</div>}
-      {shown.map((x) => (
-        <div key={x.url} className="insights-hl" data-testid="insights-hl">
-          <span className={`insights-score ${x.xpu_relevance_score >= 90 ? "crit" : x.xpu_relevance_score >= 75 ? "high" : ""}`}>{x.xpu_relevance_score < 0 ? "?" : x.xpu_relevance_score}</span>
-          <div className="insights-hl-main">
-            <a href={x.url} target="_blank" rel="noreferrer"><b>{x.title}</b></a>
-            <div className="small">{x.body}</div>
-            <details className="small muted"><summary>why</summary>{x.xpu_relevance_justification}</details>
-            <div className="muted small">{x.submitter} · {x.state}{x.vendor_involvement?.length ? ` · ${x.vendor_involvement.join(", ")}` : ""}</div>
-          </div>
+      {view === "flat" && shown.map((x) => (
+        <HlItem key={x.url} x={x} extra={x.days && x.days.length > 1 ? <span className="chip" title={`On ${x.days.join(", ")}`} data-testid="insights-hl-days"> on {x.days.length} days</span> : null} />
+      ))}
+      {view === "day" && dayList.length === 0 && days && <div className="muted small pad">No highlights in these days.</div>}
+      {view === "day" && dayList.map((d) => (
+        <div key={d.day} className="insights-hl-day" data-testid="insights-hl-day" data-day={d.day}>
+          <button className="insights-group-head" onClick={() => setFolded((f) => { const n = new Set(f); if (n.has(d.day)) n.delete(d.day); else n.add(d.day); return n; })}
+            aria-expanded={!folded.has(d.day)} title={d.files.map((f) => `${f.name}: ${f.since} – ${f.until}`).join("\n")}>
+            {folded.has(d.day) ? "▸" : "▾"} {d.day} <span className="muted">({d.shown.length}{d.shown.length !== d.items.length ? ` of ${d.items.length}` : ""}{(() => { const n = d.shown.filter((x) => x.seen_before).length; return n ? ` · ${n} seen before` : ""; })()})</span>
+          </button>
+          {!folded.has(d.day) && d.shown.map((x) => (
+            <HlItem key={x.url} x={x} extra={x.seen_before ? <span className="chip muted" title="An earlier day of this period already had it" data-testid="insights-hl-seen"> seen before</span> : null} />
+          ))}
         </div>
       ))}
     </div>

@@ -326,3 +326,24 @@ async def test_the_schedule_runs_one_repository_at_a_time_and_waits_for_quota(ru
     finally:
         L.buckets.clear()
         L.checked = 0.0
+
+
+async def test_highlights_per_day_and_flat_without_duplicates(running_app, tmp_path):
+    h, _, _ = await make(running_app, tmp_path, {})
+    hl = tmp_path / "insights" / "highlight" / "acme" / "proj"
+    hl.mkdir(parents=True)
+    item = lambda u, s: {"title": u, "url": u, "xpu_relevance_score": s, "xpu_relevance_justification": "j"}  # noqa: E731
+    (hl / "highlight_acme_proj_2026-11-10_02-05-02.json").write_text(json.dumps([
+        {"File Information": "Highlights of acme/proj from 2026-11-08_02:05:02 to 2026-11-10_02:05:02"}, item("a", 80), item("b", 40)]))
+    (hl / "highlight_acme_proj_2026-11-11_02-05-02.json").write_text(json.dumps([
+        {"File Information": "Highlights of acme/proj from 2026-11-09_02:05:02 to 2026-11-11_02:05:02"}, item("a", 85), item("c", 90)]))
+    (hl / "highlight_acme_proj_2026-11-12_23-00-00.json").write_text(json.dumps([  # an app run of one day
+        {"File Information": "Highlights of acme/proj from 2026-11-12_00:00:00 to 2026-11-12_23:59:59"}, item("c", 91)]))
+    base = "/api/v1/insights/repos/acme/proj/highlights"
+    days = (await h.api.get(base, params={"since": "2026-11-09", "until": "2026-11-12", "view": "day"})).json()["days"]
+    assert [d["day"] for d in days] == ["2026-11-12", "2026-11-10", "2026-11-09"]  # a run ending at 02:05 reports the day before
+    assert [(x["url"], x["seen_before"]) for x in days[1]["items"]] == [("c", False), ("a", True)]
+    assert [(x["url"], x["seen_before"]) for x in days[0]["items"]] == [("c", True)]
+    flat = (await h.api.get(base, params={"since": "2026-11-09", "until": "2026-11-12"})).json()["items"]
+    assert [(x["url"], x["xpu_relevance_score"], x["days"]) for x in flat] == [
+        ("c", 91, ["2026-11-12", "2026-11-10"]), ("a", 85, ["2026-11-10", "2026-11-09"]), ("b", 40, ["2026-11-09"])]

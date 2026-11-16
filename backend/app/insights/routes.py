@@ -88,9 +88,15 @@ def read_file(path: str = Query(..., max_length=4096), ctx: AppContext = Depends
 
 
 @router.get("/insights/repos/{owner}/{name}/highlights")
-def get_highlights(owner: str, name: str, since: str = Query(...), until: str = Query(...), ctx: AppContext = Depends(require_auth)):
+def get_highlights(owner: str, name: str, since: str = Query(...), until: str = Query(...), view: str = Query("flat", pattern="^(flat|day)$"),
+                   ctx: AppContext = Depends(require_auth)):
+    """XPU highlights of a period: `flat` — each item once (duplicates across days removed) with the days it was on;
+    `day` — per day, with the items an earlier day already had marked."""
     repo = _repo(owner, name)
-    return {"items": store.highlights(ctx, repo, _date(since), _date(until))}
+    since, until = _date(since), _date(until)
+    if view == "day":
+        return {"days": store.highlights_by_day(ctx, repo, since, until)}
+    return {"items": store.highlights(ctx, repo, since, until)}
 
 
 def _date(s: str) -> str:
