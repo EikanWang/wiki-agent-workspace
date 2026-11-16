@@ -473,6 +473,40 @@ test("Terminal activity: its own list of terminals (home or a chosen folder), th
   await page.getByTestId("activity-files").click();
 });
 
+test("terminal fits its box: no page scrollbar, so it does not re-fit (resize) over and over", async ({ browser }) => {
+  // the fit addon measures the host's border-box size: padding on the host made the terminal 8px too big, a page
+  // scrollbar came and went, and every change re-fit the terminal (it flickered and took no input)
+  const page = await browser.newPage({ viewport: { width: 2560, height: 1400 } });
+  const resizes: string[] = [];
+  page.on("websocket", (ws) => ws.on("framesent", (f) => { if (String(f.payload).includes('"resize"')) resizes.push(String(f.payload)); }));
+  await login(page);
+  await page.getByTestId("activity-terminal").click();
+  const n0 = await page.getByTestId("terminals-item").count();
+  await page.getByTestId("terminals-new").click();
+  await expect(page.getByTestId("terminals-item")).toHaveCount(n0 + 1);
+  const view = page.locator(".term-view.active");
+  await expect(view).toHaveAttribute("data-state", "connected", { timeout: 15000 });
+  await page.waitForTimeout(800);
+  resizes.length = 0;
+  await page.waitForTimeout(2000);
+  const r = await page.evaluate(() => {
+    const host = document.querySelector(".term-view.active .xterm-host")!.getBoundingClientRect();
+    const scr = document.querySelector(".term-view.active .xterm-screen")!.getBoundingClientRect();
+    const de = document.documentElement;
+    return { overflow: de.scrollHeight > innerHeight || de.scrollWidth > innerWidth, fits: scr.right <= host.right + 0.5 && scr.bottom <= host.bottom + 0.5 };
+  });
+  expect(r).toEqual({ overflow: false, fits: true });
+  expect(resizes).toEqual([]);
+  // leave no terminal behind for the next tests
+  const item = page.getByTestId("terminals-item").last();
+  await item.hover();
+  await item.getByTestId("terminals-close").click();
+  await page.getByTestId("confirm-ok").click();
+  await expect(page.getByTestId("terminals-item")).toHaveCount(n0);
+  await page.getByTestId("activity-files").click();
+  await page.close();
+});
+
 test("terminal on a Mac: ⌘← / ⌘→ move to the start / end of the input line like Home / End", async ({ browser }) => {
   const context = await browser.newContext();
   await context.addInitScript(() => Object.defineProperty(Navigator.prototype, "platform", { get: () => "MacIntel" }));
@@ -3514,21 +3548,27 @@ test("Repo Insights: the history in the folder, a week's report (daily summaries
   await page.getByTestId("insights-tab-highlights").click();
   await page.getByTestId("insights-hl-view-day").click();
   await page.getByTestId("insights-hl-since").fill("2026-11-08");
-  // per day: each day's run, newest first; what an earlier day already had is marked (and can be hidden)
-  await expect(page.getByTestId("insights-hl-day")).toHaveCount(2);
+  // the three tabs fill the list's width
+  const tabsBox = (await page.locator(".insights-list .insights-tabs").first().boundingBox())!;
+  const listBox = (await page.locator(".insights-list").boundingBox())!;
+  expect(Math.abs(tabsBox.width - listBox.width)).toBeLessThan(2);
+  // per day: the days are listed on the left like Daily (newest first), the chosen day's highlights on the right;
+  // what an earlier day already had is marked (and can be hidden)
+  await expect(page.locator(".insights-list").getByTestId("insights-hl-day")).toHaveCount(2);
   await expect(page.getByTestId("insights-hl-day").first()).toHaveAttribute("data-day", "2026-11-10");
   await expect(page.getByTestId("insights-hl-day").last()).toHaveAttribute("data-day", "2026-11-09");
-  // only the newest day is open; the others are folded until you open them
-  await expect(page.getByTestId("insights-hl-day-head").first()).toHaveAttribute("aria-expanded", "true");
-  await expect(page.getByTestId("insights-hl-day-head").last()).toHaveAttribute("aria-expanded", "false");
-  await expect(page.getByTestId("insights-hl-day-list")).toHaveCount(1);
+  // the newest day is shown first
+  await expect(page.getByTestId("insights-hl-day").first()).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByTestId("insights-hl-day").last()).toHaveAttribute("aria-selected", "false");
+  await expect(page.locator(".insights-main").getByTestId("insights-hl-day-list")).toHaveAttribute("data-day", "2026-11-10");
   await expect(page.getByTestId("insights-hl")).toHaveCount(3);
   await expect(page.getByTestId("insights-hl-seen")).toHaveCount(1);
   await page.getByTestId("insights-hl-only-new").check();
   await expect(page.getByTestId("insights-hl")).toHaveCount(2);
   await page.getByTestId("insights-hl-only-new").uncheck();
-  await page.getByTestId("insights-hl-day-head").last().click();
-  await expect(page.getByTestId("insights-hl")).toHaveCount(4);
+  await page.getByTestId("insights-hl-day").last().click();
+  await expect(page.getByTestId("insights-hl-day-list")).toHaveAttribute("data-day", "2026-11-09");
+  await expect(page.getByTestId("insights-hl")).toHaveCount(1);
   // flat: each item once (the newest run's score), with the days it was on
   await page.getByTestId("insights-hl-view-flat").click();
   await expect(page.getByTestId("insights-hl")).toHaveCount(3);
@@ -3537,8 +3577,8 @@ test("Repo Insights: the history in the folder, a week's report (daily summaries
   await expect(inductor.getByTestId("insights-hl-days")).toContainText("on 2 days");
   await expect(inductor.locator(".insights-score")).toHaveText("90");
   await page.getByTestId("insights-hl-view-day").click();
-  // each day's list scrolls on its own; without GitHub sign-in (no PR Review) the links go to GitHub
-  expect(await page.getByTestId("insights-hl-day-list").first().evaluate((e) => getComputedStyle(e).overflowY)).toBe("auto");
+  await page.getByTestId("insights-hl-day").first().click();
+  // without GitHub sign-in (no PR Review) the links go to GitHub
   await expect(page.getByTestId("insights-hl-open")).toHaveCount(0);
   await expect(page.getByTestId("insights-hl").first().locator('a[href^="https://github.com/"]').first()).toHaveAttribute("target", "_blank");
   // a report of a custom week: the missing days are made from GitHub, the commits read, then the report

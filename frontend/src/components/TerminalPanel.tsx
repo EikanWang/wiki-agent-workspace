@@ -577,10 +577,16 @@ export function TerminalView({ terminal, active, onState, onExited, onDismiss, f
       doFit();
       termRef.current?.focus();
     }, 30);
-    const ro = new ResizeObserver(doFit);
+    // one fit per frame, after layout settled (not inside the observer callback, which can feed back into itself)
+    let frame = 0;
+    const ro = new ResizeObserver(() => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(doFit);
+    });
     if (hostRef.current) ro.observe(hostRef.current);
     return () => {
       window.clearTimeout(id);
+      cancelAnimationFrame(frame);
       ro.disconnect();
     };
   }, [active]);
