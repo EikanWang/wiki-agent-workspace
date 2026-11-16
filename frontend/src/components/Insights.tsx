@@ -105,12 +105,14 @@ export function InsightsPanel({ active, onOpen }: { active: string | null; onOpe
 }
 
 /** Main page: a repository (reports, daily summaries, highlights) or the settings. */
-export default function InsightsView({ repo, onOpenChat }: { repo: string | null; onOpenChat: (ws: string, path: string) => void }) {
+type OpenPr = (repo: string, number: number, title?: string) => void;
+
+export default function InsightsView({ repo, onOpenChat, onOpenPrReview }: { repo: string | null; onOpenChat: (ws: string, path: string) => void; onOpenPrReview?: OpenPr }) {
   if (!repo) return <InsightsSettings />;
-  return <RepoPage key={repo} repo={repo} onOpenChat={onOpenChat} />;
+  return <RepoPage key={repo} repo={repo} onOpenChat={onOpenChat} onOpenPrReview={onOpenPrReview} />;
 }
 
-function RepoPage({ repo, onOpenChat }: { repo: string; onOpenChat: (ws: string, path: string) => void }) {
+function RepoPage({ repo, onOpenChat, onOpenPrReview }: { repo: string; onOpenChat: (ws: string, path: string) => void; onOpenPrReview?: OpenPr }) {
   const [ov, setOv] = useState<Overview | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [tab, setTab] = useState<"reports" | "daily" | "highlights">(() => (localStorage.getItem("waw.insights.tab") as "reports") || "reports");
@@ -160,7 +162,7 @@ function RepoPage({ repo, onOpenChat }: { repo: string; onOpenChat: (ws: string,
           {tab === "highlights" && <div className="muted small pad">Pick dates on the right.</div>}
         </div>
         <div className="insights-main">
-          {tab === "highlights" ? <Highlights repo={repo} onRan={load} enabled={ov.config.highlights} />
+          {tab === "highlights" ? <Highlights repo={repo} onRan={load} enabled={ov.config.highlights} onOpenPr={onOpenPrReview} />
             : open?.kind === "report" ? <ReportViewer repo={repo} id={open.id} onOpenChat={onOpenChat} onDeleted={() => { setOpen(null); void load(); }} />
             : open?.kind === "file" ? <FileViewer path={open.path} />
             : <div className="muted pad">Choose a report or a day.</div>}
@@ -359,12 +361,25 @@ function DailyList({ ov, openPath, onOpen, onRan }: { ov: Overview; openPath: st
 
 interface HlDay { day: string; files: { name: string; since: string; until: string }[]; items: (Highlight & { seen_before?: boolean })[] }
 
-function HlItem({ x, extra }: { x: Highlight & { seen_before?: boolean; days?: string[] }; extra?: React.ReactNode }) {
+/** owner/repo and number of a github.com pull request / issue link */
+function ghRef(url: string): [string, number, "pr" | "issue"] | null {
+  const m = /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/(pull|issues)\/(\d+)/.exec(url);
+  return m ? [m[1], Number(m[3]), m[2] === "pull" ? "pr" : "issue"] : null;
+}
+
+function HlItem({ x, extra, onOpenPr }: { x: Highlight & { seen_before?: boolean; days?: string[] }; extra?: React.ReactNode; onOpenPr?: OpenPr }) {
+  const ref = ghRef(x.url);
   return (
     <div className="insights-hl" data-testid="insights-hl" data-seen={x.seen_before ? "1" : "0"}>
       <span className={`insights-score ${x.xpu_relevance_score >= 90 ? "crit" : x.xpu_relevance_score >= 75 ? "high" : ""}`}>{x.xpu_relevance_score < 0 ? "?" : x.xpu_relevance_score}</span>
       <div className="insights-hl-main">
-        <a href={x.url} target="_blank" rel="noreferrer"><b>{x.title}</b></a>{extra}
+        {ref && onOpenPr ? (
+          <a href={x.url} onClick={(e) => { if (e.ctrlKey || e.metaKey || e.shiftKey || e.button !== 0) return; e.preventDefault(); onOpenPr(ref[0], ref[1], x.title); }}
+            title={`Open ${ref[0]}#${ref[1]} in PR Review (Ctrl/⌘-click: on GitHub)`} data-testid="insights-hl-open"><b>{x.title}</b></a>
+        ) : <a href={x.url} target="_blank" rel="noreferrer"><b>{x.title}</b></a>}
+        {ref && <span className="muted small"> {ref[2] === "pr" ? "PR" : "issue"} #{ref[1]}</span>}
+        {ref && onOpenPr && <a className="link-btn small" href={x.url} target="_blank" rel="noreferrer" title="Open on GitHub" data-testid="insights-hl-github"> ↗</a>}
+        {extra}
         <div className="small">{x.body}</div>
         <details className="small muted"><summary>why</summary>{x.xpu_relevance_justification}</details>
         <div className="muted small">{x.submitter} · {x.state}{x.vendor_involvement?.length ? ` · ${x.vendor_involvement.join(", ")}` : ""}</div>
@@ -375,7 +390,7 @@ function HlItem({ x, extra }: { x: Highlight & { seen_before?: boolean; days?: s
 
 /** XPU highlights of a period, two views: per day (each day's run; items an earlier day already had are marked and
  * can be hidden), or flat (each item once, duplicates across days removed, with the days it was on). */
-function Highlights({ repo, onRan, enabled }: { repo: string; onRan: () => void; enabled: boolean }) {
+function Highlights({ repo, onRan, enabled, onOpenPr }: { repo: string; onRan: () => void; enabled: boolean; onOpenPr?: OpenPr }) {
   const [since, setSince] = useState(daysAgo(7));
   const [until, setUntil] = useState(todayIso());
   const [min, setMin] = useState(70);
@@ -423,7 +438,7 @@ function Highlights({ repo, onRan, enabled }: { repo: string; onRan: () => void;
       </div>
       {err && <div className="error-text small">{err}</div>}
       {view === "flat" && shown.map((x) => (
-        <HlItem key={x.url} x={x} extra={x.days && x.days.length > 1 ? <span className="chip" title={`On ${x.days.join(", ")}`} data-testid="insights-hl-days"> on {x.days.length} days</span> : null} />
+        <HlItem key={x.url} x={x} onOpenPr={onOpenPr} extra={x.days && x.days.length > 1 ? <span className="chip" title={`On ${x.days.join(", ")}`} data-testid="insights-hl-days"> on {x.days.length} days</span> : null} />
       ))}
       {view === "day" && dayList.length === 0 && days && <div className="muted small pad">No highlights in these days.</div>}
       {view === "day" && dayList.map((d) => (
@@ -432,9 +447,9 @@ function Highlights({ repo, onRan, enabled }: { repo: string; onRan: () => void;
             aria-expanded={!folded.has(d.day)} title={d.files.map((f) => `${f.name}: ${f.since} – ${f.until}`).join("\n")}>
             {folded.has(d.day) ? "▸" : "▾"} {d.day} <span className="muted">({d.shown.length}{d.shown.length !== d.items.length ? ` of ${d.items.length}` : ""}{(() => { const n = d.shown.filter((x) => x.seen_before).length; return n ? ` · ${n} seen before` : ""; })()})</span>
           </button>
-          {!folded.has(d.day) && d.shown.map((x) => (
-            <HlItem key={x.url} x={x} extra={x.seen_before ? <span className="chip muted" title="An earlier day of this period already had it" data-testid="insights-hl-seen"> seen before</span> : null} />
-          ))}
+          {!folded.has(d.day) && <div className="insights-hl-day-list" data-testid="insights-hl-day-list">{d.shown.map((x) => (
+            <HlItem key={x.url} x={x} onOpenPr={onOpenPr} extra={x.seen_before ? <span className="chip muted" title="An earlier day of this period already had it" data-testid="insights-hl-seen"> seen before</span> : null} />
+          ))}</div>}
         </div>
       ))}
     </div>

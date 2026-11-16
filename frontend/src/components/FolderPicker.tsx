@@ -61,7 +61,7 @@ export default function FolderPicker({ title, hint, start, requireGit = false, c
   onClose: () => void;
 }) {
   const [path, setPath] = useState(start || "~");
-  const [typed, setTyped] = useState(start || "");
+  const [typed, setTyped] = useState(start || "");  // (empty at home: placeholder; Enter on it goes home)
   const [listing, setListing] = useState<DirListing | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [hidden, setHidden] = useState(false);
@@ -86,7 +86,9 @@ export default function FolderPicker({ title, hint, start, requireGit = false, c
       .then((l) => {
         if (!alive) return;
         setListing(l);
-        if (!edited.current && (asked.current || document.activeElement !== input.current)) setTyped(l.path);
+        // only a folder you went to (Go, Enter, a click) is written into the box — never the first listing, which can
+        // arrive while you type and would mix with it ("Selected:" and the breadcrumbs show where you are)
+        if (asked.current && !edited.current) setTyped(l.path);
         asked.current = false;
         setError(null);
       })

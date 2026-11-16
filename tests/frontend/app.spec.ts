@@ -2209,6 +2209,15 @@ test("GitHub PR tab: overview, files, choose the wiki once, ask about the PR and
   await expect(tab).toContainText("#101");
   await expect(page.getByTestId("pr-title")).toContainText("[xpu] Fix the lazy Level Zero stub");
   await expect(page.getByTestId("pr-description")).toContainText("This PR fixes the lazy stub.");
+  // Repo Insights: a highlight opens its PR here, in PR Review (Ctrl/⌘-click or ↗: on GitHub)
+  await page.getByTestId("activity-insights").click();
+  await page.locator('[data-testid="insights-repo"][data-repo="pytorch/pytorch"]').click();
+  await page.getByTestId("insights-tab-highlights").click();
+  await page.getByTestId("insights-hl-view-day").click();
+  await page.getByTestId("insights-hl-since").fill("2026-11-08");
+  await page.getByTestId("insights-hl-open").filter({ hasText: "Fix the lazy Level Zero stub" }).click();
+  await expect(page.getByTestId("pr-title")).toContainText("[xpu] Fix the lazy Level Zero stub");
+  await expect(page.getByTestId("reviews-panel")).toBeVisible();
   // copy the PR's link to share it: the link, the title and link, a Markdown link
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.getByTestId("pr-copy-link").click();
@@ -3509,19 +3518,23 @@ test("Repo Insights: the history in the folder, a week's report (daily summaries
   await expect(page.getByTestId("insights-hl-day")).toHaveCount(2);
   await expect(page.getByTestId("insights-hl-day").first()).toHaveAttribute("data-day", "2026-11-10");
   await expect(page.getByTestId("insights-hl-day").last()).toHaveAttribute("data-day", "2026-11-09");
-  await expect(page.getByTestId("insights-hl")).toHaveCount(3);
+  await expect(page.getByTestId("insights-hl")).toHaveCount(4);
   await expect(page.getByTestId("insights-hl-seen")).toHaveCount(1);
   await page.getByTestId("insights-hl-only-new").check();
-  await expect(page.getByTestId("insights-hl")).toHaveCount(2);
+  await expect(page.getByTestId("insights-hl")).toHaveCount(3);
   await page.getByTestId("insights-hl-only-new").uncheck();
   // flat: each item once (the newest run's score), with the days it was on
   await page.getByTestId("insights-hl-view-flat").click();
-  await expect(page.getByTestId("insights-hl")).toHaveCount(2);
+  await expect(page.getByTestId("insights-hl")).toHaveCount(3);
   await expect(page.getByTestId("insights-hl").first()).toContainText("XCCL all-gather");
   const inductor = page.getByTestId("insights-hl").filter({ hasText: "Inductor heuristic tuned for CUDA" });
   await expect(inductor.getByTestId("insights-hl-days")).toContainText("on 2 days");
   await expect(inductor.locator(".insights-score")).toHaveText("90");
   await page.getByTestId("insights-hl-view-day").click();
+  // each day's list scrolls on its own; without GitHub sign-in (no PR Review) the links go to GitHub
+  expect(await page.getByTestId("insights-hl-day-list").first().evaluate((e) => getComputedStyle(e).overflowY)).toBe("auto");
+  await expect(page.getByTestId("insights-hl-open")).toHaveCount(0);
+  await expect(page.getByTestId("insights-hl").first().locator('a[href^="https://github.com/"]').first()).toHaveAttribute("target", "_blank");
   // a report of a custom week: the missing days are made from GitHub, the commits read, then the report
   await page.getByTestId("insights-period-custom").click();
   await page.getByTestId("insights-since").fill("2026-11-08");

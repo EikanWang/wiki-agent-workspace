@@ -405,7 +405,9 @@ def main() -> None:
         {"title": "Inductor heuristic tuned for CUDA", "url": "https://github.com/pytorch/pytorch/pull/2", "xpu_relevance_score": 90,
          "xpu_relevance_justification": "may regress XPU (more data)", "body": "Changes tiling.", "submitter": "bob", "state": "open"},
         {"title": "XCCL all-gather", "url": "https://github.com/pytorch/pytorch/pull/3", "xpu_relevance_score": 95,
-         "xpu_relevance_justification": "XPU distributed", "body": "Adds it.", "submitter": "carol", "state": "open"}]))
+         "xpu_relevance_justification": "XPU distributed", "body": "Adds it.", "submitter": "carol", "state": "open"},
+        {"title": "[xpu] Fix the lazy Level Zero stub", "url": "https://github.com/pytorch/pytorch/pull/101", "xpu_relevance_score": 80,
+         "xpu_relevance_justification": "XPU runtime", "body": "Fixes the stub.", "submitter": "alice", "state": "open"}]))
     # PR Development: the fake editor and a small C++/Python source checkout to branch from
     from backend.app.config import DevSettings
 
