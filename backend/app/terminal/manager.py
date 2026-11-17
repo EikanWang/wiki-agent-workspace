@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.websockets import WebSocketState
 
 from ..db import Database, iso
@@ -206,6 +206,7 @@ class TerminalManager:
 class TerminalCreateIn(BaseModel):
     cwd: str | None = None
     label: str | None = None
+    machine: str | None = Field(None, max_length=63)  # a machine of the Machines view (an ssh login); default: this server
 
 
 class TerminalUpdateIn(BaseModel):
@@ -225,8 +226,12 @@ def list_terminals(ctx: AppContext = Depends(require_auth)):
 
 
 @router.post("/terminals", status_code=201)
-def create_terminal(body: TerminalCreateIn, ctx: AppContext = Depends(require_auth_mutating)):
-    return _mgr(ctx).create(body.cwd, body.label)
+async def create_terminal(body: TerminalCreateIn, ctx: AppContext = Depends(require_auth_mutating)):
+    if body.machine and body.machine != "local":
+        from ..machines.routes import open_terminal
+
+        return await open_terminal(ctx, body.machine, body.cwd, body.label)
+    return await asyncio.to_thread(_mgr(ctx).create, body.cwd, body.label)
 
 
 @router.patch("/terminals/{tid}")

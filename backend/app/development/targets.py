@@ -1,4 +1,4 @@
-"""Where a development workspace runs: the app server itself, or an SSH host ([[development.hosts]]).
+"""Where a development workspace runs: the app server itself, or a machine reached over SSH (machines.registry).
 
 Everything that touches the worktree — git, the editor (code-server), builds/tests and agent turns — goes through a
 Target so it runs next to the files: on the server for `local`, through `ssh <host> sh -c '<script>'` otherwise.
@@ -18,6 +18,7 @@ from pathlib import Path
 from ..config import DevHost, DevSettings
 
 LOCAL = "local"
+_HOMES: dict[str, str] = {}  # $HOME per host (asked once per process)
 
 
 class TargetError(Exception):
@@ -125,15 +126,21 @@ class LocalTarget(Target):
 class SshTarget(Target):
     is_local = False
 
-    def __init__(self, host: DevHost, ssh_bin: str = "ssh"):
+    def __init__(self, host: DevHost, ssh_bin: str = "ssh", dev: DevSettings | None = None, via: list[DevHost] | None = None):
         self.host = host
         self.name = host.name
         self.ssh_bin = ssh_bin
-        self._home: str | None = None
+        self.dev = dev if dev is not None else DevSettings(ssh=ssh_bin)
+        self.via = via  # None: the host's own bastion chain
+        self._home: str | None = _HOMES.get(self._home_key())
+
+    def _home_key(self) -> str:
+        return f"{self.ssh_bin}|{self.host.name}|{self.host.ssh}|{self.host.port}|{self.host.user}"
 
     def ssh_prefix(self, opts: list[str] | None = None) -> list[str]:
-        return [self.ssh_bin, "-o", "BatchMode=yes", "-o", "ServerAliveInterval=30", "-o", "ConnectTimeout=20",
-                *self.host.ssh_args, *(opts or []), "--", self.host.ssh]
+        from ..machines.conn import ssh_argv
+
+        return ssh_argv(self.dev, self.host, opts, via=self.via)
 
     def spawn_argv(self, args, cwd, env, ssh_opts=None):
         script = ""
@@ -157,7 +164,7 @@ class SshTarget(Target):
                 rc, out, err = await self.run(["sh", "-c", 'printf %s "$HOME"'], timeout=30)
                 if rc != 0 or not out.startswith("/"):
                     raise TargetError(f"cannot read $HOME on {self.name}: {err.strip()[:200]}")
-                self._home = out.strip()
+                self._home = _HOMES[self._home_key()] = out.strip()
             path = self._home + path[1:]
         if not path.startswith("/"):
             raise TargetError(f"give an absolute path on {self.name}", "INVALID_PATH")
@@ -178,6 +185,6 @@ def target_for(dev: DevSettings, host: str | None) -> Target:
     if not host or host == LOCAL:
         return LocalTarget()
     h = dev.host(host)
-    if h is None:
-        raise TargetError(f"unknown development host {host!r}; configure it under [[development.hosts]]", "DEV_HOST_UNKNOWN")
-    return SshTarget(h, dev.ssh)
+    if h is None or h.kind == "bastion":
+        raise TargetError(f"unknown machine {host!r}; add it in the Machines view or under [[development.hosts]]", "DEV_HOST_UNKNOWN")
+    return SshTarget(h, dev.ssh, dev)

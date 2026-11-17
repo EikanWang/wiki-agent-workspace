@@ -131,6 +131,106 @@ export interface TerminalInfo {
   tmux_session: string;
 }
 
+export interface MachineHop {
+  name: string;
+  kind: string;
+  ssh: string | null;
+  ok: boolean;
+  status: string;
+  message: string | null;
+  error?: string;
+  ms: number;
+}
+
+export interface MachineCheck {
+  ok: boolean;
+  status: string;
+  failed_at: string | null;
+  summary: string;
+  hops: MachineHop[];
+  checked_at: string;
+}
+
+export interface MachineGpu {
+  vendor: string;
+  index: number | null;
+  name: string | null;
+  uuid: string | null;
+  pci: string;
+  driver: string | null;
+  memory: string | null;
+  source: string;
+}
+
+export interface MachineTool { path: string | null; version: string | null; ok: boolean; required: boolean; for: string }
+
+export interface MachineCaps {
+  os: { kernel: string | null; release: string | null; arch: string | null; hostname: string | null; pretty: string | null };
+  cpu: { model: string | null; threads: number | null; sockets: number | null; cores_per_socket: number | null; threads_per_core: number | null; numa_nodes: number | null };
+  memory_kb: number | null;
+  disk: { path: string | null; total_kb: number | null; free_kb: number | null };
+  home: string | null;
+  shell: string | null;
+  sudo: "passwordless" | "password" | "none";
+  package_manager: string | null;
+  gnu_find: boolean;
+  tools: Record<string, MachineTool>;
+  gpus: MachineGpu[];
+  missing_required: string[];
+  complete: boolean;
+  work_dir?: string;
+  error?: string;
+}
+
+export interface MachineInfo {
+  name: string;
+  kind: "machine" | "bastion";
+  source: "server" | "config" | "ui";
+  editable: boolean;
+  shadowed?: boolean;
+  label?: string;
+  ssh: string | null;
+  port?: number | null;
+  user?: string | null;
+  identity_file?: string | null;
+  via: string[];
+  options?: Record<string, string>;
+  ssh_args?: string[];
+  work_dir?: string;
+  code_server?: string;
+  opencode?: string;
+  codex?: string;
+  strict_host_keys?: boolean;
+  status: string;
+  check?: MachineCheck | null;
+  checked_at?: string | null;
+  capabilities: MachineCaps | null;
+  probed_at: string | null;
+  ssh_command?: string | null;
+  used_by: { workspaces: string[]; machines: string[] };
+}
+
+export interface HostKeyHop {
+  name: string;
+  hostname?: string;
+  port?: number;
+  known_name?: string;
+  scanned?: string;
+  status: "trusted" | "changed" | "unknown" | "scan_failed";
+  keys: { type: string; fingerprint: string; state: "trusted" | "changed" | "new"; files: string[] }[];
+  can_trust: boolean;
+  error?: string;
+}
+
+export interface SshKeyInfo {
+  public_key_file: string;
+  identity_file: string | null;
+  type: string;
+  fingerprint: string;
+  comment: string;
+  public_key: string;
+}
+
 export interface WorkspaceInfo {
   id: string;
   name: string;
@@ -391,7 +491,7 @@ export function subscribeJob(jobId: string, after: number, onEvent: (ev: JobEven
 const globalListeners = new Set<(ev: Record<string, any>) => void>();
 let globalSource: EventSource | null = null;
 const GLOBAL_TYPES = ["github_cache", "file_changed", "tree_changed", "job_event", "terminal_state", "preview_update", "watcher_ready", "workspaces_changed",
-  "review_finished", "commit", "dev_changed", "dev_task", "message"];
+  "review_finished", "commit", "dev_changed", "dev_task", "machine_changed", "message"];
 
 export function subscribeGlobal(onEvent: (ev: Record<string, any>) => void): () => void {
   globalListeners.add(onEvent);

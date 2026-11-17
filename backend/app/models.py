@@ -474,4 +474,32 @@ class DevTaskRun(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class Machine(Base):
+    """A machine (or a bastion it is reached through) the app works on over SSH. Hosts of the config file
+    (`source = config`) are mirrored here at startup for their status and probe results; those added in the Machines
+    view (`source = ui`) are defined here."""
+
+    __tablename__ = "machines"
+    name: Mapped[str] = mapped_column(Text, primary_key=True)
+    kind: Mapped[str] = mapped_column(String(8), nullable=False, default="machine")  # machine | bastion
+    source: Mapped[str] = mapped_column(String(8), nullable=False, default="ui")  # ui | config
+    ssh: Mapped[str] = mapped_column(Text, nullable=False)  # destination: host, user@host or a ~/.ssh/config alias
+    port: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    user: Mapped[str | None] = mapped_column(Text, nullable=True)
+    identity_file: Mapped[str | None] = mapped_column(Text, nullable=True)
+    via_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")  # bastion names, first hop first
+    options_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")  # allowlisted ssh -o options
+    work_dir: Mapped[str] = mapped_column(Text, nullable=False, default="~/.cache/wiki-agent-workspace")
+    code_server: Mapped[str] = mapped_column(Text, nullable=False, default="code-server")
+    opencode: Mapped[str] = mapped_column(Text, nullable=False, default="opencode")
+    codex: Mapped[str] = mapped_column(Text, nullable=False, default="codex")
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="unknown")  # unknown | online | a failure code
+    status_detail: Mapped[str | None] = mapped_column(Text, nullable=True)  # the last check's hops (JSON)
+    checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    capabilities_json: Mapped[str | None] = mapped_column(Text, nullable=True)  # the last probe (OS, CPU, GPUs, tools, sudo)
+    probed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
 Index("ix_messages_job", Message.job_id)

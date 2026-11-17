@@ -2,11 +2,17 @@
 """Fake `ssh` for tests: runs the remote command locally (the "host" is this machine).
 
 Options are parsed like OpenSSH's; `-L <local socket>:<remote socket>` becomes a symlink (connecting to a symlink of
-a Unix socket reaches the socket), `-R` is recorded only. Destination "unreachable…" fails with exit 255.
-Calls are logged to $FAKE_AGENT_STATE/ssh_calls.log.
+a Unix socket reaches the socket), `-R` is recorded only. Calls are logged to $FAKE_AGENT_STATE/ssh_calls.log.
+
+Like OpenSSH: `-G` prints the resolved configuration, `-O <cmd>` talks to a (non-existent) master and succeeds, `-W`
+(a bastion hop of a ProxyCommand) only connects, and `-o ProxyCommand=…` is run first (with %h %p %r %% expanded) —
+when it fails, so does the connection. Destinations whose host part starts with these words fail with exit 255:
+unreachable (connection refused), authfail (permission denied), badkey (host key verification failed), nodns
+(cannot resolve). A destination in $FAKE_AGENT_STATE/ssh_down (one per line) is unreachable too.
 """
 import json
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -14,6 +20,26 @@ from pathlib import Path
 STATE = Path(os.environ.get("FAKE_AGENT_STATE", "/tmp/fake-agent-state"))
 STATE.mkdir(parents=True, exist_ok=True)
 WITH_VALUE = set("bcDEeFIiJLlmOoPpQRSWw")
+FAILURES = {
+    "unreachable": "ssh: connect to host {h} port {p}: Connection refused",
+    "authfail": "{u}@{h}: Permission denied (publickey).",
+    "badkey": "No ED25519 host key is known for {h} and you have requested strict checking.\nHost key verification failed.",
+    "nodns": "ssh: Could not resolve hostname {h}: Name or service not known",
+}
+
+
+def expand(cmd, host, port, user):
+    out, i = [], 0
+    while i < len(cmd):
+        c = cmd[i]
+        if c == "%" and i + 1 < len(cmd):
+            n = cmd[i + 1]
+            out.append({"%": "%", "h": host, "p": str(port), "r": user, "n": host}.get(n, "%" + n))
+            i += 2
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
 
 
 def main(argv):
@@ -21,6 +47,8 @@ def main(argv):
         fh.write(json.dumps(argv) + "\n")
     i = 0
     forwards = []
+    opts = {}
+    flags = {}
     while i < len(argv):
         a = argv[i]
         if a == "--":
@@ -32,16 +60,44 @@ def main(argv):
                 val = a[2:] if len(a) > 2 else argv[i + 1]
                 if letter == "L":
                     forwards.append(val)
+                elif letter == "o":
+                    k, _, v = val.partition("=")
+                    opts.setdefault(k.lower(), v)
+                else:
+                    flags[letter] = val
                 i += 1 if len(a) > 2 else 2
                 continue
+            flags[letter] = True
             i += 1
             continue
         break
     dest = argv[i]
     cmd = " ".join(argv[i + 1:])
-    if dest.startswith("unreachable"):
-        print(f"ssh: connect to host {dest}: Connection refused", file=sys.stderr)
-        return 255
+    user, _, host = dest.rpartition("@")
+    user = flags.get("l") or user or os.environ.get("USER", "me")
+    port = int(flags.get("p") or 22)
+    if flags.get("G"):
+        print(f"user {user}\nhostname {host}\nport {port}")
+        for k, v in opts.items():
+            print(f"{k} {v}")
+        return 0
+    if "O" in flags:
+        return 0
+    down = (STATE / "ssh_down").read_text().split() if (STATE / "ssh_down").exists() else []
+    for word, msg in FAILURES.items():
+        if host.startswith(word) or (word == "unreachable" and (dest in down or host in down)):
+            print(msg.format(h=host, p=port, u=user), file=sys.stderr)
+            return 255
+    pc = opts.get("proxycommand")
+    if pc and pc.lower() != "none":
+        r = subprocess.run(["sh", "-c", expand(pc, host, port, user)], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.PIPE, text=True)
+        if r.returncode != 0:
+            sys.stderr.write(r.stderr)
+            print("kex_exchange_identification: Connection closed by remote host", file=sys.stderr)
+            return 255
+    if "W" in flags:
+        return 0
     for fw in forwards:
         local, remote = fw.split(":", 1)
         if os.path.lexists(local):

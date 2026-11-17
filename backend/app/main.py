@@ -214,6 +214,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from .social_login import apply_saved
 
     apply_saved(settings)  # keys from the one-click "Continue with GitHub" setup
+    from .machines.registry import MachineRegistry
+
+    ctx.extra["machines"] = MachineRegistry(ctx)  # the app's own machines join [[development.hosts]] (DevSettings.host)
+    ctx.extra["machines"].load()
     from .development.editor import EditorManager
     from .development.tasks import TaskRunner
 
@@ -300,6 +304,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     api.include_router(dev_routes.router)
     api.include_router(dev_lsp.router)
+    from .machines import routes as machine_routes
+
+    api.include_router(machine_routes.router)
     from . import skills as skills_mod
 
     api.include_router(skills_mod.router)

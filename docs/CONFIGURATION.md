@@ -220,9 +220,21 @@ a turn, or from the workspace settings). OpenCode must be in `mode = "cli"` for 
 | --- | --- | --- |
 | `name` | — (required) | Shown in the app (letters, digits, `-_.`). |
 | `ssh` | — (required) | Destination: `me@build-box` or a `~/.ssh/config` alias. |
-| `ssh_args` | `[]` | Extra ssh options, e.g. `["-p", "2222"]`. |
+| `kind` | `"machine"` | `machine`, or `bastion`: a jump host other hosts are reached through (not offered for work itself). |
+| `via` | `[]` | Bastions (their `name`s, `kind = "bastion"`) the host is reached through, first hop first, e.g. `["corp-jump", "lab-jump"]`. |
+| `port` | `22` (or `~/.ssh/config`) | SSH port. |
+| `user` | from `ssh` / `~/.ssh/config` | Login name. |
+| `identity_file` | ssh's default keys | Private key on this server to log in with. |
+| `ssh_args` | `[]` | Extra ssh options, e.g. `["-o", "Compression=yes"]`. |
 | `work_dir` | `~/.cache/wiki-agent-workspace` | Remote folder for worktrees, editor profile, sockets and wiki snapshots. |
 | `code_server`, `opencode`, `codex` | names on the remote PATH | Executables on the host. |
+
+Hosts can also be added in the app (Machines view); those are stored in the database and listed together with the
+ones here (which are shown read-only there; on a name clash the config file wins). Commands to a host share one
+connection (OpenSSH `ControlMaster`, sockets under `<state_dir>/ssh/cm`, open for 10 minutes after the last use), and
+each bastion of a `via` chain keeps its own. Hosts of the config file keep your own ssh host-key settings; machines
+added in the app accept only host keys confirmed in the app (stored in `<state_dir>/ssh/known_hosts`, checked after
+`~/.ssh/known_hosts`).
 
 ### `[development.completion]` — AI inline completion (optional)
 
@@ -242,8 +254,17 @@ endpoint (the agent CLIs are too slow for keystrokes). Off until `base_url` and 
 # code_server = "/opt/code-server/bin/code-server"
 
 [[development.hosts]]
+name = "corp-jump"
+kind = "bastion"
+ssh = "jump.example.com"
+
+[[development.hosts]]
 name = "gpu-box"
 ssh = "me@gpu-box"
+via = ["corp-jump"]
+port = 22
+user = "me"
+identity_file = "~/.ssh/id_ed25519"
 work_dir = "~/.cache/wiki-agent-workspace"
 
 [development.completion]

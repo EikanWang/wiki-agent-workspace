@@ -436,7 +436,7 @@ stub lives in `snapshots/dev/<id>.md`.
 | --- | --- | --- |
 | `id` | TEXT, PK | UUID. |
 | `name` | TEXT | Display name (branch, or `#<n> <PR title>`). |
-| `host` | TEXT | `local`, or the name of a `[[development.hosts]]` entry. |
+| `host` | TEXT | `local`, or the name of a machine (`machines.name`: the Machines view or `[[development.hosts]]`). |
 | `source_repo` | TEXT | The checkout (top level) the worktree was added to, on the host. |
 | `worktree_path` | TEXT | The worktree, on the host (empty while `creating`). |
 | `mode` | TEXT | `branch` (new work) or `pr` (an existing pull request). |
@@ -465,6 +465,33 @@ stub lives in `snapshots/dev/<id>.md`.
 | `exit_code` | INTEGER, nullable | Exit status. |
 | `log_path` | TEXT | Output (stdout and stderr) in `<state_dir>/dev/logs/<id>.log`. |
 | `started_at`, `finished_at` | DATETIME | Timestamps. |
+
+## `machines` — SSH machines and bastions (Machines view)
+
+One per host the app can reach over SSH. Hosts of `[[development.hosts]]` (`source = config`) are mirrored here at
+startup — their definition stays in the config file, the row keeps their last check and probe; machines added in the
+Machines view (`source = ui`) are defined here. When both have the same name the config file wins. "This server"
+(`local`) has no row; its last probe is the `machine_local` key of `kv_settings`.
+
+| Column | Type | Meaning |
+| --- | --- | --- |
+| `name` | TEXT, PK | Name shown in the app and stored in `dev_workspaces.host` (cannot change). |
+| `kind` | TEXT | `machine` (work runs there) or `bastion` (a jump host other hosts are reached through). |
+| `source` | TEXT | `ui` (added in the app) or `config` (`[[development.hosts]]`, read-only in the app). |
+| `ssh` | TEXT | Destination: a host name, `user@host` or a `~/.ssh/config` alias. |
+| `port` | INTEGER, nullable | SSH port (`-p`). |
+| `user` | TEXT, nullable | Login name (`-l`). |
+| `identity_file` | TEXT, nullable | Private key on this server (`-i`, with `IdentitiesOnly=yes`). |
+| `via_json` | TEXT (JSON) | Bastion names the host is reached through, first hop first (empty for bastions). |
+| `options_json` | TEXT (JSON) | Extra `ssh -o` options from the allowlist (`ui` machines only). |
+| `work_dir` | TEXT | Folder on the machine for worktrees, the editor profile, sockets and wiki snapshots. |
+| `code_server`, `opencode`, `codex` | TEXT | Executables on the machine. |
+| `status` | TEXT | Last check: `unknown`, `online`, or why it failed (`auth_failed`, `hostkey_unknown`, `hostkey_changed`, `dns`, `timeout`, `refused`, `unreachable`, `shell_failed`, `unknown_bastion`, `failed`). |
+| `status_detail` | TEXT (JSON), nullable | The last check, hop by hop (status, message, time). |
+| `checked_at` | DATETIME, nullable | When it was checked. |
+| `capabilities_json` | TEXT (JSON), nullable | The last probe: OS, CPU, memory, free disk, GPUs, sudo, package manager, tools and versions. |
+| `probed_at` | DATETIME, nullable | When it was probed. |
+| `created_at`, `updated_at` | DATETIME | Timestamps. |
 
 ## `alembic_version`
 

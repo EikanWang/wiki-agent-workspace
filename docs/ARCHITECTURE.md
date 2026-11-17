@@ -113,7 +113,7 @@ backend/app/
                    commit (filter=latest, paginated), failing GitHub Actions jobs' logs via actions/jobs/{id}/logs
                    saved to snapshots/github/<o>/<r>/<n>.ci/, excerpt = output before the ##[error] marks
   development/     PR Development (DESIGN: agent-native development workspaces)
-    targets.py     where a workspace runs: LocalTarget, SshTarget (`ssh … sh -c '<shlex-quoted script>'`), RemoteExec
+    targets.py     where a workspace runs: LocalTarget, SshTarget (machines.conn argv + `sh -c '<shlex-quoted script>'`), RemoteExec
                    (agent CLI turns on the host: SubprocessTurn wraps the argv)
     service.py     DevService: worktrees (new branch: `worktree add -b`; PR: fetch `pull/<n>/head` → refs/waw/pr/<n>,
                    branch waw/pr-<n>, push target = the PR head branch / fork), detected C++/Python settings, git
@@ -137,6 +137,19 @@ backend/app/
     completion.py  AI inline completion via an OpenAI-compatible /chat/completions endpoint (cached, cleaned)
     routes.py      /dev/… API (also: code-anchored discussions → thread target_json {kind: "code"}, skills, worktree
                    terminals: tmux sessions, `ssh -tt` login on SSH hosts, ids in kv dev_terminals:<id>); /dev/ext/<id>/… for the extension (Bearer token handed to its editor process)
+  machines/        Machines: SSH hosts worked on like the server itself, and the bastions they are reached through
+    conn.py        ssh argv per host: allowlisted options, ControlMaster per hop (<state_dir>/ssh/cm, short-path
+                   fallback in the temp dir; ControlPath=none for -L/-R/-D/-W), bastion chains as nested app-built
+                   ProxyCommand `ssh … -W %h:%p` (% escaped per level), strict host keys from <state_dir>/ssh/known_hosts
+    registry.py    MachineRegistry: `machines` table (config hosts mirrored, `ui` ones defined there) → DevSettings.ui_hosts
+                   (DevSettings.host() merges both, config wins), validation, in-use checks, machine_changed events
+    health.py      hop-by-hop check (each bastion, then the machine through them), ssh errors classified
+    hostkeys.py    `ssh -G` resolve, ssh-keyscan (from the last bastion when behind one), SHA256 fingerprints, trust
+                   into the app's known_hosts after a re-scan
+    probe.py       one sh script on stdin: OS, CPU, memory, disk, sudo, package manager, tools, GPUs (nvidia-smi,
+                   xpu-smi, rocm-smi, lspci)
+    keys.py        ~/.ssh keys (list, ed25519 generation), ssh-copy-id in an app terminal (password typed there only)
+    routes.py      /machines…, /ssh-keys; terminals on a machine (also POST /terminals {machine})
   skills.py        skills of the connected folders and projects (SKILL.md under .opencode/.claude/.agents/.codex
                    skills): discovered per turn by JobManager (open folders + `_skill_folders` of the request), added to
                    OpenCode's config (OPENCODE_CONFIG_CONTENT skills.paths) and listed in every prompt

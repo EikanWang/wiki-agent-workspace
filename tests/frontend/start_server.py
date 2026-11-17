@@ -412,7 +412,9 @@ def main() -> None:
     # PR Development: the fake editor and a small C++/Python source checkout to branch from
     from backend.app.config import DevSettings
 
-    settings.development = DevSettings(code_server=str(ROOT / "tests" / "fakes" / "fake-code-server"), worktrees_dir=tmp / "worktrees")
+    settings.development = DevSettings(code_server=str(ROOT / "tests" / "fakes" / "fake-code-server"), worktrees_dir=tmp / "worktrees",
+                                       ssh=str(ROOT / "tests" / "fakes" / "fake-ssh"), ssh_keyscan=str(ROOT / "tests" / "fakes" / "fake-ssh-keyscan"),
+                                       ssh_copy_id=str(ROOT / "tests" / "fakes" / "fake-ssh-copy-id"))
     src = tmp / "devsrc"
     src.mkdir()
     for args in (["init", "-q", "-b", "main"], ["config", "user.email", "e2e@example.com"], ["config", "user.name", "E2E"]):

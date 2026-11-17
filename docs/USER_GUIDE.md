@@ -394,7 +394,7 @@ write code with the agent — a new pull request, or changes to an existing one.
 
 **+** (or *New development workspace*) asks:
 
-- **Runs on** — this server, or an SSH host from `[[development.hosts]]` (editor, agent, builds and tests then run
+- **Runs on** — this server, or a machine of the **Machines** view (editor, agent, builds and tests then run
   there; the wiki is copied there read-only).
 - **Work on** — *New branch* (name, optional base, the GitHub repository for the PR — detected from `origin`) or an
   *Existing pull request* (`owner/repo#123` or its URL; its head is fetched and checked out on the local branch
@@ -560,6 +560,38 @@ reference wiki, and for a PR tab the PR's connected local checkout. Skills are t
 
 **⋯ → Archive** stops the editor and hides the workspace; you may also remove its worktree (refused while it has
 uncommitted or unpushed work).
+
+## Machines
+
+The **Machines** icon of the activity bar lists the computers the app works on: **This server**, and SSH machines —
+those of `[[development.hosts]]` in the config file (shown read-only) and those added here. A machine can be used
+wherever this server can: as the place a development workspace runs, or for a terminal (**Terminal → + ▾ → on a
+machine**).
+
+- **Add machine** — a name, the SSH destination (`host`, `user@host` or an alias of your `~/.ssh/config`), and
+  optionally port, user, key, the bastions it is reached through, and extra ssh options (only harmless ones are
+  accepted: nothing that runs a local command or changes how host keys are checked). **Resolve** shows what ssh makes
+  of the destination (host name, port, user, a `ProxyJump` of your ssh config).
+- **Bastions** (jump hosts) are added like machines with *kind: bastion*. A machine *via* one or more bastions is
+  reached through them in order; each bastion keeps one shared login, so many machines behind it cost one connection.
+- **Check** tries each hop of the path in order and says where it broke and why: not reachable, login refused,
+  host key unknown or changed, name does not resolve, timeout.
+- **Host keys** — machines added here accept only host keys you confirmed (stored in the app's own known_hosts,
+  your `~/.ssh/known_hosts` counts too). **Host keys** shows each hop's fingerprint (a machine behind a bastion is
+  scanned from that bastion); compare it with the one your administrator gives you before **Trust**. A changed key
+  is shown in red — only trust it if you know why it changed. Hosts of the config file keep your own ssh settings:
+  log in once with `ssh` in a terminal to accept their key.
+- **Install key** — the first login usually needs a password: the app opens a terminal running `ssh-copy-id` with
+  this server's public key (create one with **Create key** if there is none). Type the password there — the app
+  never sees it. Then **Check** again. Bastions on the path get the same button.
+- **Probe** reports what the machine has: OS, CPU, memory, free disk in its work folder, GPUs (NVIDIA, Intel, AMD),
+  password-less sudo, the package manager, and the tools the app and builds use (git, tmux, code-server, opencode,
+  codex, python3, cmake…), with what each missing one is needed for.
+- Commands to a machine share one SSH connection (kept 10 minutes after the last use), so browsing files or running
+  `git status` there does not log in again each time. Editing a machine closes its shared connection.
+
+A machine cannot be renamed (workspaces refer to it by name) or removed while a workspace runs on it or another
+machine is reached through it.
 
 ## Agents (monitor)
 
@@ -770,7 +802,8 @@ history** shows the server-side scrollback. Tabs whose shell exited show *(exite
 **Clear exited**; closing a live terminal asks first. **Close terminal** ends the tmux session: its shell and
 programs get SIGHUP (as when an SSH connection closes) and nothing is left running, except programs started to
 outlive the shell (`nohup`, `setsid`). New tabs are named with the lowest free number (close *Terminal 2* and the
-next new tab is *Terminal 2* again); double-click a tab to rename it.
+next new tab is *Terminal 2* again); double-click a tab to rename it. **▾** next to **+** opens a terminal on one of
+the machines of the Machines view instead (an ssh login there, still kept by this server's tmux).
 
 **Keys the browser keeps for itself.** In a normal browser tab, Chrome/Edge/Firefox never pass a few shortcuts to the
 page — Ctrl+T, Ctrl+W, Ctrl+N, Ctrl+Tab and similar open/close tabs and windows instead. Three ways to send them:

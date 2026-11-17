@@ -4022,3 +4022,51 @@ test("Reviews: select several PRs (a row, a range, a repository) and start the a
   await page.locator('[data-testid="doc-tab"][data-ws="github"]').getByTestId("doc-tab-close").click();
   await signOut(page);
 });
+
+test("Machines: add a bastion and a machine behind it, check hop by hop, trust host keys, probe, open a terminal there", async ({ page }) => {
+  await login(page);
+  await page.getByTestId("activity-machines").click();
+  await expect(page.getByTestId("machines-panel")).toBeVisible();
+  await expect(page.locator('[data-testid="machines-item"][data-name="local"]')).toBeVisible();
+  const add = async (name: string, ssh: string, kind: "machine" | "bastion", via?: string) => {
+    await page.getByTestId("machines-add").click();
+    await page.getByTestId("machine-name").fill(name);
+    await page.getByTestId("machine-kind").selectOption(kind);
+    await page.getByTestId("machine-ssh").fill(ssh);
+    if (via) await page.getByTestId("machine-via").selectOption(via);
+    await page.getByTestId("machine-save").click();
+    await expect(page.getByTestId("machine-dialog")).toHaveCount(0);
+    await expect(page.locator(`[data-testid="machines-item"][data-name="${name}"]`)).toBeVisible();
+  };
+  const tag = Date.now().toString(36);
+  await add(`jump-${tag}`, "jump.example", "bastion");
+  await add(`box-${tag}`, "box.internal", "machine", `jump-${tag}`);
+  // a forbidden ssh option is refused with the reason
+  await page.getByTestId("machines-add").click();
+  await page.getByTestId("machine-name").fill(`bad-${tag}`);
+  await page.getByTestId("machine-ssh").fill("x.example");
+  await page.locator('[data-testid="machine-dialog"] textarea').fill("ProxyCommand=nc %h %p");
+  await page.getByTestId("machine-save").click();
+  await expect(page.getByTestId("machine-dialog-error")).toContainText("not allowed");
+  await page.getByRole("button", { name: "Cancel" }).click();
+
+  await page.locator(`[data-testid="machines-item"][data-name="box-${tag}"]`).click();
+  await expect(page.getByTestId("machine-view")).toContainText(`box-${tag}`);
+  await page.getByTestId("machine-check").click();
+  await expect(page.getByTestId("machine-hop")).toHaveCount(2);
+  await expect(page.getByTestId("machine-status")).toHaveText("online");
+  // host keys: the machine behind the bastion is scanned from there
+  await page.getByTestId("machine-hostkeys-btn").click();
+  await expect(page.getByTestId("machine-hostkeys")).toContainText(`from bastion jump-${tag}`);
+  await page.getByTestId("hostkey-trust").first().click();
+  await expect(page.getByTestId("hostkey-trust")).toHaveCount(1);
+  // probe
+  await page.getByTestId("machine-probe").click();
+  await expect(page.getByTestId("machine-tools")).toContainText("git");
+  await expect(page.getByTestId("machine-caps")).toContainText("CPU");
+  // a terminal there
+  await page.getByTestId("machine-terminal").click();
+  await expect(page.getByTestId("terminals-panel")).toBeVisible();
+  await expect(page.locator('[data-testid="terminals-item"]', { hasText: `box-${tag}` })).toBeVisible();
+  await page.getByTestId("activity-files").click();
+});

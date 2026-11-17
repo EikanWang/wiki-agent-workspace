@@ -330,7 +330,7 @@ class DevService:
 
     def hosts(self) -> list[dict[str, Any]]:
         return [{"name": LOCAL, "label": "This server", "ssh": None}] + [
-            {"name": h.name, "label": h.name, "ssh": h.ssh} for h in self.dev.hosts]
+            {"name": h.name, "label": h.name, "ssh": h.ssh} for h in self.dev.machines()]
 
     def wiki_root(self, row: DevWorkspace) -> Path | None:
         if not row.wiki_workspace_id or self.ctx.workspaces is None:
