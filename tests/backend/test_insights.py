@@ -251,6 +251,58 @@ async def test_scheduler_runs_the_last_complete_day_once(running_app, tmp_path):
     assert await scheduler.tick(h.ctx, late + dt.timedelta(days=1)) == []  # off
 
 
+def test_last_finished_periods():
+    lf = scheduler.last_finished
+    assert lf("week", dt.date(2026, 11, 15)) == "2026-11-15"  # a Sunday: that week has ended
+    assert lf("week", dt.date(2026, 11, 16)) == "2026-11-15"
+    assert pl.calendar_period("week", lf("week", dt.date(2026, 11, 20)))[:2] == ("2026-11-09", "2026-11-15")
+    assert lf("month", dt.date(2026, 10, 31)) == "2026-10" and lf("month", dt.date(2026, 11, 3)) == "2026-10"
+    assert lf("quarter", dt.date(2026, 11, 3)) == "2026-Q3" and lf("quarter", dt.date(2026, 12, 31)) == "2026-Q4"
+    assert lf("quarter", dt.date(2026, 2, 1)) == "2025-Q4"
+    assert lf("year", dt.date(2026, 11, 3)) == "2025" and lf("year", dt.date(2026, 12, 31)) == "2026"
+
+
+async def test_scheduled_reports_after_the_daily_run_once_per_period(running_app, tmp_path):
+    h, _, _ = await make(running_app, tmp_path, proj_nodes())
+    assert st.load(h.ctx)["repos"][0]["reports"] == {"week": False, "month": False, "quarter": False, "year": False}
+    try:
+        st.save(h.ctx, {"repos": [{"repo": "acme/proj", "reports": {"daily": True}}]})
+    except Exception as e:  # noqa: BLE001
+        assert getattr(e, "code", "") == "INVALID_PERIOD"
+    else:
+        raise AssertionError("a bad period was accepted")
+    st.save(h.ctx, {"repos": [{"repo": "acme/proj", "highlights": False, "schedule": {"enabled": True, "time": "05:35"},
+                               "reports": {"week": True, "month": True}}]})
+    late = dt.datetime(2026, 11, 3, 22, 0, tzinfo=dt.timezone.utc)  # 06:00 UTC+8 on Nov 4: the day summary of Nov 2 is due
+
+    async def settle():
+        for _ in range(1200):  # (up to a minute: slower when the whole suite runs)
+            if not [j for j in pl.jobs("acme/proj") if j.get("scheduled") and j["status"] == "running"]:
+                return
+            await asyncio.sleep(0.05)
+        raise AssertionError("still running")
+    assert await scheduler.tick(h.ctx, late) == ["acme/proj"]  # the daily run first …
+    assert scheduler.plan["reports_due"] == []  # the reports wait until the day summaries reach their last day
+    assert await scheduler.tick(h.ctx, late) == []  # … one thing at a time
+    await settle()
+    assert await scheduler.tick(h.ctx, late) == ["acme/proj week"]  # Oct 26 – Nov 1 (the daily run is past Nov 1 now)
+    assert scheduler.plan["reports_due"] == ["acme/proj week 2026-11-01", "acme/proj month 2026-10"]
+    await settle()
+    assert await scheduler.tick(h.ctx, late) == ["acme/proj month"]  # October
+    await settle()
+    assert await scheduler.tick(h.ctx, late) == [] and scheduler.plan["reports_due"] == []  # each period once
+    metas = sorted((tmp_path / "insights" / "reports" / "acme" / "proj").glob("*.json"))
+    got = sorted((json.loads(f.read_text())["kind"], json.loads(f.read_text())["since"], json.loads(f.read_text())["scheduled"]) for f in metas)
+    assert got == [("monthly", "2026-10-01", True), ("weekly", "2026-10-26", True)], got
+    # a daily run that is behind holds the report back; without a daily run the report does not wait for one
+    st.save(h.ctx, {"repos": [{"repo": "acme/proj", "schedule": {"enabled": False, "time": "05:35"}, "reports": {"week": True}}]})
+    nxt = late + dt.timedelta(days=7)  # Nov 11: the week of Nov 2 – 8 has ended
+    assert await scheduler.tick(h.ctx, nxt) == ["acme/proj week"]
+    await settle()
+    st.save(h.ctx, {"repos": [{"repo": "acme/proj", "schedule": {"enabled": True, "time": "23:59"}, "reports": {"week": True}}]})
+    assert await scheduler.tick(h.ctx, nxt + dt.timedelta(days=7)) == []  # before the repository's time of day
+
+
 async def test_a_task_set_to_the_agent_runs_an_agent_turn(running_app, tmp_path, monkeypatch):
     from backend.app import review_priority
     from backend.app.insights import llm

@@ -27,6 +27,7 @@ DEFAULT_REPOS: list[dict[str, Any]] = [
     {"repo": "triton-lang/triton", "time": "05:05"},
 ]
 REPO = re.compile(r"^[\w.-]+/[\w.-]+$")
+REPORT_PERIODS = ("week", "month", "quarter", "year")
 
 
 def _repo_defaults(r: dict[str, Any]) -> dict[str, Any]:
@@ -35,6 +36,8 @@ def _repo_defaults(r: dict[str, Any]) -> dict[str, Any]:
         "sources": {"issues": True, "commits": True, "rfcs": True, **(r.get("sources") or {})},
         "highlights": bool(r.get("highlights", False)),
         "schedule": {"enabled": False, "time": r.get("time") or "05:35", **(r.get("schedule") or {})},
+        # the report of each finished week / month / quarter / year, made by the scheduler (after the daily run)
+        "reports": {p: bool((r.get("reports") or {}).get(p, False)) for p in REPORT_PERIODS},
         "rfc": {**DEFAULT_RFC, **(r.get("rfc") or {})},
     }
 
@@ -92,7 +95,11 @@ def save(ctx: Any, patch: dict[str, Any]) -> dict[str, Any]:
             for x in rfc.get("repos") or []:
                 if not REPO.match(str(x)):
                     raise ApiError(400, "INVALID_REPO", f"RFC repository {x!r}: use owner/name")
+            rep = r.get("reports") or {}
+            if not isinstance(rep, dict) or set(rep) - set(REPORT_PERIODS):
+                raise ApiError(400, "INVALID_PERIOD", f"{name}: reports are week, month, quarter, year")
             repos.append(_repo_defaults({**r, "repo": name, "schedule": {"enabled": bool((r.get("schedule") or {}).get("enabled")), "time": t},
+                                         "reports": {p: bool(rep.get(p)) for p in REPORT_PERIODS},
                                          "rfc": {"repos": [str(x) for x in rfc.get("repos") or []][:10],
                                                  "labels": [str(x)[:60] for x in rfc.get("labels") or []][:20],
                                                  "title_patterns": [str(x)[:60] for x in rfc.get("title_patterns") or []][:20]}}))

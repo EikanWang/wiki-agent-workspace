@@ -503,10 +503,11 @@ async def make_report(ctx: Any, meta: dict[str, Any], j: dict[str, Any]) -> dict
 
 
 def new_report(ctx: Any, repo: str, since: str, until: str, sources: dict[str, bool], focus: str, label: str, preset: str | None,
-               kind: str = "dates") -> dict[str, Any]:
-    j = new_job("report", repo, since=since, until=until)
+               kind: str = "dates", scheduled: bool = False) -> dict[str, Any]:
+    j = new_job("report", repo, since=since, until=until, scheduled=scheduled)
     meta = {"id": j["id"], "job_id": j["id"], "repo": repo, "since": since, "until": until, "label": label, "kind": kind, "sources": sources,
-            "focus": focus, "preset": preset, "status": "running", "created_at": dt.datetime.now(dt.timezone.utc).isoformat()}
+            "focus": focus, "preset": preset, "status": "running", "created_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "scheduled": scheduled}
     _meta_write(ctx, meta)
     j["on_done"] = _report_done(ctx, meta)
     start(ctx, j, make_report(ctx, meta, j), durable=("insights.report", {"repo": repo}))

@@ -1,6 +1,11 @@
 """The daily runs (each repository's own switch, off by default): at its time (UTC+8 by default), the previous UTC day's
 summary of issues and PRs and — when on for the repository — its XPU highlights; days missed while the server was off
-are caught up (up to a week)."""
+are caught up (up to a week).
+
+Scheduled reports (each repository's week / month / quarter / year switches, off by default): once a period has
+ended, its report — after the repository's time of day and, when its daily run is on, after the period's last day was
+summarized (the report then reuses those summaries). Only the latest finished period is made, once; daily runs go
+first; everything one at a time and only with enough GitHub quota."""
 
 from __future__ import annotations
 
@@ -15,11 +20,48 @@ from . import settings as st
 
 log = logging.getLogger("waw.insights")
 RUNS_KEY = "insights_runs"  # {"owner/repo": "YYYY-MM-DD" (the last day done)}
+REPORT_RUNS_KEY = "insights_report_runs"  # {"owner/repo|week": the period's value (e.g. 2026-11-09, 2026-10, 2026-Q3, 2025)}
 _task: asyncio.Task | None = None
 
 
 START_MIN = 0.5  # a scheduled run starts only with at least half of the GitHub quota left (core and graphql)
-plan: dict[str, Any] = {"running": None, "due": [], "deferred": None, "checked": None}
+plan: dict[str, Any] = {"running": None, "due": [], "reports_due": [], "deferred": None, "checked": None}
+
+
+def last_finished(period: str, day: dt.date) -> str:
+    """The value (for pipeline.calendar_period) of the latest `period` that ended on or before `day`."""
+    nxt = day + dt.timedelta(days=1)
+    if period == "week":
+        start = nxt - dt.timedelta(days=nxt.weekday())
+        return (start - dt.timedelta(days=1)).isoformat()
+    if period == "month":
+        last = nxt.replace(day=1) - dt.timedelta(days=1)
+        return f"{last.year}-{last.month:02d}"
+    if period == "quarter":
+        last = dt.date(nxt.year, 3 * ((nxt.month - 1) // 3) + 1, 1) - dt.timedelta(days=1)
+        return f"{last.year}-Q{(last.month - 1) // 3 + 1}"
+    if period == "year":
+        return str(nxt.year - 1)
+    raise ValueError(period)
+
+
+def _reports_due(ctx: Any, cfg: dict[str, Any], local: dt.datetime, target: dt.date, runs: dict[str, str]) -> list[tuple[dict[str, Any], str, str]]:
+    done = kv_get(ctx, REPORT_RUNS_KEY, {}) or {}
+    out = []
+    for r in sorted(cfg["repos"], key=lambda r: r["schedule"].get("time", "05:35")):
+        if local.strftime("%H:%M") < r["schedule"].get("time", "05:35"):
+            continue
+        for p in st.REPORT_PERIODS:
+            if not (r.get("reports") or {}).get(p):
+                continue
+            value = last_finished(p, target)
+            if done.get(f"{r['repo']}|{p}") == value:
+                continue
+            until = pl.calendar_period(p, value)[1]
+            if r["schedule"].get("enabled") and (runs.get(r["repo"]) or "") < until:
+                continue  # its daily run first: the report reuses the day summaries
+            out.append((r, p, value))
+    return out
 
 
 def _quota_ok() -> tuple[bool, str]:
@@ -54,13 +96,14 @@ async def tick(ctx: Any, now: dt.datetime | None = None) -> list[str]:
         if last and last >= target.isoformat():
             continue
         due.append(r)
-    plan.update(due=[r["repo"] for r in due], checked=now.isoformat())
+    reports = _reports_due(ctx, cfg, local, target, runs)
+    plan.update(due=[r["repo"] for r in due], reports_due=[f"{r['repo']} {p} {v}" for r, p, v in reports], checked=now.isoformat())
     live = [j for j in pl.jobs() if j.get("scheduled") and j["status"] == "running"]
     if live:
         plan.update(running=live[0]["repo"], deferred=None)
         return []
     plan["running"] = None
-    if not due:
+    if not due and not reports:
         plan["deferred"] = None
         return []
     ok, why = _quota_ok()
@@ -70,6 +113,8 @@ async def tick(ctx: Any, now: dt.datetime | None = None) -> list[str]:
         plan["deferred"] = why
         return []
     plan["deferred"] = None
+    if not due:
+        return _start_report(ctx, *reports[0])
     r = due[0]
     last = runs.get(r["repo"])
     first = max(dt.date.fromisoformat(last) + dt.timedelta(days=1), target - dt.timedelta(days=6)) if last else target
@@ -90,6 +135,18 @@ async def tick(ctx: Any, now: dt.datetime | None = None) -> list[str]:
     plan["running"] = r["repo"]
     log.info("insights schedule: %s, %s", r["repo"], ", ".join(todo))
     return [r["repo"]]
+
+
+def _start_report(ctx: Any, r: dict[str, Any], period: str, value: str) -> list[str]:
+    since, until, label, kind = pl.calendar_period(period, value)
+    done = kv_get(ctx, REPORT_RUNS_KEY, {}) or {}
+    done[f"{r['repo']}|{period}"] = value  # once: a failed report is not retried by itself (make it again in Reports)
+    kv_put(ctx, REPORT_RUNS_KEY, done)
+    src = {**r["sources"], "highlights": r["highlights"]}
+    pl.new_report(ctx, r["repo"], since, until, {k: bool(v) for k, v in src.items()}, "", label, None, kind, scheduled=True)
+    plan["running"] = r["repo"]
+    log.info("insights schedule: %s report of %s (%s)", period, r["repo"], label)
+    return [f"{r['repo']} {period}"]
 
 
 async def _loop(ctx: Any) -> None:
