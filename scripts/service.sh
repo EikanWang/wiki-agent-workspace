@@ -11,6 +11,7 @@
 # Environment: WAW_CONFIG (another config file), WAW_SERVICE_NAME (default wiki-agent-workspace; one per instance),
 # WAW_NO_LINGER=1 (install: do not turn lingering on; undo with `loginctl disable-linger $USER`), WAW_NO_SYSTEMD=1.
 set -euo pipefail
+USER="${USER:-$(id -un)}" # unset under su, cron, some containers / SSH setups
 cd "$(dirname "$0")/.."
 ROOT="$(pwd)"
 NAME="${WAW_SERVICE_NAME:-wiki-agent-workspace}"
@@ -32,16 +33,37 @@ have_systemd() {
 }
 uses_systemd() { have_systemd && [ -f "$UNIT" ]; }
 
-healthy() { curl -fsS --max-time 3 "$URL/api/v1/health" >/dev/null 2>&1; }
+healthy() { curl -fsS --noproxy '*' --max-time 3 "$URL/api/v1/health" >/dev/null 2>&1; } # our own server: never via a proxy
 wait_healthy() {
   for _ in $(seq 1 60); do healthy && return 0; sleep 1; done
   return 1
 }
 
+# One systemd Environment= line, quoted: `"` and `\` escaped, `%` doubled (systemd specifiers).
+env_line() {
+  local v="$2"
+  v="${v//\\/\\\\}"; v="${v//\"/\\\"}"; v="${v//%/%%}"
+  printf 'Environment="%s=%s"\n' "$1" "$v"
+}
+# What the service must keep from your shell: PATH (the agent CLIs, gh…), HOME, and, when set, the proxy and the CA
+# certificates — a systemd user service starts with none of them, so behind a corporate proxy GitHub, gh and the
+# agents could not connect.
+KEEP_ENV="http_proxy https_proxy ftp_proxy all_proxy no_proxy HTTP_PROXY HTTPS_PROXY FTP_PROXY ALL_PROXY NO_PROXY
+  SSL_CERT_FILE SSL_CERT_DIR REQUESTS_CA_BUNDLE CURL_CA_BUNDLE NODE_EXTRA_CA_CERTS GIT_SSL_CAINFO
+  LANG LC_ALL CODEX_HOME CLAUDE_CONFIG_DIR XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME WAW_CONFIG"
+unit_env() {
+  env_line PATH "$PATH"
+  env_line HOME "$HOME"
+  local k
+  for k in $KEEP_ENV; do
+    if [ -n "${!k:-}" ]; then env_line "$k" "${!k}"; fi
+  done
+}
+
 write_unit() {
   mkdir -p "$UNIT_DIR"
-  # systemd user services get a minimal PATH: keep yours, so the agent CLIs (opencode, codex, claude, gh…) are found
-  cat > "$UNIT" <<EOF
+  # written with mode 0600: the proxy settings may hold a password
+  ( umask 077; cat > "$UNIT" <<EOF
 [Unit]
 Description=Wiki Agent Workspace ($NAME)
 After=network-online.target
@@ -51,15 +73,14 @@ WorkingDirectory=$ROOT
 ExecStart=$ROOT/scripts/start.sh
 Restart=on-failure
 RestartSec=3
-Environment=PATH=$PATH
-Environment=HOME=$HOME
-${WAW_CONFIG:+Environment=WAW_CONFIG=$WAW_CONFIG}
+$(unit_env)
 # tmux sessions of the app's terminals must survive a restart of the server
 KillMode=process
 
 [Install]
 WantedBy=default.target
 EOF
+  )
 }
 
 bg_running() { [ -f "$PID" ] && kill -0 "$(cat "$PID")" 2>/dev/null; }
@@ -92,9 +113,17 @@ shift || true
 case "$cmd" in
   install)
     if have_systemd; then
+      before="$(cat "$UNIT" 2>/dev/null || true)"
       write_unit
       systemctl --user daemon-reload
-      systemctl --user enable --now "$NAME.service"
+      if [ -n "$before" ] && [ "$before" != "$(cat "$UNIT")" ] && systemctl --user is-active --quiet "$NAME.service"; then
+        # re-run after installing an agent or changing the proxy: the running server gets the new PATH / environment
+        systemctl --user enable "$NAME.service" >/dev/null 2>&1
+        systemctl --user restart "$NAME.service"
+        echo "restarted with the updated environment (terminals keep running)"
+      else
+        systemctl --user enable --now "$NAME.service"
+      fi
       if [ -z "${WAW_NO_LINGER:-}" ] && command -v loginctl >/dev/null 2>&1 && [ "$(loginctl show-user "$USER" -p Linger --value 2>/dev/null)" != "yes" ]; then
         loginctl enable-linger "$USER" 2>/dev/null && echo "lingering enabled: the service starts at boot and keeps running after you log out" \
           || echo "note: to keep it running after you log out and start it at boot, run: sudo loginctl enable-linger $USER"

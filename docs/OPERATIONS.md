@@ -109,6 +109,7 @@ dismissed.
 | Symptom | Cause / fix |
 | --- | --- |
 | Browser can't reach `http://host:8765` from another machine | Server binds to `127.0.0.1` by default. Use an SSH tunnel, or set `server.bind = "0.0.0.0"` and restart. Check `ss -ltn \| grep 8765` and the host firewall. |
+| GitHub / `gh` / agent errors like "could not connect", "timed out", "certificate" only when the app runs them (fine in your shell) | The systemd service lacks your proxy, CA certificates or `PATH`. Run `scripts/service.sh install` again from a shell that has them; it writes them into the service and restarts it (see DEPLOYMENT §4). |
 | Browser shows a proxy "Access Denied" page | The browser sent the private address through a corporate proxy. Add the host/IP to the proxy bypass (`no_proxy`) list, or use the tunnel. |
 | `403 ORIGIN_NOT_ALLOWED` / `CSRF_INVALID` | Browser `Origin` doesn't match the `Host` the server sees (reverse proxy rewriting Host, or different hostname/port). Add the public origin to `allowed_origins`, set `trusted_proxies` so `X-Forwarded-Host` is honoured, or open the UI via the same URL the API uses. |
 | Login works, then immediately logged out behind HTTPS | `cookie_secure` mismatch or proxy not forwarding cookies. Set `cookie_secure = true` for HTTPS, `false` for plain HTTP. |

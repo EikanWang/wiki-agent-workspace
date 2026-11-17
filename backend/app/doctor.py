@@ -113,8 +113,10 @@ def run_checks(settings: Settings, *, url: str | None = None, quick: bool = Fals
     if not quick:
         host = "127.0.0.1" if settings.bind in ("0.0.0.0", "::", "") else settings.bind
         base = url or f"http://{host}:{settings.port}"
+        # our own server: never through http_proxy (a no_proxy without localhost would send it to the proxy)
+        direct = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         try:
-            with urllib.request.urlopen(f"{base}/api/v1/health", timeout=5) as r:  # noqa: S310 - our own server
+            with direct.open(f"{base}/api/v1/health", timeout=5) as r:  # noqa: S310 - our own server
                 body = json.loads(r.read() or b"{}")
             add("server", "Server", "ok" if body.get("status") == "ok" else "warn", f"{base} answers ({body.get('status')})",
                 "see the server log (scripts/service.sh logs)")
@@ -134,7 +136,7 @@ def run_checks(settings: Settings, *, url: str | None = None, quick: bool = Fals
         ver = _version([exe, "--version"]) if exe and not quick else ""
         add("agents", label, "ok" if exe else "warn", f"{exe}" + (f" ({ver})" if ver else "") if exe else "not found on PATH",
             "curl -fsSL https://opencode.ai/install | bash && opencode auth login" if name == "opencode"
-            else "npm install -g @openai/codex && codex login")
+            else "npm install -g --prefix ~/.local @openai/codex && codex login")
     dp = settings.default_provider
     if dp:
         p = settings.providers.get(dp, ProviderConfig())
@@ -145,7 +147,7 @@ def run_checks(settings: Settings, *, url: str | None = None, quick: bool = Fals
             "install OpenCode or Codex, then scripts/setup.sh (detects it) or set agents.default_provider")
     claude = shutil.which("claude")
     add("agents", "Claude Code (Agents monitor)", "ok" if claude else "warn", claude or "not found: its sessions are not monitored (optional)",
-        "npm install -g @anthropic-ai/claude-code (only to monitor / continue Claude Code sessions)")
+        "npm install -g --prefix ~/.local @anthropic-ai/claude-code (only to monitor / continue Claude Code sessions)")
     if settings.agent_env_script:
         es = Path(settings.agent_env_script).expanduser()
         add("agents", "Agent env script", "ok" if es.is_file() else "fail", str(es) + ("" if es.is_file() else " does not exist"),

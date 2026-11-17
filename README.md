@@ -23,7 +23,9 @@ curl -fsSL https://raw.githubusercontent.com/EikanWang/wiki-agent-workspace/main
 One command from an empty Linux account: it installs what is missing (with `sudo` if you allow it, otherwise
 user-level Python and Node.js in your home folder), gets the code, creates your wiki folder if needed, builds
 everything, starts the server as a user service, checks it and prints the **URL** and the **access token**.
-In a clone: `scripts/install.sh` (`--yes` to ask nothing; `--help` for the options). Then:
+Options go after `bash -s --`, e.g. `… | bash -s -- --yes --workspace ~/wiki`; in a clone: `scripts/install.sh`
+(`--yes` to ask nothing; `--help` for the options). Behind a proxy, export `https_proxy` / `http_proxy` /
+`no_proxy` first: the installer uses them and the service keeps them. Then:
 
 1. Open the URL (another machine: `ssh -N -L 8765:127.0.0.1:8765 you@server`, then `http://127.0.0.1:8765`) and
    paste the token.
@@ -203,8 +205,8 @@ separately (`~/.config/wiki-agent-workspace/config.toml`). Backup, restore and m
 ## Running the tests
 
 ```bash
-scripts/test.sh            # backend: pytest (181 tests; real git + tmux + fake agents), ~3 min
-scripts/test.sh --e2e      # + Playwright browser suite (71 scenarios) against the production build
+scripts/test.sh            # backend: pytest (282 tests; real git + tmux + fake agents), ~3 min
+scripts/test.sh --e2e      # + Playwright browser suite (79 scenarios) against the production build
 # or individually
 .venv/bin/python -m pytest tests/backend -q
 cd frontend && npx playwright install chromium && npm run test:e2e

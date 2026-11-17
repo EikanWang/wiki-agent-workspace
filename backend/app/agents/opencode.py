@@ -400,7 +400,11 @@ class OpenCodeServerAdapter(AgentAdapter):
 
     def client(self) -> httpx.AsyncClient:
         if self._client is None:
-            self._client = httpx.AsyncClient(base_url=self.base, timeout=30)
+            # an `opencode serve` on this machine is reached directly, never through http_proxy (no_proxy often
+            # lacks localhost); a remote one follows the proxy settings as usual
+            host = (httpx.URL(self.base).host or "").lower() if self.base else ""
+            local = host in ("localhost", "127.0.0.1", "::1") or host.startswith("127.")
+            self._client = httpx.AsyncClient(base_url=self.base, timeout=30, trust_env=not local)
         return self._client
 
     def api(self, path: str) -> str:

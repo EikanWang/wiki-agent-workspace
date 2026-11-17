@@ -18,8 +18,21 @@ On the Linux machine that holds your wiki (or where you want one):
 curl -fsSL https://raw.githubusercontent.com/EikanWang/wiki-agent-workspace/main/scripts/install.sh | bash
 ```
 
-or, in a clone of this repository: `scripts/install.sh`. It asks a few questions (all have defaults; `--yes` takes
-them all), then:
+or, in a clone of this repository: `scripts/install.sh`. With `curl`, the options go after `bash -s --`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/EikanWang/wiki-agent-workspace/main/scripts/install.sh | bash -s -- --yes --workspace ~/wiki
+```
+
+**Behind a proxy** (corporate networks): export the proxy first, in the same shell — Git, curl, pip, npm and the
+agent installers use it, and `scripts/service.sh install` writes it into the service (§4):
+
+```bash
+export https_proxy=http://proxy.example.com:912 http_proxy=http://proxy.example.com:912
+export no_proxy=localhost,127.0.0.1,.example.com          # the app reaches its own localhost directly anyway
+```
+
+It asks a few questions (all have defaults; `--yes` takes them all), then:
 
 1. **Prerequisites** — Git, curl, tmux, Python 3.11+, Node.js 20+. Missing ones are installed with your package
    manager (apt, dnf, yum, zypper, pacman, apk) if you allow `sudo`; otherwise, without root, Python comes from
@@ -163,7 +176,14 @@ scripts/start.sh               # or: in the foreground (Ctrl-C stops it)
 
 Without systemd user services (containers, some HPC login nodes) `service.sh` runs the server detached with a pid
 file and its log in the data folder; `scripts/service.sh start` again after a reboot (or a `@reboot` crontab line).
-The service file keeps your `PATH`, so the agent CLIs and `gh` are found as in your shell.
+A systemd user service starts with almost no environment, so `install` writes into the service file what it
+needs from the shell you run it in: your `PATH` (the agent CLIs and `gh` are found as in your shell), `HOME`, and —
+when set — the proxy (`http_proxy`, `https_proxy`, `no_proxy`, `all_proxy`, upper-case too), CA certificates
+(`SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`, `GIT_SSL_CAINFO`…), `LANG`, `CODEX_HOME`,
+`CLAUDE_CONFIG_DIR` and `WAW_CONFIG`. The file is mode 0600 (a proxy URL may hold a password). **Installed an agent
+later, or changed the proxy?** Run `scripts/service.sh install` again from a shell that has them: it rewrites the
+service and restarts it if anything changed (terminals keep running). The background mode without systemd simply
+inherits the shell's environment.
 
 Restarting the server never kills your terminals: they live on the app's own tmux server and are reattached at
 startup; agent turns that were running are marked *interrupted* (never re-run by themselves).
@@ -297,6 +317,8 @@ Start with `scripts/doctor.sh`: it names what is wrong and the fix. Then `script
 | Terminals disabled | install tmux 3.2+, restart |
 | "No provider" / discussions unavailable | install and log in to OpenCode or Codex (§6), `scripts/setup.sh`, restart |
 | Agents fail with authentication errors | log in again (`opencode auth login`, `codex login`); tokens from a script → `agents.env_script` |
+| GitHub, `gh` or the agents cannot connect only when the app runs them (fine in your shell) | the service lacks your proxy or `PATH`: `scripts/service.sh install` again from a shell that has them (§4) |
+| An agent installed later is "not found" | same: `scripts/service.sh install` again (the service keeps the `PATH` of when it was installed) |
 | No Reviews icon | §7: `gh auth login`, **Continue with GitHub** with that account |
 | File changes not noticed | inotify limit (§1); ↻ in the file tree works meanwhile |
 | Office files: only the text view | install LibreOffice (§1) |

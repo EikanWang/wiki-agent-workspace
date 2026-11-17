@@ -21,7 +21,11 @@
 #   --no-service           do not start the server; print how to start it
 #   -y, --yes              do not ask; take the defaults above
 #   -h, --help
+#
+# With curl, pass the options after `bash -s --`:
+#   curl -fsSL https://raw.githubusercontent.com/EikanWang/wiki-agent-workspace/main/scripts/install.sh | bash -s -- --yes --workspace ~/wiki
 set -euo pipefail
+USER="${USER:-$(id -un)}" # unset under su, cron, some containers / SSH setups
 
 REPO_URL="https://github.com/EikanWang/wiki-agent-workspace.git"
 DIR="$HOME/wiki-agent-workspace"
@@ -34,7 +38,12 @@ NO_SERVICE=0
 SETUP_ARGS=()
 ORIG_ARGS=("$@")
 
-usage() { sed -n '2,27p' "${BASH_SOURCE[0]:-$0}" 2>/dev/null | sed 's/^# \{0,1\}//' || true; }
+# the comment block at the top of this file (piped through `curl | bash` there is no file: point to the guide)
+usage() {
+  local me="${BASH_SOURCE[0]:-$0}"
+  if [ -f "$me" ]; then awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$me"
+  else echo "Options: see https://github.com/EikanWang/wiki-agent-workspace/blob/main/docs/DEPLOYMENT.md#0-one-click-install"; fi
+}
 while [ $# -gt 0 ]; do
   case "$1" in
     --workspace) WORKSPACE="$2"; shift 2 ;;
@@ -226,7 +235,7 @@ if in_list "$AGENTS" opencode && ! has opencode; then
   curl -fsSL https://opencode.ai/install | bash >/dev/null 2>&1 || warn "OpenCode install failed (see https://opencode.ai/docs/)"
   [ -x "$HOME/.opencode/bin/opencode" ] && export PATH="$HOME/.opencode/bin:$PATH"
 fi
-if in_list "$AGENTS" codex && ! has codex; then echo "  installing Codex CLI"; npm_user @openai/codex || warn "Codex install failed (npm install -g @openai/codex)"; fi
+if in_list "$AGENTS" codex && ! has codex; then echo "  installing Codex CLI"; npm_user @openai/codex || warn "Codex install failed (npm install -g --prefix ~/.local @openai/codex)"; fi
 if in_list "$AGENTS" claude && ! has claude; then echo "  installing Claude Code"; npm_user @anthropic-ai/claude-code || warn "Claude Code install failed"; fi
 for a in opencode codex claude; do if has "$a"; then ok "$a: $(command -v "$a")"; else warn "$a: not installed"; fi; done
 if ! has opencode && ! has codex; then warn "no OpenCode or Codex: reading, editing and terminals work; discussions and chats need one of them"; fi
