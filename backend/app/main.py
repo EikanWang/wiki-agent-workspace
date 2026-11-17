@@ -274,6 +274,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from . import github_hub
 
     api.include_router(github_hub.router)
+    from . import batch_review
+
+    api.include_router(batch_review.router)
     from . import review_learning
 
     api.include_router(review_learning.router)

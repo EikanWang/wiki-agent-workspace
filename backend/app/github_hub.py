@@ -535,7 +535,13 @@ async def review_queue(refresh: bool = Query(False), auth: tuple[AppContext, str
     codeowned.scan_soon(ctx, graphql, owner, owned, lambda: _start_refresh(graphql, owner, None, ctx))
     return {**data, "cached": True, "age_seconds": round(age), "refreshing": running, "refresh_error": _errors.get(owner),
             "prefs": prefs, "rate": RATE.status(), "rate_state": RATE.state()["state"], "priority_agent": rp.status(),
-            "maintainers": maintainers.status(ctx), "codeowned": codeowned.status(ctx, owned)}
+            "maintainers": maintainers.status(ctx), "codeowned": codeowned.status(ctx, owned), "batch_review": batch_status()}
+
+
+def batch_status() -> dict[str, Any]:
+    from . import batch_review
+
+    return batch_review.status()
 
 
 def _priority_results(ctx: AppContext) -> dict[str, Any]:
@@ -545,11 +551,12 @@ def _priority_results(ctx: AppContext) -> dict[str, Any]:
 
 
 def reset_cache() -> None:
-    from . import codeowned
+    from . import batch_review, codeowned
     from . import github_cache as gc
 
     gc.reset()
     codeowned.reset()
+    batch_review.reset()
     _ctxs.clear()
     _content_cache.clear()
     _cache.clear()

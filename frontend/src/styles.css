@@ -1443,3 +1443,14 @@ body.resizing-h iframe { pointer-events: none; }
 .learning-stat { overflow-wrap: anywhere; }
 .gh-thread-actions { flex-wrap: wrap; }
 .gh-thread-actions .teach-box { flex-basis: 100%; }
+
+/* Reviews: select several PRs → one Agent review */
+.review-check { flex: none; width: 15px; height: 15px; margin-top: 2px; border: 1px solid var(--muted); border-radius: 3px; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; line-height: 1; color: var(--primary-fg); background: var(--bg); cursor: pointer; visibility: hidden; }
+.review-pr:hover .review-check, .review-check:focus-visible, .review-check.on, .review-check.some, .reviews-panel.selecting .review-check, .review-group-head-row:hover .review-check { visibility: visible; }
+.review-check.on, .review-check.some { background: var(--primary); border-color: var(--primary); }
+.review-check.group { margin: 0 0 0 6px; }
+.review-pr { padding-left: 6px; }
+.review-pr.selected { background: var(--accent); box-shadow: inset 2px 0 0 var(--primary); }
+.reviews-batch-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--border); background: var(--card); }
+.reviews-batch-bar > div { flex-basis: 100%; }
+.git-badge.review-agent-failed { color: var(--red); }

@@ -220,6 +220,17 @@ the choice is kept per browser.
 discard (drafts included); such rows say "🤖 N suggestions to confirm" (or "🤖 reviewing…" while it runs), and the
 count follows as you decide in the PR tab. The
 line above the list says how many are requested, how many are shown and how many drafts are hidden.
+**Agent review of several PRs at once**: tick the box at the left of a PR (it shows on hover, and on every row
+once something is selected; the row does not open), Shift-click another box to select the rows in between, or tick
+a repository's box to select all of its PRs shown (again to unselect them). A bar above the list says how many are
+selected: **🤖 Agent review N** starts the review of each — the same review as its tab's **Agent review** button,
+with the prefilled question and what the agent learned — and **Clear** unselects. Two run at a time; the others
+show "🤖 queued (k)" and start in order ("🤖 starting review…", then "🤖 reviewing…"; **cancel waiting** in the
+bar takes those not started off the queue). A PR already being reviewed or queued is skipped (the bar says so). A
+repository without an agent wiki gets the wiki you are in, as if you chose it in one of its PR tabs. When a review
+is done the row says "🤖 N suggestions to confirm": open the PR and decide them in **Files** as usual. A PR whose
+review could not start or failed shows "🤖 review failed" (hover for why); select it again to retry. The queue is
+kept while the server runs: after a restart, PRs that had not started yet are no longer queued.
 - each PR shows a CI dot (green passed, red failing, amber running), title, #number, author, last update,
   size (+/−), draft flag and labels; hover for details;
 - **filter** by repository, title, author, requester or label; **drafts** shows or hides draft PRs; sort by

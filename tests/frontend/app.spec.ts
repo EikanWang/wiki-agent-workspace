@@ -3926,3 +3926,51 @@ test("Agents: rename a session, select all of a folder, delete selected after co
   await expect(page.locator(`[data-testid="mon-card"][data-key="${victim}"]`)).toHaveCount(0, { timeout: 15000 });
   await page.getByTestId("activity-files").click();
 });
+
+test("Reviews: select several PRs (a row, a range, a repository) and start the agent review of all of them at once", async ({ page }) => {
+  await ensureGithubSignIn(page);
+  await page.goto("/");
+  await page.getByTestId("login-github").click();
+  await expect(page.getByTestId("view-document")).toBeVisible({ timeout: 15000 });
+  await page.getByTestId("activity-reviews").click();
+  const row = (n: number) => page.locator(`[data-testid="review-pr"][data-number="${n}"]`);
+  await expect(row(103)).toBeVisible({ timeout: 15000 });
+  await expect(page.getByTestId("reviews-batch-bar")).toHaveCount(0); // nothing selected: no bar
+  // a row's checkbox selects it (the row does not open)
+  await row(103).hover();
+  await row(103).getByTestId("review-select").click();
+  await expect(row(103)).toHaveAttribute("data-selected", "1");
+  await expect(page.getByTestId("doc-tab").filter({ hasText: "#103" })).toHaveCount(0);
+  await expect(page.getByTestId("reviews-selected-count")).toHaveText("1 selected");
+  // Shift-click: the rows in between as shown
+  const order = await page.getByTestId("review-pr").evaluateAll((els) => els.map((e) => Number(e.getAttribute("data-number"))));
+  const a = order.indexOf(103), b = order.indexOf(101);
+  await row(101).getByTestId("review-select").click({ modifiers: ["Shift"] });
+  const range = order.slice(Math.min(a, b), Math.max(a, b) + 1);
+  await expect(page.getByTestId("reviews-selected-count")).toHaveText(`${range.length} selected`);
+  for (const n of range) await expect(row(n)).toHaveAttribute("data-selected", "1");
+  await page.getByTestId("reviews-select-clear").click();
+  await expect(page.locator('[data-testid="review-pr"][data-selected="1"]')).toHaveCount(0);
+  // a repository's box selects all its PRs shown; intel/torch-xpu-ops has no agent wiki yet: it gets this one
+  await row(103).hover(); // (the boxes show on hover, and all of them while something is selected)
+  await row(103).getByTestId("review-select").click();
+  const intel = page.locator('[data-testid="review-group"][data-repo="intel/torch-xpu-ops"]');
+  await intel.getByTestId("review-select-group").click();
+  await expect(intel.getByTestId("review-select-group")).toHaveAttribute("aria-checked", "true");
+  await expect(page.getByTestId("reviews-selected-count")).toHaveText("2 selected");
+  await page.getByTestId("reviews-batch-review").click();
+  await expect(page.getByTestId("reviews-batch-note")).toContainText("Agent review started for 2 PR(s)");
+  await expect(page.locator('[data-testid="review-pr"][data-selected="1"]')).toHaveCount(0); // cleared once started
+  // each one is reviewed like with its tab's Agent review button: its suggestions wait for you
+  await expect(row(103).getByTestId("review-agent-waiting")).toBeVisible({ timeout: 30000 });
+  await expect(row(201).getByTestId("review-agent-waiting")).toBeVisible({ timeout: 30000 });
+  await expect(page.getByTestId("reviews-batch-progress")).toHaveCount(0);
+  const wikis = (await (await page.request.get("/api/v1/github/repo-wikis")).json()).repos as { repo: string }[];
+  expect(wikis.map((w) => w.repo)).toContain("intel/torch-xpu-ops");
+  // opening one shows its suggestions in the diff
+  await row(201).click();
+  await page.getByTestId("pr-tab-files").click();
+  await expect(page.locator('[data-testid="pr-draft"][data-origin="agent"]').first()).toBeVisible({ timeout: 15000 });
+  await page.locator('[data-testid="doc-tab"][data-ws="github"]').getByTestId("doc-tab-close").click();
+  await signOut(page);
+});

@@ -66,6 +66,14 @@ backend/app/
                    turns the block into github_pr_drafts (origin=agent, decision=proposed; lines checked against
                    the diff, else file comments) and replaces the JSON in the message by a note; Finish review
                    publishes only decision=accepted drafts and deletes discarded ones
+  batch_review.py  Agent review of several PRs at once: POST /github/batch-review {prs:[{repo,number}],
+                   question?, workspace_id?} queues them (in memory; duplicates, PRs already queued or with a running
+                   agent review are skipped and reported); CONCURRENCY=2 workers each load the PR like its tab
+                   (get_pull_request, cached=true: the local cache first), set the repository's wiki to the request's
+                   (X-Workspace) when it has none, open .waw-github/<o>/<r>/<n>.md in that wiki and create the
+                   whole-document pr_review thread (ThreadService.create_thread → register_agent_review), then keep
+                   the slot until the job ends (≤ JOB_SLOT_SECONDS). POST /github/batch-review/cancel drops PRs not
+                   started; GET /github/reviews reports batch_review {queued, running, failed}
   review_learning.py  Review learning: the agent's PR reviews improve from what you do with them. Capture
                    (review_cases): Finish review records each decided agent suggestion (applied / edited — the
                    agent's text is kept in github_pr_drafts.original_body — / discarded with discard_reason) and

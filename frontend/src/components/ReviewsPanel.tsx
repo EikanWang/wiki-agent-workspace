@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import DeferMenu, { Deferral, deferLabel } from "./DeferMenu";
 import GithubRate from "./GithubRate";
-import { ApiError, get, put } from "../api";
+import { ApiError, get, post, put } from "../api";
 import RefreshButton from "./RefreshButton";
 import { confirmAction } from "./Confirm";
 import GhUser from "./GhUser";
@@ -122,7 +122,16 @@ interface Queue {
   approved_hidden?: number;
   prefs?: HubPrefs;
   priority_agent?: AgentStatus;
+  batch_review?: BatchStatus;
 }
+/** Agent reviews started for several PRs at once (POST /github/batch-review): waiting in order, running, failed. */
+export interface BatchStatus {
+  queued: string[];
+  running: Record<string, "preparing" | "reviewing">;
+  failed: Record<string, { error: string; code?: string | null; at: string }>;
+  concurrency: number;
+}
+const prKey = (p: { repo: string; number: number }) => `${p.repo}#${p.number}`.toLowerCase();
 
 // ---- one shared copy of the queue (the activity-bar badge and the panel use the same data)
 let state: { queue: Queue | null; error: string | null; loading: boolean } = { queue: null, error: null, loading: false };
@@ -141,7 +150,8 @@ export async function loadReviews(refresh = false): Promise<void> {
     const q = await get<Queue>(`/github/reviews${refresh ? "?refresh=true" : ""}`);
     set({ queue: q, error: null, loading: false });
     const deciding = q.priority_agent ? q.priority_agent.queued + q.priority_agent.running.length : 0;
-    if (q.refreshing || deciding) poll = window.setTimeout(() => void loadReviews(false), deciding && !q.refreshing ? 2500 : 3000); // new levels come in
+    const batch = q.batch_review ? q.batch_review.queued.length + Object.keys(q.batch_review.running).length : 0;
+    if (q.refreshing || deciding || batch) poll = window.setTimeout(() => void loadReviews(false), deciding && !q.refreshing ? 2500 : 3000); // new levels / reviews come in
   } catch (e) {
     set({ error: (e as ApiError).message, loading: false });
   }
@@ -219,6 +229,66 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
     }
   };
   const listScroll = useRestoredScroll("reviews.list", !!queue);
+  // several PRs selected (checkbox per row) → one Agent review for all of them
+  const [selected, setSelected] = useState<Map<string, { repo: string; number: number }>>(() => new Map());
+  const lastPick = useRef<string | null>(null);
+  const order = useRef<{ key: string; repo: string; number: number }[]>([]); // rows in the order they are shown (for Shift-click)
+  order.current = [];
+  const [batchNote, setBatchNote] = useState<{ text: string; error?: boolean } | null>(null);
+  const [starting, setStarting] = useState(false);
+  const batch = queue?.batch_review;
+  const batchBusy = batch ? batch.queued.length + Object.keys(batch.running).length : 0;
+  const pick = (p: ReviewPR, range: boolean) => {
+    const key = prKey(p);
+    // the rows as shown now: React may run the update below during a later render, while `order` is being refilled
+    const rows = order.current.slice();
+    const from = range ? lastPick.current : null;
+    setSelected((cur) => {
+      const n = new Map(cur);
+      const on = !cur.has(key);
+      const a = from ? rows.findIndex((r) => r.key === from) : -1;
+      const b = rows.findIndex((r) => r.key === key);
+      if (a >= 0 && b >= 0) {
+        for (const r of rows.slice(Math.min(a, b), Math.max(a, b) + 1)) {
+          if (on) n.set(r.key, { repo: r.repo, number: r.number }); else n.delete(r.key);
+        }
+      } else if (on) n.set(key, { repo: p.repo, number: p.number });
+      else n.delete(key);
+      return n;
+    });
+    lastPick.current = key;
+  };
+  const pickAll = (prs: ReviewPR[], on: boolean) => setSelected((cur) => {
+    const n = new Map(cur);
+    for (const p of prs) { if (on) n.set(prKey(p), { repo: p.repo, number: p.number }); else n.delete(prKey(p)); }
+    return n;
+  });
+  const startBatch = async () => {
+    const prs = [...selected.values()];
+    if (!prs.length) return;
+    setStarting(true);
+    setBatchNote(null);
+    try {
+      const r = await post<{ queued: string[]; skipped: { pr: string; reason: string }[] }>("/github/batch-review", { prs });
+      const skipped = r.skipped.length ? ` · skipped ${r.skipped.length}: ${r.skipped.map((x) => `${x.pr} (${x.reason})`).join(", ")}` : "";
+      setBatchNote({ text: `🤖 Agent review started for ${r.queued.length} PR(s)${r.queued.length > (batch?.concurrency ?? 2) ? `, ${batch?.concurrency ?? 2} at a time` : ""}${skipped}. Open a PR to apply or discard its suggestions.` });
+      setSelected(new Map());
+      lastPick.current = null;
+      await loadReviews(false);
+    } catch (e) {
+      setBatchNote({ text: (e as ApiError).message, error: true });
+    } finally {
+      setStarting(false);
+    }
+  };
+  const cancelWaiting = async () => {
+    try {
+      await post("/github/batch-review/cancel", {});
+      await loadReviews(false);
+    } catch (e) {
+      setBatchNote({ text: (e as ApiError).message, error: true });
+    }
+  };
   const [busy, setBusy] = useState<string | null>(null);
   const prefs = queue?.prefs;
   const levels = prefs?.priority_levels ?? [];
@@ -261,10 +331,21 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
     if (ok) void change(`hide:${repo}`, { hidden_repos: [...prefs.hidden_repos, repo], watched_repos: prefs.watched_repos.filter((r) => r.toLowerCase() !== repo.toLowerCase()) });
   };
   const toggle = (repo: string) => setCollapsed((s) => { const n = new Set(s); if (n.has(repo)) n.delete(repo); else n.add(repo); return n; });
-  const prRow = (p: ReviewPR, showRepo = false) => (
-    <button key={`${p.repo}#${p.number}`} className={`review-pr ${p.draft ? "draft" : ""} ${p.priority ? "priority" : ""}`} onClick={() => onOpen(p)} role="button"
+  const prRow = (p: ReviewPR, showRepo = false) => {
+    const key = prKey(p);
+    order.current.push({ key, repo: p.repo, number: p.number });
+    const on = selected.has(key);
+    const qpos = batch ? batch.queued.indexOf(key) : -1;
+    const brun = batch?.running[key];
+    const bfail = batch?.failed[key];
+    return (
+    <button key={`${p.repo}#${p.number}`} className={`review-pr ${p.draft ? "draft" : ""} ${p.priority ? "priority" : ""} ${on ? "selected" : ""}`} onClick={(e) => { if (selected.size && (e.ctrlKey || e.metaKey)) { pick(p, false); return; } onOpen(p); }} role="button"
       title={`${p.repo}#${p.number}\n${p.title}\n${CI_LABEL[p.ci ?? ""] ?? "no checks"}${p.requested_by ? `\nreview requested by ${p.requested_by}${p.requested_by_company ? ` (${p.requested_by_company})` : ""}${p.requested_by_roles ? ` — ${p.requested_by_roles}` : ""}` : ""}${p.author_roles ? `\nauthor ${p.author}: ${p.author_roles}` : ""}${p.teams.length ? `\nalso requested from: ${p.teams.join(", ")}` : ""}${ownedTitle(p)}`}
-      data-testid="review-pr" data-number={p.number} data-priority={p.priority ? "1" : "0"}>
+      data-testid="review-pr" data-number={p.number} data-repo={p.repo} data-priority={p.priority ? "1" : "0"} data-selected={on ? "1" : "0"}>
+      <span role="checkbox" aria-checked={on} tabIndex={0} className={`review-check ${on ? "on" : ""}`} aria-label={`Select ${p.repo}#${p.number}`}
+        title="Select for Agent review (Shift-click: a range)" data-testid="review-select"
+        onClick={(e) => { e.stopPropagation(); pick(p, e.shiftKey); }}
+        onKeyDown={(e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); e.stopPropagation(); pick(p, e.shiftKey); } }}>{on ? "✓" : ""}</span>
       <span className={`ci-dot ${(p.ci ?? "none").toLowerCase()}`} aria-label={CI_LABEL[p.ci ?? ""] ?? "no checks"} />
       <span className="review-pr-main">
         <span className="review-pr-title">
@@ -288,7 +369,9 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
               {" "}🤖 {p.agent_review.proposed ? `${p.agent_review.proposed} suggestion${p.agent_review.proposed > 1 ? "s" : ""} to confirm` : "review to confirm"}
             </span>
           )}
-          {p.agent_review?.state === "running" && <span className="git-badge" title="The agent is reviewing this PR" data-testid="review-agent-running"> 🤖 reviewing…</span>}
+          {(p.agent_review?.state === "running" || brun) && <span className="git-badge" title={brun === "preparing" ? "Loading the PR for the agent's review" : "The agent is reviewing this PR"} data-testid="review-agent-running"> 🤖 {brun === "preparing" ? "starting review…" : "reviewing…"}</span>}
+          {qpos >= 0 && !brun && <span className="git-badge" title="Waiting for its turn: the agent reviews a few PRs at a time" data-testid="review-agent-queued"> 🤖 queued ({qpos + 1})</span>}
+          {bfail && !brun && qpos < 0 && <span className="git-badge review-agent-failed" title={`The agent review could not start or failed: ${bfail.error}`} data-testid="review-agent-failed"> 🤖 review failed</span>}
           {p.my_activity === "news" && p.my_review !== "APPROVED" && (
             <span className="git-badge approved-news" title={`Since your latest review / comment (${p.my_last_at ? new Date(p.my_last_at).toLocaleString() : ""})`} data-testid="review-since-mine">
               {" "}↻ {(p.since_mine ?? []).join(", ")}
@@ -319,13 +402,23 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
         )}
       </span>
     </button>
-  );
+    );
+  };
   const groupBox = (repo: string, prs: ReviewPR[], watched: boolean) => {
     const id = (watched ? "w:" : "") + repo;
     const open = !collapsed.has(id);
     return (
       <div key={id} className="review-group" data-testid={watched ? "review-group-watched" : "review-group"} data-repo={repo}>
         <div className="review-group-head-row">
+          {(() => {
+            const n = prs.filter((p) => selected.has(prKey(p))).length;
+            const all = n === prs.length && n > 0;
+            return (
+              <span role="checkbox" aria-checked={all ? true : n ? "mixed" : false} tabIndex={0} className={`review-check group ${all ? "on" : n ? "some" : ""}`}
+                aria-label={`Select all PRs of ${repo}`} title={all ? `Unselect the ${prs.length} PR(s) of ${repo}` : `Select the ${prs.length} PR(s) of ${repo} shown`} data-testid="review-select-group"
+                onClick={() => pickAll(prs, !all)} onKeyDown={(e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); pickAll(prs, !all); } }}>{all ? "✓" : n ? "–" : ""}</span>
+            );
+          })()}
           <button className="review-group-head" onClick={() => toggle(id)} aria-expanded={open}>
             <span className="chev">{open ? "⌄" : "›"}</span>
             <span className="review-repo">{repo}</span>
@@ -361,7 +454,7 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
   };
 
   return (
-    <div className="reviews-panel" data-testid="reviews-panel">
+    <div className={`reviews-panel ${selected.size ? "selecting" : ""}`} data-testid="reviews-panel">
       <div className="tree-header">
         <span className="ws-name">Reviews{queue ? ` · ${reviewBadge(queue)}` : ""}</span>
         <span className="spacer" />
@@ -429,6 +522,30 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
           </select>
         </div>
       </div>
+      {(selected.size > 0 || batchBusy > 0 || batchNote) && (
+        <div className="reviews-batch-bar" data-testid="reviews-batch-bar">
+          {selected.size > 0 && (
+            <>
+              <span className="small strong" data-testid="reviews-selected-count">{selected.size} selected</span>
+              <button className="btn small primary" disabled={starting} onClick={() => void startBatch()} title={`The agent reviews each selected PR like its Agent review button (${batch?.concurrency ?? 2} at a time); its comments wait in the PR's Files tab for you to apply or discard. A repository without an agent wiki uses this wiki.`} data-testid="reviews-batch-review">
+                {starting ? "Starting…" : `🤖 Agent review ${selected.size}`}
+              </button>
+              <button className="link-btn small" onClick={() => { setSelected(new Map()); lastPick.current = null; }} data-testid="reviews-select-clear">Clear</button>
+            </>
+          )}
+          {batchBusy > 0 && (
+            <span className="muted small" data-testid="reviews-batch-progress">
+              {selected.size > 0 ? " · " : ""}🤖 reviewing {Object.keys(batch!.running).length}, waiting {batch!.queued.length}
+              {batch!.queued.length > 0 && <> · <button className="link-btn small" onClick={() => void cancelWaiting()} title="Take the PRs that have not started off the queue (running reviews go on)" data-testid="reviews-batch-cancel">cancel waiting</button></>}
+            </span>
+          )}
+          {batchNote && (
+            <div className={`small ${batchNote.error ? "tree-error" : "muted"}`} role={batchNote.error ? "alert" : "status"} data-testid="reviews-batch-note">
+              {batchNote.text} <button className="icon-btn small" onClick={() => setBatchNote(null)} aria-label="Dismiss">×</button>
+            </div>
+          )}
+        </div>
+      )}
       <div className="tree-body" data-testid="reviews-list" ref={listScroll}>
         {!queue && loading && <div className="tree-loading">Loading your review requests from GitHub… (the first load can take ~30 s)</div>}
         {error && <div className="tree-error" role="alert" data-testid="reviews-error">{error}</div>}
