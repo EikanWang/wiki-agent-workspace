@@ -71,6 +71,8 @@ const DEFAULT_CATEGORIES: Category[] = [
   { key: "quiet", title: "Commented, nothing new", level: "medium" },
 ];
 const categoryOf = (p: ReviewPR) => p.my_activity ?? "todo";
+/** the category choice above the list: short names (the full title is the tooltip) */
+const CAT_SHORT: Record<string, string> = { todo: "Not reviewed", news: "New activity", quiet: "Nothing new" };
 
 export interface MaintainerSource { repo: string; people: number; sources: string[]; fetched: number | null; error?: string | null }
 /** a repository checked for open PRs touching your files: matches, your CODEOWNERS rules, the latest scan */
@@ -201,6 +203,10 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
   const [sort, setSort] = useState<Sort>(() => (localStorage.getItem("waw.reviews.sort") as Sort) || "updated");
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set(JSON.parse(localStorage.getItem("waw.reviews.collapsed") || "[]")));
   useEffect(() => localStorage.setItem("waw.reviews.drafts", showDrafts ? "1" : "0"), [showDrafts]);
+  // the categories you chose to see (not reviewed yet / new activity / nothing new), kept per browser
+  const [hiddenCats, setHiddenCats] = useState<Set<string>>(() => new Set(JSON.parse(localStorage.getItem("waw.reviews.hiddenCats") || "[]")));
+  useEffect(() => localStorage.setItem("waw.reviews.hiddenCats", JSON.stringify([...hiddenCats])), [hiddenCats]);
+  const toggleCat = (k: string) => setHiddenCats((s) => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n; });
   useEffect(() => localStorage.setItem("waw.reviews.sort", sort), [sort]);
   useEffect(() => localStorage.setItem("waw.reviews.collapsed", JSON.stringify([...collapsed])), [collapsed]);
   useEffect(() => {
@@ -296,6 +302,7 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
   const { groups, watchedGroups } = useMemo(() => {
     const f = filter.trim().toLowerCase();
     const keep = (p: ReviewPR) => (agentOnly ? p.agent_review?.state === "waiting" : showDrafts || !p.draft) && (p.level_rank ?? 0) <= maxRank
+      && !hiddenCats.has(categoryOf(p))
       && (!f || `${p.repo} #${p.number} ${p.title} ${p.author ?? ""} ${p.requested_by ?? ""} ${p.level ?? ""} ${p.labels.map((l) => l.name).join(" ")}`.toLowerCase().includes(f));
     const key = (p: ReviewPR) => (sort === "updated" ? -new Date(p.updated_at).getTime() : sort === "waiting" ? new Date(p.created_at).getTime() : p.additions + p.deletions);
     // inside a repository (and a category): the most urgent level first, then your sort
@@ -306,8 +313,10 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
       return [...by.entries()].map(([repo, prs]) => ({ repo, prs: prs.sort(cmp) })).sort((a, b) => b.prs.length - a.prs.length || a.repo.localeCompare(b.repo));
     };
     return { groups: group((queue?.items ?? []).filter(keep)), watchedGroups: group((queue?.watched ?? []).filter(keep)) };
-  }, [queue, filter, showDrafts, sort, agentOnly, maxRank]);
+  }, [queue, filter, showDrafts, sort, agentOnly, maxRank, hiddenCats]);
   const drafts = queue?.items.filter((p) => p.draft).length ?? 0;
+  // per category: the PRs in it (drafts only when shown), for the category choice
+  const catCount = (k: string) => [...(queue?.items ?? []), ...(queue?.watched ?? [])].filter((p) => categoryOf(p) === k && (showDrafts || agentOnly || !p.draft)).length;
   const owned = queue?.items.filter((p) => p.requested === "codeowner").length ?? 0;
   const shown = groups.reduce((n, g) => n + g.prs.length, 0);
   const change = async (what: string, c: Partial<HubPrefs> & Record<string, unknown>) => {
@@ -496,6 +505,16 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
       </div>
       <div className="reviews-controls">
         <input className="reviews-filter" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter: repo, title, author, label…" data-testid="reviews-filter" />
+        <div className="reviews-cats" role="group" aria-label="Show categories" data-testid="reviews-categories">
+          {categories.map((c) => {
+            const on = !hiddenCats.has(c.key);
+            return (
+              <label key={c.key} className={`review-cat-chip small ${c.key} ${on ? "on" : ""}`} title={`${on ? "Hide" : "Show"} “${c.title}”${CATEGORY_HINT[c.key] ? ` — ${CATEGORY_HINT[c.key]}` : ""}`} data-testid="reviews-category" data-category={c.key}>
+                <input type="checkbox" checked={on} onChange={() => toggleCat(c.key)} aria-label={c.title} />{CAT_SHORT[c.key] ?? c.title} {catCount(c.key)}
+              </label>
+            );
+          })}
+        </div>
         <div className="reviews-row">
           <label className="small" title={`${drafts} draft PR(s)`}>
             <input type="checkbox" checked={showDrafts} onChange={(e) => setShowDrafts(e.target.checked)} data-testid="reviews-drafts" /> drafts ({drafts})
@@ -558,6 +577,7 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
             {(queue.deferred?.length ?? 0) > 0 && <span data-testid="reviews-deferred-count"> · {queue.deferred!.length} deferred</span>}
             {!showDrafts && !agentOnly && drafts > 0 && <span title="Tick “drafts” to show them"> · {drafts} draft{drafts > 1 ? "s" : ""} hidden</span>}
             {filter.trim() && <span> · filtered</span>}
+            {categories.some((c) => hiddenCats.has(c.key)) && <span data-testid="reviews-categories-hidden"> · hidden: {categories.filter((c) => hiddenCats.has(c.key)).map((c) => c.title).join(", ")}</span>}
             {agentOnly && <span> · only those the agent reviewed, waiting for you</span>}
             {maxRank < 99 && <span> · only {levels[0]?.id}–{levels[maxRank]?.id}</span>}
             {queue.priority_agent && queue.priority_agent.running.length + queue.priority_agent.queued > 0 && (
@@ -567,7 +587,7 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
             {" · "}<GhRefreshSelect kind="reviews" testId="reviews-auto-refresh" title="How often the Reviews list (and its badge) refreshes from GitHub on its own; ↻ refreshes now" />
           </div>
         )}
-        {queue && shown === 0 && <div className="tree-empty">{queue.items.length ? "Nothing matches the filter." : "No pull requests are waiting for your review. 🎉"}</div>}
+        {queue && shown === 0 && <div className="tree-empty">{queue.items.length ? (categories.every((c) => hiddenCats.has(c.key)) ? "All categories are hidden: tick one above." : "Nothing matches the filter.") : "No pull requests are waiting for your review. 🎉"}</div>}
         {groups.map(({ repo, prs }) => groupBox(repo, prs, false))}
         {watchedGroups.length > 0 && <div className="muted small reviews-meta" data-testid="reviews-watched-head">Watched repositories (all open PRs)</div>}
         {watchedGroups.map(({ repo, prs }) => groupBox(repo, prs, true))}

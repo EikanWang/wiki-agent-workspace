@@ -1967,6 +1967,24 @@ test("GitHub review hub: only the owner's GitHub sign-in sees it; queue grouped 
   await expect.poll(() => sectionsOf("intel/torch-xpu-ops")).toEqual(["quiet"]);
   await expect(page.locator('[data-repo="intel/torch-xpu-ops"] [data-category="quiet"] [data-testid="review-pr"]')).toHaveAttribute("data-number", "201");
   await expect(page.locator('[data-repo="intel/torch-xpu-ops"]').getByTestId("review-quiet")).toBeVisible();
+  // the categories are indented under their repository, their PRs further still
+  const left = (sel: string) => page.locator(sel).first().evaluate((e) => e.getBoundingClientRect().left);
+  const head = await left('[data-repo="pytorch/pytorch"] .review-group-head .chev');
+  const section = await left('[data-repo="pytorch/pytorch"] [data-category="todo"] .review-section-head .chev');
+  const row = await left('[data-repo="pytorch/pytorch"] [data-category="todo"] [data-testid="review-pr"] .review-pr-main');
+  expect(section - head).toBeGreaterThanOrEqual(12);
+  expect(row - section).toBeGreaterThanOrEqual(12);
+  // each category can be shown or hidden on its own (kept in this browser)
+  const cat = (k: string) => page.locator(`[data-testid="reviews-category"][data-category="${k}"] input`);
+  await cat("todo").uncheck();
+  await expect.poll(() => sectionsOf("pytorch/pytorch")).toEqual(["news"]);
+  await cat("quiet").uncheck();
+  await expect(page.locator('[data-testid="review-group"][data-repo="intel/torch-xpu-ops"]')).toHaveCount(0);
+  await expect(page.getByTestId("reviews-categories-hidden")).toBeVisible();
+  await cat("todo").check();
+  await cat("quiet").check();
+  await expect.poll(() => sectionsOf("pytorch/pytorch")).toEqual(["todo", "news"]);
+  await expect.poll(() => sectionsOf("intel/torch-xpu-ops")).toEqual(["quiet"]);
   // the Meta maintainer's request (new activity since your comment) says so, with its level from the hard rule
   const r104 = page.locator('[data-repo="pytorch/pytorch"] [data-category="news"] [data-testid="review-pr"][data-number="104"]');
   await expect(r104.getByTestId("review-since-mine")).toContainText("new comments");
