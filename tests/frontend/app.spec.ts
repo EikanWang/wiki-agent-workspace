@@ -3759,12 +3759,19 @@ test("Repo Insights: the history in the folder, a week's report (daily summaries
   await expect.poll(async () => (await (await page.request.get("/api/v1/insights/settings")).json()).llm.report.provider).toBe("codex");
   for (const t of ["report", "daily"]) await task(t).getByTestId("insights-task-mode").selectOption("api");
   await expect.poll(async () => { const x = (await (await page.request.get("/api/v1/insights/settings")).json()).llm; return `${x.report.mode} ${x.daily.mode}`; }).toBe("api api");
-  await page.locator('[data-testid="insights-repo-cfg"][data-repo="vllm-project/vllm"]').getByTestId("insights-schedule").check();
+  const vllm = page.locator('[data-testid="insights-repo-cfg"][data-repo="vllm-project/vllm"]');
+  await vllm.getByTestId("insights-schedule").check();
+  await vllm.getByTestId("insights-report-week").check(); // reports made by the scheduler when a period ends
+  await vllm.getByTestId("insights-report-month").check();
   await page.getByTestId("insights-repos-save").click();
   await expect(page.getByTestId("insights-note")).toContainText("Saved");
   const s = await (await page.request.get("/api/v1/insights/settings")).json();
-  expect(s.repos.find((r: any) => r.repo === "vllm-project/vllm").schedule.enabled).toBe(true);
-  await page.locator('[data-testid="insights-repo-cfg"][data-repo="vllm-project/vllm"]').getByTestId("insights-schedule").uncheck();
+  const saved = s.repos.find((r: any) => r.repo === "vllm-project/vllm");
+  expect(saved.schedule.enabled).toBe(true);
+  expect(saved.reports).toEqual({ week: true, month: true, quarter: false, year: false });
+  await vllm.getByTestId("insights-report-week").uncheck();
+  await vllm.getByTestId("insights-report-month").uncheck();
+  await vllm.getByTestId("insights-schedule").uncheck();
   await page.getByTestId("insights-repos-save").click();
   await page.getByTestId("activity-files").click();
 });

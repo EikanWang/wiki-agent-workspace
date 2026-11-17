@@ -14,6 +14,7 @@ export interface InsightsRepo {
   sources: { issues: boolean; commits: boolean; rfcs: boolean };
   highlights: boolean;
   schedule: { enabled: boolean; time: string };
+  reports?: { week: boolean; month: boolean; quarter: boolean; year: boolean };
   rfc: { repos: string[]; labels: string[]; title_patterns: string[] };
 }
 interface TaskModel { mode: "api" | "agent"; provider: string | null; model: string | null; variant: string | null }
@@ -493,7 +494,7 @@ function Highlights({ repo, tabs, onRan, enabled, onOpenPr }: { repo: string; ta
   );
 }
 
-interface SchedulePlan { running: string | null; due: string[]; deferred: string | null }
+interface SchedulePlan { running: string | null; due: string[]; reports_due?: string[]; deferred: string | null }
 function ScheduleState() {
   const [p, setP] = useState<SchedulePlan | null>(null);
   useEffect(() => {
@@ -508,7 +509,8 @@ function ScheduleState() {
       Scheduled runs go one repository at a time, start only with at least half of the GitHub quota left, and use at most 40% of
       each hourly quota, evenly paced — the rest stays for your own work.
       {p?.running && <div>Running now: <b>{p.running}</b>{p.due.filter((r) => r !== p.running).length ? ` · next: ${p.due.filter((r) => r !== p.running).join(", ")}` : ""}</div>}
-      {!p?.running && p?.deferred && <div className="warn">Waiting: {p.deferred} · due: {p.due.join(", ")}</div>}
+      {!p?.running && p?.deferred && <div className="warn">Waiting: {p.deferred} · due: {[...p.due, ...(p.reports_due ?? [])].join(", ")}</div>}
+      {(p?.reports_due?.length ?? 0) > 0 && <div data-testid="insights-reports-due">Reports due: {p!.reports_due!.join(", ")}</div>}
     </div>
   );
 }
@@ -593,6 +595,13 @@ function InsightsSettings() {
             <label><input type="checkbox" checked={r.highlights} onChange={(e) => setRepo(i, { highlights: e.target.checked })} /> XPU highlights</label>
             <label title="Make the daily summary (and highlights) every day at this time"><input type="checkbox" checked={r.schedule.enabled} onChange={(e) => setRepo(i, { schedule: { ...r.schedule, enabled: e.target.checked } })} data-testid="insights-schedule" /> every day at</label>
             <input type="time" value={r.schedule.time} onChange={(e) => setRepo(i, { schedule: { ...r.schedule, time: e.target.value } })} />
+          </div>
+          <div className="row nowrap small" title="When a week (Mon–Sun) / month / quarter / year has ended, its report is made by itself — after this repository's time of day and its daily summary of the period's last day. Only the latest finished period, once each.">
+            reports when a period ends:
+            {(["week", "month", "quarter", "year"] as const).map((k) => {
+              const rp = r.reports ?? { week: false, month: false, quarter: false, year: false };
+              return <label key={k}><input type="checkbox" checked={rp[k]} onChange={(e) => setRepo(i, { reports: { ...rp, [k]: e.target.checked } })} data-testid={`insights-report-${k}`} /> {k === "week" ? "weekly" : `${k}ly`}</label>;
+            })}
           </div>
           <div className="row nowrap small">RFCs: repos <input className="mono" defaultValue={r.rfc.repos.join(", ")} onBlur={(e) => setRepo(i, { rfc: { ...r.rfc, repos: list(e.target.value) } })} />
             labels <input defaultValue={r.rfc.labels.join(", ")} onBlur={(e) => setRepo(i, { rfc: { ...r.rfc, labels: list(e.target.value) } })} />
