@@ -222,7 +222,9 @@ count follows as you decide in the PR tab. The
 line above the list says how many are requested, how many are shown and how many drafts are hidden.
 **Agent review of several PRs at once**: tick the box at the left of a PR (it shows on hover, and on every row
 once something is selected; the row does not open), Shift-click another box to select the rows in between, or tick
-a repository's box to select all of its PRs shown (again to unselect them). A bar above the list says how many are
+a repository's box to select all of its PRs shown (again to unselect them), or a category's box (left of *Not
+reviewed yet*, *New activity since your comments* or *Commented, nothing new* inside a repository) to select just
+the PRs of that category in that repository. A bar above the list says how many are
 selected: **🤖 Agent review N** starts the review of each — the same review as its tab's **Agent review** button,
 with the prefilled question and what the agent learned — and **Clear** unselects. Two run at a time; the others
 show "🤖 queued (k)" and start in order ("🤖 starting review…", then "🤖 reviewing…"; **cancel waiting** in the

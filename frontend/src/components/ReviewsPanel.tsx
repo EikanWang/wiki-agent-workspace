@@ -413,21 +413,23 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
     </button>
     );
   };
+  /** a box that selects (or unselects) all of `prs`: a repository's, or one category of it */
+  const selectBox = (prs: ReviewPR[], what: string, testId: string, cls: string) => {
+    const n = prs.filter((p) => selected.has(prKey(p))).length;
+    const all = n === prs.length && n > 0;
+    return (
+      <span role="checkbox" aria-checked={all ? true : n ? "mixed" : false} tabIndex={0} className={`review-check ${cls} ${all ? "on" : n ? "some" : ""}`}
+        aria-label={`Select all PRs of ${what}`} title={all ? `Unselect the ${prs.length} PR(s) of ${what}` : `Select the ${prs.length} PR(s) of ${what} shown, for Agent review`} data-testid={testId}
+        onClick={(e) => { e.stopPropagation(); pickAll(prs, !all); }} onKeyDown={(e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); e.stopPropagation(); pickAll(prs, !all); } }}>{all ? "✓" : n ? "–" : ""}</span>
+    );
+  };
   const groupBox = (repo: string, prs: ReviewPR[], watched: boolean) => {
     const id = (watched ? "w:" : "") + repo;
     const open = !collapsed.has(id);
     return (
       <div key={id} className="review-group" data-testid={watched ? "review-group-watched" : "review-group"} data-repo={repo}>
         <div className="review-group-head-row">
-          {(() => {
-            const n = prs.filter((p) => selected.has(prKey(p))).length;
-            const all = n === prs.length && n > 0;
-            return (
-              <span role="checkbox" aria-checked={all ? true : n ? "mixed" : false} tabIndex={0} className={`review-check group ${all ? "on" : n ? "some" : ""}`}
-                aria-label={`Select all PRs of ${repo}`} title={all ? `Unselect the ${prs.length} PR(s) of ${repo}` : `Select the ${prs.length} PR(s) of ${repo} shown`} data-testid="review-select-group"
-                onClick={() => pickAll(prs, !all)} onKeyDown={(e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); pickAll(prs, !all); } }}>{all ? "✓" : n ? "–" : ""}</span>
-            );
-          })()}
+          {selectBox(prs, repo, "review-select-group", "group")}
           <button className="review-group-head" onClick={() => toggle(id)} aria-expanded={open}>
             <span className="chev">{open ? "⌄" : "›"}</span>
             <span className="review-repo">{repo}</span>
@@ -447,13 +449,16 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
           const subOpen = !collapsed.has(k);
           return (
             <div key={c.key} className={`review-section ${["todo", "news", "quiet"].indexOf(c.key) === 0 ? "top" : c.key === "news" ? "high" : "medium"}`} data-testid="review-section" data-category={c.key}>
-              <button className="review-section-head" onClick={() => toggle(k)} aria-expanded={subOpen} title={CATEGORY_HINT[c.key]}>
-                <span className="chev">{subOpen ? "⌄" : "›"}</span>
-                <span className="review-section-title">{c.title}</span>
-                {c.level && <span className={`review-level ${["top", "high", "medium"].includes(c.level) ? c.level : "medium"}`}>{c.level}</span>}
-                <span className="spacer" />
-                <span className="git-badge clean">{list.length}</span>
-              </button>
+              <div className="review-section-head-row">
+                {selectBox(list, `“${c.title}” in ${repo}`, "review-select-category", "category")}
+                <button className="review-section-head" onClick={() => toggle(k)} aria-expanded={subOpen} title={CATEGORY_HINT[c.key]}>
+                  <span className="chev">{subOpen ? "⌄" : "›"}</span>
+                  <span className="review-section-title">{c.title}</span>
+                  {c.level && <span className={`review-level ${["top", "high", "medium"].includes(c.level) ? c.level : "medium"}`}>{c.level}</span>}
+                  <span className="spacer" />
+                  <span className="git-badge clean">{list.length}</span>
+                </button>
+              </div>
               {subOpen && list.map((p) => prRow(p))}
             </div>
           );

@@ -3969,6 +3969,29 @@ test("Reviews: select several PRs (a row, a range, a repository) and start the a
   for (const n of range) await expect(row(n)).toHaveAttribute("data-selected", "1");
   await page.getByTestId("reviews-select-clear").click();
   await expect(page.locator('[data-testid="review-pr"][data-selected="1"]')).toHaveCount(0);
+  // a category's box (inside a repository) selects just that category's PRs there; again: unselects them
+  for (const k of ["todo", "news"]) {
+    const sec = page.locator(`[data-testid="review-group"][data-repo="pytorch/pytorch"] [data-testid="review-section"][data-category="${k}"]`);
+    const box = sec.getByTestId("review-select-category");
+    const nums = await sec.getByTestId("review-pr").evaluateAll((els) => els.map((e) => e.getAttribute("data-number")));
+    expect(nums.length).toBeGreaterThan(0);
+    // like a person: from the category's title, slide the pointer left onto its box (it must stay shown), click there
+    await sec.locator(".review-section-title").scrollIntoViewIfNeeded();
+    const t = (await sec.locator(".review-section-title").boundingBox())!;
+    await page.mouse.move(t.x + 5, t.y + t.height / 2);
+    const bb = (await box.boundingBox())!;
+    await page.mouse.move(bb.x + bb.width / 2, bb.y + bb.height / 2, { steps: 12 });
+    await page.mouse.down();
+    await page.mouse.up();
+    await expect(box).toHaveAttribute("aria-checked", "true");
+    await expect(page.getByTestId("reviews-selected-count")).toHaveText(`${nums.length} selected`);
+    for (const n of nums) await expect(sec.locator(`[data-testid="review-pr"][data-number="${n}"]`)).toHaveAttribute("data-selected", "1");
+    await expect(page.locator('[data-testid="review-pr"][data-selected="1"]')).toHaveCount(nums.length); // only those
+    await expect(sec).toHaveAttribute("data-category", k);
+    await expect(sec.getByTestId("review-pr").first()).toBeVisible(); // the section did not fold
+    await box.click();
+    await expect(page.locator('[data-testid="review-pr"][data-selected="1"]')).toHaveCount(0);
+  }
   // a repository's box selects all its PRs shown; intel/torch-xpu-ops has no agent wiki yet: it gets this one
   await row(103).hover(); // (the boxes show on hover, and all of them while something is selected)
   await row(103).getByTestId("review-select").click();

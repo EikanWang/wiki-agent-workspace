@@ -1280,6 +1280,12 @@ body.resizing-h iframe { pointer-events: none; }
 /* the categories are sub-items of their repository: their arrow under the repository's name, their PRs further in */
 .review-group > .review-section { margin: 0 0 2px 32px; }
 .review-group > .review-section .review-section-head { background: transparent; font-size: 11px; padding: 3px 8px; }
+/* a category's box (select its PRs for Agent review) sits in the indent, left of the category's arrow */
+/* the row itself reaches into the indent (the box is inside it, so moving the pointer to the box keeps it shown);
+   22px = the box's 3px + 15px + 4px: the arrow stays where it was */
+.review-section-head-row { display: flex; align-items: center; margin-left: -22px; }
+.review-section-head-row .review-section-head { flex: 1; min-width: 0; }
+.review-check.category { margin: 0 4px 0 3px; }
 .reviews-cats { display: flex; flex-wrap: wrap; gap: 4px; }
 .review-cat-chip { display: inline-flex; align-items: center; gap: 3px; padding: 0 6px 0 3px; border: 1px solid var(--border); border-left-width: 3px; border-radius: 10px; cursor: pointer; color: var(--muted); user-select: none; font-size: 11px; white-space: nowrap; }
 .review-cat-chip input { margin: 0; }
@@ -1453,7 +1459,7 @@ body.resizing-h iframe { pointer-events: none; }
 
 /* Reviews: select several PRs → one Agent review */
 .review-check { flex: none; width: 15px; height: 15px; margin-top: 2px; border: 1px solid var(--muted); border-radius: 3px; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; line-height: 1; color: var(--primary-fg); background: var(--bg); cursor: pointer; visibility: hidden; }
-.review-pr:hover .review-check, .review-check:focus-visible, .review-check.on, .review-check.some, .reviews-panel.selecting .review-check, .review-group-head-row:hover .review-check { visibility: visible; }
+.review-pr:hover .review-check, .review-check:focus-visible, .review-check.on, .review-check.some, .reviews-panel.selecting .review-check, .review-group-head-row:hover .review-check, .review-section-head-row:hover .review-check { visibility: visible; }
 .review-check.on, .review-check.some { background: var(--primary); border-color: var(--primary); }
 .review-check.group { margin: 0 0 0 6px; }
 .review-pr { padding-left: 6px; }
