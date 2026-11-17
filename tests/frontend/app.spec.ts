@@ -1967,6 +1967,24 @@ test("GitHub review hub: only the owner's GitHub sign-in sees it; queue grouped 
   await expect.poll(() => sectionsOf("intel/torch-xpu-ops")).toEqual(["quiet"]);
   await expect(page.locator('[data-repo="intel/torch-xpu-ops"] [data-category="quiet"] [data-testid="review-pr"]')).toHaveAttribute("data-number", "201");
   await expect(page.locator('[data-repo="intel/torch-xpu-ops"]').getByTestId("review-quiet")).toBeVisible();
+  // the categories are indented under their repository, their PRs further still
+  const left = (sel: string) => page.locator(sel).first().evaluate((e) => e.getBoundingClientRect().left);
+  const head = await left('[data-repo="pytorch/pytorch"] .review-group-head .chev');
+  const section = await left('[data-repo="pytorch/pytorch"] [data-category="todo"] .review-section-head .chev');
+  const row = await left('[data-repo="pytorch/pytorch"] [data-category="todo"] [data-testid="review-pr"] .review-pr-main');
+  expect(section - head).toBeGreaterThanOrEqual(12);
+  expect(row - section).toBeGreaterThanOrEqual(12);
+  // each category can be shown or hidden on its own (kept in this browser)
+  const cat = (k: string) => page.locator(`[data-testid="reviews-category"][data-category="${k}"] input`);
+  await cat("todo").uncheck();
+  await expect.poll(() => sectionsOf("pytorch/pytorch")).toEqual(["news"]);
+  await cat("quiet").uncheck();
+  await expect(page.locator('[data-testid="review-group"][data-repo="intel/torch-xpu-ops"]')).toHaveCount(0);
+  await expect(page.getByTestId("reviews-categories-hidden")).toBeVisible();
+  await cat("todo").check();
+  await cat("quiet").check();
+  await expect.poll(() => sectionsOf("pytorch/pytorch")).toEqual(["todo", "news"]);
+  await expect.poll(() => sectionsOf("intel/torch-xpu-ops")).toEqual(["quiet"]);
   // the Meta maintainer's request (new activity since your comment) says so, with its level from the hard rule
   const r104 = page.locator('[data-repo="pytorch/pytorch"] [data-category="news"] [data-testid="review-pr"][data-number="104"]');
   await expect(r104.getByTestId("review-since-mine")).toContainText("new comments");
@@ -2403,14 +2421,16 @@ test("GitHub PR tab: overview, files, choose the wiki once, ask about the PR and
   await stub.getByTestId("gh-reply").click();
   await stub.getByTestId("gh-reply-text").fill("Yes, on old drivers.");
   await stub.getByTestId("gh-reply-send").click();
-  await expect(stub.getByTestId("gh-thread")).toContainText("Yes, on old drivers.");
-  // select two added lines (drag) → ask the agent about them
+  // the reply is posted once the box has closed and the reloaded thread shows it as a comment (the open textarea's
+  // text would match "toContainText" on the thread at once, while its height is still about to change twice)
+  await expect(stub.getByTestId("gh-reply-text")).toHaveCount(0);
+  await expect(stub.locator('[data-testid="gh-thread"] .gh-comment').filter({ hasText: "Yes, on old drivers." })).toHaveCount(1);
+  // select two added lines (drag) → ask the agent about them; each row is located when the pointer goes to it
   const added = stub.locator('[data-testid="pr-diff-row"].add');
   await expect(added).toHaveCount(2);
-  const a1 = (await added.nth(0).boundingBox())!, a2 = (await added.nth(1).boundingBox())!;
-  await page.mouse.move(a1.x + 60, a1.y + a1.height / 2);
+  await added.nth(0).hover({ position: { x: 60, y: 10 } });
   await page.mouse.down();
-  await page.mouse.move(a2.x + 60, a2.y + a2.height / 2, { steps: 4 });
+  await added.nth(1).hover({ position: { x: 60, y: 10 } });
   await page.mouse.up();
   await expect(page.getByTestId("pr-composer")).toContainText("Lines R11–R12");
   // a suggested change from the selected lines
@@ -2595,6 +2615,114 @@ test("GitHub PR tab: agent review → suggested comments in the diff; discuss, a
   const threads = posted.filter((x: any) => x.mutation === "AddThread").map((x: any) => x.variables);
   expect(threads).toHaveLength(1);
   expect(threads[0]).toMatchObject({ path: "c10/xpu/stub.cpp", body: "Agent: is this guard needed?", side: "RIGHT", subject: "LINE" });
+  await page.locator('[data-testid="doc-tab"][data-ws="github"]').getByTestId("doc-tab-close").click();
+  await signOut(page);
+});
+
+test("review learning: severity, edits and discard reasons are learned; you accept the lessons; teach one; the next agent review uses them", async ({ page }) => {
+  await ensureGithubSignIn(page);
+  await page.goto("/");
+  await page.getByTestId("login-github").click();
+  await expect(page.getByTestId("view-document")).toBeVisible({ timeout: 15000 });
+  await page.getByTestId("activity-reviews").click();
+  // start from no lessons waiting for you (earlier tests may have left some): the badge must come from this review
+  await page.getByTestId("reviews-settings").click();
+  await page.getByTestId("reviews-settings-learning").click();
+  const lbox = page.getByTestId("learning-settings");
+  // a distill an earlier test started may still be running: let it finish before clearing what it proposes
+  await expect(lbox.getByTestId("learning-distill")).not.toHaveText("Learning…", { timeout: 30000 });
+  await lbox.getByTestId("learning-filter-proposed").click();
+  while ((await lbox.locator('[data-testid="learning-lesson"][data-status="proposed"]').count()) > 0) {
+    const n = await lbox.locator('[data-testid="learning-lesson"][data-status="proposed"]').count();
+    await lbox.locator('[data-testid="learning-lesson"][data-status="proposed"]').first().getByTestId("learning-reject").click();
+    await expect(lbox.locator('[data-testid="learning-lesson"][data-status="proposed"]')).toHaveCount(n - 1);
+  }
+  await lbox.getByTestId("learning-filter-rejected").click();
+  while ((await lbox.locator('[data-testid="learning-lesson"][data-status="rejected"]').count()) > 0) { // rejected ones are never proposed again
+    const n = await lbox.locator('[data-testid="learning-lesson"][data-status="rejected"]').count();
+    await lbox.locator('[data-testid="learning-lesson"][data-status="rejected"]').first().getByTestId("learning-delete").click();
+    await expect(lbox.locator('[data-testid="learning-lesson"][data-status="rejected"]')).toHaveCount(n - 1);
+  }
+  await page.getByTestId("reviews-settings-priority").click();
+  await page.getByTestId("reviews-settings").click();
+  await expect(page.getByTestId("reviews-learning-badge")).toHaveCount(0);
+  await page.locator('[data-testid="review-pr"][data-number="101"]').click();
+  await expect(page.getByTestId("pr-wiki-select")).toBeVisible();
+  await page.getByTestId("pr-agent-review").click();
+  await page.getByTestId("selection-send").click();
+  await expect(page.getByTestId("pr-agent-review-done")).toContainText("suggested 2 comment(s)", { timeout: 25000 });
+  await page.getByTestId("pr-tab-files").click();
+  const agent = page.locator('[data-testid="pr-draft"][data-origin="agent"]');
+  const byId = async (text: string) => page.locator(`[data-testid="pr-draft"][data-id="${await agent.filter({ hasText: text }).getAttribute("data-id")}"]`);
+  const line = await byId("is this guard needed?");
+  const file = await byId("consider a test");
+  // the agent rates each comment
+  await expect(line.getByTestId("pr-draft-severity")).toHaveText("nit · style");
+  await expect(file.getByTestId("pr-draft-severity")).toHaveText("major · tests");
+  // edit one: the agent's text is kept and can be shown
+  await file.getByRole("button", { name: "Edit" }).click();
+  await file.locator("textarea").fill("Please add an XPU test for the stub.");
+  await file.getByRole("button", { name: "Save" }).click();
+  await expect(file.getByTestId("pr-draft-edited")).toBeVisible();
+  await file.getByTestId("pr-draft-edited").click();
+  await expect(file.getByTestId("pr-draft-original")).toContainText("The agent wrote: Line 9999: Agent: consider a test.");
+  await file.getByTestId("pr-draft-accepted").click();
+  // discard the other, saying why (one click)
+  await line.getByTestId("pr-draft-discarded").click();
+  await expect(line.getByTestId("pr-draft-reasons")).toBeVisible();
+  await line.getByTestId("pr-draft-reason-nitpick").click();
+  await expect(line.getByTestId("pr-draft-reason-nitpick")).toHaveAttribute("aria-pressed", "true");
+  // teach: a lesson from your own wording, drafted by the model
+  await file.getByTestId("teach").click();
+  await file.getByTestId("teach-draft").click();
+  await expect(file.getByTestId("teach-text")).toHaveValue("Learned: Please add an XPU test for the stub.");
+  await file.getByTestId("teach-save").click();
+  await expect(file.getByTestId("teach-done")).toBeVisible();
+  await page.getByTestId("pr-finish-review").click();
+  await page.getByTestId("pr-submit-send").click();
+  await expect(page.getByTestId("pr-notice")).toContainText("The agent learns from 2 of its suggestion(s)");
+  // the lessons are proposed in the background, seconds after the publish answer. Reload while that runs: the page
+  // did not start it, yet the ⚙ badge follows on its own (the summary says a distill is running)
+  await expect(page.getByTestId("reviews-learning-badge")).toHaveCount(0);
+  await page.reload();
+  await expect(page.getByTestId("reviews-panel")).toBeVisible({ timeout: 15000 });
+  await expect(page.getByTestId("reviews-learning-badge")).toHaveCount(0); // still distilling (the fake model takes 4 s)
+  await expect(page.getByTestId("reviews-learning-badge")).toBeVisible({ timeout: 20000 });
+  await page.getByTestId("reviews-settings").click();
+  await page.getByTestId("reviews-settings-learning").click();
+  const box = page.getByTestId("learning-settings");
+  await box.getByTestId("learning-filter-proposed").click();
+  const guard = box.getByTestId("learning-lesson").filter({ hasText: "Skip questions about guards; the user discards them." });
+  await expect(guard).toHaveAttribute("data-status", "proposed");
+  await guard.getByTestId("learning-evidence").click();
+  await expect(guard.getByTestId("learning-cases")).toContainText("discarded: Nitpick");
+  await guard.getByTestId("learning-accept").click();
+  await box.getByTestId("learning-filter-active").click();
+  await expect(box.getByTestId("learning-lesson").filter({ hasText: "Skip questions about guards" })).toHaveAttribute("data-status", "active");
+  await expect(box.getByTestId("learning-lesson").filter({ hasText: "Learned: Please add an XPU test" })).toBeVisible();
+  await expect(box.getByTestId("learning-stats").filter({ hasText: "pytorch/pytorch" })).toContainText("discarded");
+  await page.getByTestId("reviews-settings").click();
+  // the next agent review uses them
+  await page.getByTestId("pr-agent-review").click();
+  await page.getByTestId("selection-send").click();
+  await expect(page.getByTestId("pr-agent-review-done")).toBeVisible({ timeout: 25000 });
+  await expect(page.getByTestId("pr-agent-review-lessons")).toContainText(/used [2-9] lesson\(s\) from your earlier reviews/);
+  await page.getByTestId("pr-agent-review-lessons").locator("summary").click();
+  await expect(page.getByTestId("pr-agent-review-lessons")).toContainText("Skip questions about guards");
+  // leave the PR as it was for the next tests
+  await page.getByTestId("pr-tab-files").click();
+  while ((await agent.count()) > 0) {
+    const n = await agent.count();
+    await agent.first().getByTestId("pr-draft-delete").click();
+    await expect(agent).toHaveCount(n - 1);
+  }
+  await page.getByTestId("reviews-settings").click();
+  await page.getByTestId("reviews-settings-learning").click();
+  await page.getByTestId("learning-enabled").uncheck();
+  await expect(page.getByTestId("learning-enabled")).not.toBeChecked();
+  await page.getByTestId("learning-enabled").check();
+  await page.getByTestId("reviews-settings-priority").click();
+  await page.getByTestId("reviews-settings").click();
   await page.locator('[data-testid="doc-tab"][data-ws="github"]').getByTestId("doc-tab-close").click();
   await signOut(page);
 });
@@ -3815,4 +3943,52 @@ test("Agents: rename a session, select all of a folder, delete selected after co
   await page.getByTestId("confirm-ok").click();
   await expect(page.locator(`[data-testid="mon-card"][data-key="${victim}"]`)).toHaveCount(0, { timeout: 15000 });
   await page.getByTestId("activity-files").click();
+});
+
+test("Reviews: select several PRs (a row, a range, a repository) and start the agent review of all of them at once", async ({ page }) => {
+  await ensureGithubSignIn(page);
+  await page.goto("/");
+  await page.getByTestId("login-github").click();
+  await expect(page.getByTestId("view-document")).toBeVisible({ timeout: 15000 });
+  await page.getByTestId("activity-reviews").click();
+  const row = (n: number) => page.locator(`[data-testid="review-pr"][data-number="${n}"]`);
+  await expect(row(103)).toBeVisible({ timeout: 15000 });
+  await expect(page.getByTestId("reviews-batch-bar")).toHaveCount(0); // nothing selected: no bar
+  // a row's checkbox selects it (the row does not open)
+  await row(103).hover();
+  await row(103).getByTestId("review-select").click();
+  await expect(row(103)).toHaveAttribute("data-selected", "1");
+  await expect(page.getByTestId("doc-tab").filter({ hasText: "#103" })).toHaveCount(0);
+  await expect(page.getByTestId("reviews-selected-count")).toHaveText("1 selected");
+  // Shift-click: the rows in between as shown
+  const order = await page.getByTestId("review-pr").evaluateAll((els) => els.map((e) => Number(e.getAttribute("data-number"))));
+  const a = order.indexOf(103), b = order.indexOf(101);
+  await row(101).getByTestId("review-select").click({ modifiers: ["Shift"] });
+  const range = order.slice(Math.min(a, b), Math.max(a, b) + 1);
+  await expect(page.getByTestId("reviews-selected-count")).toHaveText(`${range.length} selected`);
+  for (const n of range) await expect(row(n)).toHaveAttribute("data-selected", "1");
+  await page.getByTestId("reviews-select-clear").click();
+  await expect(page.locator('[data-testid="review-pr"][data-selected="1"]')).toHaveCount(0);
+  // a repository's box selects all its PRs shown; intel/torch-xpu-ops has no agent wiki yet: it gets this one
+  await row(103).hover(); // (the boxes show on hover, and all of them while something is selected)
+  await row(103).getByTestId("review-select").click();
+  const intel = page.locator('[data-testid="review-group"][data-repo="intel/torch-xpu-ops"]');
+  await intel.getByTestId("review-select-group").click();
+  await expect(intel.getByTestId("review-select-group")).toHaveAttribute("aria-checked", "true");
+  await expect(page.getByTestId("reviews-selected-count")).toHaveText("2 selected");
+  await page.getByTestId("reviews-batch-review").click();
+  await expect(page.getByTestId("reviews-batch-note")).toContainText("Agent review started for 2 PR(s)");
+  await expect(page.locator('[data-testid="review-pr"][data-selected="1"]')).toHaveCount(0); // cleared once started
+  // each one is reviewed like with its tab's Agent review button: its suggestions wait for you
+  await expect(row(103).getByTestId("review-agent-waiting")).toBeVisible({ timeout: 30000 });
+  await expect(row(201).getByTestId("review-agent-waiting")).toBeVisible({ timeout: 30000 });
+  await expect(page.getByTestId("reviews-batch-progress")).toHaveCount(0);
+  const wikis = (await (await page.request.get("/api/v1/github/repo-wikis")).json()).repos as { repo: string }[];
+  expect(wikis.map((w) => w.repo)).toContain("intel/torch-xpu-ops");
+  // opening one shows its suggestions in the diff
+  await row(201).click();
+  await page.getByTestId("pr-tab-files").click();
+  await expect(page.locator('[data-testid="pr-draft"][data-origin="agent"]').first()).toBeVisible({ timeout: 15000 });
+  await page.locator('[data-testid="doc-tab"][data-ws="github"]').getByTestId("doc-tab-close").click();
+  await signOut(page);
 });

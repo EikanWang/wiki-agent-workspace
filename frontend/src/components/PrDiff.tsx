@@ -7,6 +7,7 @@ import MentionTextarea from "./MentionTextarea";
 import GhUser from "./GhUser";
 import { loadReviews } from "./ReviewsPanel";
 import { Line, SplitCols, UnifiedCols, buildSplitRows, numColStyle, parseUnified } from "./DiffReview";
+import { DISCARD_REASONS, TeachBox } from "./ReviewLearning";
 
 /** A review thread on GitHub (line or whole-file), with all its comments. */
 export interface GhThread {
@@ -19,6 +20,8 @@ export interface GhDraft {
   id: string; path: string; subject: "line" | "file"; side: "LEFT" | "RIGHT"; line: number; start_side: string | null; start_line: number | null; line_text: string; body: string;
   /** agent: suggested by an agent review; published only once applied (decision accepted) */
   origin?: "user" | "agent"; decision?: "accepted" | "proposed" | "discarded"; thread_id?: string | null;
+  /** review learning: what the agent first wrote (edited: you changed it), why you discarded it, its severity */
+  original_body?: string | null; edited?: boolean; discard_reason?: string | null; severity?: "blocker" | "major" | "minor" | "nit" | null; category?: string | null;
 }
 export interface PrFile { path: string; previous_path: string | null; status: string; additions: number; deletions: number; unified: string; binary_or_large: boolean; viewed: "VIEWED" | "UNVIEWED" | "DISMISSED" }
 
@@ -515,6 +518,7 @@ function ThreadBox({ thread, apiBase, onChanged, onError, canAsk, onAsk }: {
                 {thread.resolved ? "Unresolve" : "Resolve conversation"}
               </button>
               <button className="link-btn small" disabled={!canAsk} onClick={() => setAsking("")} title={canAsk ? "Ask the agent about this thread" : "Choose the agent's wiki first"} data-testid="gh-ask">Ask agent…</button>
+              {first && <TeachBox apiBase={apiBase} body={first.body} path={thread.path} line={thread.line ?? thread.original_line} lineText={thread.diff_hunk?.split("\n").slice(-6).join("\n")} author={first.author} onError={onError} />}
             </div>
           )}
           {reply !== null && (
@@ -550,6 +554,7 @@ function DraftBox({ draft, apiBase, onChanged, onError, canAsk = false, onAsk }:
   const [edit, setEdit] = useState<string | null>(null);
   const [asking, setAsking] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [original, setOriginal] = useState(false);
   const agent = draft.origin === "agent";
   const decision = draft.decision ?? "accepted";
   const run = async (fn: () => Promise<unknown>) => {
@@ -565,15 +570,18 @@ function DraftBox({ draft, apiBase, onChanged, onError, canAsk = false, onAsk }:
   const save = () => run(async () => { await patch(`${apiBase}/drafts/${draft.id}`, { body: edit }); setEdit(null); await onChanged(); });
   const remove = () => run(async () => { await del(`${apiBase}/drafts/${draft.id}`); await onChanged(); });
   const decide = (d: "accepted" | "proposed" | "discarded") => run(async () => { await patch(`${apiBase}/drafts/${draft.id}`, { decision: d }); await onChanged(); });
+  const because = (r: string) => run(async () => { await patch(`${apiBase}/drafts/${draft.id}`, { discard_reason: draft.discard_reason === r ? "" : r }); await onChanged(); });
   const where = draft.subject === "file" ? draft.path : `${draft.path} ${draft.side === "LEFT" ? "L" : "R"}${draft.start_line ? `${draft.start_line}–` : ""}${draft.line}`;
   const ask = () => onAsk && run(async () => {
     await onAsk(`${draft.line_text ? draft.line_text + "\n\n" : ""}Suggested review comment (by the agent): ${draft.body}`, `suggested comment on ${where}`, asking ?? "");
     setAsking(null);
   });
   return (
-    <div className={`gh-thread draft ${agent ? `agent ${decision}` : ""}`} data-testid="pr-draft" data-origin={draft.origin ?? "user"} data-decision={decision}>
+    <div className={`gh-thread draft ${agent ? `agent ${decision}` : ""}`} data-testid="pr-draft" data-id={draft.id} data-origin={draft.origin ?? "user"} data-decision={decision}>
       <div className="gh-comment-head small">
         {agent ? <span className="chip agent">Agent suggestion</span> : <span className="chip pending">Pending</span>}{" "}
+        {agent && draft.severity && <span className={`chip sev ${draft.severity}`} title={draft.category ? `${draft.severity} · ${draft.category}` : draft.severity} data-testid="pr-draft-severity">{draft.severity}{draft.category ? ` · ${draft.category}` : ""}</span>}{" "}
+        {agent && draft.edited && <button className="chip chip-btn edited" onClick={() => setOriginal((v) => !v)} title="You edited the agent's text: show what it wrote" data-testid="pr-draft-edited">edited {original ? "▾" : "▸"}</button>}{" "}
         <span className="muted">{agent ? (decision === "accepted" ? "applied: published when you submit the review" : decision === "discarded" ? "discarded: not published" : "not published unless you apply it") : "published when you submit the review"}</span>
       </div>
       {agent && (
@@ -585,6 +593,15 @@ function DraftBox({ draft, apiBase, onChanged, onError, canAsk = false, onAsk }:
           ))}
         </div>
       )}
+      {agent && decision === "discarded" && (
+        <div className="row small pr-discard-reasons" data-testid="pr-draft-reasons">
+          <span className="muted">Why? (the agent learns from it)</span>
+          {DISCARD_REASONS.map(([k, label]) => (
+            <button key={k} className={`chip chip-btn reason ${draft.discard_reason === k ? "on" : ""}`} aria-pressed={draft.discard_reason === k} disabled={busy} onClick={() => void because(k)} data-testid={`pr-draft-reason-${k}`}>{label}</button>
+          ))}
+        </div>
+      )}
+      {agent && draft.edited && original && <div className="muted small pr-draft-original" data-testid="pr-draft-original">The agent wrote: {draft.original_body}</div>}
       {edit === null ? (
         <>
           {!(agent && decision === "discarded") && <div className="markdown-body gh-comment-body" dangerouslySetInnerHTML={{ __html: md(draft.body, apiBase) }} />}
@@ -594,6 +611,7 @@ function DraftBox({ draft, apiBase, onChanged, onError, canAsk = false, onAsk }:
               <button className="link-btn small" onClick={() => setEdit(draft.body)}>Edit</button>
               {agent && onAsk && <button className="link-btn small" disabled={!canAsk} onClick={() => setAsking("")} title="Discuss this suggestion with the agent" data-testid="pr-draft-ask">Discuss with agent…</button>}
               <button className="link-btn small danger" onClick={() => void remove()} data-testid="pr-draft-delete">Delete</button>
+              {decision !== "discarded" && <TeachBox apiBase={apiBase} body={draft.body} path={draft.path} line={draft.line || null} lineText={draft.line_text} onError={onError} />}
             </div>
           )}
           {asking !== null && (
@@ -621,7 +639,7 @@ function DraftBox({ draft, apiBase, onChanged, onError, canAsk = false, onAsk }:
 }
 
 /** "Finish your review": summary + Comment / Approve / Request changes → one review on GitHub. */
-export function SubmitReview({ apiBase, drafts, undecided = 0, fromGithub = 0, owner, onDone, onError }: { apiBase: string; drafts: number; undecided?: number; fromGithub?: number; owner: string | null; onDone: (url: string | null) => Promise<void>; onError: (m: string) => void }) {
+export function SubmitReview({ apiBase, drafts, undecided = 0, fromGithub = 0, owner, onDone, onError }: { apiBase: string; drafts: number; undecided?: number; fromGithub?: number; owner: string | null; onDone: (url: string | null, learned: { agent: number; missed: number }) => Promise<void>; onError: (m: string) => void }) {
   const [open, setOpen] = useState(false);
   const [body, setBody] = useState("");
   const [event, setEvent] = useState<"COMMENT" | "APPROVE" | "REQUEST_CHANGES">("COMMENT");
@@ -629,11 +647,11 @@ export function SubmitReview({ apiBase, drafts, undecided = 0, fromGithub = 0, o
   const submit = async () => {
     setBusy(true);
     try {
-      const r = await post<{ url: string | null }>(`${apiBase}/review`, { event, body });
+      const r = await post<{ url: string | null; learning?: { agent: number; missed: number } }>(`${apiBase}/review`, { event, body });
       setOpen(false);
       setBody("");
       void loadReviews(false); // the Reviews list moves this PR at once (only the list reloads)
-      await onDone(r.url);
+      await onDone(r.url, r.learning ?? { agent: 0, missed: 0 });
     } catch (e) {
       onError((e as ApiError).message);
     } finally {

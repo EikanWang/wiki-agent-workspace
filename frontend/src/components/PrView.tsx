@@ -9,6 +9,7 @@ import DeferMenu, { deferLabel } from "./DeferMenu";
 import { usePersistentState, useRestoredScroll } from "../persist";
 import { SelectionAnchor, wholeDocument } from "../textmodel";
 import { GhDraft, GhThread, PrFile, PrFileDiff, SubmitReview } from "./PrDiff";
+import { refreshLearningSummary } from "./ReviewLearning";
 import { COMPOSER_HINT, composerKeyDown } from "./keys";
 import MentionTextarea from "./MentionTextarea";
 import { SelectionPopover } from "./Reader";
@@ -72,7 +73,7 @@ export function groupConversation(items: ConvItem[]): { items: ConvItem[]; threa
   return { items: out, threads };
 }
 interface ConvItem { kind: "review" | "comment"; id: number; author: string | null; state?: string; body: string; created_at: string | null; url: string | null; line_comments?: number; comments?: ConvLine[]; loaded?: number }
-interface AgentReviewRun { job_id: string; thread_id: string; state: "running" | "done" | "failed"; added: number; problem: string | null; started_at: string }
+interface AgentReviewRun { job_id: string; thread_id: string; state: "running" | "done" | "failed"; added: number; problem: string | null; started_at: string; lessons?: { id: string; text: string }[] }
 interface Review { threads: GhThread[]; conversation: ConvItem[]; drafts: GhDraft[]; pending_on_github: number | null; older_hidden: number; agent_reviews?: AgentReviewRun[] }
 
 const AGENT_REVIEW_QUESTION = "Review this pull request: correctness, performance, tests, API and design. Comment on the specific lines that need attention.";
@@ -320,7 +321,12 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
             </span>
           )}
           <SubmitReview apiBase={apiBase} drafts={accepted} undecided={undecided} fromGithub={review.pending_on_github ?? 0} owner={githubLogin}
-            onDone={async (url) => { setNotice(url ? `Review published on GitHub.` : "Review published."); await loadComments(); await load(true); }}
+            onDone={async (url, learned) => {
+              const what = [learned.agent ? `${learned.agent} of its suggestion(s)` : "", learned.missed ? `${learned.missed} point(s) it missed` : ""].filter(Boolean).join(" and ");
+              setNotice(`${url ? "Review published on GitHub." : "Review published."}${what ? ` The agent learns from ${what} (⚙ in Reviews → Agent learning).` : ""}`);
+              void refreshLearningSummary(true); // the lessons are proposed in the background: the ⚙ badge follows
+              await loadComments(); await load(true);
+            }}
             onError={(m) => setError(m)} />
           <span className="spacer" />
           {onDevelop && p.state === "OPEN" && (
@@ -391,6 +397,12 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
       )}
       {lastRun && lastRun.state === "failed" && <div className="banner warn" data-testid="pr-agent-review-failed">Agent review: {lastRun.problem}</div>}
       {lastRun && lastRun.state === "done" && lastRun.added === 0 && lastRun.problem && <div className="banner warn small" data-testid="pr-agent-review-empty">Agent review added no comments: {lastRun.problem}</div>}
+      {lastRun && (lastRun.lessons?.length ?? 0) > 0 && (reviewing || undecided > 0) && (
+        <details className="banner small pr-agent-lessons" data-testid="pr-agent-review-lessons">
+          <summary>This review used {lastRun.lessons!.length} lesson(s) from your earlier reviews</summary>
+          <ul>{lastRun.lessons!.map((l) => <li key={l.id}>{l.text}</li>)}</ul>
+        </details>
+      )}
       {reviewing && <div className="banner small" data-testid="pr-agent-reviewing">The agent is reviewing this PR (follow it in the discussion panel); its comments appear in Files when it is done.</div>}
       {notice && <div className="banner" data-testid="pr-notice">{notice} <a href={`${p.url}/files`} target="_blank" rel="noreferrer">See it on GitHub</a> <button className="icon-btn" onClick={() => setNotice(null)} aria-label="Dismiss">×</button></div>}
       {tab === "overview" ? (

@@ -37,14 +37,8 @@ OWNER_CACHE_SECONDS = 600
 
 router = APIRouter()
 
-REVIEW_QUERY = """
-query ReviewQueue($q: String!, $after: String, $n: Int!, $me: String!) {
-  rateLimit { remaining resetAt }
-  search(query: $q, type: ISSUE, first: $n, after: $after) {
-    issueCount
-    pageInfo { hasNextPage endCursor }
-    nodes {
-      ... on PullRequest {
+# what the review list shows of a PR (in the queue search, and per PR for the code-owned ones)
+PR_FIELDS = """
         number title url state isDraft createdAt updatedAt additions deletions changedFiles reviewDecision
         author { login }
         headRefOid
@@ -57,11 +51,29 @@ query ReviewQueue($q: String!, $after: String, $n: Int!, $me: String!) {
         labels(first: 6) { nodes { name color } }
         reviewRequests(first: 20) { nodes { requestedReviewer { __typename ... on User { login } ... on Team { slug name } } } }
         commits(last: 1) { nodes { commit { committedDate statusCheckRollup { state } } } }
-      }
+"""
+
+REVIEW_QUERY = """
+query ReviewQueue($q: String!, $after: String, $n: Int!, $me: String!) {
+  rateLimit { remaining resetAt }
+  search(query: $q, type: ISSUE, first: $n, after: $after) {
+    issueCount
+    pageInfo { hasNextPage endCursor }
+    nodes {
+      ... on PullRequest {""" + PR_FIELDS + """      }
     }
   }
 }
 """
+
+OWNED_BATCH = 20  # code-owned PRs read per request
+
+
+def owned_query(numbers: list[int]) -> str:
+    """The review-list fields of some PRs of one repository (aliases p<number>)."""
+    body = "\n".join(f"    p{n}: pullRequest(number: {int(n)}) {{{PR_FIELDS}    }}" for n in numbers)
+    return ("query CodeownedPrs($owner: String!, $name: String!, $me: String!) {\n  rateLimit { remaining resetAt }\n"
+            f"  repository(owner: $owner, name: $name) {{\n{body}\n  }}\n}}\n")
 
 
 # ---------------------------------------------------------------------- gh access (replaceable in tests)
@@ -363,11 +375,81 @@ def fetch_watched(graphql: Callable[[str, dict], dict], owner: str, repos: list[
     return items, problems
 
 
+def fetch_owned(graphql: Callable[[str, dict], dict], owner: str, found: dict[str, dict[str, dict[str, Any]]],
+                skip: set[str]) -> tuple[list[dict[str, Any]], dict[str, list[int]], list[str]]:
+    """The PRs that touch files you own (codeowned.py found them) and are not in the list already: (items, PRs no
+    longer open per repository, problems)."""
+    items: list[dict[str, Any]] = []
+    gone: dict[str, list[int]] = {}
+    problems: list[str] = []
+    for repo, prs in found.items():
+        nums = sorted(int(n) for n in prs if f"{repo}#{n}".lower() not in skip)
+        o, name = repo.split("/")
+        for i in range(0, len(nums), OWNED_BATCH):
+            part = nums[i:i + OWNED_BATCH]
+            try:
+                d = graphql(owned_query(part), {"owner": o, "name": name, "me": owner})
+            except ApiError as exc:
+                problems.append(f"{repo}: {exc.message}")
+                continue
+            r = d.get("repository") or {}
+            for n in part:
+                node = r.get(f"p{n}")
+                if not node or (node.get("state") or "OPEN") != "OPEN":
+                    if node is not None or not d.get("_errors"):
+                        gone.setdefault(repo, []).append(n)  # closed / merged / deleted (not: hidden by an error)
+                    continue
+                x = normalize(node, owner)
+                if (x.get("author") or "").lower() == owner.lower():
+                    continue
+                info = prs.get(str(n)) or {}
+                x.update(requested="codeowner", owned_paths=info.get("paths") or [], owned_count=info.get("count") or 0)
+                skip.add(f"{repo}#{n}".lower())
+                items.append(x)
+    return items, gone, problems
+
+
 _watched: dict[str, list[str]] = {}  # owner -> watched repositories (latest prefs, read by a running refresh)
+_ctxs: dict[str, AppContext] = {}  # owner -> the app context (for the code-owned PRs, kept in the kv table)
+
+
+def owned_repos(ctx: AppContext, owner: str, data: dict[str, Any] | None, prefs: dict[str, Any] | None = None) -> list[str]:
+    """The repositories checked for PRs touching your files: those of the review list, the watched ones and those
+    checked before, where CODEOWNERS names you — none when that is turned off in Reviews ⚙."""
+    from . import codeowned
+
+    prefs = prefs or load_prefs(ctx)
+    if not prefs.get("codeowned", True):
+        return []
+    data = data or {}
+    repos = {p["repo"] for p in (data.get("items") or []) + (data.get("watched") or []) if p.get("requested") != "codeowner"}
+    repos |= set(prefs.get("watched_repos") or []) | set(codeowned.scanned_repos(ctx))
+    return codeowned.candidates(ctx, owner, repos, {r.lower() for r in prefs.get("hidden_repos") or []})
+
+
+def _owned_found(ctx: AppContext, owner: str, data: dict[str, Any]) -> dict[str, dict[str, dict[str, Any]]]:
+    from . import codeowned
+
+    return {r: prs for r, prs in codeowned.owned(ctx, owned_repos(ctx, owner, data)).items() if prs}
 
 
 async def _fetch(graphql: Callable[[str, dict], dict], owner: str) -> dict[str, Any]:
     data = await asyncio.to_thread(fetch_queue, graphql, owner)
+    ctx = _ctxs.get(owner)
+    if ctx is not None:
+        from . import codeowned
+
+        found = _owned_found(ctx, owner, data)
+        for p in data["items"]:  # requested and also yours: say which of your files it touches
+            info = (found.get(p["repo"]) or {}).get(str(p["number"]))
+            if info:
+                p.update(owned_paths=info.get("paths") or [], owned_count=info.get("count") or 0)
+        skip = {f"{p['repo']}#{p['number']}".lower() for p in data["items"]}
+        owned_items, gone, problems = await asyncio.to_thread(fetch_owned, graphql, owner, found, skip)
+        for repo, nums in gone.items():
+            codeowned.forget(ctx, repo, nums)
+        data["items"] += owned_items
+        data["codeowned_count"], data["codeowned_problems"] = len(owned_items), problems
     watched = _watched.get(owner) or []
     if watched:
         skip = {f"{p['repo']}#{p['number']}".lower() for p in data["items"]}
@@ -380,10 +462,13 @@ async def _fetch(graphql: Callable[[str, dict], dict], owner: str) -> dict[str, 
     return data
 
 
-def _start_refresh(graphql: Callable[[str, dict], dict], owner: str, watched: list[str] | None = None) -> asyncio.Task:
+def _start_refresh(graphql: Callable[[str, dict], dict], owner: str, watched: list[str] | None = None,
+                   ctx: AppContext | None = None) -> asyncio.Task:
     """One background fetch per owner at a time (a full queue takes ~10 s per 40 PRs)."""
     if watched is not None:
         _watched[owner] = list(watched)
+    if ctx is not None:
+        _ctxs[owner] = ctx
     t = _tasks.get(owner)
     if t is None or t.done():
         async def run() -> None:
@@ -404,7 +489,7 @@ async def github_hub(request: Request, ctx: AppContext = Depends(require_auth)):
     """For the UI: is the Reviews area available to this browser? For the owner it also warms the queue."""
     st = await hub_status(ctx, request)
     if st["available"] and st["owner"] not in _cache:
-        _start_refresh(_hooks(ctx)[0], st["owner"], load_prefs(ctx)["watched_repos"])
+        _start_refresh(_hooks(ctx)[0], st["owner"], load_prefs(ctx)["watched_repos"], ctx)
     return st
 
 
@@ -417,7 +502,7 @@ async def review_queue(refresh: bool = Query(False), auth: tuple[AppContext, str
     prefs = load_prefs(ctx)
     hit = _cache.get(owner)
     if hit is None:
-        task = _start_refresh(graphql, owner, prefs["watched_repos"])
+        task = _start_refresh(graphql, owner, prefs["watched_repos"], ctx)
         await asyncio.shield(task)  # first load: wait for it
         hit = _cache.get(owner)
         if hit is None:
@@ -427,7 +512,7 @@ async def review_queue(refresh: bool = Query(False), auth: tuple[AppContext, str
     age = time.time() - hit[0]
     running = owner in _tasks and not _tasks[owner].done()
     if (refresh and age >= 10) or age >= CACHE_SECONDS:  # < 10 s: rapid ↻ clicks do not burn the search quota
-        _start_refresh(graphql, owner, prefs["watched_repos"])
+        _start_refresh(graphql, owner, prefs["watched_repos"], ctx)
         running = True
     from . import maintainers
     from . import review_priority as rp
@@ -443,9 +528,20 @@ async def review_queue(refresh: bool = Query(False), auth: tuple[AppContext, str
     agent = agent_review_states(ctx)
     for key in ("items", "watched"):
         data[key] = [{**p, "agent_review": agent.get(f"{p['repo']}#{p['number']}".lower())} for p in data.get(key) or []]
+    from . import codeowned
+
+    owned = owned_repos(ctx, owner, hit[1], prefs)
+    # PRs touching your files: checked in the background; when that finds new ones the list refreshes by itself
+    codeowned.scan_soon(ctx, graphql, owner, owned, lambda: _start_refresh(graphql, owner, None, ctx))
     return {**data, "cached": True, "age_seconds": round(age), "refreshing": running, "refresh_error": _errors.get(owner),
             "prefs": prefs, "rate": RATE.status(), "rate_state": RATE.state()["state"], "priority_agent": rp.status(),
-            "maintainers": maintainers.status(ctx)}
+            "maintainers": maintainers.status(ctx), "codeowned": codeowned.status(ctx, owned), "batch_review": batch_status()}
+
+
+def batch_status() -> dict[str, Any]:
+    from . import batch_review
+
+    return batch_review.status()
 
 
 def _priority_results(ctx: AppContext) -> dict[str, Any]:
@@ -455,9 +551,13 @@ def _priority_results(ctx: AppContext) -> dict[str, Any]:
 
 
 def reset_cache() -> None:
+    from . import batch_review, codeowned
     from . import github_cache as gc
 
     gc.reset()
+    codeowned.reset()
+    batch_review.reset()
+    _ctxs.clear()
     _content_cache.clear()
     _cache.clear()
     _errors.clear()
@@ -936,7 +1036,9 @@ def _comment_dict(c: dict[str, Any]) -> dict[str, Any]:
 def _draft_dict(d: Any) -> dict[str, Any]:
     return {"id": d.id, "path": d.path, "subject": d.subject or "line", "side": d.side, "line": d.line, "start_side": d.start_side, "start_line": d.start_line,
             "line_text": d.line_text, "body": d.body, "created_at": d.created_at.isoformat() if d.created_at else None,
-            "origin": d.origin or "user", "decision": d.decision or "accepted", "thread_id": d.thread_id}
+            "origin": d.origin or "user", "decision": d.decision or "accepted", "thread_id": d.thread_id,
+            "original_body": d.original_body, "edited": bool(d.original_body) and d.original_body.strip() != (d.body or "").strip(),
+            "discard_reason": d.discard_reason, "severity": d.severity, "category": d.category}
 
 
 @router.get("/github/pr/{owner}/{repo}/{number}/comments")
@@ -969,6 +1071,9 @@ async def pr_comments(owner: str, repo: str, number: int, cached: bool = Query(F
         threads, conv = await asyncio.gather(asyncio.to_thread(fetch_threads, graphql, owner, repo, number),
                                              asyncio.to_thread(fetch_conversation, graphql, owner, repo, number))
         await asyncio.to_thread(gc.put, ctx, key, "comments", {"threads": threads, "conv": conv})
+    from .review_learning import record_reviewer_comments, safely
+
+    await asyncio.to_thread(safely, record_reviewer_comments, ctx, owner, repo, number, threads, auth[1], default=0)  # points the agent missed
     with ctx.db.read() as s:
         drafts = s.query(GithubPrDraft).filter_by(repo=f"{owner}/{repo}".lower(), number=number).order_by(GithubPrDraft.created_at).all()
         dd = [_draft_dict(d) for d in drafts]
@@ -1106,6 +1211,7 @@ def add_draft(owner: str, repo: str, number: int, body: DraftIn, auth: tuple[App
 class DraftEditIn(BaseModel):
     body: str | None = None
     decision: str | None = None  # accepted (apply) | proposed | discarded — for agent suggestions
+    discard_reason: str | None = None  # why an agent suggestion is discarded (review learning); "" clears it
 
 
 @router.patch("/github/pr/{owner}/{repo}/{number}/drafts/{draft_id}")
@@ -1120,11 +1226,21 @@ def edit_draft(owner: str, repo: str, number: int, draft_id: str, body: DraftEdi
         if body.body is not None:
             if not body.body.strip():
                 raise ApiError(400, "INVALID_COMMENT", "a comment needs text")
+            if d.origin == "agent" and d.original_body is None:  # review learning compares it with what is published
+                d.original_body = d.body
             d.body = body.body.strip()
         if body.decision is not None:
             if body.decision not in ("accepted", "proposed", "discarded"):
                 raise ApiError(400, "INVALID_DECISION", "decision must be accepted, proposed or discarded")
             d.decision = body.decision
+            if body.decision != "discarded":
+                d.discard_reason = None
+        if body.discard_reason is not None:
+            from .review_learning import REASONS
+
+            if body.discard_reason and body.discard_reason not in REASONS:
+                raise ApiError(400, "INVALID_REASON", "reason must be one of " + ", ".join(REASONS))
+            d.discard_reason = body.discard_reason or None
         return _draft_dict(d)
 
 
@@ -1137,7 +1253,11 @@ def delete_draft(owner: str, repo: str, number: int, draft_id: str, auth: tuple[
         d = s.get(GithubPrDraft, draft_id)
         if d is None or d.repo != f"{owner}/{repo}".lower() or d.number != number:
             raise ApiError(404, "DRAFT_NOT_FOUND", "draft comment not found")
+        gone = {**_draft_dict(d), "repo": d.repo, "number": d.number}
         s.delete(d)
+    from .review_learning import record_deleted, safely
+
+    safely(record_deleted, ctx, gone)  # deleting an agent suggestion is discarding it (review learning)
     return {"deleted": draft_id}
 
 
@@ -1200,15 +1320,23 @@ async def submit_review(owner: str, repo: str, number: int, body: SubmitIn, auth
             raise
 
     url = await asyncio.to_thread(publish)
+    from . import review_learning as rl
+
+    spots = rl.safely(rl.agent_spots, ctx, f"{owner}/{repo}".lower(), number, default=[])  # before the drafts go
     with ctx.db.write() as s:
         s.query(GithubPrDraft).filter(GithubPrDraft.id.in_([d["id"] for d in dd] + discarded)).delete(synchronize_session=False)
+    # review learning is not essential here: the review is on GitHub, a failure in learning must not turn it into an error
+    learned = rl.safely(rl.record_published, ctx, owner, repo, number, [d for d in everything if d["decision"] != "proposed"], spots,
+                        default={"agent": 0, "missed": 0})
+    rl.safely(rl.distill_soon, ctx)
     _pr_cache.pop(f"{owner}/{repo}#{number}".lower(), None)
     _cache_stale(ctx, owner, repo, number)
     # the review list: this PR moves at once (no waiting for GitHub), and the list is checked on GitHub in the background
     note_mine(owner, repo, number, {"APPROVE": "APPROVED", "REQUEST_CHANGES": "CHANGES_REQUESTED", "COMMENT": "COMMENTED"}.get(body.event))
-    _start_refresh(_hooks(ctx)[0], owner_login, load_prefs(ctx)["watched_repos"])
+    _start_refresh(_hooks(ctx)[0], owner_login, load_prefs(ctx)["watched_repos"], ctx)
     log.info("published review on %s/%s#%d (%s, %d comments, %d from github.com)", owner, repo, number, body.event, len(dd), pending_n)
-    return {"published": len(dd), "from_github": pending_n, "event": body.event, "url": url, "undecided": undecided}
+    return {"published": len(dd), "from_github": pending_n, "event": body.event, "url": url, "undecided": undecided,
+            "learning_cases": learned["agent"] + learned["missed"], "learning": learned}
 
 
 class ReplyIn(BaseModel):
@@ -1231,7 +1359,7 @@ async def reply_comment(owner: str, repo: str, number: int, comment_id: int, bod
 
 
 DEFAULT_PREFS: dict[str, Any] = {"hidden_repos": [], "watched_repos": [], "priority_requesters": [], "priority_meta": True, "show_approved": False,
-                                 "starred": [], "unstarred": [], "core_maintainers": [], "deferred": {}}
+                                 "starred": [], "unstarred": [], "core_maintainers": [], "deferred": {}, "codeowned": True}
 
 
 def load_prefs(ctx: AppContext) -> dict[str, Any]:
@@ -1266,7 +1394,8 @@ def apply_prefs(data: dict[str, Any], prefs: dict[str, Any], agent_results: dict
 
     prefs = normalize(prefs) if "priority_levels" not in prefs else prefs
     hidden = {r.lower() for r in prefs.get("hidden_repos") or []}
-    visible = [p for p in data.get("items", []) if p["repo"].lower() not in hidden]
+    visible = [p for p in data.get("items", []) if p["repo"].lower() not in hidden
+               and (prefs.get("codeowned", True) or p.get("requested") != "codeowner")]  # turned off: gone at once
     quiet = [p for p in visible if p.get("approved_no_news")] if not prefs.get("show_approved") else []
     items = [with_level(p, prefs, agent_results) for p in visible if p not in quiet]
     watching = {r.lower() for r in prefs.get("watched_repos") or []}  # a repository just unwatched disappears at once
@@ -1285,8 +1414,8 @@ def apply_prefs(data: dict[str, Any], prefs: dict[str, Any], agent_results: dict
                     keep.append({**p, "deferred_ended": d} if d else p)
             return keep
         items, watched = split(items), split(watched)
-    return {**data, "items": items, "watched": watched, "deferred": deferred, "hidden_count": len(data.get("items", [])) - len(visible),
-            "approved_hidden": len(quiet)}
+    return {**data, "items": items, "watched": watched, "deferred": deferred,
+            "hidden_count": sum(1 for p in data.get("items", []) if p["repo"].lower() in hidden), "approved_hidden": len(quiet)}
 
 
 def deferral_active(d: dict[str, Any], p: dict[str, Any] | None) -> bool:
@@ -1308,6 +1437,7 @@ class PrefsIn(BaseModel):
     core_maintainers: list[str] | None = None  # logins that count as core maintainers in every repository
     priority_meta: bool | None = None
     show_approved: bool | None = None  # also list PRs you approved where nothing happened since
+    codeowned: bool | None = None  # also list PRs touching files you own in CODEOWNERS (not requested from you)
     star: str | None = None    # "owner/repo#n": level P1-like (the second level) by hand (older UI)
     unstar: str | None = None  # "owner/repo#n": the default level by hand (older UI)
     # priority: levels (with descriptions for the agent), default level, hard rules, agent models, category order
@@ -1348,6 +1478,8 @@ async def put_prefs(body: PrefsIn, auth: tuple[AppContext, str] = Depends(requir
         prefs["priority_meta"] = body.priority_meta
     if body.show_approved is not None:
         prefs["show_approved"] = body.show_approved
+    if body.codeowned is not None:
+        prefs["codeowned"] = body.codeowned
     from . import review_priority as rp
 
     if body.reset_priority:
@@ -1438,8 +1570,8 @@ async def put_prefs(body: PrefsIn, auth: tuple[AppContext, str] = Depends(requir
     prefs["priority_rules"] = [r for r in prefs.get("priority_rules") or [] if r["level"] in ids]
     prefs = rp.normalize(prefs)
     kv_put(ctx, "github_hub_prefs", prefs)
-    if body.watched_repos is not None:  # watched PRs are fetched with the queue: refresh it in the background
-        _start_refresh(_hooks(ctx)[0], owner, prefs["watched_repos"])
+    if body.watched_repos is not None or body.codeowned is not None:  # fetched with the queue: refresh it in the background
+        _start_refresh(_hooks(ctx)[0], owner, prefs["watched_repos"], ctx)
     return prefs
 
 
@@ -1644,11 +1776,14 @@ def review_instructions() -> str:
         "Review the pull request as a careful reviewer and write your line comments in a "
         f"fenced block tagged {REVIEW_BLOCK} at the end of your answer: a JSON array of objects "
         '{"path": "<file in the PR>", "side": "RIGHT" (new code; "LEFT" for a deleted line), "line": <the line number of that side '
-        '(the numbers in front of the diff line)>, "start_line": <optional first line of a range>, "body": "<the comment, Markdown; a ```suggestion block may propose replacement code>"}. '
+        '(the numbers in front of the diff line)>, "start_line": <optional first line of a range>, "severity": "blocker" | "major" | "minor" | "nit", '
+        '"category": "<one word: correctness, performance, tests, api, design, style, docs, …>", '
+        '"body": "<the comment, Markdown; a ```suggestion block may propose replacement code>"}. '
         "Only comment on lines that appear in the diff; be specific, one point per comment, and skip nitpicks unless asked. "
         "Before the block, give a short overall summary. The comments are shown to the user as suggestions in the diff; "
         "nothing is posted to GitHub unless the user applies them.\n"
-        f"Example:\n```{REVIEW_BLOCK}\n" '[{"path": "src/a.cpp", "side": "RIGHT", "line": 42, "body": "This can overflow for n > 2^31."}]' "\n```"
+        f"Example:\n```{REVIEW_BLOCK}\n" '[{"path": "src/a.cpp", "side": "RIGHT", "line": 42, "severity": "major", "category": "correctness", '
+        '"body": "This can overflow for n > 2^31."}]' "\n```"
     )
 
 
@@ -1751,17 +1886,20 @@ def agent_drafts(items: list[dict[str, Any]], files: list[dict[str, Any]]) -> tu
             start = int(x["start_line"]) if x.get("start_line") not in (None, "", 0) else None
         except (TypeError, ValueError):
             line, start = 0, None
+        sev = str(x.get("severity") or "").strip().lower()
+        meta = {"severity": sev if sev in ("blocker", "major", "minor", "nit") else None,
+                "category": (re.sub(r"[^a-z0-9 _-]", "", str(x.get("category") or "").strip().lower())[:24] or None)}
         lines = diff_line_map(f.get("unified") or "")
         if line and (side, line) in lines:
             if start is not None and (start >= line or any((side, n) not in lines for n in range(start, line))):
                 start = None
             text = "\n".join(lines[(side, n)] for n in range(start or line, line + 1))
             out.append({"path": path, "subject": "line", "side": side, "line": line, "start_side": side if start else None,
-                        "start_line": start, "line_text": text, "body": body})
+                        "start_line": start, "line_text": text, "body": body, **meta})
         else:
             where = f"Line {line}: " if line else ""
             out.append({"path": path, "subject": "file", "side": "RIGHT", "line": 0, "start_side": None, "start_line": None,
-                        "line_text": "", "body": where + body})
+                        "line_text": "", "body": where + body, **meta})
     return out, problems
 
 
@@ -1769,14 +1907,15 @@ def _review_key(owner: str, repo: str, number: int) -> str:
     return f"agent_review:{owner}/{repo}#{number}".lower()
 
 
-def register_agent_review(ctx: AppContext, doc_path: str, job_id: str, thread_id: str, message_id: str) -> None:
+def register_agent_review(ctx: AppContext, doc_path: str, job_id: str, thread_id: str, message_id: str,
+                          lessons: list[dict[str, str]] | None = None) -> None:
     """Called when an agent review starts (from the PR tab's discussion document .waw-github/<owner>/<repo>/<n>.md)."""
     parts = doc_path.split("/")
     owner, repo, number = parts[1], parts[2], int(parts[3].removesuffix(".md"))
     key = _review_key(owner, repo, number)
     runs = kv_get(ctx, key, [])
     runs.append({"job_id": job_id, "thread_id": thread_id, "message_id": message_id, "state": "running", "added": 0, "problem": None,
-                 "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
+                 "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "lessons": lessons or []})
     kv_put(ctx, key, runs[-10:])
 
 
@@ -1847,7 +1986,7 @@ def import_agent_reviews(ctx: AppContext, owner: str, repo: str, number: int) ->
         with ctx.db.write() as s:
             for d in drafts:
                 s.add(GithubPrDraft(id=new_id(), repo=f"{owner}/{repo}".lower(), number=number, origin="agent", decision="proposed",
-                                    thread_id=r["thread_id"], **{**d, "line_text": d["line_text"][:4000]}))
+                                    thread_id=r["thread_id"], original_body=d["body"], **{**d, "line_text": d["line_text"][:4000]}))
             m = s.get(Message, r["message_id"])
             if m is not None and drafts:  # the JSON is for the app: the discussion shows what became of it
                 note = f"*{len(drafts)} suggested comment(s) were added to the diff (Files) — choose Apply or Discard for each.*"

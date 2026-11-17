@@ -90,6 +90,52 @@ deleted. Kept when GitHub refuses the review.
 | `decision` | `accepted` \| `proposed` \| `discarded` | Only `accepted` comments are published by *Finish review*. Agent suggestions start `proposed` until you choose *Apply* or *Discard*; discarded ones are deleted when the review is published. |
 | `thread_id` | UUID, nullable | The agent review's discussion (`threads.id`), where the suggestion can be discussed. |
 | `created_at` | DATETIME | Written. |
+| `original_body` | TEXT, nullable | Agent suggestions: what the agent first wrote (kept when you edit the comment). |
+| `discard_reason` | nullable: `wrong` \| `nitpick` \| `minor` \| `discussed` \| `scope` \| `other` | Why you discarded an agent suggestion (review learning). |
+| `severity`, `category` | nullable | Agent suggestions: `blocker` \| `major` \| `minor` \| `nit`, and a short category (correctness, performance, tests…). |
+
+## `review_cases` — review learning: what happened to review comments
+
+One row per comment the agent can learn from, written when a review is published (agent suggestions applied,
+edited or discarded; your own comments on a PR the agent reviewed = missed), when an agent suggestion is deleted,
+when another reviewer comments where the agent said nothing, and when you teach a lesson. The distiller reads the
+rows not yet distilled; the review prompt takes examples (only rows of `source` `agent` and `user`) and the
+track record (counts) from them.
+
+| Column | Type | Meaning |
+| --- | --- | --- |
+| `id` | UUID, PK | Case id. |
+| `repo`, `number` | TEXT (owner/name, lower case), INTEGER | The pull request. |
+| `path`, `line`, `line_text` | TEXT, INTEGER nullable, TEXT | Where the comment is, and the commented diff lines. |
+| `source` | `agent` \| `user` \| `reviewer` \| `taught` | Who wrote the comment: an agent suggestion, you, another reviewer, a lesson you taught. |
+| `outcome` | `applied` \| `edited` \| `discarded` \| `missed` \| `taught` | What became of it (`missed`: a point the agent did not make). |
+| `agent_body`, `final_body` | TEXT, nullable | What the agent wrote; what was published or written by a person. |
+| `reason` | nullable | Why a suggestion was discarded (see `github_pr_drafts.discard_reason`). |
+| `severity`, `category` | nullable | Of the agent's suggestion. |
+| `author` | TEXT, nullable | The reviewer (comments by others). |
+| `gh_ref` | TEXT, nullable | GitHub comment id, so a reviewer's comment is recorded once. |
+| `distilled` | BOOLEAN | Read by the distiller already. |
+| `created_at` | DATETIME | When it happened. |
+
+## `review_lessons` — review learning: lessons for the agent's PR reviews
+
+Proposed by the distiller (from `review_cases`), taught from a comment, or written by you; only `active` lessons
+of the repository (or of every repository) whose path globs match the PR go into an agent review's prompt.
+
+| Column | Type | Meaning |
+| --- | --- | --- |
+| `id` | UUID, PK | Lesson id. |
+| `scope` | TEXT | `owner/name` (lower case) or `*` (every repository). |
+| `paths` | TEXT (JSON array of globs) | Only for PRs touching matching files; `[]`: any. |
+| `text` | TEXT | The lesson, as told to the agent. |
+| `status` | `proposed` \| `active` \| `off` \| `rejected` | Proposed lessons wait for you. Rejected: a lesson with the same text is never proposed again; other wordings rely on the distiller's prompt, which lists the rejected ones. |
+| `source` | `distilled` \| `taught` \| `manual` | Where it came from. |
+| `rationale` | TEXT | The distiller's reason. |
+| `evidence` | TEXT (JSON array of case ids) | The cases behind it. |
+| `replaces` | UUID, nullable | A proposed revision of that lesson (accepting it turns the old one off). |
+| `used_count`, `confirmed_count`, `contradicted_count` | INTEGER | Reviews it went into; cases that agree / disagree with it. |
+| `flagged` | TEXT, nullable | Why recent reviews contradict it (shown to you; the lesson is not turned off by itself). |
+| `created_at`, `updated_at` | DATETIME | Lifecycle. |
 
 ## `named_workspaces` — named sets of folders (VS Code-style workspaces)
 
@@ -112,7 +158,7 @@ cannot be deleted. Folder data belongs to `workspaces`, so a folder in two named
 JSON values by key. `github_hub_prefs`: Reviews panel preferences (hidden and watched repositories, priority
 requesters, whether PyTorch Meta maintainers count as priority). `context:repo:<owner>/<name>` and
 `local_repo:<owner>/<name>`: the connected local checkout (`{path, update, remote}`). `agent_review:<repo>#<n>`:
-agent review runs of a PR (job, message, state, suggestions added). `context:ws:<folder id>`: extra reference folders (JSON array of absolute server paths) named in the agent's prompt
+agent review runs of a PR (job, message, state, suggestions added, lessons used). `review_learning`: review learning settings; `review_learning_state`: the distiller's last run (when, counts, errors per repository). `context:ws:<folder id>`: extra reference folders (JSON array of absolute server paths) named in the agent's prompt
 for that repository's PR tabs or that wiki folder's documents.
 
 | Column | Type | Meaning |

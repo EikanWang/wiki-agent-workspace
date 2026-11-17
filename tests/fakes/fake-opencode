@@ -165,6 +165,33 @@ def main(argv):
         emit({"type": "text", "sessionID": session, "part": {"id": "prt_1", "type": "text", "text": text}})
         emit({"type": "step_finish", "sessionID": session, "part": {"type": "step-finish", "reason": "stop"}})
         return 0
+    if prompt.startswith("WAW-REVIEW-LEARNING") or prompt.startswith("WAW-REVIEW-TEACH"):
+        # review learning: a lesson about guard questions when one was discarded, else about tests; existing active
+        # lessons are confirmed by the cases. Teaching: the lesson repeats the comment.
+        import re as _re
+        if prompt.startswith("WAW-REVIEW-TEACH"):
+            m = _re.search(r"^Comment:\n(.*?)\n\nReply with ONLY", prompt, _re.S | _re.M)
+            text = json.dumps({"text": "Learned: " + (m.group(1).strip()[:80] if m else "?")})
+        else:
+            # e2e: the lessons arrive a while after the review was published (as with a real model)
+            time.sleep(float(os.environ.get("FAKE_LEARNING_DELAY", "0")))
+            with (STATE / "learning_prompts.log").open("a") as fh:
+                fh.write(prompt + "\n\0\n")
+            cases = _re.findall(r"^\[([0-9a-f-]{36})\] ", prompt.split("CASES:", 1)[1], _re.M)
+            existing = prompt.split("EXISTING LESSONS:", 1)[1].split("REJECTED by the user", 1)[0]
+            active = _re.findall(r"^\[([0-9a-f-]{36})\] \(active", existing, _re.M)
+            changes = [{"op": "confirm", "id": a, "cases": cases} for a in active]
+            if "DISCARDED" in prompt.split("CASES:", 1)[1]:
+                changes.append({"op": "add", "scope": "repo", "text": "Skip questions about guards; the user discards them.",
+                                "why": "discarded guard questions", "cases": cases})
+            if "commented:" in prompt.split("CASES:", 1)[1]:
+                changes.append({"op": "add", "scope": "all", "paths": [], "text": "Point out missing tests for new code paths.",
+                                "why": "missed points", "cases": cases})
+            text = "```json\n" + json.dumps({"changes": changes}) + "\n```"
+        emit({"type": "step_start", "sessionID": session, "part": {"type": "step-start"}})
+        emit({"type": "text", "sessionID": session, "part": {"id": "prt_1", "type": "text", "text": text}})
+        emit({"type": "step_finish", "sessionID": session, "part": {"type": "step-finish", "reason": "stop"}})
+        return 0
     if prompt.startswith("You are receiving a REVIEW"):
         # Triage: comments containing "please change X to Y" are addressed by editing; questions get a reply; "[[skip]]" is skipped.
         import re as _re
@@ -198,8 +225,8 @@ def main(argv):
             m = _re.match(r"^\s*(\d*)\s+(\d+) \|\+", ln)
             if m and path and line is None:
                 line = int(m.group(2))
-        items = [{"path": path, "side": "RIGHT", "line": line, "body": "Agent: is this guard needed?"},
-                 {"path": path, "side": "RIGHT", "line": 9999, "body": "Agent: consider a test."},
+        items = [{"path": path, "side": "RIGHT", "line": line, "severity": "nit", "category": "style", "body": "Agent: is this guard needed?"},
+                 {"path": path, "side": "RIGHT", "line": 9999, "severity": "major", "category": "tests", "body": "Agent: consider a test."},
                  {"path": "not/in/pr.cpp", "side": "RIGHT", "line": 1, "body": "x"}]
         text = "Overall the change looks fine.\n\n```waw-review\n" + json.dumps(items) + "\n```"
         emit({"type": "step_start", "sessionID": session, "part": {"type": "step-start"}})

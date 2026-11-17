@@ -220,6 +220,17 @@ the choice is kept per browser.
 discard (drafts included); such rows say "🤖 N suggestions to confirm" (or "🤖 reviewing…" while it runs), and the
 count follows as you decide in the PR tab. The
 line above the list says how many are requested, how many are shown and how many drafts are hidden.
+**Agent review of several PRs at once**: tick the box at the left of a PR (it shows on hover, and on every row
+once something is selected; the row does not open), Shift-click another box to select the rows in between, or tick
+a repository's box to select all of its PRs shown (again to unselect them). A bar above the list says how many are
+selected: **🤖 Agent review N** starts the review of each — the same review as its tab's **Agent review** button,
+with the prefilled question and what the agent learned — and **Clear** unselects. Two run at a time; the others
+show "🤖 queued (k)" and start in order ("🤖 starting review…", then "🤖 reviewing…"; **cancel waiting** in the
+bar takes those not started off the queue). A PR already being reviewed or queued is skipped (the bar says so). A
+repository without an agent wiki gets the wiki you are in, as if you chose it in one of its PR tabs. When a review
+is done the row says "🤖 N suggestions to confirm": open the PR and decide them in **Files** as usual. A PR whose
+review could not start or failed shows "🤖 review failed" (hover for why); select it again to retry. The queue is
+kept while the server runs: after a restart, PRs that had not started yet are no longer queued.
 - each PR shows a CI dot (green passed, red failing, amber running), title, #number, author, last update,
   size (+/−), draft flag and labels; hover for details;
 - **filter** by repository, title, author, requester or label; **drafts** shows or hides draft PRs; sort by
@@ -322,6 +333,27 @@ line above the list says how many are requested, how many are shown and how many
     the review is submitted), edit it, or **Discuss with agent…** to ask about it first. Comments on lines outside
     the diff become comments on the file. The diff in the agent's prompt carries line numbers so its comments
     land on the right lines.
+  - **The agent learns from your reviews.** Each suggestion shows its severity (*blocker*, *major*, *minor*,
+    *nit*) and kind. What you do with it is what the agent learns from: **Apply** it as written, edit it first
+    (*edited ▸* shows what the agent wrote), or **Discard** it and click why — *Wrong*, *Nitpick*, *Not
+    important*, *Already discussed*, *Out of scope*, *Other*. Comments you write yourself on a PR the agent
+    reviewed, and those other reviewers start later where it said nothing, are points it missed. After you
+    publish, the model reads these cases and proposes **lessons**; the ⚙ in Reviews shows how many wait for you.
+    In **⚙ → Agent learning** accept, edit or reject each (a lesson recent reviews disagree with is flagged,
+    never switched off by itself), see its evidence, turn lessons off, or add
+    your own for one repository (`owner/name`) or all (`*`). **Remember…** on any comment (a suggestion, yours,
+    a reviewer's thread) makes a lesson from it at once — *Draft it for me* lets the model word it — for this
+    repository or every one, optionally only for files matching globs (e.g. `aten/*`). The next **Agent
+    review** gets the active lessons that fit the PR, a few examples from the repository and its track record
+    there (what you kept per severity, once there are 10 suggestions in 90 days), and checks each comment
+    against them; the banner lists the lessons it used. The examples are only what *you* did (suggestions you
+    applied, edited or discarded, your own comments); other reviewers' comments never go into a review prompt
+    as they are — anyone can comment on a public repository — they only reach the model that proposes lessons,
+    and nothing from them is used before you accept a lesson. **Rejected** lessons: the same text is never
+    proposed again; the model is also told not to propose the idea again in other words, which usually but not
+    always works (reject it again, or delete it to allow it once more). Settings: use the lessons or not, learn after each
+    review or only with *Learn now*, learn from other reviewers, and the model: the app's agent (default) or the
+    Repo Insights model endpoint (your comments are then sent there).
   - **Finish review (n)** (n = your pending comments plus applied suggestions): an optional summary and *Comment* / *Approve* / *Request changes*, then **Submit**
     publishes everything to GitHub as one review, as the server's `gh` account (shown in the box). If GitHub
     refuses (e.g. the PR changed and a line no longer exists), nothing is left half-published on GitHub and the
