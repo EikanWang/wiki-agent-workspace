@@ -31,7 +31,7 @@ PR_INLINE_CHARS = 60_000
 
 
 def build_pr_prompt(*, question: str, quote: str, copy_text: str, copy_path: str, wiki_root: str, target: dict[str, Any] | None,
-                    prior: list[dict[str, str]] | None, extra: str | None = None, review: bool = False) -> str:
+                    prior: list[dict[str, str]] | None, extra: str | None = None, review: bool = False, learning: str | None = None) -> str:
     """Prompt for a discussion about a GitHub pull request (review hub)."""
     head = copy_text.split("\n", 1)[0].lstrip("# ").strip()
     parts = [
@@ -64,6 +64,8 @@ def build_pr_prompt(*, question: str, quote: str, copy_text: str, copy_path: str
     if review:
         from .github_hub import review_instructions
 
+        if learning:  # review learning: lessons, examples and track record from the user's earlier reviews
+            parts.append("<<<REVIEW_LEARNING\n" + learning + "\nREVIEW_LEARNING>>>")
         parts.append(review_instructions())
     parts += ["User message:", question,
               "Instructions: answer as a careful code reviewer (correctness, performance, tests, API and design). Do not modify any "
@@ -387,6 +389,7 @@ class ThreadService:
                 if tt:
                     tt.target_json = json.dumps(target, ensure_ascii=False)
         dev_extra: dict[str, Any] = {}
+        lessons_used: list[dict[str, str]] = []
         if is_dev_path(doc.path):
             prompt, dev_extra = await self._dev_prompt(doc, body.question, body.dev_kind, body.dev_context, None)
         elif is_chat_path(doc.path):
@@ -394,9 +397,15 @@ class ThreadService:
                                        locked=self._locked(), brief=body.chat_brief)
         elif is_pr_path(doc.path):
             text, cpath = _pr_copy(self.docs, doc.path)
+            learning = None
+            if body.pr_review:
+                from .review_learning import pr_paths, review_context
+
+                parts = doc.path.split("/")
+                learning, lessons_used = review_context(self.ctx, f"{parts[1]}/{parts[2]}", pr_paths(text))
             prompt = build_pr_prompt(question=body.question, quote=body.quote, copy_text=text, copy_path=cpath,
                                      wiki_root=str(self.docs.root), target=target, prior=None,
-                                     extra=self._extra(doc.path), review=body.pr_review)
+                                     extra=self._extra(doc.path), review=body.pr_review, learning=learning)
         else:
             prompt = build_prompt(question=body.question, quote=body.quote, document_path=doc.path, sha256=sha, heading=heading,
                                   prior=None, versions=self.docs.list_versions(doc_id), whole_document=body.whole_document, target=target,
@@ -412,7 +421,7 @@ class ThreadService:
         if body.pr_review and is_pr_path(doc.path):  # its comments become suggestions in the diff when it finishes
             from .github_hub import register_agent_review
 
-            register_agent_review(self.ctx, doc.path, job_id, thread_id, agent_msg_id)
+            register_agent_review(self.ctx, doc.path, job_id, thread_id, agent_msg_id, lessons_used)
         return {"thread_id": thread_id, "job_id": job_id, "session_id": sess.id, "message_id": user_msg_id, "agent_message_id": agent_msg_id}
 
     # ------------------------------------------------------------------ reply

@@ -66,6 +66,27 @@ backend/app/
                    turns the block into github_pr_drafts (origin=agent, decision=proposed; lines checked against
                    the diff, else file comments) and replaces the JSON in the message by a note; Finish review
                    publishes only decision=accepted drafts and deletes discarded ones
+  review_learning.py  Review learning: the agent's PR reviews improve from what you do with them. Capture
+                   (review_cases): Finish review records each decided agent suggestion (applied / edited — the
+                   agent's text is kept in github_pr_drafts.original_body — / discarded with discard_reason) and
+                   your own comments on a PR the agent reviewed (missed, unless within 3 lines of a suggestion);
+                   deleting a suggestion is discarding it; GET .../comments records threads other reviewers started
+                   after the run where the agent said nothing (once per comment, ≤20 per PR, no bots). Distil: after
+                   a published review (or Learn now) one read-only turn per repository — the app's agent
+                   (review_priority.run_turn) or the Repo Insights endpoint (insights.llm.complete) — answers
+                   {"changes": [add | revise | confirm | contradict]} (prompt WAW-REVIEW-LEARNING); new lessons and
+                   revisions are proposed, contradicted active ones flagged; a lesson with the same text as a
+                   rejected one is dropped (other wordings: the prompt lists the rejected ones). Each repository is
+                   distilled on its own (a bad answer keeps that repository's cases, reported in
+                   review_learning_state.errors, and the others go on); cases recorded during a run get another pass
+                   when it ends; "running" is the in-process lock, never stored. Learning steps inside core
+                   requests (publish, comments, delete) go through safely(): logged, never an error.
+                   Inject: review_context() puts the active lessons of the repository and of "*" whose path globs
+                   match the PR's changed files, examples of what the user did (discarded with reason, edited,
+                   their own missed points, applied — never other reviewers' text: that only reaches the distiller)
+                   and the track record per severity (from min_cases on) into the agent review's prompt
+                   (<<<REVIEW_LEARNING>>>); the run records the lessons it used. Teach: a lesson from one comment, active at once
+                   (WAW-REVIEW-TEACH words it). Settings in kv review_learning, last run in review_learning_state
   chats.py         folder chats: the hidden read-only document .waw-chat/<slug>-<id>.md of a folder (stub in
                    snapshots/chats/<folder id>/, never in the wiki) reusing threads, sessions and streaming;
                    /chats list/create/archive (documents.hidden); build_chat_prompt (the conversation so far, locks,

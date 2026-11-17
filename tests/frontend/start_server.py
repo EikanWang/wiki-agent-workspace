@@ -381,6 +381,7 @@ def main() -> None:
     state = tmp / "fake-agent-state"
     state.mkdir()
     os.environ["FAKE_AGENT_STATE"] = str(state)
+    os.environ["FAKE_LEARNING_DELAY"] = "4"  # review learning: lessons come after the publish answer (the badge must follow)
     codex_home = tmp / "codex-home"
     codex_home.mkdir()
     os.environ["CODEX_HOME"] = str(codex_home)

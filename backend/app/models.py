@@ -89,6 +89,57 @@ class GithubPrDraft(Base):
     # accepted: published with the review · proposed: an agent suggestion awaiting your decision · discarded: not published
     decision: Mapped[str] = mapped_column(String(10), default="accepted", server_default="accepted")
     thread_id: Mapped[str | None] = mapped_column(String(36), nullable=True)  # the agent review's discussion
+    # review learning: what the agent first wrote (kept when you edit it), why you discarded it, its severity / category
+    original_body: Mapped[str | None] = mapped_column(Text, nullable=True)
+    discard_reason: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    severity: Mapped[str | None] = mapped_column(String(8), nullable=True)  # blocker | major | minor | nit
+    category: Mapped[str | None] = mapped_column(String(24), nullable=True)
+
+
+class ReviewCase(Base):
+    """Review learning: one thing that happened to a review comment (an agent suggestion applied / edited / discarded,
+    a comment the agent missed, one you taught), the material lessons are distilled from."""
+
+    __tablename__ = "review_cases"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    repo: Mapped[str] = mapped_column(Text, nullable=False, index=True)  # owner/name, lower case
+    number: Mapped[int] = mapped_column(Integer, nullable=False)
+    path: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    line: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    line_text: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    source: Mapped[str] = mapped_column(String(10), nullable=False)  # agent | user | reviewer | taught
+    outcome: Mapped[str] = mapped_column(String(10), nullable=False)  # applied | edited | discarded | missed | taught
+    agent_body: Mapped[str | None] = mapped_column(Text, nullable=True)  # what the agent wrote
+    final_body: Mapped[str | None] = mapped_column(Text, nullable=True)  # what was published / written by a person
+    reason: Mapped[str | None] = mapped_column(String(16), nullable=True)  # why a suggestion was discarded
+    severity: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    category: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    author: Mapped[str | None] = mapped_column(Text, nullable=True)  # the reviewer, for comments by others
+    gh_ref: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)  # GitHub comment id (comments by others: once)
+    distilled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class ReviewLesson(Base):
+    """Review learning: a lesson for the agent's PR reviews (proposed by the distiller, taught or written by you);
+    only active ones go into review prompts."""
+
+    __tablename__ = "review_lessons"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    scope: Mapped[str] = mapped_column(Text, nullable=False, index=True)  # owner/name (lower case) or * (every repository)
+    paths: Mapped[str] = mapped_column(Text, nullable=False, default="[]", server_default="[]")  # JSON globs; [] = any file
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(10), nullable=False)  # proposed | active | off | rejected
+    source: Mapped[str] = mapped_column(String(10), nullable=False)  # distilled | taught | manual
+    rationale: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    evidence: Mapped[str] = mapped_column(Text, nullable=False, default="[]", server_default="[]")  # JSON case ids
+    replaces: Mapped[str | None] = mapped_column(String(36), nullable=True)  # a proposed revision of this lesson
+    used_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    confirmed_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    contradicted_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    flagged: Mapped[str | None] = mapped_column(Text, nullable=True)  # why recent reviews contradict it (for you to look at)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 
 
 class KvSetting(Base):

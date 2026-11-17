@@ -7,6 +7,7 @@ import { confirmAction } from "./Confirm";
 import GhUser from "./GhUser";
 import { useRestoredScroll } from "../persist";
 import { GhRefreshSelect } from "../ghRefresh";
+import { LearningSettings, useLearningSummary } from "./ReviewLearning";
 import { AgentStatus, CATEGORY_HINT, CacheSettings, Category, LevelMenu, PriorityAgent, PriorityLevel, PriorityRule, PrioritySettings } from "./ReviewPriority";
 
 export interface ReviewPR {
@@ -25,7 +26,12 @@ export interface ReviewPR {
   review_decision: string | null;
   ci: "SUCCESS" | "FAILURE" | "ERROR" | "PENDING" | "EXPECTED" | null;
   labels: { name: string; color: string | null }[];
-  requested: "you" | "team" | null; // null: not requested — shown because its repository is watched
+  /** null: not requested — shown because its repository is watched; codeowner: not requested, but it touches
+   *  files you own in CODEOWNERS (e.g. a draft: GitHub requests code owners only once a PR is ready) */
+  requested: "you" | "team" | "codeowner" | null;
+  /** the files of this PR you own in CODEOWNERS (up to 20) and how many there are */
+  owned_paths?: string[];
+  owned_count?: number;
   teams: string[];
   requested_by?: string | null;
   requested_by_company?: string | null;
@@ -67,6 +73,11 @@ const DEFAULT_CATEGORIES: Category[] = [
 const categoryOf = (p: ReviewPR) => p.my_activity ?? "todo";
 
 export interface MaintainerSource { repo: string; people: number; sources: string[]; fetched: number | null; error?: string | null }
+/** a repository checked for open PRs touching your files: matches, your CODEOWNERS rules, the latest scan */
+export interface CodeownedSource { repo: string; prs: number; rules: number | null; source: string | null; scanned_at: number | null; scanned: number | null; error: string | null; in_progress: boolean }
+const ownedTitle = (p: ReviewPR) => p.owned_paths?.length
+  ? `\nyou own ${p.owned_count ?? p.owned_paths.length} of its files (CODEOWNERS):\n  ${p.owned_paths.slice(0, 8).join("\n  ")}${(p.owned_count ?? 0) > 8 ? "\n  …" : ""}`
+  : "";
 
 /** A checkbox kept per browser. */
 function usePersistedFlag(key: string): [boolean, (v: boolean) => void] {
@@ -80,6 +91,8 @@ export interface HubPrefs {
   core_maintainers?: string[];
   priority_meta: boolean;
   show_approved: boolean;
+  /** also list PRs that touch files you own in CODEOWNERS (not requested from you) */
+  codeowned?: boolean;
   starred?: string[];
   unstarred?: string[];
   priority_levels: PriorityLevel[];
@@ -102,6 +115,8 @@ interface Queue {
   watched?: ReviewPR[];
   watch_problems?: string[];
   maintainers?: MaintainerSource[];
+  codeowned?: CodeownedSource[];
+  codeowned_problems?: string[];
   deferred?: ReviewPR[];
   hidden_count?: number;
   approved_hidden?: number;
@@ -183,6 +198,8 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
   }, []);
 
   const [settings, setSettings] = useState(false);
+  const learnSummary = useLearningSummary(true);
+  const learnWaiting = learnSummary.proposed + learnSummary.flagged; // lessons the agent learned that wait for you
   // search pull requests on GitHub (beyond the review queue)
   const [search, setSearch] = useState<string | null>(null);
   const [searchState, setSearchState] = useState<"open" | "closed" | "all">("open");
@@ -221,6 +238,7 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
     return { groups: group((queue?.items ?? []).filter(keep)), watchedGroups: group((queue?.watched ?? []).filter(keep)) };
   }, [queue, filter, showDrafts, sort, agentOnly, maxRank]);
   const drafts = queue?.items.filter((p) => p.draft).length ?? 0;
+  const owned = queue?.items.filter((p) => p.requested === "codeowner").length ?? 0;
   const shown = groups.reduce((n, g) => n + g.prs.length, 0);
   const change = async (what: string, c: Partial<HubPrefs> & Record<string, unknown>) => {
     setBusy(what);
@@ -245,7 +263,7 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
   const toggle = (repo: string) => setCollapsed((s) => { const n = new Set(s); if (n.has(repo)) n.delete(repo); else n.add(repo); return n; });
   const prRow = (p: ReviewPR, showRepo = false) => (
     <button key={`${p.repo}#${p.number}`} className={`review-pr ${p.draft ? "draft" : ""} ${p.priority ? "priority" : ""}`} onClick={() => onOpen(p)} role="button"
-      title={`${p.repo}#${p.number}\n${p.title}\n${CI_LABEL[p.ci ?? ""] ?? "no checks"}${p.requested_by ? `\nreview requested by ${p.requested_by}${p.requested_by_company ? ` (${p.requested_by_company})` : ""}${p.requested_by_roles ? ` — ${p.requested_by_roles}` : ""}` : ""}${p.author_roles ? `\nauthor ${p.author}: ${p.author_roles}` : ""}${p.teams.length ? `\nalso requested from: ${p.teams.join(", ")}` : ""}`}
+      title={`${p.repo}#${p.number}\n${p.title}\n${CI_LABEL[p.ci ?? ""] ?? "no checks"}${p.requested_by ? `\nreview requested by ${p.requested_by}${p.requested_by_company ? ` (${p.requested_by_company})` : ""}${p.requested_by_roles ? ` — ${p.requested_by_roles}` : ""}` : ""}${p.author_roles ? `\nauthor ${p.author}: ${p.author_roles}` : ""}${p.teams.length ? `\nalso requested from: ${p.teams.join(", ")}` : ""}${ownedTitle(p)}`}
       data-testid="review-pr" data-number={p.number} data-priority={p.priority ? "1" : "0"}>
       <span className={`ci-dot ${(p.ci ?? "none").toLowerCase()}`} aria-label={CI_LABEL[p.ci ?? ""] ?? "no checks"} />
       <span className="review-pr-main">
@@ -254,6 +272,9 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
         </span>
         <span className="review-pr-meta muted small">
           {showRepo ? `${p.repo}` : ""}#{p.number} · <GhUser login={p.author} bold={false} inButton /> · {ago(p.updated_at)} · <span className="add">+{p.additions}</span> <span className="del">−{p.deletions}</span>
+          {p.requested === "codeowner" && (
+            <span className="git-badge" title={`Not requested from you: it touches ${p.owned_count ?? 0} file(s) you own in CODEOWNERS${p.draft ? " (a draft: GitHub requests code owners only once it is ready for review)" : ""}`} data-testid="review-codeowner"> code owner</span>
+          )}
           {p.requested_by && <span className="review-by" data-testid="review-by"> · asked by <GhUser login={p.requested_by} bold={false} inButton />{p.requested_by_roles ? <span className={`review-role ${p.requested_by_core ? "core" : ""}`} data-testid="review-role">{p.requested_by_core ? " · core maintainer" : " · maintainer"}</span> : null}</span>}
           {p.my_review === "APPROVED" && (
             <span className={`git-badge ${p.approved_no_news ? "clean" : "approved-news"}`} title={p.approved_no_news ? "You approved; nothing new since" : `You approved; since then: ${(p.since_approval ?? []).join(", ")}`} data-testid="review-approved">
@@ -345,12 +366,14 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
         <span className="ws-name">Reviews{queue ? ` · ${reviewBadge(queue)}` : ""}</span>
         <span className="spacer" />
         {prefs && (
-          <button className={`icon-btn ${settings ? "active" : ""}`} onClick={() => setSettings((v) => !v)} title="Repositories and priority" aria-label="Reviews settings" aria-pressed={settings} data-testid="reviews-settings">⚙</button>
+          <button className={`icon-btn settings-badged ${settings ? "active" : ""}`} onClick={() => setSettings((v) => !v)} title={learnWaiting ? `Repositories and priority · ${learnWaiting} lesson(s) the agent learned wait for you (Agent learning)` : "Repositories, priority and agent learning"} aria-label="Reviews settings" aria-pressed={settings} data-testid="reviews-settings">
+            ⚙{learnWaiting > 0 && <span className="activity-badge" data-testid="reviews-learning-badge">{learnWaiting}</span>}
+          </button>
         )}
         <RefreshButton onRefresh={() => loadReviews(true)} title="Refresh from GitHub" testId="reviews-refresh" />
       </div>
       <div className="pad-x"><GithubRate /></div>
-      {settings && prefs && <ReviewsSettings prefs={prefs} busy={busy} change={change} problems={queue?.watch_problems ?? []} status={queue?.priority_agent ?? null} maintainers={queue?.maintainers ?? []} />}
+      {settings && prefs && <ReviewsSettings prefs={prefs} busy={busy} change={change} problems={[...(queue?.watch_problems ?? []), ...(queue?.codeowned_problems ?? [])]} status={queue?.priority_agent ?? null} maintainers={queue?.maintainers ?? []} codeowned={queue?.codeowned ?? []} />}
       <div className="reviews-search">
         {search === null ? (
           <button className="link-btn small" onClick={() => setSearch("")} data-testid="reviews-search-open">🔍 Search pull requests on GitHub…</button>
@@ -413,7 +436,8 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
         {queue?.note && <div className="reviews-note small" data-testid="reviews-note">{queue.note}</div>}
         {queue && (
           <div className="muted small reviews-meta">
-            Requested from you: {queue.items.length}{queue.truncated ? `+ (of ${queue.total})` : ""} · showing {shown}
+            Requested from you: {queue.items.length - owned}{queue.truncated ? `+ (of ${queue.total})` : ""}
+            {owned > 0 && <span title="Not requested from you, but they touch files you own in CODEOWNERS" data-testid="reviews-codeowned-count"> · touching your files: {owned}</span>} · showing {shown}
             {(queue.deferred?.length ?? 0) > 0 && <span data-testid="reviews-deferred-count"> · {queue.deferred!.length} deferred</span>}
             {!showDrafts && !agentOnly && drafts > 0 && <span title="Tick “drafts” to show them"> · {drafts} draft{drafts > 1 ? "s" : ""} hidden</span>}
             {filter.trim() && <span> · filtered</span>}
@@ -450,13 +474,14 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
   );
 }
 
-function ReviewsSettings({ prefs, busy, change, problems, status, maintainers }: {
+function ReviewsSettings({ prefs, busy, change, problems, status, maintainers, codeowned }: {
   prefs: HubPrefs; busy: string | null; change: (what: string, c: Partial<HubPrefs> & Record<string, unknown>) => Promise<void>; problems: string[]; status: AgentStatus | null;
-  maintainers: MaintainerSource[];
+  maintainers: MaintainerSource[]; codeowned: CodeownedSource[];
 }) {
   const [repo, setRepo] = useState("");
   const [cm, setCm] = useState((prefs.core_maintainers ?? []).join(", "));
-  const [tab, setTab] = useState<"priority" | "repos" | "cache">(() => { const t = localStorage.getItem("waw.reviews.settingsTab"); return t === "repos" || t === "cache" ? t : "priority"; });
+  const [tab, setTab] = useState<"priority" | "repos" | "cache" | "learning">(() => { const t = localStorage.getItem("waw.reviews.settingsTab"); return t === "repos" || t === "cache" || t === "learning" ? t : "priority"; });
+  const learning = useLearningSummary(true);
   useEffect(() => localStorage.setItem("waw.reviews.settingsTab", tab), [tab]);
   const valid = /^[\w.-]+\/[\w.-]+$/.test(repo.trim());
   const watch = () => {
@@ -470,7 +495,10 @@ function ReviewsSettings({ prefs, busy, change, problems, status, maintainers }:
         <button role="tab" aria-selected={tab === "priority"} className={tab === "priority" ? "active" : ""} onClick={() => setTab("priority")} data-testid="reviews-settings-priority">Priority</button>
         <button role="tab" aria-selected={tab === "repos"} className={tab === "repos" ? "active" : ""} onClick={() => setTab("repos")} data-testid="reviews-settings-repos">Repositories</button>
         <button role="tab" aria-selected={tab === "cache"} className={tab === "cache" ? "active" : ""} onClick={() => setTab("cache")} data-testid="reviews-settings-cache">Cache</button>
+        <button role="tab" aria-selected={tab === "learning"} className={tab === "learning" ? "active" : ""} onClick={() => setTab("learning")} title="What the agent learned from your reviews"
+          data-testid="reviews-settings-learning">Agent learning{learning.proposed + learning.flagged ? ` (${learning.proposed + learning.flagged})` : ""}</button>
       </span>
+      {tab === "learning" && <LearningSettings />}
       {tab === "priority" && <PrioritySettings key="priority" prefs={prefs} status={status} save={async (c) => {
         await savePrefs(c as Partial<HubPrefs>);
       }} />}
@@ -488,6 +516,18 @@ function ReviewsSettings({ prefs, busy, change, problems, status, maintainers }:
         <input value={repo} onChange={(e) => setRepo(e.target.value)} placeholder="owner/name, e.g. intel/torch-xpu-ops" onKeyDown={(e) => { if (e.key === "Enter") watch(); }} data-testid="reviews-watch-input" />
         <button className="btn small" disabled={!valid || busy !== null} onClick={watch} data-testid="reviews-watch-add">{busy === "watch" ? "Adding…" : "Watch"}</button>
       </div>
+      <div className="small strong">Your files <span className="muted">(CODEOWNERS)</span></div>
+      <label className="small" title="GitHub requests code owners only once a PR is ready for review, and not the person who marks it ready or already reviewed it">
+        <input type="checkbox" checked={prefs.codeowned ?? true} disabled={busy !== null} onChange={(e) => void change("codeowned", { codeowned: e.target.checked })} data-testid="reviews-codeowned" />
+        {" "}Also list open PRs that touch files you own, even when GitHub did not request you (drafts included)
+      </label>
+      {(prefs.codeowned ?? true) && <div className="muted small">Checked in the repositories of your list whose CODEOWNERS names you (teams are not expanded). The first check walks all open PRs (a few minutes for a big repository); later ones only what changed.</div>}
+      {(prefs.codeowned ?? true) && codeowned.map((c) => (
+        <div key={c.repo} className="reviews-settings-item small" data-testid="reviews-codeowned-repo">
+          <span className="mono">{c.repo}</span>
+          <span className="muted">{c.error ? `not checked: ${c.error}` : c.in_progress ? `first check in progress… (${c.prs} found so far)` : `${c.prs} PR(s) · ${c.rules ?? 0} rule(s) name you${c.scanned_at ? ` · checked ${ago(new Date(c.scanned_at * 1000).toISOString())} ago` : ""}`}</span>
+        </div>
+      ))}
       <div className="small strong">Hidden repositories</div>
       {prefs.hidden_repos.length === 0 && <div className="muted small">None — use × on a repository to hide it.</div>}
       {prefs.hidden_repos.map((r) => (
