@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query
@@ -50,6 +53,20 @@ class ModelChoiceIn(BaseModel):
     provider: str | None = Field(None, max_length=40)
     model: str | None = Field(None, max_length=300)
     variant: str | None = Field(None, max_length=40)
+
+
+# set while creating sessions for a development workspace on a machine: its turns run the machine's own CLI, so this
+# server needs none (machines.bootstrap installs it there)
+_ON_MACHINE: ContextVar[bool] = ContextVar("waw_session_on_machine", default=False)
+
+
+@contextmanager
+def on_machine(flag: bool = True) -> Iterator[None]:
+    token = _ON_MACHINE.set(flag)
+    try:
+        yield
+    finally:
+        _ON_MACHINE.reset(token)
 
 
 class SessionService:
@@ -120,7 +137,7 @@ class SessionService:
         assert self.ctx.providers is not None
         adapter = self.ctx.providers.get(provider)
         caps = await self.ctx.providers.capabilities(provider)
-        if not caps.available:
+        if not caps.available and not (_ON_MACHINE.get() and caps.mode == "cli" and not caps.eager_session_ids):
             raise ApiError(503, "PROVIDER_UNAVAILABLE", caps.error or f"{provider} is unavailable")
         native_id: str | None = None
         if caps.eager_session_ids:

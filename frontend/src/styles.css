@@ -1467,3 +1467,59 @@ body.resizing-h iframe { pointer-events: none; }
 .reviews-batch-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--border); background: var(--card); }
 .reviews-batch-bar > div { flex-basis: 100%; }
 .git-badge.review-agent-failed { color: var(--red); }
+
+/* Machines */
+.machine-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+.machine-dot.ok { background: var(--green); }
+.machine-dot.bad { background: var(--warn); }
+.machines-group { padding-top: 8px; text-transform: uppercase; letter-spacing: 0.04em; }
+.machines-center { padding: 16px 20px; }
+.machine-view { display: flex; flex-direction: column; gap: 10px; max-width: 1100px; }
+.machine-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.machine-head h2 { margin: 0; font-size: 18px; }
+.chip.machine-status.ok { background: color-mix(in srgb, var(--green) 20%, transparent); }
+.chip.machine-status.bad { background: var(--warn-bg); color: var(--warn); }
+.machine-cmd { padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; overflow-wrap: anywhere; }
+.machine-section { border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; display: flex; flex-direction: column; gap: 6px; }
+.machine-section h4, .machine-caps h4 { margin: 4px 0; display: flex; gap: 8px; align-items: baseline; }
+.machine-table { border-collapse: collapse; font-size: 13px; }
+.machine-form { display: flex; flex-direction: column; gap: 6px; }
+.machine-form label { display: flex; flex-direction: column; gap: 2px; }
+.machine-form label:has(> input[type="checkbox"]) { flex-direction: row; align-items: center; gap: 6px; }
+.machine-log { max-height: 320px; overflow: auto; background: var(--code-bg, rgba(127, 127, 127, 0.08)); padding: 6px 8px; border-radius: 6px; white-space: pre-wrap; margin: 0; }
+.machine-jobs { list-style: none; padding: 0; margin: 4px 0; }
+.machine-table th, .machine-table td { text-align: left; padding: 3px 10px 3px 0; vertical-align: top; }
+.machine-table th { font-weight: 600; white-space: nowrap; }
+.machine-table tr.missing th { color: var(--muted); }
+.machine-hop { display: flex; flex-direction: column; gap: 3px; padding: 4px 0; border-top: 1px solid var(--border); }
+.hostkey.changed { color: var(--warn); }
+.hostkey.trusted { color: var(--green); }
+.machine-terminal { height: 320px; display: flex; min-height: 0; }
+.machine-terminal > * { flex: 1; min-width: 0; }
+.machine-recipes { margin: 8px 0; }
+.machine-recipes h5 { margin: 4px 0; display: flex; gap: 8px; align-items: baseline; font-size: 13px; }
+.recipe-library { width: min(960px, 94vw); }
+.recipe-lib-body { display: flex; gap: 12px; min-height: 320px; }
+.recipe-lib-list { width: 240px; flex: none; overflow: auto; max-height: 60vh; border-right: 1px solid var(--border, rgba(127, 127, 127, 0.25)); }
+.recipe-lib-form { flex: 1; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.recipe-lib-form textarea { width: 100%; resize: vertical; }
+
+/* benchmarks (DevBench) */
+.dev-bench { display: flex; flex: 1; min-height: 0; min-width: 0; }
+.dev-bench-side { flex: none; width: 340px; max-width: 45%; padding: 6px 8px; display: flex; flex-direction: column; gap: 6px; overflow: auto; border-right: 1px solid var(--border); }
+.dev-bench-main { flex: 1; min-width: 0; padding: 6px 10px; overflow: auto; display: flex; flex-direction: column; gap: 8px; }
+.bench-def { border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px; display: flex; flex-direction: column; gap: 2px; }
+.bench-ab { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+.bench-ab label { display: flex; gap: 6px; align-items: center; font-size: 12px; }
+.bench-ab input, .bench-editor textarea { flex: 1; width: 100%; border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px; background: var(--bg); color: var(--fg); }
+.bench-editor { display: flex; flex-direction: column; gap: 4px; }
+.bench-table { border-collapse: collapse; font-size: 12px; width: 100%; }
+.bench-table th, .bench-table td { text-align: left; padding: 3px 8px 3px 0; vertical-align: top; border-bottom: 1px solid var(--border); }
+.bench-table tbody tr[data-testid="bench-run"] { cursor: pointer; }
+.bench-table tr.selected { background: color-mix(in srgb, var(--accent, #4a7) 14%, transparent); }
+.bench-metric { display: inline-flex; align-items: center; gap: 4px; margin-right: 10px; white-space: nowrap; }
+.bench-spark { color: var(--muted); vertical-align: middle; }
+.bench-detail { border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; display: flex; flex-direction: column; gap: 6px; }
+.bench-log { max-height: 300px; }
+.chip.bench-regression { background: var(--red); color: #fff; }
+.chip.bench-improvement { background: var(--green); color: #fff; }

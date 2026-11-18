@@ -1,0 +1,3 @@
+#!/bin/sh
+echo "wget: unable to resolve host address" >&2
+exit 4

@@ -1,0 +1,43 @@
+#!/usr/bin/env python3
+"""Fake `ssh-keyscan [-T s] [-p port] host`: prints one ed25519 host key per host, derived from the host name (or the
+$FAKE_AGENT_STATE/hostkey_seed file, to simulate a changed key). Hosts starting with "unreachable" have none."""
+import base64
+import hashlib
+import json
+import os
+import struct
+import sys
+from pathlib import Path
+
+STATE = Path(os.environ.get("FAKE_AGENT_STATE", "/tmp/fake-agent-state"))
+STATE.mkdir(parents=True, exist_ok=True)
+
+
+def blob(seed: str) -> str:
+    def s(b: bytes) -> bytes:
+        return struct.pack(">I", len(b)) + b
+
+    return base64.b64encode(s(b"ssh-ed25519") + s(hashlib.sha256(seed.encode()).digest())).decode()
+
+
+def main(argv):
+    with (STATE / "keyscan_calls.log").open("a") as fh:
+        fh.write(json.dumps(argv) + "\n")
+    port, i = 22, 0
+    while i < len(argv) and argv[i].startswith("-"):
+        if argv[i] == "-p":
+            port = int(argv[i + 1])
+        i += 2 if argv[i] in ("-p", "-T", "-t") else 1
+    host = argv[i]
+    if host.startswith("unreachable"):
+        print(f"{host}: Connection refused", file=sys.stderr)
+        return 1
+    seed_file = STATE / "hostkey_seed"
+    seed = (seed_file.read_text().strip() if seed_file.exists() else "") + host
+    name = host if port == 22 else f"[{host}]:{port}"
+    print(f"{name} ssh-ed25519 {blob(seed)}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

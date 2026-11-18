@@ -60,7 +60,7 @@ async def test_monitor_discover_status_send(running_app, settings, homes, tmp_pa
     # OpenCode: a session made in the wiki folder (via a fake run)
     import subprocess
 
-    subprocess.run([str(FAKES / "fake-opencode"), "run", "--dir", str(workspace), "--", "hello"], cwd=workspace, check=True, capture_output=True)
+    subprocess.run([str(FAKES / "fake-opencode"), "run", "--", "hello"], cwd=workspace, check=True, capture_output=True)
     oc_id = json.loads((fake_env / "opencode_sessions.json").read_text())[-1]["id"]
 
     assert (await api.put("/api/v1/monitor/folders", json={"folders": [str(proj)]})).json()["folders"][0]["path"] == str(proj)
@@ -159,7 +159,7 @@ async def test_rename_and_delete_sessions(running_app, settings, homes, tmp_path
     proj.mkdir()
     write_codex(homes["codex"], "cx-del", str(proj), [ev("task_started"), ev("task_complete")])
     cl = write_claude(homes["claude"], "cl-del", str(proj), [{"type": "user", "message": {"role": "user", "content": "hi"}}])
-    subprocess.run([str(FAKES / "fake-opencode"), "run", "--dir", str(proj), "--", "hello"], cwd=proj, check=True, capture_output=True)
+    subprocess.run([str(FAKES / "fake-opencode"), "run", "--", "hello"], cwd=proj, check=True, capture_output=True)
     oc = json.loads((fake_env / "opencode_sessions.json").read_text())[-1]["id"]
     await api.put("/api/v1/monitor/watched", json={"sessions": [{"provider": "codex", "id": "cx-del"}, {"provider": "claude", "id": "cl-del"}, {"provider": "opencode", "id": oc}]})
     # rename: the name shown everywhere (status, discovery)

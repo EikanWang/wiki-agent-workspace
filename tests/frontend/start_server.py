@@ -412,7 +412,9 @@ def main() -> None:
     # PR Development: the fake editor and a small C++/Python source checkout to branch from
     from backend.app.config import DevSettings
 
-    settings.development = DevSettings(code_server=str(ROOT / "tests" / "fakes" / "fake-code-server"), worktrees_dir=tmp / "worktrees")
+    settings.development = DevSettings(code_server=str(ROOT / "tests" / "fakes" / "fake-code-server"), worktrees_dir=tmp / "worktrees",
+                                       ssh=str(ROOT / "tests" / "fakes" / "fake-ssh"), ssh_keyscan=str(ROOT / "tests" / "fakes" / "fake-ssh-keyscan"),
+                                       ssh_copy_id=str(ROOT / "tests" / "fakes" / "fake-ssh-copy-id"))
     src = tmp / "devsrc"
     src.mkdir()
     for args in (["init", "-q", "-b", "main"], ["config", "user.email", "e2e@example.com"], ["config", "user.name", "E2E"]):
@@ -455,7 +457,8 @@ def main() -> None:
     dev_service.fetch_pr_meta = pr_meta
     dev_service.set_pr_state = set_state
     Path(f"/tmp/waw-e2e-devsrc-{settings.port}").write_text(str(src))  # per port: runs side by side do not mix
-    settings.frontend_dist = ROOT / "frontend" / "dist"
+    # WAW_E2E_DIST: a build elsewhere (e.g. while a running service serves frontend/dist of the same checkout)
+    settings.frontend_dist = Path(os.environ["WAW_E2E_DIST"]) if os.environ.get("WAW_E2E_DIST") else ROOT / "frontend" / "dist"
     # "Sign in with GitHub" against a fake GitHub served by this same server (routes below)
     base = f"http://127.0.0.1:{settings.port}/fake-github"
     # GitHub starts unconfigured (no client id): the first click on the login page sets it up via the app manifest

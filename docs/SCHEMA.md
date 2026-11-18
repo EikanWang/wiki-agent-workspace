@@ -214,7 +214,7 @@ only ever sent back to the same `provider`.
 | `status` | see below | `uninitialized` (no native id yet) · `ready` (provider confirmed/used) · `missing` (provider no longer has it) · `unavailable` · `availability_unknown` (linked externally, not yet exercised). |
 | `origin` | `app` \| `linked` \| `preview` | Created by the app, linked from the provider's list/by id, or an isolated preview session. |
 | `model` | TEXT, nullable | Model override for app-driven turns in this session (`opencode run --model`, `codex exec -m`); NULL = provider default. Changed via `PUT /agent-sessions/{id}/model`; past messages are unaffected. |
-| `variant` | TEXT, nullable | Reasoning effort / variant passed with the model (`--variant`, `model_reasoning_effort`). |
+| `variant` | TEXT, nullable | Reasoning effort / variant passed with the model (OpenCode `--model …#variant`, `model_reasoning_effort`). |
 | `created_at`, `updated_at` | DATETIME | Lifecycle. |
 
 ## `threads` — a discussion anchored to a passage
@@ -398,6 +398,7 @@ event. The user's terminal is never restricted.
 | `tab_order` | INTEGER | Tab position. |
 | `state` | `live` \| `exited` \| `unavailable` \| `closed` | `exited`: tmux session gone; `unavailable`: tmux missing; `closed`: user closed/dismissed (hidden). |
 | `named_workspace_id` | UUID, FK → `named_workspaces.id`, nullable | Workspace the tab is listed in; `NULL` = Default (tabs from before named workspaces, and tabs of deleted workspaces). |
+| `machine` | TEXT, nullable | Machine (Machines view) whose own app tmux (`tmux -L <socket>-r`) runs the session; the browser attaches with `ssh -tt … tmux attach`. `NULL`: this server's tmux. Its state is checked when a tab attaches, not at listing time. |
 | `created_at`, `updated_at` | DATETIME | Lifecycle. |
 
 ## `login_sessions` — browser logins
@@ -436,7 +437,7 @@ stub lives in `snapshots/dev/<id>.md`.
 | --- | --- | --- |
 | `id` | TEXT, PK | UUID. |
 | `name` | TEXT | Display name (branch, or `#<n> <PR title>`). |
-| `host` | TEXT | `local`, or the name of a `[[development.hosts]]` entry. |
+| `host` | TEXT | `local`, or the name of a machine (`machines.name`: the Machines view or `[[development.hosts]]`). |
 | `source_repo` | TEXT | The checkout (top level) the worktree was added to, on the host. |
 | `worktree_path` | TEXT | The worktree, on the host (empty while `creating`). |
 | `mode` | TEXT | `branch` (new work) or `pr` (an existing pull request). |
@@ -446,6 +447,7 @@ stub lives in `snapshots/dev/<id>.md`.
 | `pr_number` | INTEGER, nullable | The pull request (set at creation for `pr`, after "Create pull request" for `branch`). |
 | `push_remote` | TEXT, nullable | Remote name or URL `git push` uses (the PR's fork for a cross-repository PR). |
 | `push_branch` | TEXT, nullable | Branch name on that remote. |
+| `clone_url` | TEXT, nullable | The Git URL `source_repo` was cloned from (`<state_dir>/dev/src/<owner>-<repo>` here, `<work_dir>/src/<owner>-<repo>` on a machine; shared by the workspaces of that repository there and fetched again when one is created). `NULL`: an existing checkout. |
 | `wiki_workspace_id` | TEXT, FK → workspaces, nullable | The reference wiki folder. |
 | `document_id` | TEXT, FK → documents, nullable | The hidden conversation document. |
 | `settings_json` | TEXT (JSON) | Language and task settings: `python`, `compile_commands_dir`, `clangd`, `build_command`, `test_command`, `debug_program`, `debug_args`, detected `languages`. |
@@ -459,11 +461,129 @@ stub lives in `snapshots/dev/<id>.md`.
 | --- | --- | --- |
 | `id` | TEXT, PK | UUID. |
 | `dev_id` | TEXT, FK → dev_workspaces | The workspace. |
-| `kind` | TEXT | `build`, `test` or `custom`. |
+| `kind` | TEXT | `build`, `test`, `custom`, or `bench` (a benchmark run's generated script; see `bench_runs`). |
 | `command` | TEXT | The shell command, run with `sh -c` in the worktree on the host. |
-| `status` | TEXT | `running`, `passed`, `failed`, `cancelled`, `interrupted` (cut off by a server restart). |
+| `status` | TEXT | `running`, `passed`, `failed`, `cancelled`, `interrupted` (cut off by a server restart, or gone on the machine without an exit code). |
 | `exit_code` | INTEGER, nullable | Exit status. |
-| `log_path` | TEXT | Output (stdout and stderr) in `<state_dir>/dev/logs/<id>.log`. |
+| `log_path` | TEXT | Output (stdout and stderr) in `<state_dir>/dev/logs/<id>.log` (for runs in tmux on a machine: a copy of the log there). |
+| `machine` | TEXT, nullable | Machine whose app tmux runs the command (session `wawrun-<id8>`); `NULL`: a child of the app (this server, or plain `ssh -tt`). |
+| `remote_dir` | TEXT, nullable | The run folder there (`<work_dir>/runs/<id>`: `cmd.sh`, `wrap.sh`, `log`, `pid`, `rc`), removed once the exit code is read. Runs with one are followed again after a restart. |
+| `started_at`, `finished_at` | DATETIME | Timestamps. |
+
+## `machines` — SSH machines and bastions (Machines view)
+
+One per host the app can reach over SSH. Hosts of `[[development.hosts]]` (`source = config`) are mirrored here at
+startup — their definition stays in the config file, the row keeps their last check and probe; machines added in the
+Machines view (`source = ui`) are defined here. When both have the same name the config file wins. "This server"
+(`local`) has no row; its last probe is the `machine_local` key of `kv_settings`.
+
+| Column | Type | Meaning |
+| --- | --- | --- |
+| `name` | TEXT, PK | Name shown in the app and stored in `dev_workspaces.host` (cannot change). |
+| `kind` | TEXT | `machine` (work runs there) or `bastion` (a jump host other hosts are reached through). |
+| `source` | TEXT | `ui` (added in the app) or `config` (`[[development.hosts]]`, read-only in the app). |
+| `ssh` | TEXT | Destination: a host name, `user@host` or a `~/.ssh/config` alias. |
+| `port` | INTEGER, nullable | SSH port (`-p`). |
+| `user` | TEXT, nullable | Login name (`-l`). |
+| `identity_file` | TEXT, nullable | Private key on this server (`-i`, with `IdentitiesOnly=yes`). |
+| `via_json` | TEXT (JSON) | Bastion names the host is reached through, first hop first (empty for bastions). |
+| `options_json` | TEXT (JSON) | Extra `ssh -o` options from the allowlist (`ui` machines only). |
+| `work_dir` | TEXT | Folder on the machine for worktrees, the editor profile, sockets and wiki snapshots. |
+| `code_server`, `opencode`, `codex` | TEXT | Executables on the machine. |
+| `status` | TEXT | Last check: `unknown`, `online`, or why it failed (`auth_failed`, `hostkey_unknown`, `hostkey_changed`, `dns`, `timeout`, `refused`, `unreachable`, `shell_failed`, `unknown_bastion`, `failed`). |
+| `status_detail` | TEXT (JSON), nullable | The last check, hop by hop (status, message, time). |
+| `checked_at` | DATETIME, nullable | When it was checked. |
+| `capabilities_json` | TEXT (JSON), nullable | The last probe: OS, CPU, memory, free disk, GPUs, sudo, package manager, tools and versions. |
+| `probed_at` | DATETIME, nullable | When it was probed. |
+| `env_json` | TEXT (JSON) | What it gets from this server (`ui` machines; config hosts keep theirs in the config file): `forward_env`, `env_vars`, `forward_proxy`, `ca_bundle` (see CONFIGURATION.md). Names and settings only — the values are read when a command starts. |
+| `created_at`, `updated_at` | DATETIME | Timestamps. |
+
+## `machine_jobs` — work on a machine as a whole (Set up)
+
+Run by the app step by step over ssh, one at a time per machine; a job still `running` at startup was cut off by a
+restart and becomes `interrupted` (running setup again continues: what it installed is skipped).
+
+| Column | Type | Meaning |
+| --- | --- | --- |
+| `id` | TEXT, PK | UUID. |
+| `machine` | TEXT | The machine's name (`machines.name`). |
+| `kind` | TEXT | `bootstrap` (the app's tools only) or `setup` (Set up machine: the tools, then the recipes; or only recipes). |
+| `title` | TEXT | Shown in the history, e.g. `Set up gpu-box`. |
+| `status` | TEXT | `running`, `passed`, `failed`, `cancelled`, `interrupted`. |
+| `error` | TEXT, nullable | Why it failed or stopped. |
+| `params_json` | TEXT (JSON) | What was asked: `tools`, `system_packages`, `agent_settings`, `update` (`setup`: those under `bootstrap`, or `null`; `recipes`: ids or `null` for all; `force`). |
+| `result_json` | TEXT (JSON), nullable | What happened: tools installed (their release tags), skipped, failed; system packages; the OpenCode settings copied (`setup`: that under `bootstrap`, and `recipes`: `ok`, `skipped`, `failed`). |
+| `log_path` | TEXT | The log in `<state_dir>/machines/logs/<id>.log` (forwarded values already masked). |
+| `started_at`, `finished_at` | DATETIME | Timestamps. |
+
+## `machine_recipes` — setup recipes (the user's own steps for machines)
+
+| Column | Type | Meaning |
+| --- | --- | --- |
+| `id` | TEXT, PK | UUID. |
+| `name` | TEXT, unique | Shown in the app. |
+| `run` | TEXT | The script, run on the machine in `$HOME` with `WAW_WORK_DIR` set (its own `#!` interpreter, else `sh`). |
+| `check` | TEXT, nullable | A script whose exit 0 means "already done": `run` is skipped. |
+| `env_out` | TEXT, nullable | A snippet sourced there (bash when available), e.g. `conda activate x`; what it changes in the environment is recorded per machine (`machine_recipe_state.env_text`). |
+| `version` | TEXT | Content hash (12 hex digits of SHA-256) of `run`, `check` and `env_out`. |
+| `source_path` | TEXT, nullable | The `*.sh` file on this server it was imported from (importing again updates it). |
+| `created_at`, `updated_at` | DATETIME | Timestamps. |
+
+## `machine_recipe_state` — recipes assigned to a machine, and how they went there
+
+| Column | Type | Meaning |
+| --- | --- | --- |
+| `machine` | TEXT, PK | The machine's name (`machines.name`; rows are removed with the machine). |
+| `recipe_id` | TEXT, PK, FK → machine_recipes | The recipe (it cannot be deleted while assigned). |
+| `position` | INTEGER | Order on that machine (0 first). |
+| `status` | TEXT | `not_run`, `ok` or `failed`. The API also reports `outdated`: `ok`, but the recipe changed since (`version_ok` ≠ `machine_recipes.version`). |
+| `version_ok` | TEXT, nullable | The recipe's version when it last succeeded there. |
+| `env_text` | TEXT, nullable | The `export` / `unset` lines its `env_out` produced there; those of the `ok` recipes, in order, make `<work_dir>/env.sh`, which every command the app runs there sources. |
+| `error` | TEXT, nullable | Why it last failed (e.g. `exit 3`). |
+| `last_job_id` | TEXT, nullable | The machine job that last ran it (soft ref → `machine_jobs`). |
+| `last_run_at` | DATETIME, nullable | When. |
+
+## `bench_defs` — benchmark definitions kept in the app
+
+A repository's `.waw/bench.toml` is not stored; its definitions win over these by name.
+
+| Column | Type | Meaning |
+| --- | --- | --- |
+| `id` | TEXT, PK | UUID. |
+| `scope` | TEXT | `repo` (every workspace of that GitHub repository) or `workspace` (one development workspace). |
+| `scope_key` | TEXT | `owner/name`, or the development workspace's id. Unique with `scope` and `name`. |
+| `name` | TEXT | The benchmark's name. |
+| `spec_json` | TEXT | The checked definition: `name`, `setup`, `command`, `warmup`, `repeat`, `timeout`, `metrics` (`name`, `json` path or `regex`, `better`, `unit`), `env`, `exclusive`, `gpus`, `threshold`. |
+| `created_at`, `updated_at` | DATETIME | Timestamps. |
+
+## `bench_runs` — benchmark runs and their results
+
+| Column | Type | Meaning |
+| --- | --- | --- |
+| `id` | TEXT, PK | UUID. |
+| `dev_id` | TEXT | The development workspace (soft ref → `dev_workspaces`). |
+| `repo` | TEXT, nullable | Its GitHub repository (`owner/name`), to compare across workspaces. |
+| `def_name` | TEXT | The benchmark's name. |
+| `def_source` | TEXT | `file` (`.waw/bench.toml`) or `app` (`bench_defs`). |
+| `spec_json` | TEXT | The definition as it ran. |
+| `machine` | TEXT | `local` or the machine's name. |
+| `kind` | TEXT | `run`, or `ab` (one side of an A/B run). |
+| `variant` | TEXT, nullable | A/B: `a` (baseline) or `b` (candidate). |
+| `ab_id` | TEXT, nullable | The two sides of an A/B run share it. |
+| `label` | TEXT, nullable | Shown in the app (A/B: the refs compared). |
+| `branch` | TEXT, nullable | The workspace's branch (A/B baseline: the ref given); used to find "the latest run of the base branch". |
+| `commit` | TEXT, nullable | The commit that ran. |
+| `dirty_hash` | TEXT, nullable | Hash of the uncommitted changes; `NULL`: none. |
+| `env_hash` | TEXT, nullable | Hash of the machine's recipes and their versions (`NULL`: none / this server). |
+| `caps_json` | TEXT, nullable | The machine's last probe (OS, CPU, GPUs, drivers) at the time. |
+| `samples_json` | TEXT, nullable | Each repeat: `{i, rc, values: {metric: number or null}}`; `wall_s` is always there. |
+| `summary_json` | TEXT, nullable | Per metric: `n`, `median`, `mean`, `stdev`, `min`, `max`, `better`, `unit`. |
+| `lock_json` | TEXT, nullable | What it held while running: `{"machine": true}` or `{"gpus": [...]}`. |
+| `status` | TEXT | `running`, `passed`, `failed` (a command failed, or a metric was not found), `cancelled`, `interrupted`. |
+| `error` | TEXT, nullable | Why it failed. |
+| `task_run_id` | TEXT, nullable | The `dev_task_runs` row that ran the script (its log is the output); both A/B sides share it. |
+| `baseline_id` | TEXT, nullable | A/B candidate: its baseline run. |
+| `worktrees_json` | TEXT, nullable | A/B: the temporary worktrees, removed when the run ends. |
 | `started_at`, `finished_at` | DATETIME | Timestamps. |
 
 ## `alembic_version`

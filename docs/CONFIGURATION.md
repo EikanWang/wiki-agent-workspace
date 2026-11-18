@@ -168,7 +168,7 @@ The app asks for `openid email` only, reads the email once from Google's userinf
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `default_provider` | auto-detected: `opencode` if on PATH, else `codex`, else empty | Provider used when a document has no session yet. Empty → discussions are disabled with an explanation; reader/terminal still work. |
-| `env_script` | — | A shell script sourced (bash) for every agent process the app starts — turns, model lists, session lists — e.g. one that exports API tokens (`AWS_BEARER_TOKEN_BEDROCK`). Re-read whenever the file changes, so a rotated token applies without a restart. Not passed to SSH development hosts. |
+| `env_script` | — | A shell script sourced (bash) for every agent process the app starts — turns, model lists, session lists — e.g. one that exports API tokens (`AWS_BEARER_TOKEN_BEDROCK`). Re-read whenever the file changes, so a rotated token applies without a restart. SSH machines get its variables only when they opt in (`forward_env` in `[[development.hosts]]` or the machine's **Environment** in the app). |
 
 ### `[agents.opencode]`
 
@@ -208,21 +208,63 @@ host where you want it.
 | `worktrees_dir` | `<state_dir>/dev/worktrees` | Where the app's Git worktrees go (on this server). |
 | `extensions` | clangd, CodeLLDB, Python, debugpy, basedpyright, Ruff | Open VSX ids installed by **Install language support** (into the app's own editor profile, not your VS Code). |
 | `ssh` | `ssh` | SSH client. Hosts are reached with `-o BatchMode=yes`: set up key authentication (and `~/.ssh/config` aliases) first. |
+| `release_base` | `"https://github.com"` | Where machine setup downloads opencode, code-server, gh and Codex from: GitHub, or a mirror with the same layout (`<base>/<owner>/<repo>/releases/latest` redirecting to `…/tag/<tag>`, archives under `…/releases/download/<tag>/`). |
 
 ### `[[development.hosts]]` — develop on another machine
 
 The worktree, the editor, the agent's CLI (opencode / Codex) and builds/tests all run on the host; the app reaches
 the editor with `ssh -L` (a Unix socket) and the editor's integration extension reaches the app with `ssh -R`. The
 reference wiki is copied there read-only (`<work_dir>/wiki/<folder id>`, refreshed when older than 10 minutes before
-a turn, or from the workspace settings). OpenCode must be in `mode = "cli"` for remote turns.
+a turn, or from the workspace settings). OpenCode must be in `mode = "cli"` for remote turns; turns run the host's
+own CLI, so this server needs none. **Machines → Set up** installs the tools the app uses there (see the user guide).
 
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `name` | — (required) | Shown in the app (letters, digits, `-_.`). |
 | `ssh` | — (required) | Destination: `me@build-box` or a `~/.ssh/config` alias. |
-| `ssh_args` | `[]` | Extra ssh options, e.g. `["-p", "2222"]`. |
+| `kind` | `"machine"` | `machine`, or `bastion`: a jump host other hosts are reached through (not offered for work itself). |
+| `via` | `[]` | Bastions (their `name`s, `kind = "bastion"`) the host is reached through, first hop first, e.g. `["corp-jump", "lab-jump"]`. |
+| `port` | `22` (or `~/.ssh/config`) | SSH port. |
+| `user` | from `ssh` / `~/.ssh/config` | Login name. |
+| `identity_file` | ssh's default keys | Private key on this server to log in with. |
+| `ssh_args` | `[]` | Extra ssh options, e.g. `["-o", "Compression=yes"]`. |
 | `work_dir` | `~/.cache/wiki-agent-workspace` | Remote folder for worktrees, editor profile, sockets and wiki snapshots. |
-| `code_server`, `opencode`, `codex` | names on the remote PATH | Executables on the host. |
+| `code_server`, `opencode`, `codex` | names on the remote PATH | Executables on the host. `<work_dir>/bin` (where machine setup installs them) comes first on PATH for everything the app runs there. |
+| `forward_env` | `false` | Give the host the variables `[agents] env_script` sets (API tokens) — all of them, or only those in `env_vars`. Variables that only make sense here (`PATH`, `HOME`, `LD_*`, `XDG_*`, …) are left out unless named in `env_vars`. |
+| `env_vars` | `[]` | Only these variables (taken from the env script, else from this server's environment), e.g. `["AWS_BEARER_TOKEN_BEDROCK"]`. |
+| `forward_proxy` | `false` | Give the host this server's `http_proxy`, `https_proxy`, `all_proxy` and `no_proxy` (`no_proxy` gains `localhost,127.0.0.1,::1`). |
+| `ca_bundle` | — | A PEM file on this server with extra CA certificates (a corporate proxy's). Copied to `<work_dir>/ca-extra.pem`; `<work_dir>/ca.pem` is the host's own bundle plus it, used as `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` and `GIT_SSL_CAINFO` (`NODE_EXTRA_CA_CERTS` gets the extra file). |
+
+Forwarded values go to builds/tests, terminals, the editor and agent turns on the host, never on a command line:
+they are written over ssh into a 0600 file under `<work_dir>/run` that the command sources and deletes before it
+starts. Values of 8 characters or more show as `****` in the logs the app keeps of runs and setup jobs.
+
+Hosts can also be added in the app (Machines view); those are stored in the database and listed together with the
+ones here (which are shown read-only there; on a name clash the config file wins). Commands to a host share one
+connection (OpenSSH `ControlMaster`, sockets under `<state_dir>/ssh/cm`, open for 10 minutes after the last use), and
+each bastion of a `via` chain keeps its own. Hosts of the config file keep your own ssh host-key settings; machines
+added in the app accept only host keys confirmed in the app (stored in `<state_dir>/ssh/known_hosts`, checked after
+`~/.ssh/known_hosts`).
+
+### `.waw/bench.toml` — benchmarks of a repository
+
+Not part of the config file: a file in the repository (read from the workspace's worktree) with one `[[bench]]`
+table per benchmark. The same table can be kept in the app (**Benchmarks → New**, for a workspace or for every
+workspace of a repository); on a name clash the file wins. How runs, comparisons and A/B work: USER_GUIDE.md.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `name` | — (required) | Letters, digits, `-_.` (up to 64). |
+| `command` | — (required) | Shell command run in the worktree, once per warmup and repeat. |
+| `setup` | — | Run once before; skipped while the commit, the uncommitted changes and the setup itself are unchanged. |
+| `warmup` | `0` | Runs whose results are dropped (0–20). |
+| `repeat` | `5` | Measured runs (1–100). |
+| `timeout` | `1800` | Seconds, per command. |
+| `metrics` | `[]` | `{ name, json = "$.path" \| regex = "…( group )…", better = "lower" \| "higher", unit }`: from JSON in the output, or the last regex match. `wall_s` (how long each run took) is always recorded. |
+| `env` | `{}` | Extra environment variables. |
+| `exclusive` | `true` | Hold the whole machine: no build, test or other benchmark there meanwhile. |
+| `gpus` | `[]` | With `exclusive = false`: only benchmarks sharing one of these GPUs wait for each other. |
+| `threshold` | `5` | % change that counts as a regression or improvement (and at least 2 standard deviations). |
 
 ### `[development.completion]` — AI inline completion (optional)
 
@@ -242,9 +284,22 @@ endpoint (the agent CLIs are too slow for keystrokes). Off until `base_url` and 
 # code_server = "/opt/code-server/bin/code-server"
 
 [[development.hosts]]
+name = "corp-jump"
+kind = "bastion"
+ssh = "jump.example.com"
+
+[[development.hosts]]
 name = "gpu-box"
 ssh = "me@gpu-box"
+via = ["corp-jump"]
+port = 22
+user = "me"
+identity_file = "~/.ssh/id_ed25519"
 work_dir = "~/.cache/wiki-agent-workspace"
+forward_env = true
+env_vars = ["AWS_BEARER_TOKEN_BEDROCK"]
+forward_proxy = true
+# ca_bundle = "/etc/ssl/certs/corp-proxy-ca.pem"
 
 [development.completion]
 base_url = "https://bedrock-runtime.us-east-2.amazonaws.com/openai/v1"

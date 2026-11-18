@@ -113,11 +113,13 @@ backend/app/
                    commit (filter=latest, paginated), failing GitHub Actions jobs' logs via actions/jobs/{id}/logs
                    saved to snapshots/github/<o>/<r>/<n>.ci/, excerpt = output before the ##[error] marks
   development/     PR Development (DESIGN: agent-native development workspaces)
-    targets.py     where a workspace runs: LocalTarget, SshTarget (`ssh … sh -c '<shlex-quoted script>'`), RemoteExec
+    targets.py     where a workspace runs: LocalTarget, SshTarget (machines.conn argv + `sh -c '<shlex-quoted script>'`,
+                   <work_dir>/bin first on PATH, optional env file), RemoteExec
                    (agent CLI turns on the host: SubprocessTurn wraps the argv)
     service.py     DevService: worktrees (new branch: `worktree add -b`; PR: fetch `pull/<n>/head` → refs/waw/pr/<n>,
                    branch waw/pr-<n>, push target = the PR head branch / fork), detected C++/Python settings, git
-                   status / diff / commit / push (refs/waw/pushed/<branch>), `gh pr create`, `gh pr checks`
+                   status / diff / commit / push (refs/waw/pushed/<branch>), `gh pr create`, `gh pr checks`; clone_url:
+                   cloned once into <state_dir>/dev/src or <work_dir>/src (per-destination lock, fetched on reuse)
     editor.py      EditorManager: one code-server per workspace on a 0600 Unix socket (`--auth none`, own config,
                    user-data, extensions and shared-data dirs), generated .code-workspace (worktree + read-only wiki,
                    clangd / Python settings, build/test tasks, debug configs), the integration extension packaged as
@@ -127,8 +129,10 @@ backend/app/
                    same-origin Origin for writes/WebSockets, X-Frame-Options SAMEORIGIN, own CSP kept)
     agent.py       prompts grounded in the whole reference wiki (local folder or read-only snapshot on the host),
                    editor context (file, selection, diagnostics, unsaved buffers, failed task output), task kinds
-    tasks.py       TaskRunner: build / test / custom runs (`sh -c` in the worktree, `ssh -tt` remotely), log files,
-                   cancel, interrupted on restart
+    tasks.py       TaskRunner: build / test / custom runs (`sh -c` in the worktree), log files, cancel. On a machine
+                   with tmux: a `wawrun-<id8>` session there writing <work_dir>/runs/<id>/{log,pid,rc}; followed over
+                   ssh into the local log (again after a dropped connection, resumed after a restart), cancel kills
+                   the process group. Else `ssh -tt` (interrupted on restart)
     files.py       the web editor's file access on the host: list, read, conditional write (sha256), create, rename,
                    delete, stat (follow agent edits), search (git grep / grep); wiki root read-only; no `..`, no .git,
                    no writes through symlinks leaving the worktree
@@ -136,7 +140,45 @@ backend/app/
                    pyright / pylsp) in the worktree; one WS message = one LSP message (Content-Length framing added)
     completion.py  AI inline completion via an OpenAI-compatible /chat/completions endpoint (cached, cleaned)
     routes.py      /dev/… API (also: code-anchored discussions → thread target_json {kind: "code"}, skills, worktree
-                   terminals: tmux sessions, `ssh -tt` login on SSH hosts, ids in kv dev_terminals:<id>); /dev/ext/<id>/… for the extension (Bearer token handed to its editor process)
+                   terminals: tmux sessions, in the host's own app tmux on SSH hosts, ids in kv dev_terminals:<id>); /dev/ext/<id>/… for the extension (Bearer token handed to its editor process)
+  machines/        Machines: SSH hosts worked on like the server itself, and the bastions they are reached through
+    conn.py        ssh argv per host: allowlisted options, ControlMaster per hop (<state_dir>/ssh/cm, short-path
+                   fallback in the temp dir; ControlPath=none for -L/-R/-D/-W), bastion chains as nested app-built
+                   ProxyCommand `ssh … -W %h:%p` (% escaped per level), strict host keys from <state_dir>/ssh/known_hosts
+    registry.py    MachineRegistry: `machines` table (config hosts mirrored, `ui` ones defined there) → DevSettings.ui_hosts
+                   (DevSettings.host() merges both, config wins), validation, in-use checks, machine_changed events
+    health.py      hop-by-hop check (each bastion, then the machine through them), ssh errors classified
+    hostkeys.py    `ssh -G` resolve, ssh-keyscan (from the last bastion when behind one), SHA256 fingerprints, trust
+                   into the app's known_hosts of the keys the user was shown (kept 10 min, else scanned again); only
+                   ed25519/ecdsa/rsa are scanned — few unauthenticated connections (OpenSSH PerSourcePenalties)
+    probe.py       one sh script on stdin: OS, CPU, memory, disk, sudo, package manager, tools, GPUs (nvidia-smi,
+                   xpu-smi, rocm-smi, lspci)
+    keys.py        ~/.ssh keys (list, ed25519 generation), ssh-copy-id in an app terminal (password typed there only)
+    envfwd.py      what a machine gets from this server (opt-in: env_script variables, proxy, CA bundle): a 0600
+                   <work_dir>/run/env-*.sh written over stdin, sourced and deleted by the command (never on argv);
+                   masking of forwarded values in logs (held back at a chunk end that may start one)
+    jobs.py        MachineJobs: one app-driven job per machine (`machine_jobs`, log in <state_dir>/machines/logs),
+                   cancel, interrupted at restart, machine_job events
+    bootstrap.py   Set up: probe, system packages (password-less sudo), tools from GitHub releases (or
+                   [development] release_base) into <work_dir>/tools + bin (fallback: this server downloads into
+                   <state_dir>/cache/tools and streams over ssh), opencode settings without secrets → <work_dir>/opencode
+    recipes.py     setup recipes (`machine_recipes`, per machine `machine_recipe_state`): run in order by a `setup` job
+                   (check → skip, first failure stops), scripts in <work_dir>/recipes; env_out sourced between two
+                   `env -0` dumps, the difference → export lines → <work_dir>/env.sh, which targets.path_prefix sources
+                   for every command there; import from *.sh header comments; outdated = version_ok ≠ content hash
+    bench.py       benchmarks: definitions (`.waw/bench.toml` in the worktree wins by name over `bench_defs`), a run =
+                   a dev task of kind `bench` running a generated script (setup cached per commit + changes in the
+                   worktree's git dir, warmups, repeats; A/B: two worktrees, A B / B A alternating) whose output parts
+                   are marked `@@waw-bench begin|end`; TaskRunner.finish_hooks parse the log into `bench_runs`
+                   (samples, median/mean/stdev). Locks in memory (whole machine, or GPUs), restored at startup;
+                   builds/tests refuse while a benchmark holds the machine. Compare: change % vs max(threshold, 2·stdev)
+    bench_routes.py /dev/workspaces/{id}/bench/{defs,run,ab}, /bench/defs…, /bench/runs… (export csv|json, cancel,
+                   explain → an agent turn of kind `perf`), /bench/compare?b=&a=
+    routes.py      /machines…, /ssh-keys, /recipes…; POST /machines/{m}/setup (tools + recipes), GET /machines/{m}/fs/dirs
+                   (folder picker over ssh); terminals on a machine (also POST /terminals {machine})
+    rtmux.py       RemoteTmux: the app's own tmux server on a machine (`-L <socket>-r`, config under work_dir, adapted
+                   to its tmux version, 2.1+); terminals attach with `ssh -tt … tmux attach`; no tmux → ssh login in
+                   this server's tmux
   skills.py        skills of the connected folders and projects (SKILL.md under .opencode/.claude/.agents/.codex
                    skills): discovered per turn by JobManager (open folders + `_skill_folders` of the request), added to
                    OpenCode's config (OPENCODE_CONFIG_CONTENT skills.paths) and listed in every prompt
@@ -166,7 +208,7 @@ backend/app/
   gitinfo.py       read-only git helpers (status/branch/commit/show, raw git runner, ref validation)
   agents/
     base.py        adapter contract (capabilities/list/create/resume/cancel/list_models), event types, subprocess helper
-    opencode.py    OpenCode CLI adapter (JSON lines) and server adapter (HTTP + SSE); --model/--variant
+    opencode.py    OpenCode CLI adapter (JSON lines) and server adapter (HTTP + SSE); --model provider/model#variant
     codex.py       Codex `exec --json` adapter (new + resume), session listing from $CODEX_HOME; -m / effort
     registry.py    builds adapters from config, caches capabilities
     jobs.py        JobManager: per-session serialization, event persistence (seq), SSE replay, cancel,

@@ -49,6 +49,20 @@ class DevHost:
     code_server: str = "code-server"           # remote editor executable
     opencode: str = "opencode"                 # remote agent executables
     codex: str = "codex"
+    kind: str = "machine"                      # machine (runs work) | bastion (a jump host other hosts are reached through)
+    via: list[str] = field(default_factory=list)  # bastion names, in order, the host is reached through (ProxyJump chain)
+    port: int | None = None
+    user: str | None = None
+    identity_file: str | None = None           # private key used to log in
+    options: dict[str, str] = field(default_factory=dict)  # allowlisted ssh -o options (machines added in the app)
+    source: str = "config"                     # config ([[development.hosts]]) | ui (Machines view, stored in the database)
+    strict_host_keys: bool = False             # only keys confirmed in the app (its known_hosts) are accepted
+    # what the machine gets from this server (opt-in): [agents] env_script's variables (all, or only `env_vars`),
+    # the proxy settings, a CA bundle (a file on this server). Sent as 0600 files over ssh, never on a command line.
+    forward_env: bool = False
+    env_vars: list[str] = field(default_factory=list)
+    forward_proxy: bool = False
+    ca_bundle: str | None = None
 
 
 @dataclass
@@ -74,9 +88,27 @@ class DevSettings:
     completion: DevCompletion = field(default_factory=DevCompletion)
     # web editor: language servers per language key (yaml, starlark, cmake, json, …): argv, e.g. ["starpls", "server"]
     language_servers: dict[str, list[str]] = field(default_factory=dict)
+    # where machine setup downloads opencode, code-server, gh and codex from: GitHub, or a mirror with the same layout
+    # (<base>/<owner>/<repo>/releases/latest and …/releases/download/<tag>/<asset>)
+    release_base: str = "https://github.com"
+    # set by the app (machines.registry), never read from or written to the config file:
+    ui_hosts: list[DevHost] = field(default_factory=list)   # machines and bastions added in the Machines view
+    control_dir: Path | None = None            # ssh ControlMaster sockets (one shared connection per host)
+    known_hosts: Path | None = None            # host keys confirmed in the app
+    ssh_keyscan: str = "ssh-keyscan"
+    ssh_copy_id: str = "ssh-copy-id"
+    ssh_keygen: str = "ssh-keygen"
+
+    def all_hosts(self) -> list[DevHost]:
+        names = {h.name for h in self.hosts}
+        return [*self.hosts, *(h for h in self.ui_hosts if h.name not in names)]
 
     def host(self, name: str | None) -> DevHost | None:
-        return next((h for h in self.hosts if h.name == name), None) if name else None
+        return next((h for h in self.all_hosts() if h.name == name), None) if name else None
+
+    def machines(self) -> list[DevHost]:
+        """Hosts work can run on (not bastions)."""
+        return [h for h in self.all_hosts() if h.kind != "bastion"]
 
 
 # C/C++ (clangd, CodeLLDB debugger) and Python (language server, debugger, Ruff) from Open VSX
@@ -250,7 +282,8 @@ class Settings:
         if dev.ssh != "ssh":
             dd["ssh"] = dev.ssh
         if dev.hosts:
-            dd["hosts"] = [{k: v for k, v in h.__dict__.items() if v not in (None, [], "")} for h in dev.hosts]
+            dd["hosts"] = [{k: v for k, v in h.__dict__.items() if v not in (None, [], "", {}) and k not in ("source", "strict_host_keys")
+                            and not (k == "kind" and v == "machine")} for h in dev.hosts]
         if dev.completion.base_url:
             dd["completion"] = dict(dev.completion.__dict__)
         if dev.language_servers:
@@ -295,12 +328,24 @@ def _dev_from(d: dict[str, Any]) -> DevSettings:
         if not name.replace("-", "").replace("_", "").replace(".", "").isalnum() or name == "local":
             print_config_warning(f"development.hosts: ignoring host with invalid name {name!r} (letters, digits, - _ .)")
             continue
+        kind = "bastion" if h.get("kind") == "bastion" else "machine"
         hosts.append(DevHost(
             name=name, ssh=str(h["ssh"]), ssh_args=[str(a) for a in h.get("ssh_args") or []],
             work_dir=str(h.get("work_dir") or "~/.cache/wiki-agent-workspace"),
             code_server=str(h.get("code_server") or "code-server"),
             opencode=str(h.get("opencode") or "opencode"), codex=str(h.get("codex") or "codex"),
+            kind=kind, via=[] if kind == "bastion" else [str(v) for v in h.get("via") or []],
+            port=int(h["port"]) if h.get("port") else None, user=str(h.get("user") or "") or None,
+            identity_file=str(h.get("identity_file") or "") or None,
+            forward_env=bool(h.get("forward_env", False)), env_vars=[str(v) for v in h.get("env_vars") or []],
+            forward_proxy=bool(h.get("forward_proxy", False)), ca_bundle=str(h.get("ca_bundle") or "") or None,
         ))
+    names = {h.name: h for h in hosts}
+    for h in hosts:
+        bad = [v for v in h.via if v not in names or names[v].kind != "bastion"]
+        if bad:
+            print_config_warning(f"development.hosts: {h.name}: via {bad} are not bastions (kind = \"bastion\"); ignored")
+            h.via = [v for v in h.via if v not in bad]
     c = d.get("completion") or {}
     wt = d.get("worktrees_dir")
     return DevSettings(
@@ -310,6 +355,7 @@ def _dev_from(d: dict[str, Any]) -> DevSettings:
         ssh=str(d.get("ssh") or "ssh"),
         hosts=hosts,
         language_servers={str(k): [str(x) for x in v] for k, v in (d.get("language_servers") or {}).items() if isinstance(v, list) and v},
+        release_base=str(d.get("release_base") or "https://github.com").rstrip("/"),
         completion=DevCompletion(
             base_url=str(c.get("base_url") or ""), model=str(c.get("model") or ""), api_key_env=str(c.get("api_key_env") or ""),
             max_tokens=int(c.get("max_tokens", 128)), timeout=float(c.get("timeout", 8.0)),

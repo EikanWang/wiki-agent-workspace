@@ -25,9 +25,12 @@ from .targets import TargetError
 SNAPSHOT_MAX_AGE = 600  # seconds
 _snap: dict[str, float] = {}  # "<host>:<wiki ws id>" -> last sync
 
-KINDS = ("ask", "explain", "fix", "tests", "implement", "review", "ci", "verify")
+KINDS = ("ask", "explain", "fix", "tests", "implement", "review", "ci", "verify", "perf")
 
 KIND_INSTRUCTIONS = {
+    "perf": "Explain why the benchmark result changed against its baseline: compare the two commits (`git diff <baseline>..<candidate>` "
+            "and the uncommitted changes, if any), point at the changes most likely responsible and why, and say how to confirm "
+            "it (a profile, a narrower benchmark). Treat differences within the noise as such. Do not change files unless asked.",
     "ask": "Answer the user's question about the code. Only change files if the message asks for a change.",
     "explain": "Explain the selected code: what it does, how it fits the surrounding code, and how it relates to what the "
                "wiki documents. Do not modify files.",
@@ -151,6 +154,14 @@ def _context_text(c: dict[str, Any] | None) -> str | None:
     if c.get("task_output"):
         parts.append("Output of the failed command" + (f" `{c.get('task_command')}`" if c.get("task_command") else "") + " (tail):\n```\n"
                      + str(c["task_output"])[-30000:] + "\n```")
+    if c.get("bench_report"):
+        parts.append("Benchmark comparison" + (f" (baseline commit {c['bench_base_commit']}, candidate commit {c['bench_commit']})"
+                                                if c.get("bench_base_commit") and c.get("bench_commit") else "") + ":\n"
+                     + str(c["bench_report"])[:20000])
+    for side, label in (("a", "baseline"), ("b", "candidate")):
+        out = (c.get("bench_logs") or {}).get(side) if isinstance(c.get("bench_logs"), dict) else None
+        if out:
+            parts.append(f"Output of the {label} run (tail):\n```\n" + str(out)[-12000:] + "\n```")
     return "\n\n".join(parts) or None
 
 
@@ -304,7 +315,7 @@ async def dev_turn(ctx: AppContext, row: DevWorkspace, *, question: str, kind: s
             skill_map = await sync_skills(ctx, row)
         except (ApiError, TargetError):
             skill_map = {}
-        extra["_remote"] = {"ssh_prefix": rex.ssh_prefix, "bins": rex.bins, "cwd": rex.cwd,
+        extra["_remote"] = {"ssh_prefix": rex.ssh_prefix, "bins": rex.bins, "cwd": rex.cwd, "machine": t.name, "pre": rex.pre,
                             "skill_map": skill_map, "skill_dirs": list(skill_map.values())}
     prompt = build_dev_prompt(row=row, host_label=t.label(), wiki=wiki, question=question, kind=kind if kind in KINDS else "ask",
                               context=context, prior=prior)

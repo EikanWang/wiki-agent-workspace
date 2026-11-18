@@ -30,11 +30,12 @@ export function Breadcrumbs({ path, onGo }: { path: string; onGo: (p: string) =>
 }
 
 /** Quick places: home, the file system root, and the folders open in this window (and where they live). */
-export function Places({ onGo }: { onGo: (p: string) => void }) {
+export function Places({ onGo, remote = false }: { onGo: (p: string) => void; remote?: boolean }) {
   const [roots, setRoots] = useState<{ name: string; root: string }[]>([]);
   useEffect(() => {
+    if (remote) return;  // (the open folders live on this server)
     get<{ workspaces: WorkspaceInfo[] }>("/workspaces").then((r) => setRoots(r.workspaces.filter((w) => w.available).map((w) => ({ name: w.name, root: w.root })))).catch(() => undefined);
-  }, []);
+  }, [remote]);
   const parents = [...new Set(roots.map((r) => r.root.replace(/\/[^/]+\/?$/, "") || "/"))].filter((p) => !roots.some((r) => r.root === p));
   return (
     <div className="places small" data-testid="folder-places">
@@ -50,13 +51,15 @@ export function Places({ onGo }: { onGo: (p: string) => void }) {
 /**
  * Browse the server's file system and choose a folder (used for reference folders, a repository's local checkout,
  * …). Click a folder to enter it; "Choose" takes the folder shown. `requireGit`: only Git checkouts can be chosen.
+ * `machine`: browse that machine's file system instead (over ssh).
  */
-export default function FolderPicker({ title, hint, start, requireGit = false, confirmLabel = "Choose this folder", onChoose, onClose }: {
+export default function FolderPicker({ title, hint, start, requireGit = false, confirmLabel = "Choose this folder", machine, onChoose, onClose }: {
   title: string;
   hint?: string;
   start?: string;
   requireGit?: boolean;
   confirmLabel?: string;
+  machine?: string;
   onChoose: (path: string) => void;
   onClose: () => void;
 }) {
@@ -82,7 +85,8 @@ export default function FolderPicker({ title, hint, start, requireGit = false, c
   useEffect(() => {
     let alive = true;
     setLoading(true);
-    get<DirListing>(`/fs/dirs?path=${encodeURIComponent(path)}&hidden=${hidden}`)
+    const base = machine && machine !== "local" ? `/machines/${encodeURIComponent(machine)}/fs/dirs` : "/fs/dirs";
+    get<DirListing>(`${base}?path=${encodeURIComponent(path)}&hidden=${hidden}`)
       .then((l) => {
         if (!alive) return;
         setListing(l);
@@ -101,7 +105,7 @@ export default function FolderPicker({ title, hint, start, requireGit = false, c
       .finally(() => alive && setLoading(false));
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [path, hidden]);
+  }, [path, hidden, machine]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", onKey);
@@ -109,6 +113,7 @@ export default function FolderPicker({ title, hint, start, requireGit = false, c
   }, [onClose]);
   const entries = (listing?.entries ?? []).filter((e) => !filter || e.name.toLowerCase().includes(filter.toLowerCase()));
   // a folder that could not be listed is not chosen: "Choose" takes only the folder shown, after a successful listing
+  const remote = !!machine && machine !== "local";
   const ok = !!listing && !loading && !error && (!requireGit || listing.is_git);
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -117,8 +122,8 @@ export default function FolderPicker({ title, hint, start, requireGit = false, c
           <span>{title}</span>
           <button className="icon-btn" onClick={onClose} aria-label="Close">×</button>
         </div>
-        {hint && <div className="muted small">{hint} You are browsing the server's file system.</div>}
-        <Places onGo={go} />
+        {hint && <div className="muted small">{hint} You are browsing {remote ? `the file system of ${machine}` : "the server's file system"}.</div>}
+        <Places onGo={go} remote={remote} />
         <div className="row">
           <input ref={input} className="path-input" value={typed} onChange={(e) => { edited.current = true; setTyped(e.target.value); }} onKeyDown={(e) => { if (e.key === "Enter") go(e.currentTarget.value.trim() || "~"); }}
             placeholder="/absolute/path (Enter to open)" data-testid="folder-picker-path" />

@@ -51,7 +51,7 @@ def main(argv):
         print("fake code-server needs --socket", file=sys.stderr)
         return 2
     workspace = argv[-1]
-    (STATE / "code_server_env.json").write_text(json.dumps({k: v for k, v in os.environ.items() if k.startswith("WAW_DEV")} | {"workspace": workspace, "cwd": os.getcwd()}))
+    (STATE / "code_server_env.json").write_text(json.dumps({k: v for k, v in os.environ.items() if k.startswith("WAW_") or k in ("PATH", "https_proxy", "SSL_CERT_FILE")} | {"workspace": workspace, "cwd": os.getcwd()}))
     asyncio.run(serve(sock, workspace))
     return 0
 

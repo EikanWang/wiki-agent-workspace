@@ -285,6 +285,70 @@ async def test_tasks_run_log_cancel_and_fix(running_app, dev_settings, tmp_path,
     assert (await api.post(f"/api/v1/dev/workspaces/{d['id']}/tasks", json={"kind": "build", "command": ""})).status_code in (201, 400)
 
 
+async def wait_run(api: Api, run_id: str, timeout: float = 30) -> dict:
+    for _ in range(int(timeout / 0.1)):
+        log = (await api.get(f"/api/v1/dev/tasks/{run_id}/log")).json()
+        if log["run"]["status"] != "running":
+            return log
+        await asyncio.sleep(0.1)
+    raise AssertionError(log)
+
+
+async def test_tasks_on_a_machine_run_in_its_tmux(running_app, dev_settings, tmp_path, fake_env):
+    """On a machine with tmux a command runs in a tmux session there: it survives a dropped connection and an app
+    restart, its log is copied exactly once, and cancel stops its whole process group."""
+    h = await running_app(dev_settings)
+    api = h.api
+    src, _ = make_source(tmp_path)
+    d = await new_branch_ws(api, src, h.ctx.workspace_id, host="box")
+    tasks = f"/api/v1/dev/workspaces/{d['id']}/tasks"
+    rsock = f"{h.ctx.terminals.tmux.socket}-r"
+    runs = tmp_path / "remote" / "runs"
+    # a failing command: exit code, both streams, the run folder removed afterwards
+    r = await api.post(tasks, json={"kind": "custom", "command": "pwd; echo out; echo err >&2; exit 4"})
+    assert r.status_code == 201, r.text
+    run = r.json()
+    assert run["machine"] == "box" and run["in_remote_tmux"] is True
+    log = await wait_run(api, run["id"])
+    assert log["run"]["status"] == "failed" and log["run"]["exit_code"] == 4, log
+    assert d["worktree_path"] in log["text"] and "out" in log["text"] and "err" in log["text"]
+    assert not (runs / run["id"]).exists()
+    # dropped connection while it runs: followed again from where the copy ends, every line once
+    cmd = "for i in 1 2 3 4 5 6; do echo line$i; sleep 0.5; done"
+    run = (await api.post(tasks, json={"kind": "custom", "command": cmd})).json()
+    tasks_rt = h.ctx.extra["dev_tasks"]
+    for _ in range(100):
+        if run["id"] in tasks_rt.followers and "line1" in Path(tasks_rt.get(run["id"]).log_path).read_text():
+            break
+        await asyncio.sleep(0.05)
+    (fake_env / "ssh_down").write_text("me@box\n")
+    tasks_rt.followers[run["id"]].kill()
+    await asyncio.sleep(1.5)
+    (fake_env / "ssh_down").unlink()
+    log = await wait_run(api, run["id"])
+    assert log["run"]["status"] == "passed", log
+    assert [ln for ln in log["text"].splitlines() if ln.startswith("line")] == [f"line{i}" for i in range(1, 7)]
+    # an app restart while it runs: the new app follows it to the end
+    run = (await api.post(tasks, json={"kind": "custom", "command": "sleep 2; echo after-restart"})).json()
+    await h.stop()
+    assert subprocess.run(["tmux", "-L", rsock, "has-session", "-t", f"=wawrun-{run['id'][:8]}"]).returncode == 0
+    h = await running_app(dev_settings)
+    api = h.api
+    log = await wait_run(api, run["id"])
+    assert log["run"]["status"] == "passed" and "after-restart" in log["text"], log
+    # cancel: the process group there is stopped
+    run = (await api.post(f"/api/v1/dev/workspaces/{d['id']}/tasks", json={"kind": "custom", "command": "sleep 60"})).json()
+    for _ in range(100):
+        if (runs / run["id"] / "pid").exists():
+            break
+        await asyncio.sleep(0.05)
+    r = await api.post(f"/api/v1/dev/tasks/{run['id']}/cancel")
+    assert r.status_code == 200, r.text
+    log = await wait_run(api, run["id"])
+    assert log["run"]["status"] == "cancelled", log
+    assert not (runs / run["id"]).exists()
+
+
 async def test_existing_pr_workspace(running_app, dev_settings, tmp_path, fake_env, monkeypatch):
     h = await running_app(dev_settings)
     api = h.api
@@ -665,16 +729,15 @@ async def test_dev_terminals(running_app, dev_settings, tmp_path, fake_env):
     t = (await api.post(f"{base}/terminals")).json()
     assert t["cwd"] == d["worktree_path"] and t["state"] == "live"
     assert [x["id"] for x in (await api.get(f"{base}/terminals")).json()["terminals"]] == [t["id"]]
-    # SSH host: the tmux session runs an ssh login that starts in the remote worktree
+    # SSH host: the shell runs in the host's own app tmux, starting in the remote worktree
     r = await new_branch_ws(api, src, None, host="box", branch="b-remote")
     tr = (await api.post(f"/api/v1/dev/workspaces/{r['id']}/terminals")).json()
-    assert tr["label"].endswith("(box)")
-    for _ in range(50):
-        calls = (fake_env / "ssh_calls.log").read_text()
-        if f"cd {r['worktree_path']}" in calls and "-tt" in calls.splitlines()[-1]:
-            break
-        await asyncio.sleep(0.1)
-    assert f"cd {r['worktree_path']}" in (fake_env / "ssh_calls.log").read_text()
+    assert tr["label"].endswith("(box)") and tr["machine"] == "box" and tr["cwd"] == r["worktree_path"]
+    rsock = f"{h.ctx.terminals.tmux.socket}-r"
+    cwd = subprocess.run(["tmux", "-L", rsock, "display-message", "-p", "-t", f"={tr['tmux_session']}:", "#{pane_start_path}"],
+                         capture_output=True, text=True).stdout.strip()
+    assert cwd == r["worktree_path"]
+    assert [x["id"] for x in (await api.get(f"/api/v1/dev/workspaces/{r['id']}/terminals")).json()["terminals"]] == [tr["id"]]
     for x in (t, tr):
         await api.delete(f"/api/v1/terminals/{x['id']}")
 

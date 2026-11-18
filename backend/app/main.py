@@ -214,6 +214,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from .social_login import apply_saved
 
     apply_saved(settings)  # keys from the one-click "Continue with GitHub" setup
+    from .machines.registry import MachineRegistry
+
+    ctx.extra["machines"] = MachineRegistry(ctx)  # the app's own machines join [[development.hosts]] (DevSettings.host)
+    ctx.extra["machines"].load()
+    ctx.jobs.machines = ctx.extra["machines"]
+    from .machines import rtmux
+
+    ctx.terminals.remote_for = lambda name: rtmux.for_machine(ctx.extra["machines"].dev, name, tmux.socket, settings.tmux_history_limit)
     from .development.editor import EditorManager
     from .development.tasks import TaskRunner
 
@@ -224,6 +232,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     _files_memo.clear()  # (a new app: nothing remembered from another one)
     gh_limits.configure(settings.state_dir, settings.gh_rate)  # GitHub rate-limit state, shared with the other processes of this data folder
     ctx.extra["dev_tasks"] = TaskRunner(ctx)
+    from .machines.jobs import MachineJobs
+
+    ctx.extra["machine_jobs"] = MachineJobs(ctx)
+    from .machines.recipes import Recipes
+
+    ctx.extra["recipes"] = Recipes(ctx)
+    from .machines.bench import Bench
+
+    ctx.extra["bench"] = Bench(ctx)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -231,6 +248,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if n:
             log.info("marked %d unfinished jobs as interrupted", n)
         ctx.extra["dev_tasks"].mark_interrupted()
+        ctx.extra["machine_jobs"].mark_interrupted()
+        resumed = ctx.extra["dev_tasks"].resume()  # commands still running in tmux on a machine
+        if resumed:
+            log.info("following %d commands still running on machines", resumed)
+        ctx.extra["bench"].reconcile()
         rec = ctx.terminals.reconcile()
         log.info("terminal reconcile: %s", rec)
         try:
@@ -250,6 +272,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await reg.stop_all()
             await ctx.extra["dev_editor"].shutdown()
             await ctx.extra["dev_tasks"].shutdown()
+            await ctx.extra["machine_jobs"].shutdown()
             n = await ctx.jobs.shutdown()
             if n:
                 log.info("marked %d running jobs as interrupted at shutdown", n)
@@ -300,6 +323,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     api.include_router(dev_routes.router)
     api.include_router(dev_lsp.router)
+    from .machines import routes as machine_routes
+
+    api.include_router(machine_routes.router)
+    from .machines import bench_routes
+
+    api.include_router(bench_routes.router)
     from . import skills as skills_mod
 
     api.include_router(skills_mod.router)

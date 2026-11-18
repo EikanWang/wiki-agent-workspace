@@ -769,12 +769,15 @@ class SendIn(BaseModel):
     text: str = Field(min_length=1, max_length=100_000)
 
 
-def _send_argv(ctx: AppContext, provider: str, sid: str, text: str, cwd: str) -> tuple[list[str], bytes | None]:
+def _send_argv(ctx: AppContext, provider: str, sid: str, text: str, cwd: str, version: str | None = None) -> tuple[list[str], bytes | None]:
     exe = _bin(ctx, provider)
     if not exe:
         raise ApiError(503, "PROVIDER_UNAVAILABLE", f"{provider} is not installed on the server")
     if provider == "opencode":
-        return [exe, "run", "--session", sid, "--dir", cwd, "--format", "json", "--", text], None
+        from .agents.opencode import is_v2
+
+        here = [] if is_v2(version) else ["--dir", cwd]  # v2 has no --dir: the process runs in cwd
+        return [exe, "run", "--session", sid, *here, "--format", "json", "--", text], None
     if provider == "codex":
         return [exe, "exec", "resume", "--json", "--skip-git-repo-check", sid, "-"], text.encode("utf-8")
     return [exe, "-p", "--resume", sid, "--output-format", "text", text], None
@@ -793,7 +796,8 @@ async def send(provider: str, sid: str, body: SendIn, ctx: AppContext = Depends(
     if not snap.found:
         raise not_found(f"no {provider} session {sid} on this machine", "SESSION_NOT_FOUND")
     cwd = snap.directory if snap.directory and Path(snap.directory).is_dir() else str(Path.home())
-    argv, stdin = _send_argv(ctx, provider, sid, body.text, cwd)
+    version = (await ctx.providers.capabilities("opencode")).version if provider == "opencode" else None
+    argv, stdin = _send_argv(ctx, provider, sid, body.text, cwd, version)
     st: dict[str, Any] = {"state": "running", "started_at": _iso(time.time()), "rc": None, "output": "", "busy_warning": snap.turn_open}
     _sending[key] = st
 

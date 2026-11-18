@@ -326,6 +326,8 @@ class Terminal(Base):
     state: Mapped[str] = mapped_column(String(16), default="live")  # live | exited | unavailable | closed
     # the named workspace the tab belongs to (NULL: the Default workspace — terminals from before named workspaces)
     named_workspace_id: Mapped[str | None] = mapped_column(ForeignKey("named_workspaces.id"), nullable=True)
+    # a machine of the Machines view whose own tmux runs the session (NULL: this server's tmux)
+    machine: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 
@@ -450,6 +452,7 @@ class DevWorkspace(Base):
     pr_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     push_remote: Mapped[str | None] = mapped_column(Text, nullable=True)  # remote name or URL `git push` uses
     push_branch: Mapped[str | None] = mapped_column(Text, nullable=True)  # branch name on that remote
+    clone_url: Mapped[str | None] = mapped_column(Text, nullable=True)  # cloned into <work_dir>/src/<repo> first (no checkout needed there)
     wiki_workspace_id: Mapped[str | None] = mapped_column(ForeignKey("workspaces.id"), nullable=True)  # reference wiki folder
     document_id: Mapped[str | None] = mapped_column(ForeignKey("documents.id"), nullable=True)  # the agent conversation
     settings_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}", server_default="{}")  # language + task settings
@@ -465,13 +468,141 @@ class DevTaskRun(Base):
     __tablename__ = "dev_task_runs"
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     dev_id: Mapped[str] = mapped_column(ForeignKey("dev_workspaces.id"), nullable=False, index=True)
-    kind: Mapped[str] = mapped_column(String(12), nullable=False)  # build | test | custom
+    kind: Mapped[str] = mapped_column(String(12), nullable=False)  # build | test | custom | bench (machines.bench)
     command: Mapped[str] = mapped_column(Text, nullable=False)  # shell command, run in the worktree
     status: Mapped[str] = mapped_column(String(12), nullable=False, default="running")  # running|passed|failed|cancelled|interrupted
     exit_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    log_path: Mapped[str] = mapped_column(Text, nullable=False)
+    # run in tmux on a machine: the machine and the run's folder there (its log, pid and exit code); the local log is a copy
+    machine: Mapped[str | None] = mapped_column(Text, nullable=True)
+    remote_dir: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class Machine(Base):
+    """A machine (or a bastion it is reached through) the app works on over SSH. Hosts of the config file
+    (`source = config`) are mirrored here at startup for their status and probe results; those added in the Machines
+    view (`source = ui`) are defined here."""
+
+    __tablename__ = "machines"
+    name: Mapped[str] = mapped_column(Text, primary_key=True)
+    kind: Mapped[str] = mapped_column(String(8), nullable=False, default="machine")  # machine | bastion
+    source: Mapped[str] = mapped_column(String(8), nullable=False, default="ui")  # ui | config
+    ssh: Mapped[str] = mapped_column(Text, nullable=False)  # destination: host, user@host or a ~/.ssh/config alias
+    port: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    user: Mapped[str | None] = mapped_column(Text, nullable=True)
+    identity_file: Mapped[str | None] = mapped_column(Text, nullable=True)
+    via_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")  # bastion names, first hop first
+    options_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")  # allowlisted ssh -o options
+    work_dir: Mapped[str] = mapped_column(Text, nullable=False, default="~/.cache/wiki-agent-workspace")
+    code_server: Mapped[str] = mapped_column(Text, nullable=False, default="code-server")
+    opencode: Mapped[str] = mapped_column(Text, nullable=False, default="opencode")
+    codex: Mapped[str] = mapped_column(Text, nullable=False, default="codex")
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="unknown")  # unknown | online | a failure code
+    status_detail: Mapped[str | None] = mapped_column(Text, nullable=True)  # the last check's hops (JSON)
+    checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    capabilities_json: Mapped[str | None] = mapped_column(Text, nullable=True)  # the last probe (OS, CPU, GPUs, tools, sudo)
+    probed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # what the machine gets from this server: {forward_env, env_vars, forward_proxy, ca_bundle} (machines added in the app)
+    env_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+class MachineJob(Base):
+    """Work on a machine as a whole (setup: installing the app's tools), with a log in the state dir."""
+
+    __tablename__ = "machine_jobs"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    machine: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)  # bootstrap
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(12), nullable=False, default="running")  # running | passed | failed | cancelled | interrupted
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    params_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    result_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     log_path: Mapped[str] = mapped_column(Text, nullable=False)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class MachineRecipe(Base):
+    """A setup step for machines (machines.recipes): a shell script, an optional check (exit 0: already done) and an
+    optional snippet whose effect on the environment (conda activate, setvars.sh) becomes the machine's environment."""
+
+    __tablename__ = "machine_recipes"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    run: Mapped[str] = mapped_column(Text, nullable=False)
+    check: Mapped[str | None] = mapped_column(Text, nullable=True)
+    env_out: Mapped[str | None] = mapped_column(Text, nullable=True)
+    version: Mapped[str] = mapped_column(String(16), nullable=False)  # content hash of run + check + env_out
+    source_path: Mapped[str | None] = mapped_column(Text, nullable=True)  # the *.sh file it was imported from
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+class MachineRecipeState(Base):
+    """A recipe assigned to a machine (in order) and how it last went there."""
+
+    __tablename__ = "machine_recipe_state"
+    machine: Mapped[str] = mapped_column(Text, primary_key=True)
+    recipe_id: Mapped[str] = mapped_column(ForeignKey("machine_recipes.id", ondelete="CASCADE"), primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    status: Mapped[str] = mapped_column(String(10), nullable=False, default="not_run")  # not_run | ok | failed
+    version_ok: Mapped[str | None] = mapped_column(String(16), nullable=True)  # the recipe's version when it last succeeded
+    env_text: Mapped[str | None] = mapped_column(Text, nullable=True)  # the export lines env_out produced there
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_job_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class BenchDef(Base):
+    """A benchmark definition kept in the app (machines.bench); a `.waw/bench.toml` in the repository wins by name."""
+
+    __tablename__ = "bench_defs"
+    __table_args__ = (UniqueConstraint("scope", "scope_key", "name", name="uq_bench_defs_scope_name"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    scope: Mapped[str] = mapped_column(String(10), nullable=False)  # repo | workspace
+    scope_key: Mapped[str] = mapped_column(Text, nullable=False)  # owner/name (repo) or the dev workspace id
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    spec_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+class BenchRun(Base):
+    """One benchmark run (or one side of an A/B run) and its results."""
+
+    __tablename__ = "bench_runs"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    dev_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)  # soft ref → dev_workspaces
+    repo: Mapped[str | None] = mapped_column(Text, nullable=True)  # owner/name when known (comparisons across workspaces)
+    def_name: Mapped[str] = mapped_column(Text, nullable=False)
+    def_source: Mapped[str] = mapped_column(String(8), nullable=False)  # file | app
+    spec_json: Mapped[str] = mapped_column(Text, nullable=False)  # the definition as run
+    machine: Mapped[str] = mapped_column(Text, nullable=False)  # local or a machine name
+    kind: Mapped[str] = mapped_column(String(4), nullable=False, default="run")  # run | ab
+    variant: Mapped[str | None] = mapped_column(String(1), nullable=True)  # ab: a (baseline) | b (candidate)
+    ab_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    label: Mapped[str | None] = mapped_column(Text, nullable=True)
+    branch: Mapped[str | None] = mapped_column(Text, nullable=True)
+    commit: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    dirty_hash: Mapped[str | None] = mapped_column(String(16), nullable=True)  # uncommitted changes (NULL: none)
+    env_hash: Mapped[str | None] = mapped_column(String(16), nullable=True)  # the machine's recipes and env.sh
+    caps_json: Mapped[str | None] = mapped_column(Text, nullable=True)  # the machine's last probe
+    samples_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    summary_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    lock_json: Mapped[str | None] = mapped_column(Text, nullable=True)  # what it held: {"machine": true} or {"gpus": [...]}
+    status: Mapped[str] = mapped_column(String(12), nullable=False, default="running")
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    task_run_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)  # soft ref → dev_task_runs
+    baseline_id: Mapped[str | None] = mapped_column(String(36), nullable=True)  # soft ref → bench_runs
+    worktrees_json: Mapped[str | None] = mapped_column(Text, nullable=True)  # temporary A/B worktrees to remove
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 Index("ix_messages_job", Message.job_id)
+Index("ix_machine_jobs_machine", MachineJob.machine, MachineJob.started_at)

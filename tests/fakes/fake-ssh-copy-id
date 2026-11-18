@@ -1,0 +1,12 @@
+#!/usr/bin/env python3
+"""Fake `ssh-copy-id`: records its arguments to $FAKE_AGENT_STATE/copy_id_calls.log and succeeds."""
+import json
+import os
+import sys
+from pathlib import Path
+
+STATE = Path(os.environ.get("FAKE_AGENT_STATE", "/tmp/fake-agent-state"))
+STATE.mkdir(parents=True, exist_ok=True)
+with (STATE / "copy_id_calls.log").open("a") as fh:
+    fh.write(json.dumps(sys.argv[1:]) + "\n")
+print("Number of key(s) added: 1")

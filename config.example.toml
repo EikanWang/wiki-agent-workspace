@@ -80,9 +80,18 @@ extra_args = []
 # code_server = "/opt/code-server/bin/code-server"   # default: code-server on PATH
 # worktrees_dir = "/home/me/.local/share/wiki-agent-workspace/dev/worktrees"
 
+# [[development.hosts]]      # a bastion (jump host) other hosts are reached through
+# name = "corp-jump"
+# kind = "bastion"
+# ssh = "jump.example.com"
+
 # [[development.hosts]]      # develop on another machine (key-based ssh; code-server and the agent CLI installed there)
-# name = "gpu-box"
+# name = "gpu-box"           # (machines can also be added in the app's Machines view)
 # ssh = "me@gpu-box"
+# via = ["corp-jump"]        # bastions on the way, first hop first
+# port = 22
+# user = "me"
+# identity_file = "~/.ssh/id_ed25519"
 # work_dir = "~/.cache/wiki-agent-workspace"
 
 # [development.completion]   # AI inline completion: an OpenAI-compatible chat endpoint

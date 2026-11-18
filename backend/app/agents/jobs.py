@@ -42,6 +42,7 @@ class JobManager:
         self.locks = None       # LockService of the primary root, set by main
         self.documents = None   # DocumentService of the primary root, set by main
         self.registry = None    # WorkspaceRegistry: resolves each session's root folder
+        self.machines = None    # MachineRegistry: what remote turns get from this server (machines.envfwd)
 
     # ------------------------------------------------------------------ startup
     def mark_interrupted(self) -> int:
@@ -239,7 +240,7 @@ class JobManager:
         try:
             adapter: AgentAdapter = self.providers.get(provider)
             caps = await self.providers.capabilities(provider)
-            if not caps.available:
+            if not caps.available and not context.get("_remote"):  # a remote turn runs the machine's own CLI
                 raise ProviderError("PROVIDER_UNAVAILABLE", caps.error or f"{provider} is not available")
             cwd = Path(context["_cwd"]) if context.get("_cwd") else None
             root, locks_svc = self._root_and_locks(session_ws)
@@ -274,11 +275,14 @@ class JobManager:
                     raise ProviderError("PROVIDER_UNAVAILABLE", "OpenCode server mode cannot run turns on an SSH host; "
                                         "use agents.opencode.mode = \"cli\" (or Codex) for remote development workspaces")
                 r = context["_remote"]
-                remote = RemoteExec(list(r["ssh_prefix"]), dict(r.get("bins") or {}), str(r.get("cwd") or ""))
+                remote = RemoteExec(list(r["ssh_prefix"]), dict(r.get("bins") or {}), str(r.get("cwd") or ""),
+                                    pre=str(r.get("pre") or ""))
                 if provider == "opencode" and r.get("skill_dirs"):
                     from ..skills import opencode_env
 
                     remote.env = {"OPENCODE_CONFIG_CONTENT": opencode_env([Path(x) for x in r["skill_dirs"]], {})["OPENCODE_CONFIG_CONTENT"]}
+                if r.get("machine"):
+                    await self._remote_setup(remote, str(r["machine"]), provider)
             turn = TurnContext(prompt=prompt, workspace=root, native_session_id=native_id,
                                title=display_name or (doc_path and f"Wiki: {doc_path}"),
                                cwd=cwd, sandbox=sandbox, model=model, variant=variant,
@@ -387,6 +391,33 @@ class JobManager:
             if p is not None and p not in folders:
                 folders.append(p)
         return folders
+
+    async def _remote_setup(self, remote: Any, machine: str, provider: str) -> None:
+        """A turn on a machine: its CLI must be there (as of the last probe); it gets the variables the machine is
+        given from this server (a 0600 file, sourced then deleted) and the opencode settings setup copied there."""
+        if self.machines is None:
+            return
+        from ..development.targets import TargetError, sh_path, target_for
+        from ..machines import envfwd
+
+        try:
+            caps = json.loads(self.machines.row(machine).capabilities_json or "null") or {}
+        except Exception:
+            caps = {}
+        tool = (caps.get("tools") or {}).get(provider)
+        if tool is not None and not tool.get("ok"):
+            raise ProviderError("PROVIDER_UNAVAILABLE", f"{provider} is not installed on {machine} (as of its last probe): "
+                                f"install it with Machines → {machine} → Set up, or probe the machine again")
+        if tool and tool.get("version"):
+            remote.versions[provider] = str(tool["version"])
+        try:
+            t = target_for(self.machines.dev, machine)
+            if provider == "opencode":
+                cfg = sh_path(t.host.work_dir, "opencode/opencode.json")
+                remote.pre += f"if [ -f {cfg} ]; then OPENCODE_CONFIG={cfg}; export OPENCODE_CONFIG; fi; "
+            remote.env_file = await envfwd.push(t) or ""
+        except TargetError as exc:
+            raise ProviderError(exc.code, exc.message)
 
     def _with_skills(self, prompt: str, root: Path | None, cwd: Path | None, context: dict[str, Any]) -> tuple[str, list[Path]]:
         from .. import skills as sk

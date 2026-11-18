@@ -30,7 +30,8 @@ import { ConfirmHost, confirmAction } from "./components/Confirm";
 import WorkspaceMenu from "./components/WorkspaceMenu";
 import AccountMenu from "./components/AccountMenu";
 import ReviewsPanel, { loadReviews, reviewBadge, useReviews } from "./components/ReviewsPanel";
-import { CodeIcon, DashboardIcon, FilesIcon, InsightsIcon, PullRequestIcon, TerminalIcon, WikiIcon } from "./components/Icons";
+import { CodeIcon, DashboardIcon, FilesIcon, InsightsIcon, PullRequestIcon, ServerIcon, TerminalIcon, WikiIcon } from "./components/Icons";
+import MachineView, { MachineDialog, MachinesPanel, useMachines } from "./components/Machines";
 import InsightsView, { InsightsPanel } from "./components/Insights";
 import TerminalsPanel from "./components/TerminalsPanel";
 import { useGhAutoRefresh } from "./ghRefresh";
@@ -54,7 +55,7 @@ import { FONT_STACKS, FontSettings, Prefs, Resizer, loadPrefs, savePrefs } from 
 
 const ACTIVITY_BAR_PX = 45;
 
-type View = "document" | "terminal" | "diff" | "chats" | "development" | "local" | "agents" | "insights";
+type View = "document" | "terminal" | "diff" | "chats" | "development" | "local" | "agents" | "insights" | "machines";
 
 export default function App() {
   const [boot, setBoot] = useState<Bootstrap | null>(null);
@@ -376,6 +377,7 @@ export default function App() {
       const ui = savedUi.current ?? {};
       if (prefs.sidebarView === "agents") setView("agents"); // the Agents activity always shows the agents' status
       else if (prefs.sidebarView === "insights") setView("insights");
+      else if (prefs.sidebarView === "machines") setView("machines");
       else if (prefs.sidebarView === "terminal") setView("terminal"); // the Terminal activity: the terminals
       else if (ui.view === "terminal") setView("terminal");
       else if (ui.view === "chats") openChats(ui.chat ?? { ws: getWorkspace() ?? "", path: null });
@@ -513,9 +515,14 @@ export default function App() {
   const terminalMode = sidebarView === "terminal" && view === "terminal";
   const [insightsRepo, setInsightsRepo] = useState<string | null>(() => localStorage.getItem("waw.insights.repo") || "pytorch/pytorch");
   useEffect(() => { if (insightsRepo) localStorage.setItem("waw.insights.repo", insightsRepo); }, [insightsRepo]);
+  const machinesState = useMachines(!!authed);
+  const [machineName, setMachineName] = useState<string>(() => localStorage.getItem("waw.machine") || "local");
+  useEffect(() => { localStorage.setItem("waw.machine", machineName); }, [machineName]);
+  const [addMachine, setAddMachine] = useState(false);
+  const currentMachine = machinesState.machines.find((m) => m.name === machineName) ?? machinesState.machines[0];
   // Document / Terminal / Chats / Diff belong to the wiki: opening one (Recent, a link) while in Agents goes back to it
   useEffect(() => {
-    if (uiRestored && (sidebarView === "agents" || sidebarView === "insights") && (view === "document" || view === "terminal" || view === "chats" || view === "diff")) updatePrefs({ sidebarView: "files" });
+    if (uiRestored && (sidebarView === "agents" || sidebarView === "insights" || sidebarView === "machines") && (view === "document" || view === "terminal" || view === "chats" || view === "diff")) updatePrefs({ sidebarView: "files" });
     if (uiRestored && sidebarView === "terminal" && (view === "document" || view === "chats" || view === "diff")) updatePrefs({ sidebarView: "files" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view]);
@@ -591,6 +598,8 @@ export default function App() {
       await refreshThreads(doc.document_id);
       const d = await get<OpenDocument>(`/documents/open?path=${encodeURIComponent(doc.path)}`);
       setDoc((cur) => (cur ? { ...cur, default_session_id: d.default_session_id } : cur));
+      // a fast agent may have edited the file already: this open recorded that version, so the watcher will not announce it
+      if (d.sha256 !== doc.sha256 && !ownSaves.current.has(d.sha256)) setChanged({ sha256: d.sha256 });
       void refreshSessions();
       setActiveThread(r.thread_id);
       setLiveJobId(r.job_id);
@@ -848,17 +857,17 @@ export default function App() {
       {boot.settings.watcher_error && <div className="banner warn">{boot.settings.watcher_error}</div>}
       {!watcherReady && <div className="banner">The file watcher is still indexing this workspace; until it finishes, use the ↻ button in the file tree to see new files and changes.</div>}
 
-      <main className={`layout view-${view === "diff" || view === "chats" || view === "development" || view === "local" || view === "agents" || view === "insights" ? "terminal" : view} ${view === "diff" ? "view-diff" : ""} ${view === "chats" ? "view-chats" : ""}`}>
+      <main className={`layout view-${view === "diff" || view === "chats" || view === "development" || view === "local" || view === "agents" || view === "insights" || view === "machines" ? "terminal" : view} ${view === "diff" ? "view-diff" : ""} ${view === "chats" ? "view-chats" : ""}`}>
         <aside className={`sidebar with-activity ${listOpen ? "" : "list-folded"}`} data-list={listOpen ? "open" : "folded"}>
           <nav className="activity-bar" aria-label="Sidebar views">
-            <button className={sidebarView === "files" ? "active" : ""} onClick={() => { if (sidebarView === "files") { updatePrefs({ listOpen: !listOpen }); if (listOpen) return; } updatePrefs({ sidebarView: "files", listOpen: true }); if (view === "development" || view === "local" || view === "agents" || view === "insights" || sidebarView === "terminal") setView("document"); }} title="Wiki: read, discuss and edit the wiki folders with the agent" aria-label="Wiki" aria-pressed={sidebarView === "files"} data-testid="activity-files">
+            <button className={sidebarView === "files" ? "active" : ""} onClick={() => { if (sidebarView === "files") { updatePrefs({ listOpen: !listOpen }); if (listOpen) return; } updatePrefs({ sidebarView: "files", listOpen: true }); if (view === "development" || view === "local" || view === "agents" || view === "insights" || view === "machines" || sidebarView === "terminal") setView("document"); }} title="Wiki: read, discuss and edit the wiki folders with the agent" aria-label="Wiki" aria-pressed={sidebarView === "files"} data-testid="activity-files">
               <WikiIcon size={20} />
             </button>
             <button className={sidebarView === "local" ? "active" : ""} onClick={() => { if (sidebarView === "local") { updatePrefs({ listOpen: !listOpen }); if (listOpen) return; } updatePrefs({ sidebarView: "local", listOpen: true }); setLocalUsed(true); setView("local"); }} title="Local files: browse and edit any folder or file on the server, like a file manager" aria-label="Local files" aria-pressed={sidebarView === "local"} data-testid="activity-local">
               <FilesIcon size={20} />
             </button>
             {hub?.available && (
-              <button className={sidebarView === "reviews" ? "active" : ""} onClick={() => { if (sidebarView === "reviews") { updatePrefs({ listOpen: !listOpen }); if (listOpen) return; } updatePrefs({ sidebarView: "reviews", listOpen: true }); if (view === "development" || view === "local" || view === "agents" || view === "insights" || sidebarView === "terminal") setView("document"); }} title="Pull requests waiting for your review" aria-label="Reviews" aria-pressed={sidebarView === "reviews"} data-testid="activity-reviews">
+              <button className={sidebarView === "reviews" ? "active" : ""} onClick={() => { if (sidebarView === "reviews") { updatePrefs({ listOpen: !listOpen }); if (listOpen) return; } updatePrefs({ sidebarView: "reviews", listOpen: true }); if (view === "development" || view === "local" || view === "agents" || view === "insights" || view === "machines" || sidebarView === "terminal") setView("document"); }} title="Pull requests waiting for your review" aria-label="Reviews" aria-pressed={sidebarView === "reviews"} data-testid="activity-reviews">
                 <PullRequestIcon size={20} />
                 {reviewBadge(reviews.queue) > 0 && <span className="activity-badge" data-testid="activity-reviews-badge">{reviewBadge(reviews.queue)}</span>}
               </button>
@@ -878,6 +887,11 @@ export default function App() {
             <button className={sidebarView === "insights" ? "active" : ""} onClick={() => { if (sidebarView === "insights") { updatePrefs({ listOpen: !listOpen }); if (listOpen) return; } updatePrefs({ sidebarView: "insights", listOpen: true }); setView("insights"); }}
               title="Repo Insights: summaries of what happens in repositories — issues, PRs, commits, RFCs, XPU highlights — over any period" aria-label="Repo Insights" aria-pressed={sidebarView === "insights"} data-testid="activity-insights">
               <InsightsIcon size={20} />
+            </button>
+            <button className={sidebarView === "machines" ? "active" : ""} onClick={() => { if (sidebarView === "machines") { updatePrefs({ listOpen: !listOpen }); if (listOpen) return; } updatePrefs({ sidebarView: "machines", listOpen: true }); setView("machines"); }}
+              title="Machines: this server and SSH machines to work on — connection checks, host keys, keys, what they have" aria-label="Machines" aria-pressed={sidebarView === "machines"} data-testid="activity-machines">
+              <ServerIcon size={20} />
+              {machinesState.machines.some((m) => m.status !== "online" && m.status !== "unknown") && <span className="activity-badge alarm" title="A machine is not reachable">!</span>}
             </button>
             <span className="activity-spacer" />
             <button onClick={() => updatePrefs({ listOpen: !listOpen })} title={listOpen ? "Fold the list (folders, projects, pull requests…) — click the current icon to unfold it again" : "Show the list"}
@@ -931,10 +945,16 @@ export default function App() {
               <InsightsPanel active={insightsRepo} onOpen={(r) => { setInsightsRepo(r); setView("insights"); }} />
             </div>
           )}
+          {sidebarView === "machines" && (
+            <div className="sidebar-content">
+              <MachinesPanel machines={machinesState.machines} active={view === "machines" ? currentMachine?.name ?? null : null}
+                onOpen={(n) => { setMachineName(n); setView("machines"); }} onAdd={() => setAddMachine(true)} />
+            </div>
+          )}
           {sidebarView === "terminal" && (
             <div className="sidebar-content">
               <TerminalsPanel terminals={terminals} activeId={activeTerminal} onActive={(id) => { setActiveTerminal(id); setView("terminal"); }} onChanged={refreshTerminals}
-                available={!!boot.terminal_info?.tmux_available} />
+                available={!!boot.terminal_info?.tmux_available} machines={machinesState.machines.filter((m) => m.kind === "machine" && m.source !== "server").map((m) => m.name)} />
             </div>
           )}
           {sidebarView === "development" && (
@@ -1091,6 +1111,19 @@ export default function App() {
             <InsightsView repo={insightsRepo} onOpenChat={(ws, p) => openChats({ ws, path: p })}
               onOpenPrReview={hub?.available ? (r, n, t) => { updatePrefs({ sidebarView: "reviews", listOpen: true }); setView("document"); openPr(r, n, t ? `#${n} ${t}` : undefined); } : undefined} />
           </section>
+        )}
+        {view === "machines" && authed && (
+          <section className="center agents-center machines-center">
+            {currentMachine
+              ? <MachineView machine={currentMachine} machines={machinesState.machines} allowed={machinesState.allowed} onChanged={machinesState.reload}
+                  onDeleted={() => { setMachineName("local"); void machinesState.reload(); }}
+                  onOpenTerminal={(t) => { void refreshTerminals(); setActiveTerminal(t.id); updatePrefs({ sidebarView: "terminal", listOpen: true }); setView("terminal"); }} />
+              : <div className="muted pad">Loading…</div>}
+          </section>
+        )}
+        {addMachine && (
+          <MachineDialog machines={machinesState.machines} allowed={machinesState.allowed} onClose={() => setAddMachine(false)}
+            onSaved={async (m) => { setAddMachine(false); await machinesState.reload(); setMachineName(m.name); updatePrefs({ sidebarView: "machines", listOpen: true }); setView("machines"); }} />
         )}
         <section className="center agents-center" style={{ display: view === "agents" ? undefined : "none" }}>
           {authed && <AgentMonitor watched={watched} onWatched={setWatched} visible={view === "agents"} onAlarms={setAlarms} autoVersion={autoVersion} />}

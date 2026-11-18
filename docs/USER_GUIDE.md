@@ -394,7 +394,7 @@ write code with the agent — a new pull request, or changes to an existing one.
 
 **+** (or *New development workspace*) asks:
 
-- **Runs on** — this server, or an SSH host from `[[development.hosts]]` (editor, agent, builds and tests then run
+- **Runs on** — this server, or a machine of the **Machines** view (editor, agent, builds and tests then run
   there; the wiki is copied there read-only).
 - **Work on** — *New branch* (name, optional base, the GitHub repository for the PR — detected from `origin`) or an
   *Existing pull request* (`owner/repo#123` or its URL; its head is fetched and checked out on the local branch
@@ -425,7 +425,12 @@ write code with the agent — a new pull request, or changes to an existing one.
   (uncommitted changes go along) or switches to another; in a folder opened directly, a new branch is compared with
   the one it was created from. A branch switched outside the app (a terminal) is followed. A pull request's
   workspace keeps the PR's branch.
-- **Repository checkout** — your clone on that host (for a PR, the repository's connected local checkout is offered).
+- **Source** — **A checkout there**: your clone on that host (for a PR, the repository's connected local checkout is
+  offered; **Browse…** lists that host's folders, also on a machine). **Clone from a URL**: the app clones the
+  repository once (`<state folder>/dev/src/<owner>-<repo>` here, `<work folder>/src/<owner>-<repo>` on a machine) and
+  adds the worktree to it; later workspaces of that repository there reuse the clone and fetch it first. For a PR the
+  URL defaults to `https://github.com/<owner>/<repo>.git`. The clone uses the machine's forwarded proxy, never asks
+  for a password (use a URL that needs none, or ssh keys on that machine).
 - **Reference wiki** — a folder of this window; the agent reads the whole folder.
 - Optional: name, Python interpreter (a virtual environment's `python`), `compile_commands.json` folder, build and
   test commands. Defaults are detected: CMake (`cmake … -DCMAKE_EXPORT_COMPILE_COMMANDS=ON`, `ctest`), Make, and
@@ -541,6 +546,40 @@ reference wiki, and for a PR tab the PR's connected local checkout. Skills are t
 
 - **Build & test** — run the build, the tests or any command in the worktree; the output streams in; a failed run
   has **Fix with the agent** (the output goes with the request).
+- **Benchmarks** — benchmarks of the workspace, on the machine it is on. Define one with **New** (a `[[bench]]`
+  table, kept in the app for this workspace or for every workspace of the repository) or in the repository's
+  `.waw/bench.toml`, which wins by name:
+
+  ```toml
+  [[bench]]
+  name = "matmul-xpu"
+  setup = "python setup.py develop"   # optional: done again only when the commit, the changes or the setup change
+  command = "python bench/matmul.py --json"
+  warmup = 1
+  repeat = 5
+  timeout = 1800                      # seconds, per command
+  metrics = [
+    { name = "latency_ms", json = "$.latency_ms", better = "lower" },     # from JSON in the output
+    { name = "tflops", regex = "TFLOPS: ([0-9.]+)", better = "higher" },  # or the last match of a regex
+  ]
+  env = { ZE_AFFINITY_MASK = "0" }
+  exclusive = true                    # default: the whole machine — no other benchmark, build or test meanwhile
+  gpus = [0]                          # with exclusive = false: only benchmarks on one of these GPUs wait
+  threshold = 5                       # % change that counts (and at least 2 standard deviations)
+  ```
+
+  **Run** records each repeat (plus `wall_s`, how long the command took), the median, mean, stdev, min and max, the
+  commit and whether there were uncommitted changes, the machine's probe and its recipes. Click a run to compare it
+  with a baseline — by default its A/B baseline, else the latest run of the base branch on the same machine, else the
+  previous run here; any other run can be picked. Each metric shows its change and **regression**, **improvement** or
+  **same**; a different machine, GPU, driver or setup gives a warning. **A/B** runs a baseline (a branch, tag or
+  commit) against the workspace as it is (or another commit), each in its own worktree, alternating repeat by repeat.
+  If the setup installs into a shared environment (`pip install -e .`, `setup.py develop`), both sides use what was
+  installed last; prefer a setup that builds inside the worktree. **Explain the regression** sends both runs and
+  their output to the agent. **Output** shows the run's log; **CSV** / **JSON** export the history; a machine's page
+  lists the benchmarks run there. A run is a command like a build (shown in **Build & test** too): on a machine with
+  tmux it goes on through dropped connections and restarts. Benchmarks are shell commands with the same rights as a
+  terminal.
 - **Changes** — like the wiki's Diff view: every changed file with its own diff (new files included), **Unified** or
   **Side by side**, ↑/↓/↕ and **Expand all** for more context, **Viewed** to fold a file you have checked (the mark
   goes when its change changes). Choose what to compare: **Uncommitted changes** (default), **Everything on this
@@ -560,6 +599,73 @@ reference wiki, and for a PR tab the PR's connected local checkout. Skills are t
 
 **⋯ → Archive** stops the editor and hides the workspace; you may also remove its worktree (refused while it has
 uncommitted or unpushed work).
+
+## Machines
+
+The **Machines** icon of the activity bar lists the computers the app works on: **This server**, and SSH machines —
+those of `[[development.hosts]]` in the config file (shown read-only) and those added here. A machine can be used
+wherever this server can: as the place a development workspace runs, or for a terminal (**Terminal → + ▾ → on a
+machine**).
+
+- **Add machine** — a name, the SSH destination (`host`, `user@host` or an alias of your `~/.ssh/config`), and
+  optionally port, user, key, the bastions it is reached through, and extra ssh options (only harmless ones are
+  accepted: nothing that runs a local command or changes how host keys are checked). **Resolve** shows what ssh makes
+  of the destination (host name, port, user, a `ProxyJump` of your ssh config).
+- **Bastions** (jump hosts) are added like machines with *kind: bastion*. A machine *via* one or more bastions is
+  reached through them in order; each bastion keeps one shared login, so many machines behind it cost one connection.
+- **Check** tries each hop of the path in order and says where it broke and why: not reachable, login refused,
+  host key unknown or changed, name does not resolve, timeout.
+- **Host keys** — machines added here accept only host keys you confirmed (stored in the app's own known_hosts,
+  your `~/.ssh/known_hosts` counts too). **Host keys** shows each hop's fingerprint (a machine behind a bastion is
+  scanned from that bastion); compare it with the one your administrator gives you before **Trust**. A changed key
+  is shown in red — only trust it if you know why it changed. Hosts of the config file keep your own ssh settings:
+  log in once with `ssh` in a terminal to accept their key.
+- **Install key** — the first login usually needs a password: the app opens a terminal running `ssh-copy-id` with
+  this server's public key (create one with **Create key** if there is none). Type the password there — the app
+  never sees it. Then **Check** again. Bastions on the path get the same button.
+- **Probe** reports what the machine has: OS, CPU, memory, free disk in its work folder, GPUs (NVIDIA, Intel, AMD),
+  password-less sudo, the package manager, and the tools the app and builds use (git, tmux, code-server, opencode,
+  codex, python3, cmake…), with what each missing one is needed for.
+- Commands to a machine share one SSH connection (kept 10 minutes after the last use), so browsing files or running
+  `git status` there does not log in again each time. Editing a machine closes its shared connection.
+- **Set up** installs what the app needs on the machine, without root: opencode, code-server and gh (Codex too when
+  ticked) from their latest releases into `<work folder>/tools`, linked from `<work folder>/bin` — which comes first on
+  PATH for everything the app runs there, so this copy is used even when an older one is installed. The machine
+  downloads them itself (through the forwarded proxy, if any); when it cannot reach the internet this server
+  downloads them and sends them over SSH. Missing system packages (tmux, git, tar, curl) are installed with the
+  machine's package manager when sudo works without a password; otherwise setup shows the command to give an
+  administrator. It also copies this server's OpenCode settings (providers, models) **without** keys or tokens;
+  references such as `{env:AWS_BEARER_TOKEN_BEDROCK}` stay, so forward that variable in **Environment**. The log
+  shows each step; setup can be cancelled, and running it again skips what it already installed (**Install the
+  latest release again** updates them). Agent turns on a machine run its own opencode / Codex, so this server needs
+  neither; when the last probe says the tool is missing there, the turn says so and points to **Set up**.
+- **Recipes** are your own setup steps, run after the app's tools: a conda environment, the oneAPI variables, `pip
+  install -e .` dependencies. Write them in the **Recipe library** (Set up → **Recipe library…**), or keep them as
+  `*.sh` files (for example in a wiki folder, under Git) and **Import a folder…**; header comments `# name: …`,
+  `# check: …` and `# env: …` fill in the name, check and environment (importing again updates the recipes from
+  those files). Each recipe has:
+  - a **script**, run on the machine in your home folder with `$WAW_WORK_DIR` set (a `#!` line chooses the
+    interpreter, else `sh`);
+  - an optional **check**: exit 0 means it is already done, so the script is skipped;
+  - an optional **environment** snippet, sourced there (`conda activate torch-xpu`,
+    `. /opt/intel/oneapi/setvars.sh`): what it sets becomes the machine's environment, written to
+    `<work folder>/env.sh` and loaded by every command the app runs there — builds, tests, terminals, the editor,
+    agent turns, and the next recipes. Paths it adds in front of PATH-like variables stay in front of whatever they
+    are then.
+
+  Add recipes to a machine in the order they must run. **Set up machine** installs the app's tools (untick them to
+  run only the recipes), then the recipes in order, and stops at the first that fails; each shows **ok**, **failed**
+  (with why), **not run** or **changed since** (edited after it last succeeded). Running setup again skips the ones
+  that are ok and unchanged; **Run** runs one recipe again. A recipe cannot be deleted while a machine uses it.
+- **Environment** chooses what the machine gets from this server — nothing by default: the variables of the agent
+  env script (API tokens; all, or only the names listed), this server's proxy settings, and an extra CA bundle (for
+  a proxy that inspects TLS; added to the machine's own certificates). Builds and tests, terminals, the editor and
+  agent turns there get them. They never appear on a command line (a 0600 file is read and deleted as the command
+  starts), and their values show as `****` in run and setup logs. Machines of the config file set this there
+  (`forward_env`, `env_vars`, `forward_proxy`, `ca_bundle`).
+
+A machine cannot be renamed (workspaces refer to it by name) or removed while a workspace runs on it or another
+machine is reached through it.
 
 ## Agents (monitor)
 
@@ -770,7 +876,8 @@ history** shows the server-side scrollback. Tabs whose shell exited show *(exite
 **Clear exited**; closing a live terminal asks first. **Close terminal** ends the tmux session: its shell and
 programs get SIGHUP (as when an SSH connection closes) and nothing is left running, except programs started to
 outlive the shell (`nohup`, `setsid`). New tabs are named with the lowest free number (close *Terminal 2* and the
-next new tab is *Terminal 2* again); double-click a tab to rename it.
+next new tab is *Terminal 2* again); double-click a tab to rename it. **▾** next to **+** opens a terminal on one of
+the machines of the Machines view instead (an ssh login there, still kept by this server's tmux).
 
 **Keys the browser keeps for itself.** In a normal browser tab, Chrome/Edge/Firefox never pass a few shortcuts to the
 page — Ctrl+T, Ctrl+W, Ctrl+N, Ctrl+Tab and similar open/close tabs and windows instead. Three ways to send them:

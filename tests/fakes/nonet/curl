@@ -1,0 +1,4 @@
+#!/bin/sh
+# a host without internet (fake-ssh with ssh_no_net)
+echo "curl: (6) Could not resolve host" >&2
+exit 6

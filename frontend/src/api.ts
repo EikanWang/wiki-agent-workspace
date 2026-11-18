@@ -131,6 +131,157 @@ export interface TerminalInfo {
   tmux_session: string;
 }
 
+export interface MachineHop {
+  name: string;
+  kind: string;
+  ssh: string | null;
+  ok: boolean;
+  status: string;
+  message: string | null;
+  error?: string;
+  ms: number;
+}
+
+export interface MachineCheck {
+  ok: boolean;
+  status: string;
+  failed_at: string | null;
+  summary: string;
+  hops: MachineHop[];
+  checked_at: string;
+}
+
+export interface MachineGpu {
+  vendor: string;
+  index: number | null;
+  name: string | null;
+  uuid: string | null;
+  pci: string;
+  driver: string | null;
+  memory: string | null;
+  source: string;
+}
+
+export interface MachineTool { path: string | null; version: string | null; ok: boolean; required: boolean; for: string }
+
+export interface MachineCaps {
+  os: { kernel: string | null; release: string | null; arch: string | null; hostname: string | null; pretty: string | null };
+  cpu: { model: string | null; threads: number | null; sockets: number | null; cores_per_socket: number | null; threads_per_core: number | null; numa_nodes: number | null };
+  memory_kb: number | null;
+  disk: { path: string | null; total_kb: number | null; free_kb: number | null };
+  home: string | null;
+  shell: string | null;
+  sudo: "passwordless" | "password" | "none";
+  package_manager: string | null;
+  gnu_find: boolean;
+  tools: Record<string, MachineTool>;
+  gpus: MachineGpu[];
+  missing_required: string[];
+  complete: boolean;
+  work_dir?: string;
+  error?: string;
+}
+
+export interface MachineInfo {
+  name: string;
+  kind: "machine" | "bastion";
+  source: "server" | "config" | "ui";
+  editable: boolean;
+  shadowed?: boolean;
+  label?: string;
+  ssh: string | null;
+  port?: number | null;
+  user?: string | null;
+  identity_file?: string | null;
+  via: string[];
+  options?: Record<string, string>;
+  ssh_args?: string[];
+  work_dir?: string;
+  code_server?: string;
+  opencode?: string;
+  codex?: string;
+  strict_host_keys?: boolean;
+  status: string;
+  check?: MachineCheck | null;
+  checked_at?: string | null;
+  capabilities: MachineCaps | null;
+  probed_at: string | null;
+  ssh_command?: string | null;
+  used_by: { workspaces: string[]; machines: string[] };
+  env?: MachineEnv;
+}
+
+/** What a machine gets from this server (0600 files on it, never on a command line). */
+export interface MachineEnv { forward_env: boolean; env_vars: string[]; forward_proxy: boolean; ca_bundle: string | null }
+
+export interface BootstrapTool { name: string; for: string; installed: boolean; path: string | null; version: string | null; managed: boolean; default: boolean; configured: string }
+
+export interface BootstrapPlan {
+  probed: boolean;
+  tools: BootstrapTool[];
+  release_base: string;
+  system_packages: { missing: string[]; package_manager: string | null; sudo: string | null; can_install: boolean; command: string | null };
+  agent_settings: { source: string | null };
+  running: string | null;
+}
+
+export interface Recipe {
+  id: string;
+  name: string;
+  run: string;
+  check: string | null;
+  env_out: string | null;
+  version: string;
+  source_path: string | null;
+  machines: string[];
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface MachineRecipe extends Recipe {
+  position: number;
+  status: "not_run" | "ok" | "failed" | "outdated";
+  version_ok: string | null;
+  env_vars: string[];
+  error: string | null;
+  last_job_id: string | null;
+  last_run_at: string | null;
+}
+
+export interface MachineJob {
+  id: string;
+  machine: string;
+  kind: string;
+  title: string;
+  status: "running" | "passed" | "failed" | "cancelled" | "interrupted";
+  error: string | null;
+  params: Record<string, unknown>;
+  result: Record<string, any> | null;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export interface HostKeyHop {
+  name: string;
+  hostname?: string;
+  port?: number;
+  known_name?: string;
+  scanned?: string;
+  status: "trusted" | "changed" | "unknown" | "scan_failed";
+  keys: { type: string; fingerprint: string; state: "trusted" | "changed" | "new"; files: string[] }[];
+  can_trust: boolean;
+  error?: string;
+}
+
+export interface SshKeyInfo {
+  public_key_file: string;
+  identity_file: string | null;
+  type: string;
+  fingerprint: string;
+  comment: string;
+  public_key: string;
+}
+
 export interface WorkspaceInfo {
   id: string;
   name: string;
@@ -391,7 +542,7 @@ export function subscribeJob(jobId: string, after: number, onEvent: (ev: JobEven
 const globalListeners = new Set<(ev: Record<string, any>) => void>();
 let globalSource: EventSource | null = null;
 const GLOBAL_TYPES = ["github_cache", "file_changed", "tree_changed", "job_event", "terminal_state", "preview_update", "watcher_ready", "workspaces_changed",
-  "review_finished", "commit", "dev_changed", "dev_task", "message"];
+  "review_finished", "commit", "dev_changed", "dev_task", "machine_changed", "machine_job", "recipes_changed", "bench_run", "bench_defs_changed", "message"];
 
 export function subscribeGlobal(onEvent: (ev: Record<string, any>) => void): () => void {
   globalListeners.add(onEvent);
@@ -611,10 +762,27 @@ export interface DevRefs { branch_commits: DevCommitRef[]; commits: DevCommitRef
 export interface DevTaskRun {
   id: string;
   dev_id: string;
-  kind: "build" | "test" | "custom";
+  kind: "build" | "test" | "custom" | "bench";
   command: string;
   status: "running" | "passed" | "failed" | "cancelled" | "interrupted";
   exit_code: number | null;
   started_at: string;
   finished_at: string | null;
 }
+
+export interface BenchMetric { name: string; json: string | null; regex: string | null; better: "lower" | "higher"; unit: string | null }
+export interface BenchSpec {
+  name: string; setup: string | null; command: string; warmup: number; repeat: number; timeout: number;
+  metrics: BenchMetric[]; env: Record<string, string>; exclusive: boolean; gpus: number[]; threshold: number;
+}
+export interface BenchDef { name: string; source: "file" | "workspace" | "repo"; spec: BenchSpec; id: string | null; shadowed: boolean; toml: string }
+export interface BenchStat { n: number; median?: number; mean?: number; stdev?: number; min?: number; max?: number; better: "lower" | "higher"; unit: string | null }
+export interface BenchRun {
+  id: string; dev_id: string; repo: string | null; name: string; source: "file" | "app"; machine: string; kind: "run" | "ab";
+  variant: "a" | "b" | null; ab_id: string | null; label: string | null; branch: string | null; commit: string | null; dirty: boolean;
+  env_hash: string | null; status: "running" | "passed" | "failed" | "cancelled" | "interrupted"; error: string | null;
+  task_run_id: string | null; baseline_id: string | null; summary: Record<string, BenchStat>; started_at: string; finished_at: string | null;
+  spec?: BenchSpec; samples?: { i: number; rc: number | null; values: Record<string, number | null> }[];
+}
+export interface BenchCompareRow { name: string; better: string; unit: string | null; a: BenchStat | null; b: BenchStat; change_pct: number | null; limit_pct?: number; verdict: "same" | "regression" | "improvement" | "missing" }
+export interface BenchCompare { a: BenchRun | null; b: BenchRun; metrics: BenchCompareRow[]; warnings: string[]; regressions: number; threshold?: number }

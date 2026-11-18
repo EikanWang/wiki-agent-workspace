@@ -6,21 +6,23 @@ import { confirmAction } from "./Confirm";
 
 /**
  * Sidebar of the Terminal activity: every terminal of the server (the same tmux-backed terminals as the wiki's
- * Terminal view), a new one in the home folder or in a folder you pick, and closing them.
+ * Terminal view), a new one in the home folder, in a folder you pick or on a machine (an ssh login there), and
+ * closing them.
  */
-export default function TerminalsPanel({ terminals, activeId, onActive, onChanged, available }: {
+export default function TerminalsPanel({ terminals, activeId, onActive, onChanged, available, machines = [] }: {
   terminals: TerminalInfo[];
   activeId: string | null;
   onActive: (id: string) => void;
   onChanged: () => Promise<void> | void;
   available: boolean;
+  machines?: string[];
 }) {
   const [pick, setPick] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const create = async (cwd: string) => {
+  const create = async (cwd: string, machine?: string) => {
     setErr(null);
     try {
-      const t = await post<TerminalInfo>("/terminals", { cwd });
+      const t = await post<TerminalInfo>("/terminals", machine ? { machine } : { cwd });
       await onChanged();
       onActive(t.id);
     } catch (e) {
@@ -47,6 +49,14 @@ export default function TerminalsPanel({ terminals, activeId, onActive, onChange
       <div className="row pad-x">
         <button className="link-btn small" disabled={!available} onClick={() => setPick(true)} data-testid="terminals-new-in">+ New terminal in a folder…</button>
       </div>
+      {machines.length > 0 && (
+        <div className="row pad-x">
+          <select className="small" disabled={!available} value="" onChange={(e) => { if (e.target.value) void create("~", e.target.value); }} aria-label="New terminal on a machine" data-testid="terminals-new-on">
+            <option value="">+ New terminal on a machine…</option>
+            {machines.map((m) => <option key={m} value={m}>{m}</option>)}
+          </select>
+        </div>
+      )}
       {!available && <div className="warn small pad-x">tmux is not installed on the server; terminals are disabled.</div>}
       {err && <div className="error-text small pad-x" role="alert">{err}</div>}
       <div className="terminals-list">

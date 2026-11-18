@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.websockets import WebSocketState
 
 from ..db import Database, iso
@@ -40,7 +40,7 @@ def default_label(taken) -> str:
 
 def terminal_dict(t: Terminal) -> dict[str, Any]:
     return {"id": t.id, "label": t.label, "cwd": t.cwd, "tab_order": t.tab_order, "state": t.state,
-            "tmux_session": t.tmux_session, "created_at": iso(t.created_at), "updated_at": iso(t.updated_at)}
+            "tmux_session": t.tmux_session, "machine": t.machine, "created_at": iso(t.created_at), "updated_at": iso(t.updated_at)}
 
 
 class TerminalManager:
@@ -52,6 +52,8 @@ class TerminalManager:
         self.clients: dict[str, int] = {}
         # (current named workspace id, whether it is Default): tabs are listed and created per named workspace
         self.scope = lambda: ("", True)
+        # machine name -> its app tmux (machines.rtmux.RemoteTmux); set by the app. Raises TargetError when unknown.
+        self.remote_for: Any = None
 
     def _in_scope(self, q):
         """Only the current named workspace's tabs; NULL = Default (tabs from before named workspaces)."""
@@ -70,7 +72,7 @@ class TerminalManager:
         result = {"live": 0, "exited": 0, "discovered": 0, "tmux_available": self.tmux.available, "error": None}
         if not self.tmux.available:
             with self.db.write() as s:
-                for t in s.query(Terminal).filter(Terminal.state == "live").all():
+                for t in s.query(Terminal).filter(Terminal.state == "live", Terminal.machine.is_(None)).all():
                     t.state = "unavailable"
             result["error"] = "tmux is not installed"
             return result
@@ -80,8 +82,9 @@ class TerminalManager:
             result["error"] = str(exc)
             return result
         with self.db.write() as s:
-            rows = s.query(Terminal).all()
-            known = {t.tmux_session for t in rows}
+            all_rows = s.query(Terminal).all()
+            known = {t.tmux_session for t in all_rows}
+            rows = [t for t in all_rows if not t.machine]  # sessions on machines are checked when a tab attaches
             for t in rows:
                 if t.tmux_session in live:
                     if t.state != "live":
@@ -90,7 +93,7 @@ class TerminalManager:
                 elif t.state == "live":
                     t.state = "exited"
                     result["exited"] += 1
-            order = max([t.tab_order for t in rows], default=-1) + 1
+            order = max([t.tab_order for t in all_rows], default=-1) + 1
             for name in sorted(live - known):
                 s.add(Terminal(id=str(uuid.uuid4()), tmux_session=name, label=f"Terminal {name[len(SESSION_PREFIX):][:6]}",
                                cwd=str(self.default_cwd), tab_order=order, state="live"))
@@ -106,7 +109,7 @@ class TerminalManager:
         except TmuxError:
             return
         with self.db.write() as s:
-            for t in s.query(Terminal).filter(Terminal.state == "live").all():
+            for t in s.query(Terminal).filter(Terminal.state == "live", Terminal.machine.is_(None)).all():
                 if t.tmux_session not in live:
                     t.state = "exited"
                     self.bus.publish("global", {"type": "terminal_state", "terminal_id": t.id, "state": "exited"})
@@ -132,13 +135,42 @@ class TerminalManager:
             self.tmux.new_session(name, start, command=command)
         except TmuxError as exc:
             raise ApiError(503, "TMUX_ERROR", str(exc))
+        return self._add(tid, name, label, str(start), None)
+
+    def create_remote(self, machine: str, cwd: str, label: str | None) -> dict[str, Any]:
+        """A shell in the machine's own app tmux, starting in `cwd` (an absolute path there): it keeps running when
+        the connection drops or this server restarts. Blocks (ssh)."""
+        from ..development.targets import TargetError
+        from ..machines import envfwd
+
+        rt = self.remote_for(machine)
+        tid = str(uuid.uuid4())
+        name = f"{SESSION_PREFIX}{tid[:8]}"
+        try:
+            rt.new_session(name, cwd, envfwd.login_shell(rt.target.host, envfwd.push_sync(rt.target)))
+        except TargetError as exc:
+            raise ApiError(502 if exc.code == "DEV_HOST_UNREACHABLE" else 503, exc.code, exc.message)
+        return self._add(tid, name, label, cwd, machine)
+
+    def remote_ready(self, machine: str) -> bool:
+        """Whether terminals on `machine` can live in its own tmux (else: an ssh login in this server's tmux)."""
+        from ..development.targets import TargetError
+
+        if self.remote_for is None:
+            return False
+        try:
+            return self.remote_for(machine).available()
+        except TargetError:
+            return False
+
+    def _add(self, tid: str, name: str, label: str | None, cwd: str, machine: str | None) -> dict[str, Any]:
         with self.db.write() as s:
             # closed rows are kept (hidden) for history: number and place new tabs among the visible ones only
             shown = self._in_scope(s.query(Terminal).filter(Terminal.state != "closed")).all()
             order = max([t.tab_order for t in shown], default=-1) + 1
             nid, _ = self.scope()
-            t = Terminal(id=tid, tmux_session=name, label=label or default_label(t.label for t in shown), cwd=str(start),
-                         tab_order=order, state="live", named_workspace_id=nid or None)
+            t = Terminal(id=tid, tmux_session=name, label=label or default_label(t.label for t in shown), cwd=cwd,
+                         tab_order=order, state="live", named_workspace_id=nid or None, machine=machine)
             s.add(t)
             s.flush()
             d = terminal_dict(t)
@@ -166,7 +198,15 @@ class TerminalManager:
 
     def close(self, tid: str) -> dict[str, Any]:
         t = self.get(tid)
-        if self.tmux.available:
+        warning = None
+        if t.machine:
+            from ..development.targets import TargetError
+
+            try:
+                self.remote_for(t.machine).kill_session(t.tmux_session)
+            except TargetError as exc:  # the tab goes anyway; the session may still run there
+                warning = f"could not stop the session on {t.machine} ({exc.message}); it may still be running there (tmux session {t.tmux_session})"
+        elif self.tmux.available:
             try:
                 self.tmux.kill_session(t.tmux_session)
             except TmuxError as exc:
@@ -176,10 +216,22 @@ class TerminalManager:
             if row:
                 row.state = "closed"
         self.bus.publish("global", {"type": "terminal_state", "terminal_id": tid, "state": "closed"})
-        return {"id": tid, "state": "closed"}
+        return {"id": tid, "state": "closed", **({"warning": warning} if warning else {})}
 
     def history(self, tid: str, lines: int) -> dict[str, Any]:
         t = self.get(tid)
+        if t.machine:
+            from ..development.targets import TargetError
+
+            try:
+                rt = self.remote_for(t.machine)
+                if not rt.has_session(t.tmux_session):
+                    raise ApiError(410, TERMINAL_GONE, "the tmux session no longer exists")
+                text = rt.capture_history(t.tmux_session, lines)
+            except TargetError as exc:
+                raise ApiError(502 if exc.code == "DEV_HOST_UNREACHABLE" else 503, exc.code, exc.message)
+            return {"id": tid, "lines": lines, "text": text,
+                    "note": f"Snapshot of the tmux pane history on {t.machine} (up to the configured history-limit). Taken at request time; concurrent output may be missing."}
         if not self.tmux.available or not self.tmux.has_session(t.tmux_session):
             raise ApiError(410, TERMINAL_GONE, "the tmux session no longer exists")
         try:
@@ -206,6 +258,7 @@ class TerminalManager:
 class TerminalCreateIn(BaseModel):
     cwd: str | None = None
     label: str | None = None
+    machine: str | None = Field(None, max_length=63)  # a machine of the Machines view (an ssh login); default: this server
 
 
 class TerminalUpdateIn(BaseModel):
@@ -225,8 +278,12 @@ def list_terminals(ctx: AppContext = Depends(require_auth)):
 
 
 @router.post("/terminals", status_code=201)
-def create_terminal(body: TerminalCreateIn, ctx: AppContext = Depends(require_auth_mutating)):
-    return _mgr(ctx).create(body.cwd, body.label)
+async def create_terminal(body: TerminalCreateIn, ctx: AppContext = Depends(require_auth_mutating)):
+    if body.machine and body.machine != "local":
+        from ..machines.routes import open_terminal
+
+        return await open_terminal(ctx, body.machine, body.cwd, body.label)
+    return await asyncio.to_thread(_mgr(ctx).create, body.cwd, body.label)
 
 
 @router.patch("/terminals/{tid}")
@@ -235,13 +292,13 @@ def update_terminal(tid: str, body: TerminalUpdateIn, ctx: AppContext = Depends(
 
 
 @router.delete("/terminals/{tid}")
-def delete_terminal(tid: str, ctx: AppContext = Depends(require_auth_mutating)):
-    return _mgr(ctx).close(tid)
+async def delete_terminal(tid: str, ctx: AppContext = Depends(require_auth_mutating)):
+    return await asyncio.to_thread(_mgr(ctx).close, tid)
 
 
 @router.get("/terminals/{tid}/history")
-def terminal_history(tid: str, lines: int = Query(2000, ge=1, le=100000), ctx: AppContext = Depends(require_auth)):
-    return _mgr(ctx).history(tid, lines)
+async def terminal_history(tid: str, lines: int = Query(2000, ge=1, le=100000), ctx: AppContext = Depends(require_auth)):
+    return await asyncio.to_thread(_mgr(ctx).history, tid, lines)
 
 
 def _valid_dims(cols: Any, rows: Any) -> tuple[int, int] | None:
@@ -277,11 +334,25 @@ async def terminal_ws(ws: WebSocket, tid: str):
             except Exception:
                 pass
 
-    if not mgr.tmux.available:
+    from ..development.targets import TargetError
+
+    rt = None
+    if term.machine:
+        try:
+            rt = mgr.remote_for(term.machine)
+            alive = await asyncio.to_thread(rt.has_session, term.tmux_session)
+        except TargetError as exc:
+            # (not "exited": the session may be fine; Reconnect tries again)
+            await send({"type": "state", "state": "detached", "message": f"cannot reach {term.machine}: {exc.message}"})
+            await ws.close(code=1011)
+            return
+    elif not mgr.tmux.available:
         await send({"type": "state", "state": "error", "message": "tmux is not installed on the server"})
         await ws.close(code=1011)
         return
-    if not mgr.tmux.has_session(term.tmux_session):
+    else:
+        alive = mgr.tmux.has_session(term.tmux_session)
+    if not alive:
         with mgr.db.write() as s:
             row = s.get(Terminal, tid)
             if row and row.state == "live":
@@ -296,7 +367,10 @@ async def terminal_ws(ws: WebSocket, tid: str):
     if dims:
         cols, rows = dims
 
-    pty = PtyProcess(mgr.tmux.attach_args(term.tmux_session), env=mgr.tmux.env, cols=cols, rows=rows, cwd=term.cwd)
+    if rt is not None:
+        pty = PtyProcess(rt.attach_argv(term.tmux_session), env=mgr.tmux.env, cols=cols, rows=rows, cwd=str(Path.home()))
+    else:
+        pty = PtyProcess(mgr.tmux.attach_args(term.tmux_session), env=mgr.tmux.env, cols=cols, rows=rows, cwd=term.cwd)
     exited = asyncio.Event()
 
     async def on_output(data: bytes) -> None:
@@ -314,12 +388,22 @@ async def terminal_ws(ws: WebSocket, tid: str):
         await ws.close(code=1011)
         return
     mgr.clients[tid] = mgr.clients.get(tid, 0) + 1
-    await send({"type": "state", "state": "connected", "message": f"attached to tmux session {term.tmux_session}"})
+    where = f" on {term.machine}" if term.machine else ""
+    await send({"type": "state", "state": "connected", "message": f"attached to tmux session {term.tmux_session}{where}"})
 
     async def watch_exit() -> None:
         await exited.wait()
-        still = mgr.tmux.has_session(term.tmux_session)
-        if still:
+        if rt is not None:
+            try:
+                still = await asyncio.to_thread(rt.has_session, term.tmux_session)
+            except TargetError as exc:
+                await send({"type": "state", "state": "detached", "message": f"connection to {term.machine} lost ({exc.message}); the session keeps running there"})
+                still = None
+        else:
+            still = mgr.tmux.has_session(term.tmux_session)
+        if still is None:
+            pass
+        elif still:
             await send({"type": "state", "state": "detached", "message": "tmux client detached; the session keeps running"})
         else:
             with mgr.db.write() as s:
