@@ -351,6 +351,16 @@ export default function Reader(props: ReaderProps) {
       target = withIds.find((h) => h.id.toLowerCase() === wantLower) ?? null;
       if (!target) target = withIds.find((h) => slugify(h.textContent || "") === wantLower || slugify(h.textContent || "") === wantSlug) ?? null;
     }
+    if (!target) {
+      // headings without an id of their own (Word documents: <h1><a id="_Toc…"></a>Introduction</h1>): by their text
+      const heads = Array.from(el.querySelectorAll<HTMLElement>("h1, h2, h3, h4, h5, h6"));
+      const norm = (t: string) => t.replace(/\s+/g, " ").trim().toLowerCase();
+      const strip = (t: string) => norm(t).replace(/^[\d.]+\s+/, ""); // "2.1 Overview" ↔ "Overview"
+      const w = norm(want);
+      target = heads.find((h) => norm(h.textContent || "") === w)
+        ?? heads.find((h) => strip(h.textContent || "") === strip(want))
+        ?? heads.find((h) => slugify(h.textContent || "") === wantSlug) ?? null;
+    }
     if (!target) return false;
     const scroller = scrollRef.current;
     if (scroller) {
@@ -367,11 +377,15 @@ export default function Reader(props: ReaderProps) {
 
   useEffect(() => {
     if (!initialFragment) return;
+    if (layout && hasText && !/^#?(?:page|slide)=\d+$/i.test(initialFragment)) {
+      setLocalView("text"); // a section lives in the text view of an Office document: show it, then scroll
+      return;
+    }
     const ok = scrollToFragment(initialFragment);
     if (!ok) setFragmentMissing(initialFragment);
     onFragmentConsumed?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialFragment, html]);
+  }, [initialFragment, html, layout]);
 
   // Clicks: thread marks open the discussion; internal links open documents.
   useEffect(() => {

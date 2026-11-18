@@ -2749,7 +2749,7 @@ test("references in an answer: a link opens its place, a name several files have
   try {
     await login(page);
     await openGuide(page);
-    await selectText(page, "captures");
+    await page.getByTestId("ask-whole-document").click();
     // the fake agent echoes the question: its links are the answer's
     await page.getByTestId("selection-question").fill(`Refs e2e: see [the capture section](${ws}/docs/guide.md#Capture) and [the notes](/elsewhere/e2e-refnotes.md#Alpha)`);
     await page.getByTestId("selection-send").click();
@@ -2774,6 +2774,32 @@ test("references in an answer: a link opens its place, a name several files have
     await expect(page.getByTestId("markdown-body").locator("h2.waw-target")).toHaveText("Capture");
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("references: a link to a section of a Word document (heading text, no id of its own) opens it at that heading", async ({ page }) => {
+  const ws = workspaceDir();
+  const file = path.join(ws, "docs", "e2e-spec.docx");
+  const cp = require("child_process") as typeof import("child_process");
+  // Word headings render as <h1><a id="_Toc…"></a>Introduction</h1>
+  cp.execFileSync(path.resolve(__dirname, "../../.venv/bin/python"), ["-c", `
+import sys; sys.path.insert(0, ${JSON.stringify(path.resolve(__dirname, "../backend"))})
+from pathlib import Path
+from test_locks_formats import _minimal_docx
+h = '</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:bookmarkStart w:id="0" w:name="_Toc1"/><w:r><w:t>Introduction</w:t></w:r><w:bookmarkEnd w:id="0"/></w:p><w:p><w:r><w:t>The unit'
+Path(${JSON.stringify(file)}).write_bytes(_minimal_docx(["Filler paragraph %d." % i for i in range(80)] + [h]))
+`]);
+  try {
+    await login(page);
+    await openGuide(page);
+    await page.getByTestId("ask-whole-document").click(); // earlier tests reword the guide: no passage to rely on
+    await page.getByTestId("selection-question").fill(`Refs e2e docx: see [the introduction](${file}#Introduction)`);
+    await page.getByTestId("selection-send").click();
+    const answer = page.locator('[data-testid="message-agent"][data-status="completed"]').last();
+    await answer.getByRole("link", { name: "the introduction" }).click({ timeout: 20000 });
+    await expect(page.getByTestId("markdown-body").locator("h1.waw-target")).toHaveText("Introduction");
+  } finally {
+    fs.rmSync(file, { force: true });
   }
 });
 

@@ -7,6 +7,8 @@ import difflib
 import hashlib
 import logging
 import os
+import threading
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
@@ -54,6 +56,31 @@ def sha256_bytes(data: bytes) -> str:
 # in the repository's wiki folder, with content written by the review hub into <snapshots>/github/ (never into
 # the wiki; the ".waw" prefix also keeps them out of the file tree and the watcher).
 PR_PREFIX = ".waw-github/"
+
+# Rendered HTML by (format, content hash): a large Word file takes seconds to convert, and opening it, asking about a
+# passage and listing its discussions each need it. Bounded by total size (inline images make it large).
+_RENDER_CACHE: OrderedDict[tuple[str, str], str] = OrderedDict()
+_RENDER_CACHE_MAX_BYTES = 256 * 1024 * 1024
+_RENDER_LOCK = threading.Lock()
+
+
+def _cached_render(fmt: str, data: bytes, name: str) -> str:
+    if len(data) < 64 * 1024:  # small files: rendering is cheaper than keeping them
+        return render_document(fmt, data, name)
+    key = (fmt, hashlib.sha256(data).hexdigest())
+    with _RENDER_LOCK:
+        hit = _RENDER_CACHE.get(key)
+        if hit is not None:
+            _RENDER_CACHE.move_to_end(key)
+            return hit
+    html = render_document(fmt, data, name)
+    with _RENDER_LOCK:
+        _RENDER_CACHE[key] = html
+        total = sum(len(v) for v in _RENDER_CACHE.values())
+        while total > _RENDER_CACHE_MAX_BYTES and len(_RENDER_CACHE) > 1:
+            _, old = _RENDER_CACHE.popitem(last=False)
+            total -= len(old)
+    return html
 
 
 def is_pr_path(rel: str) -> bool:
@@ -296,7 +323,7 @@ class DocumentService:
         if fmt in NO_TEXT_FORMATS:
             return fmt, ""
         try:
-            return fmt, render_document(fmt, data, Path(norm).name)
+            return fmt, _cached_render(fmt, data, Path(norm).name)
         except UnicodeDecodeError as exc:
             raise bad_request(f"file is not valid UTF-8 (byte {exc.start})", "INVALID_UTF8")
         except Exception as exc:  # corrupt docx etc.

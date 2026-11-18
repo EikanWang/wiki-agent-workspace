@@ -132,3 +132,18 @@ async def test_open_text_source_docx_and_pdf(api: Api, workspace: Path):
     (workspace / "src" / "bad.txt").write_bytes(b"\xff\xfe\x00bad")
     assert (await api.get("/api/v1/documents/open", params={"path": "src/bad.txt"})).json()["error"]["code"] == "INVALID_UTF8"
     assert json.dumps(items["kernel.cpp"]["kind"]) == '"code"'
+
+
+def test_a_large_document_is_rendered_once_per_content(monkeypatch):
+    """Opening a big Word file, asking about it and listing its discussions all need its HTML: converted once."""
+    from backend.app import documents
+
+    calls: list[bytes] = []
+    monkeypatch.setattr(documents, "render_document", lambda fmt, data, name: calls.append(data) or f"<p>{len(calls)}</p>")
+    big = b"x" * (100 * 1024)
+    assert documents.DocumentService.render("a.docx", big) == ("docx", "<p>1</p>")
+    assert documents.DocumentService.render("b.docx", big) == ("docx", "<p>1</p>")  # same content: cached
+    assert documents.DocumentService.render("a.docx", big + b"y")[1] == "<p>2</p>"  # changed: rendered again
+    documents.DocumentService.render("s.docx", b"small")
+    documents.DocumentService.render("s.docx", b"small")
+    assert len(calls) == 4  # small files are not kept

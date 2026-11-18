@@ -414,6 +414,8 @@ export default function App() {
 
   // links in agent answers: open the place they point at (any open folder, else Local files); several files: choose
   const [refPick, setRefPick] = useState<{ target: string; candidates: RefCandidate[] } | null>(null);
+  const docPathRef = useRef<string | null>(null);
+  docPathRef.current = doc?.path ?? null;
   const goToRef = useCallback(async (c: RefCandidate) => {
     setRefPick(null);
     if (c.kind === "local") {
@@ -422,15 +424,18 @@ export default function App() {
       setLocalOpen({ path: c.abs, at: Date.now() });
       return;
     }
-    if (c.workspace_id && c.workspace_id !== getWorkspace()) {
-      switchWorkspace(c.workspace_id, false);
+    const switching = !!c.workspace_id && c.workspace_id !== getWorkspace();
+    if (switching) {
+      switchWorkspace(c.workspace_id!, false);
       if (getWorkspace() !== c.workspace_id) return; // stayed (unsaved edits)
     }
+    if (!switching && docPathRef.current === c.path) { // already open (e.g. a link from the Agents monitor): show it, no reload
+      setView("document");
+      setMobilePane("doc");
+    } else if (!(await openDocument(c.path!))) return;
+    // after the document is there: set before, the one shown until then would look for the place and give up
     setPendingFragment(c.fragment || null);
-    if (!(await openDocument(c.path!))) setPendingFragment(null);
   }, [openDocument, switchWorkspace]);
-  const docPathRef = useRef<string | null>(null);
-  docPathRef.current = doc?.path ?? null;
   const openRef = useCallback((href: string) => {
     void (async () => {
       try {
