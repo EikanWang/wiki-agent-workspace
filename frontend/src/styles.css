@@ -1224,6 +1224,11 @@ body.resizing-v iframe { pointer-events: none; }
 .composer-picture button { position: absolute; top: 0; right: 0; background: color-mix(in srgb, var(--card) 85%, transparent); }
 .msg-images { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0; }
 .msg-images img { max-height: 120px; max-width: 220px; object-fit: contain; border: 1px solid var(--border); border-radius: 6px; display: block; background: var(--bg); }
+.msg-image-btn { padding: 0; border: none; background: none; cursor: zoom-in; }
+.picture-viewer-backdrop { z-index: 90; }
+.picture-viewer { background: var(--bg); border: 1px solid var(--border); border-radius: 12px; padding: 8px 10px 10px; display: flex; flex-direction: column; gap: 6px; max-width: 94vw; max-height: 94vh; }
+.picture-viewer .modal-head { gap: 4px; }
+.picture-viewer img { max-width: calc(94vw - 20px); max-height: calc(94vh - 56px); min-width: 64px; object-fit: contain; image-rendering: auto; display: block; margin: 0 auto; }
 .mon-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .mon-picker { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .mon-cmd-suggest { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 6px; background: var(--card); overflow: hidden; }

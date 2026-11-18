@@ -1,4 +1,5 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type React from "react";
 
 /** A picture pasted (Ctrl+V) or dropped into a composer, sent with the next message. */
@@ -94,20 +95,50 @@ export function PictureStrip({ pics }: { pics: Pictures }) {
   );
 }
 
-/** The pictures sent with a message of a discussion (thumbnails; a click opens one). */
+/** The pictures sent with a message of a discussion (thumbnails; a click shows one in a dialog). */
 export function MessageImages({ threadId, names }: { threadId?: string; names?: string[] }) {
+  const [shown, setShown] = useState<number | null>(null);
   if (!threadId || !names?.length) return null;
+  const srcs = names.map((n) => `/api/v1/threads/${threadId}/attachments/${n}`);
   return (
     <div className="msg-images" data-testid="msg-images">
-      {names.map((n) => {
-        const src = `/api/v1/threads/${threadId}/attachments/${n}`;
-        return (
-          <a key={n} href={src} target="_blank" rel="noreferrer" title="Open the picture">
-            <img src={src} alt="sent with this message" data-testid="msg-image" />
-          </a>
-        );
-      })}
+      {srcs.map((src, k) => (
+        <button key={src} type="button" className="msg-image-btn" onClick={() => setShown(k)} title="Show the picture">
+          <img src={src} alt="sent with this message" data-testid="msg-image" />
+        </button>
+      ))}
+      {shown !== null && <PictureViewer srcs={srcs} index={shown} onIndex={setShown} onClose={() => setShown(null)} />}
     </div>
+  );
+}
+
+/** A picture over the page: Esc or a click outside closes it; ← / → go through the message's pictures. */
+function PictureViewer({ srcs, index, onIndex, onClose }: { srcs: string[]; index: number; onIndex: (k: number) => void; onClose: () => void }) {
+  const many = srcs.length > 1;
+  const go = (d: number) => onIndex((index + d + srcs.length) % srcs.length);
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); onClose(); }
+      else if (many && e.key === "ArrowLeft") go(-1);
+      else if (many && e.key === "ArrowRight") go(1);
+    };
+    window.addEventListener("keydown", key, true);
+    return () => window.removeEventListener("keydown", key, true);
+  });
+  return createPortal(
+    <div className="modal-backdrop picture-viewer-backdrop" onClick={onClose} data-testid="picture-viewer">
+      <div className="picture-viewer" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <span className="muted small">{many ? `Picture ${index + 1} of ${srcs.length}` : "Picture"}</span>
+          <span className="spacer" />
+          {many && <button type="button" className="icon-btn" onClick={() => go(-1)} aria-label="Previous picture" data-testid="picture-viewer-prev">‹</button>}
+          {many && <button type="button" className="icon-btn" onClick={() => go(1)} aria-label="Next picture" data-testid="picture-viewer-next">›</button>}
+          <button type="button" className="icon-btn" onClick={onClose} aria-label="Close" data-testid="picture-viewer-close">×</button>
+        </div>
+        <img src={srcs[index]} alt={`picture ${index + 1}`} data-testid="picture-viewer-image" />
+      </div>
+    </div>,
+    document.body,
   );
 }
 

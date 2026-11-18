@@ -4579,6 +4579,20 @@ test("pictures: pasted into a discussion reply or a new chat, they go to the age
   await expect(asked.getByTestId("msg-image")).toHaveCount(2);
   await expect.poll(() => asked.getByTestId("msg-image").first().evaluate((i: HTMLImageElement) => i.naturalWidth)).toBe(1);
   expect(sentPngs()).toHaveLength(2);
+  // a click shows the picture in a dialog on the page (no new tab); → goes to the next one, Esc closes
+  const tabs = page.context().pages().length;
+  await asked.getByTestId("msg-image").first().click();
+  const viewer = page.getByTestId("picture-viewer");
+  await expect(viewer).toContainText("Picture 1 of 2");
+  await expect.poll(() => viewer.getByTestId("picture-viewer-image").evaluate((i: HTMLImageElement) => i.naturalWidth)).toBe(1);
+  await page.keyboard.press("ArrowRight");
+  await expect(viewer).toContainText("Picture 2 of 2");
+  await page.keyboard.press("Escape");
+  await expect(viewer).toHaveCount(0);
+  await asked.getByTestId("msg-image").last().click();
+  await viewer.getByTestId("picture-viewer-close").click();
+  await expect(viewer).toHaveCount(0);
+  expect(page.context().pages()).toHaveLength(tabs);
   // a new chat with only a picture
   const root = page.getByTestId("tree-root").first();
   await root.locator(".tree-root").hover();
