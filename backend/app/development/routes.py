@@ -34,8 +34,9 @@ def _tasks(ctx: AppContext):
 class DevCreateIn(BaseModel):
     name: str | None = Field(None, max_length=200)
     host: str = Field("local", max_length=100)
-    source_repo: str = Field(min_length=1, max_length=4096)
+    source_repo: str = Field("", max_length=4096)  # may be empty with clone_url
     mode: str = Field(pattern="^(branch|pr|folder)$")  # folder: work in the given checkout / folder itself
+    clone_url: str | None = Field(None, max_length=2000)  # branch / pr: clone this into <work_dir>/src/<repo> first
     init_git: bool = True  # folder mode: make a folder that is not in a Git repository one (git init)
     branch: str | None = Field(None, max_length=200)
     base: str | None = Field(None, max_length=200)

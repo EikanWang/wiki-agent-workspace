@@ -1496,3 +1496,10 @@ body.resizing-h iframe { pointer-events: none; }
 .hostkey.trusted { color: var(--green); }
 .machine-terminal { height: 320px; display: flex; min-height: 0; }
 .machine-terminal > * { flex: 1; min-width: 0; }
+.machine-recipes { margin: 8px 0; }
+.machine-recipes h5 { margin: 4px 0; display: flex; gap: 8px; align-items: baseline; font-size: 13px; }
+.recipe-library { width: min(960px, 94vw); }
+.recipe-lib-body { display: flex; gap: 12px; min-height: 320px; }
+.recipe-lib-list { width: 240px; flex: none; overflow: auto; max-height: 60vh; border-right: 1px solid var(--border, rgba(127, 127, 127, 0.25)); }
+.recipe-lib-form { flex: 1; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.recipe-lib-form textarea { width: 100%; resize: vertical; }

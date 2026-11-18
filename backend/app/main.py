@@ -235,6 +235,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from .machines.jobs import MachineJobs
 
     ctx.extra["machine_jobs"] = MachineJobs(ctx)
+    from .machines.recipes import Recipes
+
+    ctx.extra["recipes"] = Recipes(ctx)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):

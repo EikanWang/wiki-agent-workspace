@@ -118,7 +118,8 @@ backend/app/
                    (agent CLI turns on the host: SubprocessTurn wraps the argv)
     service.py     DevService: worktrees (new branch: `worktree add -b`; PR: fetch `pull/<n>/head` → refs/waw/pr/<n>,
                    branch waw/pr-<n>, push target = the PR head branch / fork), detected C++/Python settings, git
-                   status / diff / commit / push (refs/waw/pushed/<branch>), `gh pr create`, `gh pr checks`
+                   status / diff / commit / push (refs/waw/pushed/<branch>), `gh pr create`, `gh pr checks`; clone_url:
+                   cloned once into <state_dir>/dev/src or <work_dir>/src (per-destination lock, fetched on reuse)
     editor.py      EditorManager: one code-server per workspace on a 0600 Unix socket (`--auth none`, own config,
                    user-data, extensions and shared-data dirs), generated .code-workspace (worktree + read-only wiki,
                    clangd / Python settings, build/test tasks, debug configs), the integration extension packaged as
@@ -160,7 +161,12 @@ backend/app/
     bootstrap.py   Set up: probe, system packages (password-less sudo), tools from GitHub releases (or
                    [development] release_base) into <work_dir>/tools + bin (fallback: this server downloads into
                    <state_dir>/cache/tools and streams over ssh), opencode settings without secrets → <work_dir>/opencode
-    routes.py      /machines…, /ssh-keys; terminals on a machine (also POST /terminals {machine})
+    recipes.py     setup recipes (`machine_recipes`, per machine `machine_recipe_state`): run in order by a `setup` job
+                   (check → skip, first failure stops), scripts in <work_dir>/recipes; env_out sourced between two
+                   `env -0` dumps, the difference → export lines → <work_dir>/env.sh, which targets.path_prefix sources
+                   for every command there; import from *.sh header comments; outdated = version_ok ≠ content hash
+    routes.py      /machines…, /ssh-keys, /recipes…; POST /machines/{m}/setup (tools + recipes), GET /machines/{m}/fs/dirs
+                   (folder picker over ssh); terminals on a machine (also POST /terminals {machine})
     rtmux.py       RemoteTmux: the app's own tmux server on a machine (`-L <socket>-r`, config under work_dir, adapted
                    to its tmux version, 2.1+); terminals attach with `ssh -tt … tmux attach`; no tmux → ssh login in
                    this server's tmux
@@ -193,7 +199,7 @@ backend/app/
   gitinfo.py       read-only git helpers (status/branch/commit/show, raw git runner, ref validation)
   agents/
     base.py        adapter contract (capabilities/list/create/resume/cancel/list_models), event types, subprocess helper
-    opencode.py    OpenCode CLI adapter (JSON lines) and server adapter (HTTP + SSE); --model/--variant
+    opencode.py    OpenCode CLI adapter (JSON lines) and server adapter (HTTP + SSE); --model provider/model#variant
     codex.py       Codex `exec --json` adapter (new + resume), session listing from $CODEX_HOME; -m / effort
     registry.py    builds adapters from config, caches capabilities
     jobs.py        JobManager: per-session serialization, event persistence (seq), SSE replay, cancel,

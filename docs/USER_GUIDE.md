@@ -425,7 +425,12 @@ write code with the agent — a new pull request, or changes to an existing one.
   (uncommitted changes go along) or switches to another; in a folder opened directly, a new branch is compared with
   the one it was created from. A branch switched outside the app (a terminal) is followed. A pull request's
   workspace keeps the PR's branch.
-- **Repository checkout** — your clone on that host (for a PR, the repository's connected local checkout is offered).
+- **Source** — **A checkout there**: your clone on that host (for a PR, the repository's connected local checkout is
+  offered; **Browse…** lists that host's folders, also on a machine). **Clone from a URL**: the app clones the
+  repository once (`<state folder>/dev/src/<owner>-<repo>` here, `<work folder>/src/<owner>-<repo>` on a machine) and
+  adds the worktree to it; later workspaces of that repository there reuse the clone and fetch it first. For a PR the
+  URL defaults to `https://github.com/<owner>/<repo>.git`. The clone uses the machine's forwarded proxy, never asks
+  for a password (use a URL that needs none, or ssh keys on that machine).
 - **Reference wiki** — a folder of this window; the agent reads the whole folder.
 - Optional: name, Python interpreter (a virtual environment's `python`), `compile_commands.json` folder, build and
   test commands. Defaults are detected: CMake (`cmake … -DCMAKE_EXPORT_COMPILE_COMMANDS=ON`, `ctest`), Make, and
@@ -600,6 +605,24 @@ machine**).
   shows each step; setup can be cancelled, and running it again skips what it already installed (**Install the
   latest release again** updates them). Agent turns on a machine run its own opencode / Codex, so this server needs
   neither; when the last probe says the tool is missing there, the turn says so and points to **Set up**.
+- **Recipes** are your own setup steps, run after the app's tools: a conda environment, the oneAPI variables, `pip
+  install -e .` dependencies. Write them in the **Recipe library** (Set up → **Recipe library…**), or keep them as
+  `*.sh` files (for example in a wiki folder, under Git) and **Import a folder…**; header comments `# name: …`,
+  `# check: …` and `# env: …` fill in the name, check and environment (importing again updates the recipes from
+  those files). Each recipe has:
+  - a **script**, run on the machine in your home folder with `$WAW_WORK_DIR` set (a `#!` line chooses the
+    interpreter, else `sh`);
+  - an optional **check**: exit 0 means it is already done, so the script is skipped;
+  - an optional **environment** snippet, sourced there (`conda activate torch-xpu`,
+    `. /opt/intel/oneapi/setvars.sh`): what it sets becomes the machine's environment, written to
+    `<work folder>/env.sh` and loaded by every command the app runs there — builds, tests, terminals, the editor,
+    agent turns, and the next recipes. Paths it adds in front of PATH-like variables stay in front of whatever they
+    are then.
+
+  Add recipes to a machine in the order they must run. **Set up machine** installs the app's tools (untick them to
+  run only the recipes), then the recipes in order, and stops at the first that fails; each shows **ok**, **failed**
+  (with why), **not run** or **changed since** (edited after it last succeeded). Running setup again skips the ones
+  that are ok and unchanged; **Run** runs one recipe again. A recipe cannot be deleted while a machine uses it.
 - **Environment** chooses what the machine gets from this server — nothing by default: the variables of the agent
   env script (API tokens; all, or only the names listed), this server's proxy settings, and an extra CA bundle (for
   a proxy that inspects TLS; added to the machine's own certificates). Builds and tests, terminals, the editor and

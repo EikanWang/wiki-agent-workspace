@@ -31,8 +31,10 @@ def sh_path(work_dir: str, sub: str = "") -> str:
 
 
 def path_prefix(work_dir: str) -> str:
-    """Shell that puts the tools machine setup installed (<work_dir>/bin) first on PATH."""
-    return f'PATH={sh_path(work_dir, "bin")}:"$PATH"; export PATH; '
+    """Shell that puts the tools machine setup installed (<work_dir>/bin) first on PATH and loads the machine's
+    environment (<work_dir>/env.sh: what its setup recipes set up, machines.recipes)."""
+    env = sh_path(work_dir, "env.sh")
+    return f'PATH={sh_path(work_dir, "bin")}:"$PATH"; export PATH; if [ -f {env} ]; then . {env}; fi; '
 
 
 class TargetError(Exception):
@@ -74,8 +76,8 @@ class Target:
     is_local: bool = True
 
     async def run(self, args: list[str], cwd: str | None = None, timeout: float = 60, stdin: bytes | None = None,
-                  env: dict[str, str] | None = None) -> tuple[int, str, str]:
-        argv, lcwd, lenv = self.spawn_argv(args, cwd, env)
+                  env: dict[str, str] | None = None, env_file: str | None = None) -> tuple[int, str, str]:
+        argv, lcwd, lenv = self.spawn_argv(args, cwd, env, env_file=env_file)
         try:
             proc = await asyncio.create_subprocess_exec(*argv, cwd=lcwd, env=lenv,
                                                         stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
@@ -176,8 +178,8 @@ class SshTarget(Target):
         script += shlex.join(list(args))
         return [*self.ssh_prefix(ssh_opts), "sh -c " + shlex.quote(script)], None, None
 
-    async def run(self, args, cwd=None, timeout=60, stdin=None, env=None):
-        rc, out, err = await super().run(args, cwd, timeout, stdin, env)
+    async def run(self, args, cwd=None, timeout=60, stdin=None, env=None, env_file=None):
+        rc, out, err = await super().run(args, cwd, timeout, stdin, env, env_file)
         if rc == 255:  # ssh's own failure (unreachable, auth)
             raise TargetError(f"ssh to {self.host.ssh} failed: {err.strip()[-300:] or 'exit 255'}", "DEV_HOST_UNREACHABLE")
         return rc, out, err

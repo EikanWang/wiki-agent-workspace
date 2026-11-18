@@ -214,7 +214,7 @@ only ever sent back to the same `provider`.
 | `status` | see below | `uninitialized` (no native id yet) · `ready` (provider confirmed/used) · `missing` (provider no longer has it) · `unavailable` · `availability_unknown` (linked externally, not yet exercised). |
 | `origin` | `app` \| `linked` \| `preview` | Created by the app, linked from the provider's list/by id, or an isolated preview session. |
 | `model` | TEXT, nullable | Model override for app-driven turns in this session (`opencode run --model`, `codex exec -m`); NULL = provider default. Changed via `PUT /agent-sessions/{id}/model`; past messages are unaffected. |
-| `variant` | TEXT, nullable | Reasoning effort / variant passed with the model (`--variant`, `model_reasoning_effort`). |
+| `variant` | TEXT, nullable | Reasoning effort / variant passed with the model (OpenCode `--model …#variant`, `model_reasoning_effort`). |
 | `created_at`, `updated_at` | DATETIME | Lifecycle. |
 
 ## `threads` — a discussion anchored to a passage
@@ -447,6 +447,7 @@ stub lives in `snapshots/dev/<id>.md`.
 | `pr_number` | INTEGER, nullable | The pull request (set at creation for `pr`, after "Create pull request" for `branch`). |
 | `push_remote` | TEXT, nullable | Remote name or URL `git push` uses (the PR's fork for a cross-repository PR). |
 | `push_branch` | TEXT, nullable | Branch name on that remote. |
+| `clone_url` | TEXT, nullable | The Git URL `source_repo` was cloned from (`<state_dir>/dev/src/<owner>-<repo>` here, `<work_dir>/src/<owner>-<repo>` on a machine; shared by the workspaces of that repository there and fetched again when one is created). `NULL`: an existing checkout. |
 | `wiki_workspace_id` | TEXT, FK → workspaces, nullable | The reference wiki folder. |
 | `document_id` | TEXT, FK → documents, nullable | The hidden conversation document. |
 | `settings_json` | TEXT (JSON) | Language and task settings: `python`, `compile_commands_dir`, `clangd`, `build_command`, `test_command`, `debug_program`, `debug_args`, detected `languages`. |
@@ -506,14 +507,41 @@ restart and becomes `interrupted` (running setup again continues: what it instal
 | --- | --- | --- |
 | `id` | TEXT, PK | UUID. |
 | `machine` | TEXT | The machine's name (`machines.name`). |
-| `kind` | TEXT | `bootstrap` (Set up). |
+| `kind` | TEXT | `bootstrap` (the app's tools only) or `setup` (Set up machine: the tools, then the recipes; or only recipes). |
 | `title` | TEXT | Shown in the history, e.g. `Set up gpu-box`. |
 | `status` | TEXT | `running`, `passed`, `failed`, `cancelled`, `interrupted`. |
 | `error` | TEXT, nullable | Why it failed or stopped. |
-| `params_json` | TEXT (JSON) | What was asked: `tools`, `system_packages`, `agent_settings`, `update`. |
-| `result_json` | TEXT (JSON), nullable | What happened: tools installed (their release tags), skipped, failed; system packages; the OpenCode settings copied. |
+| `params_json` | TEXT (JSON) | What was asked: `tools`, `system_packages`, `agent_settings`, `update` (`setup`: those under `bootstrap`, or `null`; `recipes`: ids or `null` for all; `force`). |
+| `result_json` | TEXT (JSON), nullable | What happened: tools installed (their release tags), skipped, failed; system packages; the OpenCode settings copied (`setup`: that under `bootstrap`, and `recipes`: `ok`, `skipped`, `failed`). |
 | `log_path` | TEXT | The log in `<state_dir>/machines/logs/<id>.log` (forwarded values already masked). |
 | `started_at`, `finished_at` | DATETIME | Timestamps. |
+
+## `machine_recipes` — setup recipes (the user's own steps for machines)
+
+| Column | Type | Meaning |
+| --- | --- | --- |
+| `id` | TEXT, PK | UUID. |
+| `name` | TEXT, unique | Shown in the app. |
+| `run` | TEXT | The script, run on the machine in `$HOME` with `WAW_WORK_DIR` set (its own `#!` interpreter, else `sh`). |
+| `check` | TEXT, nullable | A script whose exit 0 means "already done": `run` is skipped. |
+| `env_out` | TEXT, nullable | A snippet sourced there (bash when available), e.g. `conda activate x`; what it changes in the environment is recorded per machine (`machine_recipe_state.env_text`). |
+| `version` | TEXT | Content hash (12 hex digits of SHA-256) of `run`, `check` and `env_out`. |
+| `source_path` | TEXT, nullable | The `*.sh` file on this server it was imported from (importing again updates it). |
+| `created_at`, `updated_at` | DATETIME | Timestamps. |
+
+## `machine_recipe_state` — recipes assigned to a machine, and how they went there
+
+| Column | Type | Meaning |
+| --- | --- | --- |
+| `machine` | TEXT, PK | The machine's name (`machines.name`; rows are removed with the machine). |
+| `recipe_id` | TEXT, PK, FK → machine_recipes | The recipe (it cannot be deleted while assigned). |
+| `position` | INTEGER | Order on that machine (0 first). |
+| `status` | TEXT | `not_run`, `ok` or `failed`. The API also reports `outdated`: `ok`, but the recipe changed since (`version_ok` ≠ `machine_recipes.version`). |
+| `version_ok` | TEXT, nullable | The recipe's version when it last succeeded there. |
+| `env_text` | TEXT, nullable | The `export` / `unset` lines its `env_out` produced there; those of the `ok` recipes, in order, make `<work_dir>/env.sh`, which every command the app runs there sources. |
+| `error` | TEXT, nullable | Why it last failed (e.g. `exit 3`). |
+| `last_job_id` | TEXT, nullable | The machine job that last ran it (soft ref → `machine_jobs`). |
+| `last_run_at` | DATETIME, nullable | When. |
 
 ## `alembic_version`
 

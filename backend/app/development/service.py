@@ -108,6 +108,16 @@ DEV_NOT_FOUND = "DEV_WORKSPACE_NOT_FOUND"
 _ID = re.compile(r"^[0-9a-f-]{36}$")
 _REPO = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _tasks: dict[str, asyncio.Task] = {}
+_CLONE_URL = re.compile(r"^(https?://|ssh://|git://|file://)[^\s]+$|^[\w.-]+@[\w.-]+:[^\s]+$")
+_clone_locks: dict[str, asyncio.Lock] = {}
+
+
+def clone_name(url: str) -> str:
+    tail = url.rstrip("/").rsplit("/", 1)[-1].rsplit(":", 1)[-1]
+    tail = tail[:-4] if tail.endswith(".git") else tail
+    owner = url.rstrip("/").rsplit("/", 2)[-2].rsplit(":", 1)[-1] if url.count("/") >= 1 else ""
+    name = f"{owner}-{tail}" if owner and owner not in (".", "..") and "@" not in owner else tail
+    return re.sub(r"[^A-Za-z0-9._-]", "-", name).strip(".-") or "repo"
 
 
 def dev_snapshot_path(snapshots_dir: Path, norm: str) -> Path | None:
@@ -350,6 +360,35 @@ class DevService:
         await target.mkdir(d)
         return d
 
+    async def clones_dir(self, target: Target) -> str:
+        """Where repositories cloned for workspaces go: <state_dir>/dev/src here, <work_dir>/src on a machine."""
+        if target.is_local:
+            return str((self.ctx.settings.state_dir / "dev" / "src").resolve())
+        host = self.dev.host(target.name)
+        assert host is not None
+        return f"{await target.expand(host.work_dir)}/src"
+
+    async def ensure_clone(self, t: Target, url: str, dest: str) -> None:
+        """`git clone` once (shared by the workspaces of that repository there), `git fetch` when it is there."""
+        from ..machines import envfwd
+
+        async with _clone_locks.setdefault(f"{t.name}:{dest}", asyncio.Lock()):
+            env_file = None if t.is_local else await envfwd.push(t)
+            env = {"GIT_TERMINAL_PROMPT": "0"}
+            rc, _, _ = await t.run(["test", "-d", f"{dest}/.git"], timeout=30)
+            if rc == 0:
+                rc, _, err = await t.run(["git", "-C", dest, "fetch", "--quiet", "--prune", "origin"], timeout=1800, env=env,
+                                         env_file=env_file)
+                if rc != 0:
+                    log.warning("fetch in %s on %s failed: %s", dest, t.label(), err.strip()[:300])
+                return
+            parent = dest.rsplit("/", 1)[0]
+            await t.mkdir(parent)
+            rc, _, err = await t.run(["git", "clone", "--quiet", "--", url, dest], timeout=3600, env=env, env_file=env_file)
+            if rc != 0:
+                await t.run(["rm", "-rf", dest], timeout=120)
+                raise ApiError(400, "CLONE_FAILED", f"git clone {url} on {t.label()} failed: {err.strip()[-400:] or f'exit {rc}'}")
+
     def _publish(self, row_id: str) -> None:
         if self.ctx.events:
             self.ctx.events.publish("global", {"type": "dev_changed", "dev_id": row_id})
@@ -372,6 +411,14 @@ class DevService:
         if body.mode not in ("branch", "pr", "folder"):
             raise bad_request("mode must be branch, pr or folder", "INVALID_MODE")
         source = (body.source_repo or "").strip()
+        clone_url = (getattr(body, "clone_url", None) or "").strip() or None
+        if clone_url:
+            if body.mode == "folder":
+                raise bad_request("cloning is for a new branch or a pull request; open a folder that exists", "INVALID_MODE")
+            if not _CLONE_URL.match(clone_url) or clone_url.startswith("-"):
+                raise bad_request("give a Git URL, e.g. https://github.com/owner/repo.git or git@github.com:owner/repo.git",
+                                  "INVALID_URL")
+            source = await self.clones_dir(target) + "/" + clone_name(clone_url)
         if not source or source.startswith("-"):
             raise bad_request("give the path of a local Git checkout of the repository (on the chosen host)", "INVALID_PATH")
         if body.mode == "folder":
@@ -424,7 +471,7 @@ class DevService:
                 id=dev_id, name=name[:200], host=host, source_repo=source_abs, worktree_path="", mode=body.mode,
                 branch=(body.branch or "").strip() if body.mode != "pr" else f"waw/pr-{body.pr_number}",
                 base_ref=(body.base or "").strip() or None, github_repo=body.github_repo or None, pr_number=body.pr_number if body.mode != "branch" else None,
-                wiki_workspace_id=body.wiki_workspace_id or None, document_id=doc.id,
+                wiki_workspace_id=body.wiki_workspace_id or None, document_id=doc.id, clone_url=clone_url,
                 settings_json=json.dumps(clean_settings(body.settings or {})), status="creating"))
         self._start(dev_id, self._provision_folder(dev_id, body.init_git) if body.mode == "folder" else self._provision(dev_id))
         return dev_dict(self.get(dev_id), self.ctx)
@@ -445,6 +492,8 @@ class DevService:
     async def _provision(self, dev_id: str) -> None:
         row = self.get(dev_id)
         t = self.target(row)
+        if row.clone_url:
+            await self.ensure_clone(t, row.clone_url, row.source_repo)
         rc, top, err = await t.git(row.source_repo, ["rev-parse", "--show-toplevel"], timeout=60)
         if rc != 0:
             raise ApiError(400, "NOT_A_GIT_REPO", f"{row.source_repo} is not a Git checkout on {t.label()}: {err.strip()[:300]}")

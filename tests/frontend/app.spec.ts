@@ -4040,19 +4040,21 @@ test("Machines: add a bastion and a machine behind it, check hop by hop, trust h
   await page.getByTestId("activity-machines").click();
   await expect(page.getByTestId("machines-panel")).toBeVisible();
   await expect(page.locator('[data-testid="machines-item"][data-name="local"]')).toBeVisible();
-  const add = async (name: string, ssh: string, kind: "machine" | "bastion", via?: string) => {
+  const add = async (name: string, ssh: string, kind: "machine" | "bastion", via?: string, workDir?: string) => {
     await page.getByTestId("machines-add").click();
     await page.getByTestId("machine-name").fill(name);
     await page.getByTestId("machine-kind").selectOption(kind);
     await page.getByTestId("machine-ssh").fill(ssh);
     if (via) await page.getByTestId("machine-via").selectOption(via);
+    if (workDir) await page.getByTestId("machine-workdir").fill(workDir);
     await page.getByTestId("machine-save").click();
     await expect(page.getByTestId("machine-dialog")).toHaveCount(0);
     await expect(page.locator(`[data-testid="machines-item"][data-name="${name}"]`)).toBeVisible();
   };
   const tag = Date.now().toString(36);
   await add(`jump-${tag}`, "jump.example", "bastion");
-  await add(`box-${tag}`, "box.internal", "machine", `jump-${tag}`);
+  const workDir = workspaceDir().replace(/\/[^/]+\/?$/, "") + `/box-work-${tag}`;  // (the fake ssh runs here)
+  await add(`box-${tag}`, "box.internal", "machine", `jump-${tag}`, workDir);
   // a forbidden ssh option is refused with the reason
   await page.getByTestId("machines-add").click();
   await page.getByTestId("machine-name").fill(`bad-${tag}`);
@@ -4089,6 +4091,24 @@ test("Machines: add a bastion and a machine behind it, check hop by hop, trust h
   await expect(page.getByTestId("setup-tool")).toHaveCount(4);
   await expect(page.getByTestId("setup-tool-codex")).not.toBeChecked();
   await expect(page.getByTestId("setup-start")).toBeEnabled();
+  // a recipe: written in the library, assigned to the machine, run alone; what its snippet sets is reported
+  await page.getByTestId("recipes-library-btn").click();
+  await page.getByTestId("recipe-new").click();
+  await page.getByTestId("recipe-name").fill(`hello-${tag}`);
+  await page.getByTestId("recipe-run").fill("echo hello-from-recipe");
+  await page.getByTestId("recipe-env_out").fill("export E2E_RECIPE=yes");
+  await page.getByTestId("recipe-save").click();
+  await expect(page.getByTestId("recipe-note")).toHaveText("Saved.");
+  await expect(page.locator(`[data-testid="recipe-item"][data-name="hello-${tag}"]`)).toBeVisible();
+  await page.getByTestId("recipe-library").getByRole("button", { name: "Close" }).click();
+  await page.getByTestId("machine-recipe-add-select").selectOption({ label: `hello-${tag}` });
+  await page.getByTestId("machine-recipe-add").click();
+  const rec = page.locator(`[data-testid="machine-recipe"][data-name="hello-${tag}"]`);
+  await expect(rec.getByTestId("machine-recipe-status")).toHaveText("not run");
+  await rec.getByTestId("machine-recipe-run").click();
+  await expect(page.getByTestId("setup-log")).toContainText("hello-from-recipe", { timeout: 20000 });
+  await expect(rec.getByTestId("machine-recipe-status")).toHaveText("ok", { timeout: 20000 });
+  await expect(rec).toContainText("sets E2E_RECIPE");
   // a terminal there
   await page.getByTestId("machine-terminal").click();
   await expect(page.getByTestId("terminals-panel")).toBeVisible();

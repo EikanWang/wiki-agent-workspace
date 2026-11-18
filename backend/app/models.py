@@ -452,6 +452,7 @@ class DevWorkspace(Base):
     pr_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     push_remote: Mapped[str | None] = mapped_column(Text, nullable=True)  # remote name or URL `git push` uses
     push_branch: Mapped[str | None] = mapped_column(Text, nullable=True)  # branch name on that remote
+    clone_url: Mapped[str | None] = mapped_column(Text, nullable=True)  # cloned into <work_dir>/src/<repo> first (no checkout needed there)
     wiki_workspace_id: Mapped[str | None] = mapped_column(ForeignKey("workspaces.id"), nullable=True)  # reference wiki folder
     document_id: Mapped[str | None] = mapped_column(ForeignKey("documents.id"), nullable=True)  # the agent conversation
     settings_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}", server_default="{}")  # language + task settings
@@ -524,6 +525,37 @@ class MachineJob(Base):
     log_path: Mapped[str] = mapped_column(Text, nullable=False)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class MachineRecipe(Base):
+    """A setup step for machines (machines.recipes): a shell script, an optional check (exit 0: already done) and an
+    optional snippet whose effect on the environment (conda activate, setvars.sh) becomes the machine's environment."""
+
+    __tablename__ = "machine_recipes"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    run: Mapped[str] = mapped_column(Text, nullable=False)
+    check: Mapped[str | None] = mapped_column(Text, nullable=True)
+    env_out: Mapped[str | None] = mapped_column(Text, nullable=True)
+    version: Mapped[str] = mapped_column(String(16), nullable=False)  # content hash of run + check + env_out
+    source_path: Mapped[str | None] = mapped_column(Text, nullable=True)  # the *.sh file it was imported from
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+class MachineRecipeState(Base):
+    """A recipe assigned to a machine (in order) and how it last went there."""
+
+    __tablename__ = "machine_recipe_state"
+    machine: Mapped[str] = mapped_column(Text, primary_key=True)
+    recipe_id: Mapped[str] = mapped_column(ForeignKey("machine_recipes.id", ondelete="CASCADE"), primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    status: Mapped[str] = mapped_column(String(10), nullable=False, default="not_run")  # not_run | ok | failed
+    version_ok: Mapped[str | None] = mapped_column(String(16), nullable=True)  # the recipe's version when it last succeeded
+    env_text: Mapped[str | None] = mapped_column(Text, nullable=True)  # the export lines env_out produced there
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_job_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 Index("ix_messages_job", Message.job_id)

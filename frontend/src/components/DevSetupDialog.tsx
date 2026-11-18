@@ -43,12 +43,16 @@ export default function DevSetupDialog({ info, workspaces, preset, onClose, onCr
   const [build, setBuild] = useState("");
   const [test, setTest] = useState("");
   const [browse, setBrowse] = useState(false);
+  const [srcKind, setSrcKind] = useState<"checkout" | "clone">("checkout");
+  const [cloneUrl, setCloneUrl] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   // the repository's connected local checkout (PR Review → "Local checkout") is the natural source
   const pr = parsePrRef(prRef);
   const repoForLookup = mode === "pr" ? pr?.repo : repo.trim();
+  const cloning = mode !== "folder" && srcKind === "clone";
+  const defaultUrl = repoForLookup ? `https://github.com/${repoForLookup}.git` : "";
   useEffect(() => {
     if (!repoForLookup || source || host !== "local") return;
     let alive = true;
@@ -73,14 +77,15 @@ export default function DevSetupDialog({ info, workspaces, preset, onClose, onCr
       if (build.trim()) settings.build_command = build.trim();
       if (test.trim()) settings.test_command = test.trim();
       const d = await post<DevWorkspace>("/dev/workspaces", {
-        host, source_repo: source.trim(), mode, name: name.trim() || undefined,
+        host, source_repo: cloning ? "" : source.trim(), mode,
+        clone_url: cloning ? (cloneUrl.trim() || defaultUrl) : undefined, name: name.trim() || undefined,
         branch: mode !== "pr" ? branch.trim() || undefined : undefined, base: mode === "branch" ? base.trim() || undefined : undefined,
         init_git: mode === "folder" ? initGit : undefined,
         github_repo: mode === "pr" ? pr!.repo : repo.trim() || undefined, pr_number: mode === "pr" ? pr!.number : undefined,
         wiki_workspace_id: wiki || undefined, settings,
       });
       localStorage.setItem("waw.devHost", host);
-      localStorage.setItem(`waw.devSource.${host}`, source.trim());
+      if (!cloning) localStorage.setItem(`waw.devSource.${host}`, source.trim());
       if (wiki) localStorage.setItem("waw.devWiki", wiki);
       onCreated(d);
     } catch (e) {
@@ -90,7 +95,7 @@ export default function DevSetupDialog({ info, workspaces, preset, onClose, onCr
     }
   };
 
-  const ready = !!source.trim() && (mode === "pr" ? !!pr : mode === "folder" ? true : !!branch.trim());
+  const ready = (cloning ? !!(cloneUrl.trim() || defaultUrl) : !!source.trim()) && (mode === "pr" ? !!pr : mode === "folder" ? true : !!branch.trim());
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal dev-setup" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="New development workspace" data-testid="dev-setup">
@@ -139,13 +144,30 @@ export default function DevSetupDialog({ info, workspaces, preset, onClose, onCr
             </div>
           </>
         )}
-        <label className="dev-field">
-          <span className="label">{mode === "folder" ? "Folder" : "Repository checkout"} {host === "local" ? "on this server" : `on ${host}`}</span>
-          <span className="row nowrap">
-            <input value={source} onChange={(e) => setSource(e.target.value)} placeholder={mode === "folder" ? "/path/to/a/checkout/or/folder" : "/path/to/your/clone"} className="mono" data-testid="dev-source" />
-            {host === "local" && <button className="btn small" onClick={() => setBrowse(true)}>Browse…</button>}
-          </span>
-        </label>
+        {mode !== "folder" && (
+          <div className="dev-field">
+            <span className="label">Source</span>
+            <span className="mode-switch" role="tablist">
+              <button role="tab" aria-selected={srcKind === "checkout"} className={srcKind === "checkout" ? "active" : ""} onClick={() => setSrcKind("checkout")} data-testid="dev-src-checkout">A checkout there</button>
+              <button role="tab" aria-selected={srcKind === "clone"} className={srcKind === "clone" ? "active" : ""} onClick={() => setSrcKind("clone")} title="Cloned once into the machine's work folder and shared by its workspaces" data-testid="dev-src-clone">Clone from a URL</button>
+            </span>
+          </div>
+        )}
+        {cloning ? (
+          <label className="dev-field">
+            <span className="label">Git URL to clone {host === "local" ? "on this server" : `on ${host}`}</span>
+            <input value={cloneUrl} onChange={(e) => setCloneUrl(e.target.value)} placeholder={defaultUrl || "https://github.com/owner/repo.git"} className="mono" data-testid="dev-clone-url" />
+            <span className="muted small">cloned once {host === "local" ? "into the app's state folder" : "into the machine's work folder (src/)"} and reused (fetched) by later workspaces</span>
+          </label>
+        ) : (
+          <label className="dev-field">
+            <span className="label">{mode === "folder" ? "Folder" : "Repository checkout"} {host === "local" ? "on this server" : `on ${host}`}</span>
+            <span className="row nowrap">
+              <input value={source} onChange={(e) => setSource(e.target.value)} placeholder={mode === "folder" ? "/path/to/a/checkout/or/folder" : "/path/to/your/clone"} className="mono" data-testid="dev-source" />
+              <button className="btn small" onClick={() => setBrowse(true)} data-testid="dev-browse">Browse…</button>
+            </span>
+          </label>
+        )}
         {mode === "folder" && (
           <label className="small" title="Git keeps track of the changes: the diff, commits and branches need it">
             <input type="checkbox" checked={initGit} onChange={(e) => setInitGit(e.target.checked)} data-testid="dev-init-git" /> If the folder is not in a Git repository, make it one (git init)
@@ -175,8 +197,8 @@ export default function DevSetupDialog({ info, workspaces, preset, onClose, onCr
           <button className="btn primary" disabled={!ready || busy} onClick={() => void create()} data-testid="dev-create">{busy ? "Creating…" : "Create"}</button>
         </div>
         {browse && (
-          <FolderPicker title={mode === "folder" ? "Folder" : "Repository checkout"} requireGit={mode !== "folder"} start={source || undefined}
-            hint={mode === "folder" ? "A Git checkout or any folder on this server; the app works in it directly." : "A Git clone on this server; the app adds a worktree to it."}
+          <FolderPicker title={mode === "folder" ? "Folder" : "Repository checkout"} requireGit={mode !== "folder"} start={source || undefined} machine={host}
+            hint={mode === "folder" ? "A Git checkout or any folder; the app works in it directly." : "A Git clone; the app adds a worktree to it."}
             confirmLabel={mode === "folder" ? "Use this folder" : "Use this checkout"} onClose={() => setBrowse(false)} onChoose={(p) => { setBrowse(false); setSource(p); }} />
         )}
       </div>

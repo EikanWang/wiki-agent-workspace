@@ -225,6 +225,29 @@ export interface BootstrapPlan {
   running: string | null;
 }
 
+export interface Recipe {
+  id: string;
+  name: string;
+  run: string;
+  check: string | null;
+  env_out: string | null;
+  version: string;
+  source_path: string | null;
+  machines: string[];
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface MachineRecipe extends Recipe {
+  position: number;
+  status: "not_run" | "ok" | "failed" | "outdated";
+  version_ok: string | null;
+  env_vars: string[];
+  error: string | null;
+  last_job_id: string | null;
+  last_run_at: string | null;
+}
+
 export interface MachineJob {
   id: string;
   machine: string;

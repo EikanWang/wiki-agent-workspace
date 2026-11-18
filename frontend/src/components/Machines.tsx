@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ApiError, BootstrapPlan, HostKeyHop, MachineCaps, MachineCheck, MachineEnv, MachineInfo, MachineJob, SshKeyInfo, TerminalInfo, del, get, patch, post, subscribeGlobal } from "../api";
+import { ApiError, BootstrapPlan, HostKeyHop, MachineCaps, MachineCheck, MachineEnv, MachineInfo, MachineJob, MachineRecipe, Recipe, SshKeyInfo, TerminalInfo, del, get, patch, post, put, subscribeGlobal } from "../api";
 import { writeClipboard } from "../clipboard";
 import { confirmAction } from "./Confirm";
+import FolderPicker from "./FolderPicker";
 import { PlusIcon } from "./Icons";
 import { StickyMods, TerminalView } from "./TerminalPanel";
 
@@ -10,7 +11,9 @@ import { StickyMods, TerminalView } from "./TerminalPanel";
  * `[[development.hosts]]` in the config file (read-only here) and those added in the app. Each can be checked hop by
  * hop, probed (OS, CPU, GPUs, tools), have its host keys confirmed and this server's key installed (ssh-copy-id in a
  * terminal: the password is typed there, never seen by the app). Set up installs the app's tools into the machine's
- * work folder (a machine job with a log); Environment chooses what it gets from this server (variables, proxy, CA).
+ * work folder (a machine job with a log), then the machine's recipes (the user's own setup steps, in order; what their
+ * environment snippets set becomes <work_dir>/env.sh for everything run there); Environment chooses what it gets from
+ * this server (variables, proxy, CA).
  */
 
 const STATUS_TEXT: Record<string, string> = {
@@ -175,6 +178,180 @@ function EnvSection({ machine, onChanged }: { machine: MachineInfo; onChanged: (
   );
 }
 
+const RECIPE_TEXT: Record<string, string> = { not_run: "not run", ok: "ok", failed: "failed", outdated: "changed since" };
+
+function RecipesSection({ machine, running, refresh, onJob }: { machine: string; running: boolean; refresh: unknown; onJob: (j: MachineJob) => void }) {
+  const [mine, setMine] = useState<MachineRecipe[] | null>(null);
+  const [lib, setLib] = useState<Recipe[]>([]);
+  const [adding, setAdding] = useState("");
+  const [library, setLibrary] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [warn, setWarn] = useState<string | null>(null);
+  const load = useCallback(async () => {
+    try {
+      const [m, l] = await Promise.all([get<{ recipes: MachineRecipe[] }>(`/machines/${machine}/recipes`), get<{ recipes: Recipe[] }>("/recipes")]);
+      setMine(m.recipes);
+      setLib(l.recipes);
+    } catch (e) {
+      setErr((e as ApiError).message);
+    }
+  }, [machine]);
+  useEffect(() => { void load(); }, [load, refresh]);
+  useEffect(() => subscribeGlobal((ev) => { if (ev.type === "recipes_changed" && (!ev.machine || ev.machine === machine)) void load(); }), [machine, load]);
+  const assign = async (ids: string[]) => {
+    setErr(null);
+    try {
+      const r = await put<{ recipes: MachineRecipe[]; warning: string | null }>(`/machines/${machine}/recipes`, { recipes: ids });
+      setMine(r.recipes);
+      setWarn(r.warning);
+    } catch (e) {
+      setErr((e as ApiError).message);
+    }
+  };
+  const ids = (mine ?? []).map((x) => x.id);
+  const move = (i: number, d: number) => { const n = [...ids]; [n[i], n[i + d]] = [n[i + d], n[i]]; void assign(n); };
+  const runOne = async (id: string) => {
+    setErr(null);
+    try { onJob(await post<MachineJob>(`/machines/${machine}/setup`, { bootstrap: null, recipes: [id], force: true })); } catch (e) { setErr((e as ApiError).message); }
+  };
+  const free = lib.filter((r) => !ids.includes(r.id));
+  return (
+    <div className="machine-recipes" data-testid="machine-recipes">
+      <h5>Recipes <span className="muted small">your own setup steps, in order, after the app's tools; what their environment snippets set is loaded by every command there</span>
+        <span className="spacer" /><button className="link-btn small" onClick={() => setLibrary(true)} data-testid="recipes-library-btn">Recipe library…</button></h5>
+      {!mine ? <div className="muted small">Loading…</div> : mine.length === 0 ? <div className="muted small">No recipes assigned.</div> : (
+        <table className="machine-table">
+          <tbody>
+            {mine.map((x, i) => (
+              <tr key={x.id} data-testid="machine-recipe" data-name={x.name} data-status={x.status}>
+                <th>{i + 1}. {x.name}</th>
+                <td><span className={`chip status ${x.status === "ok" ? "passed" : x.status === "failed" ? "failed" : ""}`} title={x.error ?? undefined} data-testid="machine-recipe-status">{RECIPE_TEXT[x.status] ?? x.status}</span>
+                  {x.env_vars.length > 0 && <span className="muted small mono"> sets {x.env_vars.join(", ")}</span>}
+                  {x.status === "failed" && x.error && <span className="small error-text"> {x.error}</span>}</td>
+                <td className="nowrap">
+                  <button className="link-btn small" disabled={running || i === 0} onClick={() => move(i, -1)} title="Earlier" aria-label="Move up">↑</button>
+                  <button className="link-btn small" disabled={running || i === mine.length - 1} onClick={() => move(i, 1)} title="Later" aria-label="Move down">↓</button>
+                  <button className="link-btn small" disabled={running} onClick={() => void runOne(x.id)} data-testid="machine-recipe-run">Run</button>
+                  <button className="link-btn small" disabled={running} onClick={() => void assign(ids.filter((y) => y !== x.id))} data-testid="machine-recipe-remove">Remove</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {mine?.some((x) => x.status === "failed") && <div className="muted small">Fix the recipe in the library (or on the machine in a terminal) and run it again; the agent can help from a development workspace on this machine.</div>}
+      <div className="row small">
+        <select value={adding} onChange={(e) => setAdding(e.target.value)} disabled={running || !free.length} data-testid="machine-recipe-add-select">
+          <option value="">{free.length ? "Add a recipe…" : lib.length ? "All recipes are assigned" : "The library is empty"}</option>
+          {free.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+        </select>
+        <button className="btn small" disabled={!adding || running} onClick={() => { void assign([...ids, adding]); setAdding(""); }} data-testid="machine-recipe-add">Add</button>
+      </div>
+      {warn && <div className="warn small">{warn}</div>}
+      {err && <div className="error-text small" role="alert">{err}</div>}
+      {library && <RecipeLibrary onClose={() => { setLibrary(false); void load(); }} />}
+    </div>
+  );
+}
+
+const NEW_RECIPE = { name: "", run: "", check: "", env_out: "" };
+
+export function RecipeLibrary({ onClose }: { onClose: () => void }) {
+  const [list, setList] = useState<Recipe[]>([]);
+  const [sel, setSel] = useState<string | null>(null);  // an id, "new", or null
+  const [form, setForm] = useState(NEW_RECIPE);
+  const [err, setErr] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [pick, setPick] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(async () => {
+    try { setList((await get<{ recipes: Recipe[] }>("/recipes")).recipes); } catch (e) { setErr((e as ApiError).message); }
+  }, []);
+  useEffect(() => { void load(); }, [load]);
+  const open = (r: Recipe | null) => {
+    setErr(null);
+    setNote(null);
+    setSel(r ? r.id : "new");
+    setForm(r ? { name: r.name, run: r.run, check: r.check ?? "", env_out: r.env_out ?? "" } : NEW_RECIPE);
+  };
+  const cur = list.find((r) => r.id === sel);
+  const save = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      const body = { name: form.name.trim(), run: form.run, check: form.check.trim() ? form.check : null, env_out: form.env_out.trim() ? form.env_out : null };
+      const r = sel === "new" ? await post<Recipe>("/recipes", body) : await put<Recipe>(`/recipes/${sel}`, body);
+      await load();
+      setSel(r.id);
+      setNote("Saved.");
+    } catch (e) {
+      setErr((e as ApiError).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const remove = async () => {
+    if (!cur || !(await confirmAction({ title: `Delete the recipe ${cur.name}?`, message: "Machines that ran it keep what it did.", confirmLabel: "Delete", danger: true }))) return;
+    try { await del(`/recipes/${cur.id}`); setSel(null); await load(); } catch (e) { setErr((e as ApiError).message); }
+  };
+  const importFolder = async (folder: string) => {
+    setPick(false);
+    setErr(null);
+    try {
+      const r = await post<{ added: string[]; updated: string[]; unchanged: string[]; errors: { file: string; error: string }[]; recipes: Recipe[] }>("/recipes/import", { folder });
+      setList(r.recipes);
+      setNote(`Imported from ${folder}: ${r.added.length} new, ${r.updated.length} updated, ${r.unchanged.length} unchanged` +
+        (r.errors.length ? `; skipped ${r.errors.map((x) => `${x.file.split("/").pop()} (${x.error})`).join(", ")}` : ""));
+    } catch (e) {
+      setErr((e as ApiError).message);
+    }
+  };
+  const field = (k: keyof typeof NEW_RECIPE, label: string, hint: string, rows: number) => (
+    <label className="dev-field"><span className="label">{label} <span className="muted small">{hint}</span></span>
+      <textarea className="mono" rows={rows} value={form[k]} onChange={(e) => setForm({ ...form, [k]: e.target.value })} data-testid={`recipe-${k}`} spellCheck={false} /></label>
+  );
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal recipe-library" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Recipe library" data-testid="recipe-library">
+        <div className="modal-head"><span>Recipe library</span><button className="icon-btn" onClick={onClose} aria-label="Close">×</button></div>
+        <div className="muted small">Setup steps for machines, e.g. a conda environment or the oneAPI variables. Keep them as *.sh files (in a wiki folder, under Git) and import them; header comments <span className="mono"># name:</span>, <span className="mono"># check:</span> and <span className="mono"># env:</span> fill in the fields.</div>
+        <div className="row small">
+          <button className="btn small" onClick={() => open(null)} data-testid="recipe-new">New recipe</button>
+          <button className="btn small" onClick={() => setPick(true)} data-testid="recipe-import">Import a folder…</button>
+        </div>
+        <div className="recipe-lib-body">
+          <div className="recipe-lib-list">
+            {list.length === 0 && <div className="muted small pad">No recipes yet.</div>}
+            {list.map((r) => (
+              <button key={r.id} className={`list-item ${r.id === sel ? "selected" : ""}`} onClick={() => open(r)} data-testid="recipe-item" data-name={r.name}>
+                <span>{r.name}</span>{r.machines.length > 0 && <span className="muted small"> · {r.machines.join(", ")}</span>}
+              </button>
+            ))}
+          </div>
+          {sel && (
+            <div className="recipe-lib-form">
+              <label className="dev-field"><span className="label">Name</span>
+                <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} data-testid="recipe-name" /></label>
+              {field("run", "Script", "runs in $HOME with $WAW_WORK_DIR set; a #! line chooses the interpreter (else sh)", 10)}
+              {field("check", "Check (optional)", "exit 0 means already done: the script is skipped", 2)}
+              {field("env_out", "Environment (optional)", "sourced there (bash); what it sets is loaded by every later command, e.g. conda activate torch", 3)}
+              {cur?.source_path && <div className="muted small">From <span className="mono">{cur.source_path}</span> (importing again overwrites edits made here).</div>}
+              <div className="row">
+                <button className="btn small primary" disabled={busy || !form.name.trim() || !form.run.trim()} onClick={() => void save()} data-testid="recipe-save">{busy ? "Saving…" : "Save"}</button>
+                {cur && <button className="btn small danger" onClick={() => void remove()} data-testid="recipe-delete">Delete</button>}
+              </div>
+            </div>
+          )}
+        </div>
+        {note && <div className="small" data-testid="recipe-note">{note}</div>}
+        {err && <div className="error-text small" role="alert" data-testid="recipe-error">{err}</div>}
+        {pick && <FolderPicker title="Import recipes" hint="Its *.sh files become recipes (matched by file, then by name)." confirmLabel="Import this folder"
+          onClose={() => setPick(false)} onChoose={(p) => void importFolder(p)} />}
+      </div>
+    </div>
+  );
+}
+
 const JOB_TEXT: Record<string, string> = { running: "running", passed: "done", failed: "failed", cancelled: "cancelled", interrupted: "interrupted" };
 
 function SetupPanel({ machine, onChanged }: { machine: MachineInfo; onChanged: () => Promise<void> | void }) {
@@ -183,6 +360,7 @@ function SetupPanel({ machine, onChanged }: { machine: MachineInfo; onChanged: (
   const [sysPkgs, setSysPkgs] = useState(true);
   const [agentSettings, setAgentSettings] = useState(true);
   const [update, setUpdate] = useState(false);
+  const [withTools, setWithTools] = useState(true);
   const [jobs, setJobs] = useState<MachineJob[]>([]);
   const [jobId, setJobId] = useState<string | null>(null);
   const [job, setJob] = useState<MachineJob | null>(null);
@@ -240,7 +418,7 @@ function SetupPanel({ machine, onChanged }: { machine: MachineInfo; onChanged: (
   const start = async () => {
     setErr(null);
     try {
-      const j = await post<MachineJob>(`/machines/${machine.name}/bootstrap`, { tools, system_packages: sysPkgs, agent_settings: agentSettings, update });
+      const j = await post<MachineJob>(`/machines/${machine.name}/setup`, { bootstrap: withTools ? { tools, system_packages: sysPkgs, agent_settings: agentSettings, update } : null });
       setJob(j);
       setJobId(j.id);
       void load();
@@ -253,18 +431,21 @@ function SetupPanel({ machine, onChanged }: { machine: MachineInfo; onChanged: (
     try { setJob(await post<MachineJob>(`/machine-jobs/${jobId}/cancel`)); } catch (e) { setErr((e as ApiError).message); }
   };
   const running = job?.status === "running";
+  const onJob = (j: MachineJob) => { setJob(j); setJobId(j.id); void load(); };
+  const off = running || !withTools;
   const sp = plan?.system_packages;
   return (
     <div className="machine-section" data-testid="machine-setup">
-      <h4>Set up <span className="muted small">installs the app's tools into {machine.work_dir}/bin (no root needed); they come first on PATH there</span></h4>
+      <h4>Set up <span className="muted small">the app's tools, then your recipes</span></h4>
       {!plan ? <div className="muted small">Loading…</div> : (
         <>
+          <label className="small"><input type="checkbox" checked={withTools} disabled={running} onChange={(e) => setWithTools(e.target.checked)} data-testid="setup-bootstrap" /> The app's tools, into <span className="mono">{machine.work_dir}/bin</span> (no root needed; first on PATH there)</label>
           {!plan.probed && <div className="muted small">Not probed yet: setup probes it first.</div>}
           <table className="machine-table">
             <tbody>
               {plan.tools.map((t) => (
                 <tr key={t.name} data-testid="setup-tool" data-tool={t.name}>
-                  <th><label><input type="checkbox" checked={tools.includes(t.name)} disabled={running}
+                  <th><label><input type="checkbox" checked={tools.includes(t.name)} disabled={off}
                     onChange={(e) => setTools((cur) => e.target.checked ? [...cur, t.name] : cur.filter((x) => x !== t.name))} data-testid={`setup-tool-${t.name}`} /> {t.name}</label></th>
                   <td className="muted">{t.for}</td>
                   <td className="small">{t.installed ? <>{t.version ?? "installed"} <span className="mono muted">{t.path}</span>{t.managed && <span className="chip">setup</span>}</> : <span className="muted">not installed</span>}</td>
@@ -272,21 +453,22 @@ function SetupPanel({ machine, onChanged }: { machine: MachineInfo; onChanged: (
               ))}
             </tbody>
           </table>
-          <label className="small"><input type="checkbox" checked={update} disabled={running} onChange={(e) => setUpdate(e.target.checked)} data-testid="setup-update" /> Install the latest release again over setup's own copies</label>
-          <label className="small"><input type="checkbox" checked={sysPkgs} disabled={running} onChange={(e) => setSysPkgs(e.target.checked)} data-testid="setup-system" /> System packages
+          <label className="small"><input type="checkbox" checked={update} disabled={off} onChange={(e) => setUpdate(e.target.checked)} data-testid="setup-update" /> Install the latest release again over setup's own copies</label>
+          <label className="small"><input type="checkbox" checked={sysPkgs} disabled={off} onChange={(e) => setSysPkgs(e.target.checked)} data-testid="setup-system" /> System packages
             {sp && sp.missing.length > 0 ? <> (missing: {sp.missing.join(", ")}{sp.can_install ? `, with ${sp.package_manager}` : ""})</> : <span className="muted"> (nothing missing as of the last probe)</span>}
           </label>
           {sp && sp.missing.length > 0 && !sp.can_install && sp.command && (
             <div className="warn small" data-testid="setup-sudo-hint">sudo needs a password there; ask an administrator to run <span className="mono">{sp.command.replace(/sudo -n /g, "sudo ")}</span>
               <button className="link-btn small" onClick={() => void writeClipboard((sp.command ?? "").replace(/sudo -n /g, "sudo "))}>copy</button></div>
           )}
-          <label className="small"><input type="checkbox" checked={agentSettings} disabled={running} onChange={(e) => setAgentSettings(e.target.checked)} data-testid="setup-agent-settings" /> OpenCode settings
+          <label className="small"><input type="checkbox" checked={agentSettings} disabled={off} onChange={(e) => setAgentSettings(e.target.checked)} data-testid="setup-agent-settings" /> OpenCode settings
             {plan.agent_settings.source ? <> from <span className="mono">{plan.agent_settings.source}</span>, without keys and tokens</> : <span className="muted"> (this server has none)</span>}
           </label>
+          <RecipesSection machine={machine.name} running={running} refresh={job?.status} onJob={onJob} />
           <div className="row">
             {running
               ? <button className="btn small danger" onClick={() => void cancel()} data-testid="setup-cancel">Cancel</button>
-              : <button className="btn small primary" disabled={!tools.length && !sysPkgs && !agentSettings} onClick={() => void start()} data-testid="setup-start">Set up</button>}
+              : <button className="btn small primary" disabled={withTools && !tools.length && !sysPkgs && !agentSettings} onClick={() => void start()} data-testid="setup-start">{withTools ? "Set up machine" : "Run the recipes"}</button>}
             {job && <span className={`chip status ${job.status}`} data-testid="setup-status" data-status={job.status}>{JOB_TEXT[job.status] ?? job.status}</span>}
             {job?.error && job.status !== "running" && <span className="small error-text">{job.error}</span>}
           </div>
@@ -616,7 +798,7 @@ export function MachineDialog({ existing, machines, allowed, onClose, onSaved }:
         )}
         {kind === "machine" && (
           <label className="dev-field"><span className="label">Work folder on the machine</span>
-            <input value={workDir} onChange={(e) => setWorkDir(e.target.value)} placeholder="~/.cache/wiki-agent-workspace" className="mono" /></label>
+            <input value={workDir} onChange={(e) => setWorkDir(e.target.value)} placeholder="~/.cache/wiki-agent-workspace" className="mono" data-testid="machine-workdir" /></label>
         )}
         <label className="dev-field"><span className="label">Extra ssh options (one Name=value per line)</span>
           <textarea value={opts} onChange={(e) => setOpts(e.target.value)} rows={2} className="mono" placeholder="ServerAliveInterval=15" title={`Allowed: ${allowed.join(", ")}`} /></label>

@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 from ..config import DevHost
 from ..deps import AppContext, require_auth, require_auth_mutating
 from ..development.targets import LOCAL, LocalTarget, TargetError, target_for
-from ..errors import ApiError, bad_request
+from ..errors import ApiError, bad_request, not_found
 from ..kv import kv_get, kv_put
 from . import bootstrap, conn, envfwd, health, hostkeys, keys, probe
 from .registry import ALLOWED_OPTIONS, MachineRegistry, validate
@@ -59,6 +59,27 @@ class BootstrapIn(BaseModel):
     system_packages: bool = True
     agent_settings: bool = True
     update: bool = False  # install the latest release again over setup's own copies
+
+
+class SetupIn(BaseModel):
+    bootstrap: BootstrapIn | None = Field(default_factory=BootstrapIn)  # None: only the recipes
+    recipes: list[str] | None = Field(None, max_length=200)  # default: all assigned, in order
+    force: bool = False  # run recipes that succeeded before (unchanged) again
+
+
+class RecipeIn(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    run: str = Field(min_length=1, max_length=200_000)
+    check: str | None = Field(None, max_length=200_000)
+    env_out: str | None = Field(None, max_length=200_000)
+
+
+class RecipeImportIn(BaseModel):
+    folder: str = Field(min_length=1, max_length=4096)
+
+
+class AssignIn(BaseModel):
+    recipes: list[str] = Field(max_length=200)
 
 
 class TerminalIn(BaseModel):
@@ -110,6 +131,7 @@ async def update_machine(name: str, body: MachineIn, ctx: AppContext = Depends(r
 async def delete_machine(name: str, ctx: AppContext = Depends(require_auth_mutating)):
     _not_local(name)
     await reg(ctx).delete(name)
+    ctx.extra["recipes"].forget_machine(name)
     return {"ok": True}
 
 
@@ -181,6 +203,141 @@ async def bootstrap_machine(body: BootstrapIn, name: str, ctx: AppContext = Depe
 
     return ctx.extra["machine_jobs"].start(name, "bootstrap", f"Set up {name}", params, work,
                                            secrets=envfwd.secrets_for(h))
+
+
+@router.post("/machines/{name}/setup", status_code=202)
+async def setup_machine(body: SetupIn, name: str, ctx: AppContext = Depends(require_auth_mutating)):
+    """Set up machine: the app's tools (bootstrap, unless `bootstrap` is null), then its recipes in order (a machine
+    job; it stops at the first recipe that fails)."""
+    r = reg(ctx)
+    h = _setup_host(ctx, name)
+    rec = ctx.extra["recipes"]
+    if body.bootstrap is not None:
+        bad = [x for x in body.bootstrap.tools or [] if x not in bootstrap.APP_TOOLS]
+        if bad:
+            raise bad_request(f"unknown tools {bad}; choose from {list(bootstrap.APP_TOOLS)}", "INVALID_TOOLS")
+    assigned = {x["id"] for x in rec.for_machine(name)}
+    if body.recipes is not None and (missing := [x for x in body.recipes if x not in assigned]):
+        raise bad_request(f"not assigned to {name}: {missing}", "INVALID_RECIPES")
+    params = body.model_dump()
+    t = target_for(r.dev, name)
+    cache = ctx.settings.state_dir / "cache" / "tools"
+    jobs = ctx.extra["machine_jobs"]
+    holder: dict[str, str] = {}
+
+    async def work(jl):
+        out: dict[str, Any] = {}
+        if body.bootstrap is not None:
+            out["bootstrap"] = await bootstrap.run(t, h, body.bootstrap.model_dump(), jl, release_base=r.dev.release_base,
+                                                   cache=cache, save_probe=lambda caps: r.save_probe(name, caps))
+        out["recipes"] = await rec.run_all(t, name, jl, only=body.recipes, force=body.force, job_id=holder["id"])
+        return out
+
+    title = f"Set up {name}" if body.bootstrap is not None else (
+        f"Recipes on {name}" if body.recipes is None or len(body.recipes) != 1
+        else f"Recipe {next(x['name'] for x in rec.for_machine(name) if x['id'] == body.recipes[0])} on {name}")
+    j = jobs.start(name, "setup", title, params, work, secrets=envfwd.secrets_for(h))
+    holder["id"] = j["id"]
+    return j
+
+
+@router.get("/machines/{name}/recipes")
+def machine_recipes(name: str, ctx: AppContext = Depends(require_auth)):
+    reg(ctx).host(name)
+    return {"recipes": ctx.extra["recipes"].for_machine(name)}
+
+
+@router.put("/machines/{name}/recipes")
+async def assign_recipes(body: AssignIn, name: str, ctx: AppContext = Depends(require_auth_mutating)):
+    """The recipes of a machine, in order. Its env.sh is rewritten (best effort: also at the next setup)."""
+    r = reg(ctx)
+    _setup_host(ctx, name)
+    rec = ctx.extra["recipes"]
+    rec.assign(name, body.recipes)
+    warning = None
+    try:
+        await rec.write_env(target_for(r.dev, name), name)
+    except TargetError as exc:
+        warning = f"could not update the machine's env.sh now ({exc.message}); the next setup does"
+    return {"recipes": rec.for_machine(name), "warning": warning}
+
+
+@router.get("/recipes")
+def list_recipes(ctx: AppContext = Depends(require_auth)):
+    return {"recipes": ctx.extra["recipes"].list()}
+
+
+@router.post("/recipes", status_code=201)
+def create_recipe(body: RecipeIn, ctx: AppContext = Depends(require_auth_mutating)):
+    return ctx.extra["recipes"].create(body.model_dump())
+
+
+@router.put("/recipes/{recipe_id}")
+def update_recipe(recipe_id: str, body: RecipeIn, ctx: AppContext = Depends(require_auth_mutating)):
+    return ctx.extra["recipes"].update(recipe_id, body.model_dump())
+
+
+@router.delete("/recipes/{recipe_id}")
+def delete_recipe(recipe_id: str, ctx: AppContext = Depends(require_auth_mutating)):
+    ctx.extra["recipes"].delete(recipe_id)
+    return {"ok": True}
+
+
+@router.post("/recipes/import")
+def import_recipes(body: RecipeImportIn, ctx: AppContext = Depends(require_auth_mutating)):
+    """The *.sh files of a folder on this server (e.g. in a wiki, kept in Git) as recipes."""
+    return ctx.extra["recipes"].import_folder(body.folder)
+
+
+_LIST_DIRS = r'''p=$1; hidden=$2
+case "$p" in "~") p=$HOME;; "~/"*) p="$HOME/${p#"~/"}";; esac
+[ -e "$p" ] || { echo "@@notfound"; exit 0; }
+[ -d "$p" ] || { echo "@@notdir"; exit 0; }
+cd "$p" 2>/dev/null || { echo "@@denied"; exit 0; }
+pwd -P
+if [ -e .git ]; then echo git; else echo nogit; fi
+n=0
+for e in * .*; do
+  case "$e" in .|..) continue;; .*) [ "$hidden" = 1 ] || continue;; esac
+  [ -d "$e" ] || continue
+  if [ -e "$e/.git" ]; then g=1; else g=0; fi
+  printf '%s/%s\n' "$g" "$e"
+  n=$((n+1)); [ $n -ge 2000 ] && break
+done
+exit 0
+'''
+
+
+@router.get("/machines/{name}/fs/dirs")
+async def machine_dirs(name: str, path: str = "~", hidden: bool = False, ctx: AppContext = Depends(require_auth)):
+    """The folder picker on a machine: subfolders of a path there (same answer as /fs/dirs)."""
+    if name == LOCAL:
+        from ..workspaces import list_server_dirs
+
+        return list_server_dirs(path=path, hidden=hidden, ctx=ctx)
+    r = reg(ctx)
+    h = r.host(name)
+    if h.kind == "bastion":
+        raise bad_request("bastions are only passed through; browse the machines behind them", "MACHINE_IS_BASTION")
+    if not (path == "~" or path.startswith("~/") or path.startswith("/")):
+        raise bad_request("absolute path required", "INVALID_PATH")
+    t = target_for(r.dev, name)
+    rc, out, err = await t.run(["sh", "-c", _LIST_DIRS, "_", path, "1" if hidden else "0"], timeout=30)
+    if rc != 0:
+        raise ApiError(502 if rc == 255 else 400, "DEV_HOST_FAILED", f"cannot list {path} on {name}: {err.strip()[:300]}")
+    lines = out.split("\n")
+    if lines[0] == "@@notfound":
+        raise not_found(f"{path} does not exist on {name}", "FOLDER_NOT_FOUND")
+    if lines[0] == "@@notdir":
+        raise bad_request(f"{path} is not a directory on {name}", "NOT_A_DIRECTORY")
+    if lines[0] == "@@denied":
+        raise ApiError(403, "PERMISSION_DENIED", f"cannot list {path} on {name}")
+    p = lines[0]
+    entries = sorted(({"name": ln[2:], "path": f"{p.rstrip('/')}/{ln[2:]}", "is_git": ln[0] == "1"}
+                      for ln in lines[2:] if len(ln) > 2 and ln[1] == "/"), key=lambda e: e["name"].lower())
+    parent = (p.rsplit("/", 1)[0] or "/") if p != "/" else None
+    return {"path": p, "parent": parent, "is_git": lines[1] == "git", "open_as": None, "entries": entries[:500],
+            "listed_at": datetime.now(timezone.utc).isoformat()}
 
 
 @router.get("/machines/{name}/jobs")
