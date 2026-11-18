@@ -26,9 +26,15 @@ async function login(page: Page) {
   }
 }
 
+// LibreOffice is optional (docs/DEPLOYMENT.md); like tests/backend/test_office.py, its layout checks are skipped without it
+function hasSoffice(): boolean {
+  const cp = require("child_process") as typeof import("child_process");
+  return ["soffice", "libreoffice"].some((b) => cp.spawnSync("sh", ["-c", `command -v ${b}`]).status === 0);
+}
+
 async function openGuide(page: Page) {
   const dir = page.locator(".tree-row.dir", { hasText: "docs" });
-  if ((await page.getByTestId("tree-file-docs/guide.md").count()) === 0) await dir.click();
+  if ((await page.getByTestId("tree-file-docs/guide.md").count()) === 0) await dir.locator(".chev").click();
   await page.getByTestId("tree-file-docs/guide.md").click();
   await expect(page.getByTestId("markdown-body").locator("h1")).toContainText("Guide");
 }
@@ -274,7 +280,7 @@ test("D13: script tags and unsafe URLs are neutralized in rendered Markdown", as
   await page.reload();
   await page.getByTestId("tree-refresh").click();
   const dir = page.locator(".tree-row.dir", { hasText: "docs" });
-  if ((await page.getByTestId("tree-file-docs/evil.md").count()) === 0) await dir.click();
+  if ((await page.getByTestId("tree-file-docs/evil.md").count()) === 0) await dir.locator(".chev").click();
   await page.getByTestId("tree-file-docs/evil.md").click();
   await expect(page.getByTestId("markdown-body").locator("h1")).toHaveText("Evil");
   expect(await page.evaluate(() => (window as any).pwned)).toBeUndefined();
@@ -292,7 +298,7 @@ test("links to sections jump within the document and across documents", async ({
   fs.writeFileSync(path.join(ws, "docs", "long.md"), long.join("\n"));
   await page.getByTestId("tree-refresh").click();
   const dir = page.locator(".tree-row.dir", { hasText: "docs" });
-  if ((await page.getByTestId("tree-file-docs/long.md").count()) === 0) await dir.click();
+  if ((await page.getByTestId("tree-file-docs/long.md").count()) === 0) await dir.locator(".chev").click();
   await page.getByTestId("tree-file-docs/long.md").click();
   await expect(page.getByTestId("markdown-body").locator("h1")).toHaveText("Long");
   const target = page.locator('[id="44-target-section--details"]');
@@ -571,7 +577,7 @@ test("file tree shows distinct icons per kind; binary entries are not openable, 
   try { fs.symlinkSync("guide.md", path.join(ws, "docs", "alias.md")); } catch { /* exists */ }
   await page.getByTestId("tree-refresh").click();
   const dir = page.locator(".tree-row.dir", { hasText: "docs" });
-  if ((await page.getByTestId("tree-file-docs/guide.md").count()) === 0) await dir.click();
+  if ((await page.getByTestId("tree-file-docs/guide.md").count()) === 0) await dir.locator(".chev").click();
   await expect(page.getByTestId("tree-file-docs/diagram.png")).toHaveAttribute("data-kind", "image");
   await expect(page.getByTestId("tree-file-docs/tool.py")).toHaveAttribute("data-kind", "code");
   await expect(page.getByTestId("tree-file-docs/config-with-a-very-long-name-that-hides-the-extension.json")).toHaveAttribute("data-kind", "data");
@@ -940,7 +946,7 @@ test("multi-root window: add a folder, work in both wikis, Recent across folders
   await expect(page.getByTestId("workspace-switch")).toHaveValue(/.+/);
   // open the second wiki's docs/guide.md (same relative path as in the first wiki)
   const secondRoot = page.getByTestId("tree-root").nth(1);
-  await secondRoot.locator(".tree-row.dir", { hasText: "docs" }).click();
+  await secondRoot.locator(".tree-row.dir", { hasText: "docs" }).locator(".chev").click();
   await secondRoot.getByTestId("tree-file-Second:docs/guide.md").locator("button.tree-main").click();
   await expect(page.getByTestId("markdown-body").locator("h1")).toHaveText("Second guide");
   // a discussion here stays in this wiki
@@ -952,7 +958,7 @@ test("multi-root window: add a folder, work in both wikis, Recent across folders
   const firstId = await page.getByTestId("tree-root").nth(0).getAttribute("data-ws");
   await page.getByTestId("workspace-switch").selectOption(firstId!);
   const firstRoot = page.getByTestId("tree-root").nth(0);
-  if ((await page.getByTestId("tree-file-docs/guide.md").count()) === 0) await firstRoot.locator(".tree-row.dir", { hasText: "docs" }).first().click();
+  if ((await page.getByTestId("tree-file-docs/guide.md").count()) === 0) await firstRoot.locator(".tree-row.dir", { hasText: "docs" }).first().locator(".chev").click();
   await page.getByTestId("tree-file-docs/guide.md").locator("button.tree-main").click();
   await expect(page.getByTestId("markdown-body").locator("h1")).toContainText("Guide");
   await expect(page.locator(".thread-item", { hasText: "only here?" })).toHaveCount(0);
@@ -997,7 +1003,7 @@ test("edit a file directly: save with Ctrl+S, preview, conflict handling, lock, 
   fs.writeFileSync(file, "# Edit me\n\nfirst paragraph\n");
   await page.getByTestId("tree-refresh").click();
   const dir = page.getByTestId("tree-root").first().locator(".tree-row.dir", { hasText: "docs" }).first();
-  if ((await page.getByTestId("tree-file-docs/editme.md").count()) === 0) await dir.click();
+  if ((await page.getByTestId("tree-file-docs/editme.md").count()) === 0) await dir.locator(".chev").click();
   await page.getByTestId("tree-file-docs/editme.md").locator("button.tree-main").click();
   await expect(page.getByTestId("markdown-body").locator("h1")).toHaveText("Edit me");
   // edit + Ctrl+S
@@ -1058,6 +1064,9 @@ test("terminal: send browser-reserved keys (Ctrl+T, Ctrl+W) via the Keys menu an
   await page.getByTestId("term-key-ctrl-t").click();
   await page.getByTestId("term-key-ctrl-w").click();
   await page.getByTestId("term-key-esc").click();
+  // let the lone Esc arrive first: within tmux's escape-time, the focus report of the next click (ESC [ O) would be
+  // read together with it as one Meta key
+  await expect(view.locator(".xterm-rows")).toContainText("^T^W^[", { timeout: 10000 });
   await page.getByTestId("term-keys").click(); // close menu
   // sticky Ctrl: arm it, then type a letter
   await page.getByTestId("term-sticky-ctrl").click();
@@ -1093,7 +1102,7 @@ prs.save(${JSON.stringify(path.join(ws, "docs", "roadmap.pptx"))})
 `]);
   await page.getByTestId("tree-refresh").click();
   const dir = page.getByTestId("tree-root").first().locator(".tree-row.dir", { hasText: "docs" }).first();
-  if ((await page.getByTestId("tree-file-docs/roadmap.pptx").count()) === 0) await dir.click();
+  if ((await page.getByTestId("tree-file-docs/roadmap.pptx").count()) === 0) await dir.locator(".chev").click();
   await expect(page.getByTestId("tree-file-docs/roadmap.pptx")).toHaveAttribute("data-kind", "slides");
   await page.getByTestId("tree-file-docs/roadmap.pptx").locator("button.tree-main").click();
   await page.getByTestId("office-view-text").click(); // Layout (original slides) is the default; slides as text here
@@ -1194,7 +1203,7 @@ test("file tree: only the list scrolls; the header with ＋ and ↻ stays in pla
   try {
     await page.getByTestId("tree-refresh").click();
     const root = page.getByTestId("tree-root").first();
-    await root.locator(".tree-row.dir", { hasText: "many" }).first().click();
+    await root.locator(".tree-row.dir", { hasText: "many" }).first().locator(".chev").click();
     await expect(page.getByTestId("tree-file-many/note-79.md")).toBeAttached();
     const body = page.locator(".tree-body");
     const header = page.locator(".tree-header");
@@ -1316,7 +1325,7 @@ test("document tabs: open several, switch, close (× / middle-click), unsaved-ed
       const dir = p.includes("/") ? p.slice(0, p.indexOf("/")) : null;
       if (dir) {
         const row = page.getByTestId("tree-root").first().locator(".tree-row.dir", { hasText: dir }).first();
-        if ((await row.locator(".chev").textContent()) === "›") await row.click(); // expand only if collapsed
+        if ((await row.locator(".chev").textContent()) === "›") await row.locator(".chev").click(); // expand only if collapsed
       }
       await page.getByTestId(`tree-file-${p}`).locator("button.tree-main").click();
     };
@@ -1488,9 +1497,10 @@ test("site icon: favicon (SVG + ICO), apple-touch icon and manifest are served",
 });
 
 test("Office layout view: a .pptx opens in its original layout (LibreOffice → PDF); Text and Ask switch to the text", async ({ page }) => {
+  const cp = require("child_process") as typeof import("child_process");
+  test.skip(!hasSoffice(), "LibreOffice not installed");
   await login(page);
   const ws = workspaceDir();
-  const cp = require("child_process") as typeof import("child_process");
   const py = path.resolve(__dirname, "../../.venv/bin/python");
   cp.execFileSync(py, ["-c", `
 from pptx import Presentation
@@ -1503,7 +1513,7 @@ prs.save(${JSON.stringify(path.join(ws, "docs", "layout-deck.pptx"))})
   try {
     await page.getByTestId("tree-refresh").click();
     const dir = page.getByTestId("tree-root").first().locator(".tree-row.dir", { hasText: "docs" }).first();
-    if ((await page.getByTestId("tree-file-docs/layout-deck.pptx").count()) === 0) await dir.click();
+    if ((await page.getByTestId("tree-file-docs/layout-deck.pptx").count()) === 0) await dir.locator(".chev").click();
     await page.getByTestId("tree-file-docs/layout-deck.pptx").locator("button.tree-main").click();
     const view = page.getByTestId("office-view");
     await expect(page.getByTestId("office-view-layout")).toHaveAttribute("aria-selected", "true"); // default
@@ -1545,7 +1555,7 @@ make_vsdx(Path(${JSON.stringify(path.join(ws, "docs", "flow.vsdx"))}))
   try {
     await page.getByTestId("tree-refresh").click();
     const dir = page.getByTestId("tree-root").first().locator(".tree-row.dir", { hasText: "docs" }).first();
-    if ((await page.getByTestId("tree-file-docs/flow.vsdx").count()) === 0) await dir.click();
+    if ((await page.getByTestId("tree-file-docs/flow.vsdx").count()) === 0) await dir.locator(".chev").click();
     await expect(page.getByTestId("tree-file-docs/flow.vsdx")).toHaveAttribute("data-kind", "diagram");
     await page.getByTestId("tree-file-docs/flow.vsdx").locator("button.tree-main").click();
     await expect(page.locator(".doc-meta .chip").first()).toHaveText("VISIO");
@@ -1775,7 +1785,7 @@ test("ask directly in the discussion panel about the open document, incl. an ima
     await page.getByTestId("tree-refresh").click();
     await expect(page.getByTestId("tree-refresh")).toHaveAttribute("data-spinning", "false");
     const dir = page.getByTestId("tree-root").first().locator(".tree-row.dir", { hasText: "docs" }).first();
-    if ((await page.getByTestId("tree-file-docs/pixel.png").count()) === 0) await dir.click();
+    if ((await page.getByTestId("tree-file-docs/pixel.png").count()) === 0) await dir.locator(".chev").click();
     await expect(page.getByTestId("tree-file-docs/pixel.png")).toHaveAttribute("data-kind", "image");
     await page.getByTestId("tree-file-docs/pixel.png").locator("button.tree-main").click();
     // the image is shown, and loads
@@ -1837,7 +1847,7 @@ test("PDF (PDF.js): ask about selected text, a whole page, an area — pictures 
     await page.getByTestId("tree-refresh").click();
     await expect(page.getByTestId("tree-refresh")).toHaveAttribute("data-spinning", "false");
     const dir = page.getByTestId("tree-root").first().locator(".tree-row.dir", { hasText: "docs" }).first();
-    if ((await page.getByTestId("tree-file-docs/spec.pdf").count()) === 0) await dir.click();
+    if ((await page.getByTestId("tree-file-docs/spec.pdf").count()) === 0) await dir.locator(".chev").click();
     await page.getByTestId("tree-file-docs/spec.pdf").locator("button.tree-main").click();
     const viewer = page.getByTestId("pdfjs-view");
     await expect(viewer).toHaveAttribute("data-pages", "2", { timeout: 20000 });
@@ -1906,23 +1916,25 @@ prs.save(${JSON.stringify(deck)})
     await page.getByTestId("tree-refresh").click();
     await expect(page.getByTestId("tree-refresh")).toHaveAttribute("data-spinning", "false");
     const dir = page.getByTestId("tree-root").first().locator(".tree-row.dir", { hasText: "docs" }).first();
-    if ((await page.getByTestId("tree-file-docs/pics.pptx").count()) === 0) await dir.click();
+    if ((await page.getByTestId("tree-file-docs/pics.pptx").count()) === 0) await dir.locator(".chev").click();
     await page.getByTestId("tree-file-docs/pics.pptx").locator("button.tree-main").click();
     if ((await page.getByTestId("mode-individual").count()) > 0) await page.getByTestId("mode-individual").click();
-    // Layout: the rendered slides, with a per-slide question
-    await page.getByTestId("office-view-layout").click();
-    const viewer = page.getByTestId("office-pdf");
-    await expect(viewer).toHaveAttribute("data-pages", "2", { timeout: 60000 });
-    const s2 = viewer.locator('[data-page="2"]');
-    await s2.scrollIntoViewIfNeeded();
-    await expect(s2).toHaveAttribute("data-rendered", "true", { timeout: 15000 });
-    await expect(s2.getByTestId("pdfjs-ask-page")).toHaveText("Ask about this slide");
-    await s2.getByTestId("pdfjs-ask-page").click();
-    await expect(page.locator(".sel-head")).toContainText("Ask about slide 2");
-    await page.getByTestId("selection-question").fill("Is this plan realistic?");
-    await page.getByTestId("selection-send").click();
-    await expect(page.locator('[data-testid="message-agent"][data-status="completed"]').last()).toContainText("Is this plan realistic?", { timeout: 20000 });
-    await expect(page.getByTestId("thread-target")).toContainText("Slide 2");
+    if (hasSoffice()) {
+      // Layout: the rendered slides, with a per-slide question
+      await page.getByTestId("office-view-layout").click();
+      const viewer = page.getByTestId("office-pdf");
+      await expect(viewer).toHaveAttribute("data-pages", "2", { timeout: 60000 });
+      const s2 = viewer.locator('[data-page="2"]');
+      await s2.scrollIntoViewIfNeeded();
+      await expect(s2).toHaveAttribute("data-rendered", "true", { timeout: 15000 });
+      await expect(s2.getByTestId("pdfjs-ask-page")).toHaveText("Ask about this slide");
+      await s2.getByTestId("pdfjs-ask-page").click();
+      await expect(page.locator(".sel-head")).toContainText("Ask about slide 2");
+      await page.getByTestId("selection-question").fill("Is this plan realistic?");
+      await page.getByTestId("selection-send").click();
+      await expect(page.locator('[data-testid="message-agent"][data-status="completed"]').last()).toContainText("Is this plan realistic?", { timeout: 20000 });
+      await expect(page.getByTestId("thread-target")).toContainText("Slide 2");
+    }
     // Text view: a whole slide (anchored on its text) and a picture
     await page.getByTestId("office-view-text").click();
     const body = page.getByTestId("markdown-body");
@@ -2741,7 +2753,7 @@ test("diff line numbers are those of the files (Markdown '---' rules, no final n
     await page.getByTestId("tree-refresh").click();
     await expect(page.getByTestId("tree-refresh")).toHaveAttribute("data-spinning", "false");
     const dir = page.getByTestId("tree-root").first().locator(".tree-row.dir", { hasText: "docs" }).first();
-    if ((await page.getByTestId("tree-file-docs/numbers.md").count()) === 0) await dir.click();
+    if ((await page.getByTestId("tree-file-docs/numbers.md").count()) === 0) await dir.locator(".chev").click();
     await page.getByTestId("tree-file-docs/numbers.md").locator("button.tree-main").click();
     await expect(page.getByTestId("markdown-body").locator("h1")).toHaveText("Numbers"); // opened
     await page.getByTestId("view-diff").click();

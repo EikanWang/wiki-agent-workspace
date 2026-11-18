@@ -598,6 +598,8 @@ export default function App() {
       await refreshThreads(doc.document_id);
       const d = await get<OpenDocument>(`/documents/open?path=${encodeURIComponent(doc.path)}`);
       setDoc((cur) => (cur ? { ...cur, default_session_id: d.default_session_id } : cur));
+      // a fast agent may have edited the file already: this open recorded that version, so the watcher will not announce it
+      if (d.sha256 !== doc.sha256 && !ownSaves.current.has(d.sha256)) setChanged({ sha256: d.sha256 });
       void refreshSessions();
       setActiveThread(r.thread_id);
       setLiveJobId(r.job_id);
