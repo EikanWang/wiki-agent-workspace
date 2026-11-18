@@ -65,7 +65,7 @@ def pr_key(repo: str, number: int) -> str:
 
 def status() -> dict[str, Any]:
     """For the Reviews list: what waits, what runs, what failed (with why)."""
-    return {"queued": list(_queue), "running": dict(_running), "failed": dict(_failed), "concurrency": CONCURRENCY, **_state}
+    return {"queued": list(_queue), "running": dict(_running), "failed": dict(_failed), "concurrency": CONCURRENCY, "max_prs": MAX_PRS, **_state}
 
 
 class BatchPr(BaseModel):

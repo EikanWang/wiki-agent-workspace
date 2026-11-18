@@ -286,7 +286,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.exception_handler(RequestValidationError)
     async def _validation(_: Request, exc: RequestValidationError):
-        return JSONResponse(status_code=400, content={"error": {"code": "VALIDATION_ERROR", "message": "malformed request",
+        errs = exc.errors()
+        first = errs[0] if errs else {}
+        where = ".".join(str(x) for x in first.get("loc", ()) if x not in ("body", "query", "path"))
+        msg = f"malformed request: {where + ': ' if where else ''}{first.get('msg', '')}".rstrip(": ") if first else "malformed request"
+        return JSONResponse(status_code=400, content={"error": {"code": "VALIDATION_ERROR", "message": msg,
                                                                 "details": {"errors": json.loads(json.dumps(exc.errors(), default=str))}}})
 
     api = APIRouter(prefix="/api/v1")

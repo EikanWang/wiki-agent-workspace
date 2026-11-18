@@ -127,6 +127,10 @@ async def test_batch_review_failures_are_reported_per_pr(running_app, workspace,
     assert (await api.post("/api/v1/github/batch-review", json={"prs": [{"repo": "a/b", "number": 1}], "workspace_id": "nope"})).status_code == 400
     assert (await api.post("/api/v1/github/batch-review", json={"prs": [{"repo": "a/b/c", "number": 1}]})).status_code == 400
     assert (await api.post("/api/v1/github/batch-review", json={"prs": []})).status_code == 400
+    # more than one request takes (the UI sends a big selection in parts): the message says which limit
+    too_many = await api.post("/api/v1/github/batch-review", json={"prs": [{"repo": "a/b", "number": i} for i in range(1, batch_review.MAX_PRS + 2)]})
+    assert too_many.status_code == 400 and "prs" in too_many.json()["error"]["message"], too_many.json()
+    assert batch_review.status()["max_prs"] == batch_review.MAX_PRS
     as_github(h, "someone-else")
     assert (await api.post("/api/v1/github/batch-review", json={"prs": [{"repo": "a/b", "number": 1}]})).status_code == 403
 

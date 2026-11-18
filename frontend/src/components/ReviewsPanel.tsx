@@ -132,6 +132,7 @@ export interface BatchStatus {
   running: Record<string, "preparing" | "reviewing">;
   failed: Record<string, { error: string; code?: string | null; at: string }>;
   concurrency: number;
+  max_prs?: number;
 }
 const prKey = (p: { repo: string; number: number }) => `${p.repo}#${p.number}`.toLowerCase();
 
@@ -275,7 +276,14 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
     setStarting(true);
     setBatchNote(null);
     try {
-      const r = await post<{ queued: string[]; skipped: { pr: string; reason: string }[] }>("/github/batch-review", { prs });
+      // the server takes at most max_prs per request: a big selection goes in parts, queued in order
+      const r: { queued: string[]; skipped: { pr: string; reason: string }[] } = { queued: [], skipped: [] };
+      const per = batch?.max_prs ?? 50;
+      for (let i = 0; i < prs.length; i += per) {
+        const part = await post<typeof r>("/github/batch-review", { prs: prs.slice(i, i + per) });
+        r.queued.push(...part.queued);
+        r.skipped.push(...part.skipped);
+      }
       const skipped = r.skipped.length ? ` · skipped ${r.skipped.length}: ${r.skipped.map((x) => `${x.pr} (${x.reason})`).join(", ")}` : "";
       setBatchNote({ text: `🤖 Agent review started for ${r.queued.length} PR(s)${r.queued.length > (batch?.concurrency ?? 2) ? `, ${batch?.concurrency ?? 2} at a time` : ""}${skipped}. Open a PR to apply or discard its suggestions.` });
       setSelected(new Map());
