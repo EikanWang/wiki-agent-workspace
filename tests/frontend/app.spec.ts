@@ -4076,6 +4076,19 @@ test("Machines: add a bastion and a machine behind it, check hop by hop, trust h
   await page.getByTestId("machine-probe").click();
   await expect(page.getByTestId("machine-tools")).toContainText("git");
   await expect(page.getByTestId("machine-caps")).toContainText("CPU");
+  // environment: nothing by default; forward the proxy and one variable
+  await expect(page.getByTestId("machine-env-summary")).toContainText("Nothing");
+  await page.getByTestId("machine-env-edit").click();
+  await page.getByTestId("machine-env-proxy").check();
+  await page.getByTestId("machine-env-vars").fill("AWS_BEARER_TOKEN_BEDROCK");
+  await page.getByTestId("machine-env-save").click();
+  await expect(page.getByTestId("machine-env-summary")).toContainText("this server's proxy");
+  await expect(page.getByTestId("machine-env-summary")).toContainText("AWS_BEARER_TOKEN_BEDROCK");
+  // set up: the plan from the probe, one row per tool
+  await page.getByTestId("machine-setup-btn").click();
+  await expect(page.getByTestId("setup-tool")).toHaveCount(4);
+  await expect(page.getByTestId("setup-tool-codex")).not.toBeChecked();
+  await expect(page.getByTestId("setup-start")).toBeEnabled();
   // a terminal there
   await page.getByTestId("machine-terminal").click();
   await expect(page.getByTestId("terminals-panel")).toBeVisible();

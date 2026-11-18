@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -430,8 +431,11 @@ async def put_file_session(dev_id: str, body: FileSessionIn, ctx: AppContext = D
             raise ApiError(503, "PROVIDER_UNAVAILABLE", "no default agent provider configured")
         cur = file_session(ctx, dev_id, body.root, body.file)
         ss = SessionService(ctx)
-        sess = await ss.create_for_provider(provider, f"Dev: {row.name} · {body.file.split('/')[-1]}",
-                                            inherit_from=ss.get(cur) if cur else None)
+        from ..sessions import on_machine
+
+        with on_machine(row.host != "local"):
+            sess = await ss.create_for_provider(provider, f"Dev: {row.name} · {body.file.split('/')[-1]}",
+                                                inherit_from=ss.get(cur) if cur else None)
         sid = sess.id
     elif sid:
         SessionService(ctx).get(sid)  # 404 if unknown
@@ -443,7 +447,10 @@ async def put_file_session(dev_id: str, body: FileSessionIn, ctx: AppContext = D
 
 @router.post("/dev/workspaces/{dev_id}/ask", status_code=201)
 async def ask_route(dev_id: str, body: AskIn, ctx: AppContext = Depends(require_auth_mutating)):
-    return await ask(ctx, dev_id, body)
+    from ..sessions import on_machine
+
+    with on_machine(_svc(ctx).get(dev_id).host != "local"):
+        return await ask(ctx, dev_id, body)
 
 
 @router.get("/dev/workspaces/{dev_id}/conversation")
@@ -506,7 +513,10 @@ async def draft(dev_id: str, what: str = Query(pattern="^(commit|pr)$"), body: D
         provider = ctx.providers.default_provider() if ctx.providers else None
         if not provider:
             raise ApiError(503, "PROVIDER_UNAVAILABLE", "no default agent provider configured")
-        session_id = (await sess_svc.create_for_provider(provider, f"Dev drafts: {row.name}")).id
+        from ..sessions import on_machine
+
+        with on_machine(row.host != "local"):
+            session_id = (await sess_svc.create_for_provider(provider, f"Dev drafts: {row.name}")).id
     from .agent import dev_turn
 
     _, extra = await dev_turn(ctx, row, question="draft", kind="ask", context=None, prior=None)
@@ -884,7 +894,7 @@ def dev_terminals(dev_id: str, ctx: AppContext = Depends(require_auth)):
 
 
 @router.post("/dev/workspaces/{dev_id}/terminals", status_code=201)
-def dev_terminal_create(dev_id: str, ctx: AppContext = Depends(require_auth_mutating)):
+async def dev_terminal_create(dev_id: str, ctx: AppContext = Depends(require_auth_mutating)):
     """A new shell in the worktree: on this server, or an ssh login on the workspace's host that starts there."""
     from pathlib import Path as _P
 
@@ -896,14 +906,22 @@ def dev_terminal_create(dev_id: str, ctx: AppContext = Depends(require_auth_muta
     n = len(dev_terminals(dev_id, ctx)["terminals"]) + 1
     label = f"{row.name[:30]}{f' {n}' if n > 1 else ''}"
     if t.is_local:
-        term = ctx.terminals.create(row.worktree_path, label)
-    elif ctx.terminals.remote_ready(t.name):  # in the host's own tmux: survives disconnects and restarts
-        term = ctx.terminals.create_remote(t.name, row.worktree_path, f"{label} ({t.name})")
+        term = await asyncio.to_thread(ctx.terminals.create, row.worktree_path, label)
+    elif await asyncio.to_thread(ctx.terminals.remote_ready, t.name):  # in the host's own tmux: survives disconnects and restarts
+        term = await asyncio.to_thread(ctx.terminals.create_remote, t.name, row.worktree_path, f"{label} ({t.name})")
     else:
-        argv, _, _ = t.spawn_argv(["sh", "-c", 'exec "${SHELL:-sh}" -l'], row.worktree_path, None, ssh_opts=["-tt"])
+        from ..machines import envfwd
+        from .targets import TargetError
+
+        try:
+            env_file = await envfwd.push(t)
+        except TargetError as exc:
+            raise ApiError(502 if exc.code == "DEV_HOST_UNREACHABLE" else 400, exc.code, exc.message)
+        argv, _, _ = t.spawn_argv(["sh", "-c", 'exec "${SHELL:-sh}" -l'], row.worktree_path, None, ssh_opts=["-tt"],
+                                  env_file=env_file)
         # the remote login shell starts in the worktree; tmux runs the ssh command (shell-quoted argv)
         assert all(isinstance(a, str) for a in argv)
-        term = ctx.terminals.create(str(_P.home()), f"{label} ({t.name})", command=argv)
+        term = await asyncio.to_thread(ctx.terminals.create, str(_P.home()), f"{label} ({t.name})", command=argv)
     ids = [i for i in kv_get(ctx, _dev_terms_key(dev_id), []) if isinstance(i, str)] + [term["id"]]
     kv_put(ctx, _dev_terms_key(dev_id), ids[-20:])
     return term

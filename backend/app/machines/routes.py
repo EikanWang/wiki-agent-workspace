@@ -17,7 +17,7 @@ from ..deps import AppContext, require_auth, require_auth_mutating
 from ..development.targets import LOCAL, LocalTarget, TargetError, target_for
 from ..errors import ApiError, bad_request
 from ..kv import kv_get, kv_put
-from . import conn, health, hostkeys, keys, probe
+from . import bootstrap, conn, envfwd, health, hostkeys, keys, probe
 from .registry import ALLOWED_OPTIONS, MachineRegistry, validate
 
 router = APIRouter()
@@ -41,6 +41,7 @@ class MachineIn(BaseModel):
     code_server: str | None = Field(None, max_length=4096)
     opencode: str | None = Field(None, max_length=4096)
     codex: str | None = Field(None, max_length=4096)
+    env: dict[str, Any] | None = None  # {forward_env, env_vars, forward_proxy, ca_bundle}
 
 
 class TrustIn(BaseModel):
@@ -51,6 +52,13 @@ class TrustIn(BaseModel):
 class InstallKeyIn(BaseModel):
     hop: str | None = Field(None, max_length=63)  # default: the machine itself
     public_key_file: str | None = Field(None, max_length=4096)  # default: the first key of ~/.ssh (ed25519 first)
+
+
+class BootstrapIn(BaseModel):
+    tools: list[str] | None = Field(None, max_length=8)  # default: opencode, code-server and gh where missing
+    system_packages: bool = True
+    agent_settings: bool = True
+    update: bool = False  # install the latest release again over setup's own copies
 
 
 class TerminalIn(BaseModel):
@@ -136,6 +144,60 @@ async def probe_machine(name: str, ctx: AppContext = Depends(require_auth_mutati
     return caps
 
 
+def _setup_host(ctx: AppContext, name: str) -> DevHost:
+    _not_local(name)
+    h = reg(ctx).host(name)
+    if h.kind == "bastion":
+        raise bad_request("bastions are only passed through; set up the machines behind them", "MACHINE_IS_BASTION")
+    return h
+
+
+@router.get("/machines/{name}/bootstrap")
+def bootstrap_plan(name: str, ctx: AppContext = Depends(require_auth)):
+    """What setup would do, from the last probe."""
+    r = reg(ctx)
+    h = _setup_host(ctx, name)
+    caps = r.to_dict(r.row(name)).get("capabilities")
+    jobs = ctx.extra["machine_jobs"]
+    running = jobs.running(name)
+    return {**bootstrap.plan(h, caps, r.dev.release_base), "running": running.id if running else None}
+
+
+@router.post("/machines/{name}/bootstrap", status_code=202)
+async def bootstrap_machine(body: BootstrapIn, name: str, ctx: AppContext = Depends(require_auth_mutating)):
+    """Start setup (a machine job; follow its log)."""
+    r = reg(ctx)
+    h = _setup_host(ctx, name)
+    bad = [x for x in body.tools or [] if x not in bootstrap.APP_TOOLS]
+    if bad:
+        raise bad_request(f"unknown tools {bad}; choose from {list(bootstrap.APP_TOOLS)}", "INVALID_TOOLS")
+    params = body.model_dump()
+    t = target_for(r.dev, name)
+    cache = ctx.settings.state_dir / "cache" / "tools"
+
+    async def work(jl):
+        return await bootstrap.run(t, h, params, jl, release_base=r.dev.release_base, cache=cache,
+                                   save_probe=lambda caps: r.save_probe(name, caps))
+
+    return ctx.extra["machine_jobs"].start(name, "bootstrap", f"Set up {name}", params, work,
+                                           secrets=envfwd.secrets_for(h))
+
+
+@router.get("/machines/{name}/jobs")
+def machine_jobs(name: str, ctx: AppContext = Depends(require_auth)):
+    return {"jobs": ctx.extra["machine_jobs"].list(name)}
+
+
+@router.get("/machine-jobs/{job_id}/log")
+def machine_job_log(job_id: str, offset: int = 0, ctx: AppContext = Depends(require_auth)):
+    return ctx.extra["machine_jobs"].read_log(job_id, offset)
+
+
+@router.post("/machine-jobs/{job_id}/cancel")
+async def machine_job_cancel(job_id: str, ctx: AppContext = Depends(require_auth_mutating)):
+    return await ctx.extra["machine_jobs"].cancel(job_id)
+
+
 @router.get("/machines/{name}/hostkeys")
 async def machine_hostkeys(name: str, ctx: AppContext = Depends(require_auth)):
     _not_local(name)
@@ -212,7 +274,11 @@ async def open_terminal(ctx: AppContext, name: str, cwd: str | None, label: str 
     if await asyncio.to_thread(ctx.terminals.remote_ready, name):  # in the machine's own tmux: survives disconnects
         return await asyncio.to_thread(ctx.terminals.create_remote, name, path, label or name)
     # no tmux there: the ssh login runs in this server's tmux (it ends with the connection)
-    argv, _, _ = t.spawn_argv(["sh", "-c", 'exec "${SHELL:-sh}" -l'], path, None, ssh_opts=["-tt"])
+    try:
+        env_file = await envfwd.push(t)
+    except TargetError as exc:
+        raise ApiError(502 if exc.code == "DEV_HOST_UNREACHABLE" else 400, exc.code, exc.message)
+    argv, _, _ = t.spawn_argv(["sh", "-c", 'exec "${SHELL:-sh}" -l'], path, None, ssh_opts=["-tt"], env_file=env_file)
     return await asyncio.to_thread(ctx.terminals.create, str(Path.home()), label or name, argv)
 
 

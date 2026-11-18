@@ -185,9 +185,9 @@ class OpenCodeCliAdapter(AgentAdapter):
         return None
 
     async def resume_turn(self, ctx: TurnContext) -> TurnHandle:
-        if not self.exe:
+        if not self.exe and ctx.remote is None:  # on a machine its own opencode runs (RemoteExec.bins)
             raise ProviderError("PROVIDER_UNAVAILABLE", "opencode executable not found")
-        args = [self.exe, "run", "--format", "json", "--dir", str(ctx.cwd or ctx.workspace)]
+        args = [self.exe or "opencode", "run", "--format", "json", "--dir", str(ctx.cwd or ctx.workspace)]
         if ctx.native_session_id:
             args += ["--session", ctx.native_session_id]
         elif ctx.title:

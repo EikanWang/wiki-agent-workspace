@@ -304,7 +304,7 @@ async def dev_turn(ctx: AppContext, row: DevWorkspace, *, question: str, kind: s
             skill_map = await sync_skills(ctx, row)
         except (ApiError, TargetError):
             skill_map = {}
-        extra["_remote"] = {"ssh_prefix": rex.ssh_prefix, "bins": rex.bins, "cwd": rex.cwd,
+        extra["_remote"] = {"ssh_prefix": rex.ssh_prefix, "bins": rex.bins, "cwd": rex.cwd, "machine": t.name, "pre": rex.pre,
                             "skill_map": skill_map, "skill_dirs": list(skill_map.values())}
     prompt = build_dev_prompt(row=row, host_label=t.label(), wiki=wiki, question=question, kind=kind if kind in KINDS else "ask",
                               context=context, prior=prior)

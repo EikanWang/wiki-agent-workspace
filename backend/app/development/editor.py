@@ -382,7 +382,15 @@ class EditorManager:
         args = [exe, "--config", dirs["config"], "--vscode-option", f"shared-data-dir={dirs['shared']}", "--socket", sock, "--socket-mode", "600", "--auth", "none", "--disable-telemetry", "--disable-update-check",
                 "--disable-workspace-trust", "--disable-getting-started-override", "--user-data-dir", dirs["data"],
                 "--extensions-dir", dirs["ext"], ws_file]
-        argv, lcwd, lenv = t.spawn_argv(args, row.worktree_path, env, ssh_opts=ssh_opts)
+        env_file = None
+        if not t.is_local:  # the token (and forwarded variables) in a 0600 file there, not on the command line
+            from ..machines import envfwd
+
+            f = envfwd.collect(t.host)
+            f.env.update(env)
+            env_file = await envfwd.push(t, f)
+            env = {}
+        argv, lcwd, lenv = t.spawn_argv(args, row.worktree_path, env or None, ssh_opts=ssh_opts, env_file=env_file)
         fh = open(e.log_path, "ab", buffering=0)  # noqa: SIM115 - handed to the child process
         try:
             e.proc = await asyncio.create_subprocess_exec(*argv, cwd=lcwd, env=lenv, stdin=asyncio.subprocess.DEVNULL,

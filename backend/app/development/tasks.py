@@ -10,6 +10,9 @@ and stderr interleaved); the UI polls it by byte offset.
   log over ssh into the local copy; when the connection drops it follows again from where the copy ends, and after a
   restart it picks up the runs still going. Cancel signals the command's whole process group there. The run folder is
   removed once the exit code is read.
+
+On a machine, <work_dir>/bin comes first on PATH and the variables it gets from this server (machines.envfwd) are in a
+0600 file the command sources and deletes; their values are shown as **** in the log.
 """
 
 from __future__ import annotations
@@ -36,6 +39,7 @@ LOST = 3  # the follow script's exit code when the command is gone without an ex
 
 # runs in the tmux session: the command in a process group of its own (setsid), its exit code written last
 _WRAP = r'''d=$1; wt=$2
+if [ -f "$d/env" ]; then . "$d/env"; rm -f "$d/env"; fi
 cd "$wt" 2>"$d/log" || { echo 1 > "$d/rc.tmp"; mv -f "$d/rc.tmp" "$d/rc"; exit 0; }
 export TERM=dumb CLICOLOR=0 PYTHONUNBUFFERED=1
 if command -v setsid >/dev/null 2>&1; then setsid sh "$d/cmd.sh" >"$d/log" 2>&1 </dev/null &
@@ -133,11 +137,24 @@ class TaskRunner:
         py = cfg.get("python") or ""
         if "/" in py:  # the configured interpreter's folder (a virtual environment / conda env) first on PATH
             script = f'PATH={shlex.quote(py.rsplit("/", 1)[0])}:"$PATH"; export PATH; {cmd}'
-        if not target.is_local and await self._remote_tmux_ready(target):
-            return await self._start_remote(run_id, dev_id, kind, cmd, script, target, row.worktree_path, log_path)
+        env_file = None
+        if not target.is_local:
+            from ..machines import envfwd
+            from .targets import TargetError, path_prefix
+
+            script = path_prefix(target.host.work_dir) + script
+            if await self._remote_tmux_ready(target):
+                return await self._start_remote(run_id, dev_id, kind, cmd, script, target, row.worktree_path, log_path)
+            try:
+                env_file = await envfwd.push(target)
+            except TargetError as exc:
+                raise ApiError(502 if exc.code == "DEV_HOST_UNREACHABLE" else 400, "TASK_START_FAILED",
+                               f"could not start the command on {target.name}: {exc.message}")
         with self.ctx.db.write() as s:
-            s.add(DevTaskRun(id=run_id, dev_id=dev_id, kind=kind, command=cmd, status="running", log_path=str(log_path)))
-        argv, lcwd, lenv = target.spawn_argv(["sh", "-c", script], row.worktree_path, env, ssh_opts=None if target.is_local else ["-tt"])
+            s.add(DevTaskRun(id=run_id, dev_id=dev_id, kind=kind, command=cmd, status="running", log_path=str(log_path),
+                             machine=None if target.is_local else target.name))
+        argv, lcwd, lenv = target.spawn_argv(["sh", "-c", script], row.worktree_path, env, ssh_opts=None if target.is_local else ["-tt"],
+                                             env_file=env_file)
         fh = open(log_path, "ab", buffering=0)  # noqa: SIM115 - closed when the process ends
         try:
             proc = await asyncio.create_subprocess_exec(*argv, cwd=lcwd, env=lenv, stdin=asyncio.subprocess.DEVNULL,
@@ -181,12 +198,16 @@ class TaskRunner:
 
     async def _start_remote(self, run_id: str, dev_id: str, kind: str, cmd: str, script: str, target, worktree: str,
                             log_path: Path) -> dict[str, Any]:
+        from ..machines import envfwd
         from .targets import TargetError
 
         try:
             base = await target.expand(target.host.work_dir)
             rdir = f"{base}/runs/{run_id}"
             await target.mkdir(rdir)
+            env_text = await envfwd.prepare(target)
+            if env_text:
+                await target.write_text(f"{rdir}/env", env_text, 0o600)
             await target.write_text(f"{rdir}/cmd.sh", script + "\n", 0o700)
             await target.write_text(f"{rdir}/wrap.sh", _WRAP, 0o700)
             with self.ctx.db.write() as s:
@@ -336,7 +357,17 @@ class TaskRunner:
                 pass
         return run_dict(self.get(r.id))
 
+    def _secrets(self, r: DevTaskRun) -> list[str]:
+        if not r.machine:
+            return []
+        from ..machines import envfwd
+
+        machines = self.ctx.extra.get("machines")
+        return envfwd.secrets_for(machines.dev.host(r.machine) if machines else None)
+
     def read_log(self, run_id: str, offset: int) -> dict[str, Any]:
+        from ..machines.envfwd import mask_bytes
+
         r = self.get(run_id)
         p = Path(r.log_path)
         size = p.stat().st_size if p.exists() else 0
@@ -346,16 +377,23 @@ class TaskRunner:
             with p.open("rb") as fh:
                 fh.seek(offset)
                 data = fh.read(MAX_LOG_READ)
+        used = len(data)
+        secrets = self._secrets(r)
+        if secrets:
+            # while more can come, a tail that may be the start of a secret waits for the next read
+            data, used = mask_bytes(data, secrets, final=r.status != "running" and offset + len(data) >= size)
         text = data.decode("utf-8", "replace").replace("\r\n", "\n")
-        return {"text": text, "offset": offset + len(data), "size": size, "run": run_dict(r)}
+        return {"text": text, "offset": offset + used, "size": size, "run": run_dict(r)}
 
     def tail(self, run_id: str, max_chars: int = 30_000) -> str:
+        from ..machines.envfwd import mask
+
         r = self.get(run_id)
         p = Path(r.log_path)
         if not p.exists():
             return ""
         data = p.read_bytes()[-max_chars * 2:]
-        return data.decode("utf-8", "replace").replace("\r\n", "\n")[-max_chars:]
+        return mask(data.decode("utf-8", "replace").replace("\r\n", "\n"), self._secrets(r))[-max_chars:]
 
     async def shutdown(self) -> None:
         """Stop the app's own children; runs in tmux on a machine keep going (followed again after the restart)."""

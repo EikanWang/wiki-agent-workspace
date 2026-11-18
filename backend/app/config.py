@@ -57,6 +57,12 @@ class DevHost:
     options: dict[str, str] = field(default_factory=dict)  # allowlisted ssh -o options (machines added in the app)
     source: str = "config"                     # config ([[development.hosts]]) | ui (Machines view, stored in the database)
     strict_host_keys: bool = False             # only keys confirmed in the app (its known_hosts) are accepted
+    # what the machine gets from this server (opt-in): [agents] env_script's variables (all, or only `env_vars`),
+    # the proxy settings, a CA bundle (a file on this server). Sent as 0600 files over ssh, never on a command line.
+    forward_env: bool = False
+    env_vars: list[str] = field(default_factory=list)
+    forward_proxy: bool = False
+    ca_bundle: str | None = None
 
 
 @dataclass
@@ -82,6 +88,9 @@ class DevSettings:
     completion: DevCompletion = field(default_factory=DevCompletion)
     # web editor: language servers per language key (yaml, starlark, cmake, json, …): argv, e.g. ["starpls", "server"]
     language_servers: dict[str, list[str]] = field(default_factory=dict)
+    # where machine setup downloads opencode, code-server, gh and codex from: GitHub, or a mirror with the same layout
+    # (<base>/<owner>/<repo>/releases/latest and …/releases/download/<tag>/<asset>)
+    release_base: str = "https://github.com"
     # set by the app (machines.registry), never read from or written to the config file:
     ui_hosts: list[DevHost] = field(default_factory=list)   # machines and bastions added in the Machines view
     control_dir: Path | None = None            # ssh ControlMaster sockets (one shared connection per host)
@@ -328,6 +337,8 @@ def _dev_from(d: dict[str, Any]) -> DevSettings:
             kind=kind, via=[] if kind == "bastion" else [str(v) for v in h.get("via") or []],
             port=int(h["port"]) if h.get("port") else None, user=str(h.get("user") or "") or None,
             identity_file=str(h.get("identity_file") or "") or None,
+            forward_env=bool(h.get("forward_env", False)), env_vars=[str(v) for v in h.get("env_vars") or []],
+            forward_proxy=bool(h.get("forward_proxy", False)), ca_bundle=str(h.get("ca_bundle") or "") or None,
         ))
     names = {h.name: h for h in hosts}
     for h in hosts:
@@ -344,6 +355,7 @@ def _dev_from(d: dict[str, Any]) -> DevSettings:
         ssh=str(d.get("ssh") or "ssh"),
         hosts=hosts,
         language_servers={str(k): [str(x) for x in v] for k, v in (d.get("language_servers") or {}).items() if isinstance(v, list) and v},
+        release_base=str(d.get("release_base") or "https://github.com").rstrip("/"),
         completion=DevCompletion(
             base_url=str(c.get("base_url") or ""), model=str(c.get("model") or ""), api_key_env=str(c.get("api_key_env") or ""),
             max_tokens=int(c.get("max_tokens", 128)), timeout=float(c.get("timeout", 8.0)),

@@ -218,6 +218,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     ctx.extra["machines"] = MachineRegistry(ctx)  # the app's own machines join [[development.hosts]] (DevSettings.host)
     ctx.extra["machines"].load()
+    ctx.jobs.machines = ctx.extra["machines"]
     from .machines import rtmux
 
     ctx.terminals.remote_for = lambda name: rtmux.for_machine(ctx.extra["machines"].dev, name, tmux.socket, settings.tmux_history_limit)
@@ -231,6 +232,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     _files_memo.clear()  # (a new app: nothing remembered from another one)
     gh_limits.configure(settings.state_dir, settings.gh_rate)  # GitHub rate-limit state, shared with the other processes of this data folder
     ctx.extra["dev_tasks"] = TaskRunner(ctx)
+    from .machines.jobs import MachineJobs
+
+    ctx.extra["machine_jobs"] = MachineJobs(ctx)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -238,6 +242,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if n:
             log.info("marked %d unfinished jobs as interrupted", n)
         ctx.extra["dev_tasks"].mark_interrupted()
+        ctx.extra["machine_jobs"].mark_interrupted()
         resumed = ctx.extra["dev_tasks"].resume()  # commands still running in tmux on a machine
         if resumed:
             log.info("following %d commands still running on machines", resumed)
@@ -260,6 +265,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await reg.stop_all()
             await ctx.extra["dev_editor"].shutdown()
             await ctx.extra["dev_tasks"].shutdown()
+            await ctx.extra["machine_jobs"].shutdown()
             n = await ctx.jobs.shutdown()
             if n:
                 log.info("marked %d running jobs as interrupted at shutdown", n)

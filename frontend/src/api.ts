@@ -208,6 +208,34 @@ export interface MachineInfo {
   probed_at: string | null;
   ssh_command?: string | null;
   used_by: { workspaces: string[]; machines: string[] };
+  env?: MachineEnv;
+}
+
+/** What a machine gets from this server (0600 files on it, never on a command line). */
+export interface MachineEnv { forward_env: boolean; env_vars: string[]; forward_proxy: boolean; ca_bundle: string | null }
+
+export interface BootstrapTool { name: string; for: string; installed: boolean; path: string | null; version: string | null; managed: boolean; default: boolean; configured: string }
+
+export interface BootstrapPlan {
+  probed: boolean;
+  tools: BootstrapTool[];
+  release_base: string;
+  system_packages: { missing: string[]; package_manager: string | null; sudo: string | null; can_install: boolean; command: string | null };
+  agent_settings: { source: string | null };
+  running: string | null;
+}
+
+export interface MachineJob {
+  id: string;
+  machine: string;
+  kind: string;
+  title: string;
+  status: "running" | "passed" | "failed" | "cancelled" | "interrupted";
+  error: string | null;
+  params: Record<string, unknown>;
+  result: Record<string, any> | null;
+  started_at: string | null;
+  finished_at: string | null;
 }
 
 export interface HostKeyHop {

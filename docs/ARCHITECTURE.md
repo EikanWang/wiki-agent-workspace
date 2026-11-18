@@ -113,7 +113,8 @@ backend/app/
                    commit (filter=latest, paginated), failing GitHub Actions jobs' logs via actions/jobs/{id}/logs
                    saved to snapshots/github/<o>/<r>/<n>.ci/, excerpt = output before the ##[error] marks
   development/     PR Development (DESIGN: agent-native development workspaces)
-    targets.py     where a workspace runs: LocalTarget, SshTarget (machines.conn argv + `sh -c '<shlex-quoted script>'`), RemoteExec
+    targets.py     where a workspace runs: LocalTarget, SshTarget (machines.conn argv + `sh -c '<shlex-quoted script>'`,
+                   <work_dir>/bin first on PATH, optional env file), RemoteExec
                    (agent CLI turns on the host: SubprocessTurn wraps the argv)
     service.py     DevService: worktrees (new branch: `worktree add -b`; PR: fetch `pull/<n>/head` → refs/waw/pr/<n>,
                    branch waw/pr-<n>, push target = the PR head branch / fork), detected C++/Python settings, git
@@ -151,6 +152,14 @@ backend/app/
     probe.py       one sh script on stdin: OS, CPU, memory, disk, sudo, package manager, tools, GPUs (nvidia-smi,
                    xpu-smi, rocm-smi, lspci)
     keys.py        ~/.ssh keys (list, ed25519 generation), ssh-copy-id in an app terminal (password typed there only)
+    envfwd.py      what a machine gets from this server (opt-in: env_script variables, proxy, CA bundle): a 0600
+                   <work_dir>/run/env-*.sh written over stdin, sourced and deleted by the command (never on argv);
+                   masking of forwarded values in logs (held back at a chunk end that may start one)
+    jobs.py        MachineJobs: one app-driven job per machine (`machine_jobs`, log in <state_dir>/machines/logs),
+                   cancel, interrupted at restart, machine_job events
+    bootstrap.py   Set up: probe, system packages (password-less sudo), tools from GitHub releases (or
+                   [development] release_base) into <work_dir>/tools + bin (fallback: this server downloads into
+                   <state_dir>/cache/tools and streams over ssh), opencode settings without secrets → <work_dir>/opencode
     routes.py      /machines…, /ssh-keys; terminals on a machine (also POST /terminals {machine})
     rtmux.py       RemoteTmux: the app's own tmux server on a machine (`-L <socket>-r`, config under work_dir, adapted
                    to its tmux version, 2.1+); terminals attach with `ssh -tt … tmux attach`; no tmux → ssh login in

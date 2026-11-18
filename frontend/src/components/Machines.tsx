@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ApiError, HostKeyHop, MachineCaps, MachineCheck, MachineInfo, SshKeyInfo, TerminalInfo, del, get, patch, post, subscribeGlobal } from "../api";
+import { ApiError, BootstrapPlan, HostKeyHop, MachineCaps, MachineCheck, MachineEnv, MachineInfo, MachineJob, SshKeyInfo, TerminalInfo, del, get, patch, post, subscribeGlobal } from "../api";
 import { writeClipboard } from "../clipboard";
 import { confirmAction } from "./Confirm";
 import { PlusIcon } from "./Icons";
@@ -9,7 +9,8 @@ import { StickyMods, TerminalView } from "./TerminalPanel";
  * Machines: this server and the SSH machines (and the bastions they are reached through) the app works on — those of
  * `[[development.hosts]]` in the config file (read-only here) and those added in the app. Each can be checked hop by
  * hop, probed (OS, CPU, GPUs, tools), have its host keys confirmed and this server's key installed (ssh-copy-id in a
- * terminal: the password is typed there, never seen by the app).
+ * terminal: the password is typed there, never seen by the app). Set up installs the app's tools into the machine's
+ * work folder (a machine job with a log); Environment chooses what it gets from this server (variables, proxy, CA).
  */
 
 const STATUS_TEXT: Record<string, string> = {
@@ -107,6 +108,203 @@ function CapsView({ caps }: { caps: MachineCaps }) {
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+const NO_ENV: MachineEnv = { forward_env: false, env_vars: [], forward_proxy: false, ca_bundle: null };
+
+function EnvSection({ machine, onChanged }: { machine: MachineInfo; onChanged: () => Promise<void> | void }) {
+  const env = machine.env ?? NO_ENV;
+  const [edit, setEdit] = useState(false);
+  const [fwd, setFwd] = useState(env.forward_env);
+  const [vars, setVars] = useState(env.env_vars.join(" "));
+  const [proxy, setProxy] = useState(env.forward_proxy);
+  const [ca, setCa] = useState(env.ca_bundle ?? "");
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const reset = () => { setFwd(env.forward_env); setVars(env.env_vars.join(" ")); setProxy(env.forward_proxy); setCa(env.ca_bundle ?? ""); setErr(null); };
+  useEffect(() => { reset(); setEdit(false); }, [machine.name]); // eslint-disable-line react-hooks/exhaustive-deps
+  const save = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      await patch(`/machines/${machine.name}`, { env: { forward_env: fwd, env_vars: vars.split(/[\s,]+/).filter(Boolean), forward_proxy: proxy, ca_bundle: ca.trim() || null } });
+      setEdit(false);
+      await onChanged();
+    } catch (e) {
+      setErr((e as ApiError).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const summary = [env.forward_env && "the agent env script's variables", env.env_vars.length > 0 && env.env_vars.join(", "),
+    env.forward_proxy && "this server's proxy", env.ca_bundle && `CA bundle ${env.ca_bundle}`].filter(Boolean) as string[];
+  return (
+    <div className="machine-section" data-testid="machine-env">
+      <h4>Environment
+        <span className="muted small">what commands, terminals, the editor and agents there get from this server</span>
+        <span className="spacer" />
+        {machine.editable && !edit && <button className="link-btn small" onClick={() => { reset(); setEdit(true); }} data-testid="machine-env-edit">Edit</button>}
+      </h4>
+      {!edit && (
+        <div className="small" data-testid="machine-env-summary">
+          {summary.length ? summary.join(" · ") : <span className="muted">Nothing: the machine uses only its own environment.</span>}
+          {machine.source === "config" && <div className="muted small">Set in the config file (forward_env, env_vars, forward_proxy, ca_bundle).</div>}
+        </div>
+      )}
+      {edit && (
+        <div className="machine-form small">
+          <label><input type="checkbox" checked={fwd} onChange={(e) => setFwd(e.target.checked)} data-testid="machine-env-forward" /> Variables of the agent env script (tokens such as AWS_BEARER_TOKEN_BEDROCK)</label>
+          <label>Also these variables of this server
+            <input className="mono" value={vars} onChange={(e) => setVars(e.target.value)} placeholder="NAME OTHER_NAME" data-testid="machine-env-vars" />
+          </label>
+          <label><input type="checkbox" checked={proxy} onChange={(e) => setProxy(e.target.checked)} data-testid="machine-env-proxy" /> This server's proxy (http_proxy, https_proxy, no_proxy)</label>
+          <label>Extra CA bundle (a PEM file on this server, added to the machine's own)
+            <input className="mono" value={ca} onChange={(e) => setCa(e.target.value)} placeholder="/etc/ssl/certs/corp-ca.pem" data-testid="machine-env-ca" />
+          </label>
+          <div className="muted small">Values travel in a 0600 file that is read and deleted; they show as **** in logs.</div>
+          {err && <div className="error-text" role="alert">{err}</div>}
+          <div className="row">
+            <button className="btn small primary" disabled={busy} onClick={() => void save()} data-testid="machine-env-save">{busy ? "Saving…" : "Save"}</button>
+            <button className="btn small" onClick={() => setEdit(false)}>Cancel</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const JOB_TEXT: Record<string, string> = { running: "running", passed: "done", failed: "failed", cancelled: "cancelled", interrupted: "interrupted" };
+
+function SetupPanel({ machine, onChanged }: { machine: MachineInfo; onChanged: () => Promise<void> | void }) {
+  const [plan, setPlan] = useState<BootstrapPlan | null>(null);
+  const [tools, setTools] = useState<string[]>([]);
+  const [sysPkgs, setSysPkgs] = useState(true);
+  const [agentSettings, setAgentSettings] = useState(true);
+  const [update, setUpdate] = useState(false);
+  const [jobs, setJobs] = useState<MachineJob[]>([]);
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [job, setJob] = useState<MachineJob | null>(null);
+  const [text, setText] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+  const offset = useRef(0);
+  const logRef = useRef<HTMLPreElement>(null);
+  const load = useCallback(async () => {
+    try {
+      const [p, j] = await Promise.all([get<BootstrapPlan>(`/machines/${machine.name}/bootstrap`), get<{ jobs: MachineJob[] }>(`/machines/${machine.name}/jobs`)]);
+      setPlan(p);
+      setJobs(j.jobs);
+      return p;
+    } catch (e) {
+      setErr((e as ApiError).message);
+      return null;
+    }
+  }, [machine.name]);
+  useEffect(() => {
+    setJobId(null); setJob(null); setText(""); offset.current = 0;
+    void load().then((p) => {
+      if (!p) return;
+      setTools(p.tools.filter((t) => t.default).map((t) => t.name));
+      if (p.running) setJobId(p.running);
+    });
+  }, [load]);
+  useEffect(() => {
+    if (!jobId) return;
+    let stop = false;
+    offset.current = 0;
+    setText("");
+    const tick = async () => {
+      while (!stop) {
+        try {
+          const r = await get<{ text: string; offset: number; size: number; job: MachineJob }>(`/machine-jobs/${jobId}/log?offset=${offset.current}`);
+          if (stop) return;
+          offset.current = r.offset;
+          if (r.text) setText((t) => t + r.text);
+          setJob(r.job);
+          if (r.job.status !== "running" && r.offset >= r.size) { void load(); void onChanged(); return; }
+        } catch (e) {
+          setErr((e as ApiError).message);
+          return;
+        }
+        await new Promise((res) => setTimeout(res, 700));
+      }
+    };
+    void tick();
+    return () => { stop = true; };
+  }, [jobId]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => subscribeGlobal((ev) => {
+    if (ev.type === "machine_job" && ev.machine === machine.name) { void load(); if (ev.status === "running" && !jobId) setJobId(ev.job_id); }
+  }), [machine.name, load, jobId]);
+  useEffect(() => { const el = logRef.current; if (el) el.scrollTop = el.scrollHeight; }, [text]);
+  const start = async () => {
+    setErr(null);
+    try {
+      const j = await post<MachineJob>(`/machines/${machine.name}/bootstrap`, { tools, system_packages: sysPkgs, agent_settings: agentSettings, update });
+      setJob(j);
+      setJobId(j.id);
+      void load();
+    } catch (e) {
+      setErr((e as ApiError).message);
+    }
+  };
+  const cancel = async () => {
+    if (!jobId) return;
+    try { setJob(await post<MachineJob>(`/machine-jobs/${jobId}/cancel`)); } catch (e) { setErr((e as ApiError).message); }
+  };
+  const running = job?.status === "running";
+  const sp = plan?.system_packages;
+  return (
+    <div className="machine-section" data-testid="machine-setup">
+      <h4>Set up <span className="muted small">installs the app's tools into {machine.work_dir}/bin (no root needed); they come first on PATH there</span></h4>
+      {!plan ? <div className="muted small">Loading…</div> : (
+        <>
+          {!plan.probed && <div className="muted small">Not probed yet: setup probes it first.</div>}
+          <table className="machine-table">
+            <tbody>
+              {plan.tools.map((t) => (
+                <tr key={t.name} data-testid="setup-tool" data-tool={t.name}>
+                  <th><label><input type="checkbox" checked={tools.includes(t.name)} disabled={running}
+                    onChange={(e) => setTools((cur) => e.target.checked ? [...cur, t.name] : cur.filter((x) => x !== t.name))} data-testid={`setup-tool-${t.name}`} /> {t.name}</label></th>
+                  <td className="muted">{t.for}</td>
+                  <td className="small">{t.installed ? <>{t.version ?? "installed"} <span className="mono muted">{t.path}</span>{t.managed && <span className="chip">setup</span>}</> : <span className="muted">not installed</span>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <label className="small"><input type="checkbox" checked={update} disabled={running} onChange={(e) => setUpdate(e.target.checked)} data-testid="setup-update" /> Install the latest release again over setup's own copies</label>
+          <label className="small"><input type="checkbox" checked={sysPkgs} disabled={running} onChange={(e) => setSysPkgs(e.target.checked)} data-testid="setup-system" /> System packages
+            {sp && sp.missing.length > 0 ? <> (missing: {sp.missing.join(", ")}{sp.can_install ? `, with ${sp.package_manager}` : ""})</> : <span className="muted"> (nothing missing as of the last probe)</span>}
+          </label>
+          {sp && sp.missing.length > 0 && !sp.can_install && sp.command && (
+            <div className="warn small" data-testid="setup-sudo-hint">sudo needs a password there; ask an administrator to run <span className="mono">{sp.command.replace(/sudo -n /g, "sudo ")}</span>
+              <button className="link-btn small" onClick={() => void writeClipboard((sp.command ?? "").replace(/sudo -n /g, "sudo "))}>copy</button></div>
+          )}
+          <label className="small"><input type="checkbox" checked={agentSettings} disabled={running} onChange={(e) => setAgentSettings(e.target.checked)} data-testid="setup-agent-settings" /> OpenCode settings
+            {plan.agent_settings.source ? <> from <span className="mono">{plan.agent_settings.source}</span>, without keys and tokens</> : <span className="muted"> (this server has none)</span>}
+          </label>
+          <div className="row">
+            {running
+              ? <button className="btn small danger" onClick={() => void cancel()} data-testid="setup-cancel">Cancel</button>
+              : <button className="btn small primary" disabled={!tools.length && !sysPkgs && !agentSettings} onClick={() => void start()} data-testid="setup-start">Set up</button>}
+            {job && <span className={`chip status ${job.status}`} data-testid="setup-status" data-status={job.status}>{JOB_TEXT[job.status] ?? job.status}</span>}
+            {job?.error && job.status !== "running" && <span className="small error-text">{job.error}</span>}
+          </div>
+        </>
+      )}
+      {err && <div className="error-text" role="alert">{err}</div>}
+      {jobId && <pre className="mono small machine-log" ref={logRef} data-testid="setup-log">{text}</pre>}
+      {jobs.length > 0 && (
+        <details className="small">
+          <summary>History</summary>
+          <ul className="machine-jobs">
+            {jobs.map((j) => (
+              <li key={j.id}><button className="link-btn small" onClick={() => setJobId(j.id)}>{j.title}</button> · {JOB_TEXT[j.status] ?? j.status}
+                <span className="muted"> · {j.started_at ? new Date(j.started_at).toLocaleString() : ""}</span></li>
+            ))}
+          </ul>
+        </details>
+      )}
     </div>
   );
 }
@@ -236,7 +434,7 @@ export default function MachineView({ machine, machines, allowed, onOpenTerminal
   const [check, setCheck] = useState<MachineCheck | null>(machine.check ?? null);
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [panel, setPanel] = useState<"hostkeys" | "install" | null>(null);
+  const [panel, setPanel] = useState<"hostkeys" | "install" | "setup" | null>(null);
   const [edit, setEdit] = useState(false);
   const isLocal = machine.source === "server";
   const isBastion = machine.kind === "bastion";
@@ -277,6 +475,7 @@ export default function MachineView({ machine, machines, allowed, onOpenTerminal
         {!isBastion && <button className="btn small" disabled={!!busy} onClick={() => void doProbe()} data-testid="machine-probe">{busy === "probe" ? "Probing…" : "Probe"}</button>}
         {!isLocal && <button className="btn small" onClick={() => setPanel(panel === "hostkeys" ? null : "hostkeys")} data-testid="machine-hostkeys-btn">Host keys</button>}
         {!isLocal && <button className="btn small" onClick={() => setPanel(panel === "install" ? null : "install")} data-testid="machine-install-key-btn">Install key</button>}
+        {!isLocal && !isBastion && <button className="btn small" onClick={() => setPanel(panel === "setup" ? null : "setup")} data-testid="machine-setup-btn">Set up</button>}
         {!isBastion && <button className="btn small" disabled={!!busy} onClick={() => void openTerm()} data-testid="machine-terminal">Terminal</button>}
         {machine.editable && <button className="btn small" onClick={() => setEdit(true)} data-testid="machine-edit">Edit</button>}
         {machine.editable && <button className="btn small danger" disabled={!!busy || used.length > 0} title={used.length ? `In use by ${used.join(", ")}` : "Remove this machine"} onClick={() => void remove()} data-testid="machine-delete">Remove</button>}
@@ -316,6 +515,8 @@ export default function MachineView({ machine, machines, allowed, onOpenTerminal
       )}
       {panel === "hostkeys" && <HostKeys name={machine.name} onDone={() => void doCheck()} />}
       {panel === "install" && <InstallKey machine={machine} onDone={() => { setPanel(null); void doCheck(); }} />}
+      {panel === "setup" && <SetupPanel machine={machine} onChanged={onChanged} />}
+      {!isLocal && !isBastion && <EnvSection machine={machine} onChanged={onChanged} />}
       {machine.capabilities ? <CapsView caps={machine.capabilities} /> : !isBastion && <div className="muted small">Not probed yet: <b>Probe</b> shows its OS, CPU, GPUs and tools.</div>}
       {edit && <MachineDialog existing={machine} machines={machines} allowed={allowed} onClose={() => setEdit(false)} onSaved={async () => { setEdit(false); await onChanged(); }} />}
     </div>

@@ -8,7 +8,10 @@ Like OpenSSH: `-G` prints the resolved configuration, `-O <cmd>` talks to a (non
 (a bastion hop of a ProxyCommand) only connects, and `-o ProxyCommand=…` is run first (with %h %p %r %% expanded) —
 when it fails, so does the connection. Destinations whose host part starts with these words fail with exit 255:
 unreachable (connection refused), authfail (permission denied), badkey (host key verification failed), nodns
-(cannot resolve). A destination in $FAKE_AGENT_STATE/ssh_down (one per line) is unreachable too.
+(cannot resolve). A destination in $FAKE_AGENT_STATE/ssh_down (one per line) is unreachable too. When
+$FAKE_AGENT_STATE/ssh_no_net exists, the "host" has no internet: its curl and wget fail (tests/fakes/nonet). When $FAKE_AGENT_STATE/ssh_clean_env exists, the remote command gets
+only what sshd would give it (PATH, HOME, USER, …; plus FAKE_* and CODEX_HOME for the fakes), not this process's
+environment.
 """
 import json
 import os
@@ -117,6 +120,14 @@ def main(argv):
             os._exit(0)
     if not cmd:
         return 0
+    if (STATE / "ssh_clean_env").exists():
+        keep = ("PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "TERM", "TMPDIR", "TMUX_TMPDIR", "CODEX_HOME")
+        for k in list(os.environ):
+            if k not in keep and not k.startswith("FAKE_"):
+                del os.environ[k]
+    if (STATE / "ssh_no_net").exists():
+        os.environ["PATH"] = str(Path(__file__).resolve().parent / "nonet") + os.pathsep + os.environ.get("PATH", "")
+        os.environ["FAKE_NO_NET"] = "1"
     os.execvp("sh", ["sh", "-c", cmd])
 
 

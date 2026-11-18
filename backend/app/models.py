@@ -503,8 +503,28 @@ class Machine(Base):
     checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     capabilities_json: Mapped[str | None] = mapped_column(Text, nullable=True)  # the last probe (OS, CPU, GPUs, tools, sudo)
     probed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # what the machine gets from this server: {forward_env, env_vars, forward_proxy, ca_bundle} (machines added in the app)
+    env_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 
 
+class MachineJob(Base):
+    """Work on a machine as a whole (setup: installing the app's tools), with a log in the state dir."""
+
+    __tablename__ = "machine_jobs"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    machine: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)  # bootstrap
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(12), nullable=False, default="running")  # running | passed | failed | cancelled | interrupted
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    params_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    result_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    log_path: Mapped[str] = mapped_column(Text, nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 Index("ix_messages_job", Message.job_id)
+Index("ix_machine_jobs_machine", MachineJob.machine, MachineJob.started_at)

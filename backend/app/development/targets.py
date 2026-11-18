@@ -21,6 +21,20 @@ LOCAL = "local"
 _HOMES: dict[str, str] = {}  # $HOME per host (asked once per process)
 
 
+def sh_path(work_dir: str, sub: str = "") -> str:
+    """`work_dir`/`sub` as a shell word on the host (a leading ~ becomes "$HOME")."""
+    rest = "/".join(x for x in (work_dir, sub) if x).rstrip("/")
+    if work_dir == "~" or work_dir.startswith("~/"):
+        tail = rest[1:].lstrip("/")
+        return '"$HOME"' + ("/" + shlex.quote(tail) if tail else "")
+    return shlex.quote(rest or "/")
+
+
+def path_prefix(work_dir: str) -> str:
+    """Shell that puts the tools machine setup installed (<work_dir>/bin) first on PATH."""
+    return f'PATH={sh_path(work_dir, "bin")}:"$PATH"; export PATH; '
+
+
 class TargetError(Exception):
     def __init__(self, message: str, code: str = "DEV_HOST_FAILED"):
         super().__init__(message)
@@ -36,13 +50,18 @@ class RemoteExec:
     bins: dict[str, str] = field(default_factory=dict)  # provider name -> executable on the host
     cwd: str = ""
     env: dict[str, str] = field(default_factory=dict)  # set for the provider on the host (e.g. OPENCODE_CONFIG_CONTENT)
+    pre: str = ""        # shell run first (PATH with <work_dir>/bin)
+    env_file: str = ""   # a file on the host with forwarded variables, sourced then deleted (machines.envfwd)
 
     def wrap(self, args: list[str], provider: str | None = None) -> list[str]:
         argv = list(args)
         if provider and provider in self.bins:
             argv[0] = self.bins[provider]
         envs = "".join(f"export {k}={shlex.quote(v)}; " for k, v in self.env.items() if k.isidentifier())
-        script = envs + (f"cd {shlex.quote(self.cwd)} && " if self.cwd else "") + "exec " + shlex.join(argv)
+        if self.env_file:
+            q = shlex.quote(self.env_file)
+            envs = f". {q}; rm -f {q}; " + envs
+        script = self.pre + envs + (f"cd {shlex.quote(self.cwd)} && " if self.cwd else "") + "exec " + shlex.join(argv)
         return [*self.ssh_prefix, "sh -c " + shlex.quote(script)]
 
 
@@ -77,8 +96,10 @@ class Target:
         return await self.run(["git", "-C", cwd, *args], timeout=timeout, env=_git_env(), stdin=stdin)
 
     def spawn_argv(self, args: list[str], cwd: str | None, env: dict[str, str] | None,
-                   ssh_opts: list[str] | None = None) -> tuple[list[str], str | None, dict[str, str] | None]:
-        """(argv, local cwd, local env) that runs `args` in `cwd` on this target (for long-running processes)."""
+                   ssh_opts: list[str] | None = None,
+                   env_file: str | None = None) -> tuple[list[str], str | None, dict[str, str] | None]:
+        """(argv, local cwd, local env) that runs `args` in `cwd` on this target (for long-running processes).
+        `env_file` (SSH): a file on the host that is sourced and deleted first (machines.envfwd)."""
         raise NotImplementedError
 
     async def expand(self, path: str) -> str:
@@ -108,7 +129,7 @@ class LocalTarget(Target):
     name = LOCAL
     is_local = True
 
-    def spawn_argv(self, args, cwd, env, ssh_opts=None):
+    def spawn_argv(self, args, cwd, env, ssh_opts=None, env_file=None):
         return list(args), cwd, ({**os.environ, **env} if env else None)
 
     async def expand(self, path: str) -> str:
@@ -142,8 +163,11 @@ class SshTarget(Target):
 
         return ssh_argv(self.dev, self.host, opts, via=self.via)
 
-    def spawn_argv(self, args, cwd, env, ssh_opts=None):
-        script = ""
+    def spawn_argv(self, args, cwd, env, ssh_opts=None, env_file=None):
+        script = path_prefix(self.host.work_dir)
+        if env_file:
+            q = shlex.quote(env_file)
+            script += f". {q}; rm -f {q}; "
         if cwd:
             script += f"cd {shlex.quote(cwd)} && "
         script += "exec "
@@ -178,7 +202,8 @@ class SshTarget(Target):
             raise TargetError(f"cannot write {path} on {self.name}: {err.strip()[:300]}")
 
     def remote_exec(self, cwd: str) -> RemoteExec:
-        return RemoteExec(self.ssh_prefix(), {"opencode": self.host.opencode, "codex": self.host.codex}, cwd)
+        return RemoteExec(self.ssh_prefix(), {"opencode": self.host.opencode, "codex": self.host.codex}, cwd,
+                          pre=path_prefix(self.host.work_dir))
 
 
 def target_for(dev: DevSettings, host: str | None) -> Target:

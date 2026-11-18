@@ -141,12 +141,13 @@ class TerminalManager:
         """A shell in the machine's own app tmux, starting in `cwd` (an absolute path there): it keeps running when
         the connection drops or this server restarts. Blocks (ssh)."""
         from ..development.targets import TargetError
+        from ..machines import envfwd
 
         rt = self.remote_for(machine)
         tid = str(uuid.uuid4())
         name = f"{SESSION_PREFIX}{tid[:8]}"
         try:
-            rt.new_session(name, cwd)
+            rt.new_session(name, cwd, envfwd.login_shell(rt.target.host, envfwd.push_sync(rt.target)))
         except TargetError as exc:
             raise ApiError(502 if exc.code == "DEV_HOST_UNREACHABLE" else 503, exc.code, exc.message)
         return self._add(tid, name, label, cwd, machine)

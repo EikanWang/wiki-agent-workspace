@@ -589,6 +589,23 @@ machine**).
   codex, python3, cmake…), with what each missing one is needed for.
 - Commands to a machine share one SSH connection (kept 10 minutes after the last use), so browsing files or running
   `git status` there does not log in again each time. Editing a machine closes its shared connection.
+- **Set up** installs what the app needs on the machine, without root: opencode, code-server and gh (Codex too when
+  ticked) from their latest releases into `<work folder>/tools`, linked from `<work folder>/bin` — which comes first on
+  PATH for everything the app runs there, so this copy is used even when an older one is installed. The machine
+  downloads them itself (through the forwarded proxy, if any); when it cannot reach the internet this server
+  downloads them and sends them over SSH. Missing system packages (tmux, git, tar, curl) are installed with the
+  machine's package manager when sudo works without a password; otherwise setup shows the command to give an
+  administrator. It also copies this server's OpenCode settings (providers, models) **without** keys or tokens;
+  references such as `{env:AWS_BEARER_TOKEN_BEDROCK}` stay, so forward that variable in **Environment**. The log
+  shows each step; setup can be cancelled, and running it again skips what it already installed (**Install the
+  latest release again** updates them). Agent turns on a machine run its own opencode / Codex, so this server needs
+  neither; when the last probe says the tool is missing there, the turn says so and points to **Set up**.
+- **Environment** chooses what the machine gets from this server — nothing by default: the variables of the agent
+  env script (API tokens; all, or only the names listed), this server's proxy settings, and an extra CA bundle (for
+  a proxy that inspects TLS; added to the machine's own certificates). Builds and tests, terminals, the editor and
+  agent turns there get them. They never appear on a command line (a 0600 file is read and deleted as the command
+  starts), and their values show as `****` in run and setup logs. Machines of the config file set this there
+  (`forward_env`, `env_vars`, `forward_proxy`, `ca_bundle`).
 
 A machine cannot be renamed (workspaces refer to it by name) or removed while a workspace runs on it or another
 machine is reached through it.

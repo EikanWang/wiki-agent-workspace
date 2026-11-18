@@ -25,6 +25,8 @@ NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$")
 DEST_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._@:%\[\]-]{0,252}$")
 USER_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$")
 VALUE_RE = re.compile(r"^[A-Za-z0-9_.,:@+/=~%-]{1,512}$")
+VAR_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
+MAX_ENV_VARS = 200
 MAX_VIA = 4
 DEFAULT_WORK_DIR = "~/.cache/wiki-agent-workspace"
 
@@ -48,8 +50,18 @@ def _loads(text: str | None, default: Any) -> Any:
         return default
 
 
+def env_of(row: Machine) -> dict[str, Any]:
+    e = _loads(row.env_json, {})
+    return {"forward_env": bool(e.get("forward_env")), "env_vars": [str(v) for v in e.get("env_vars") or []],
+            "forward_proxy": bool(e.get("forward_proxy")), "ca_bundle": str(e.get("ca_bundle") or "") or None}
+
+
+def host_env(h: DevHost) -> dict[str, Any]:
+    return {"forward_env": h.forward_env, "env_vars": list(h.env_vars), "forward_proxy": h.forward_proxy, "ca_bundle": h.ca_bundle}
+
+
 def to_host(row: Machine) -> DevHost:
-    return DevHost(name=row.name, ssh=row.ssh, work_dir=row.work_dir or DEFAULT_WORK_DIR, code_server=row.code_server or "code-server",
+    return DevHost(**env_of(row), name=row.name, ssh=row.ssh, work_dir=row.work_dir or DEFAULT_WORK_DIR, code_server=row.code_server or "code-server",
                    opencode=row.opencode or "opencode", codex=row.codex or "codex", kind=row.kind,
                    via=[] if row.kind == "bastion" else [str(v) for v in _loads(row.via_json, [])],
                    port=row.port, user=row.user, identity_file=row.identity_file,
@@ -131,6 +143,8 @@ def validate(body: dict[str, Any], dev: DevSettings, *, existing: Machine | None
             if b is None or b.kind != "bastion":
                 raise bad_request(f"via: {v} is not a bastion", "INVALID_MACHINE")
         out["via"] = via
+    if "env" in body:
+        out["env"] = validate_env(body.get("env"))
     if "work_dir" in body:
         w = _clean_text(body.get("work_dir"), "work_dir") or DEFAULT_WORK_DIR
         if not (w.startswith("/") or w == "~" or w.startswith("~/")):
@@ -143,6 +157,29 @@ def validate(body: dict[str, Any], dev: DevSettings, *, existing: Machine | None
                 raise bad_request(f"{b}: invalid executable", "INVALID_MACHINE")
             out[b] = v or b.replace("_", "-")
     return out
+
+
+def validate_env(e: Any) -> dict[str, Any]:
+    if not isinstance(e, dict):
+        raise bad_request("env must be an object {forward_env, env_vars, forward_proxy, ca_bundle}", "INVALID_MACHINE")
+    names = e.get("env_vars") or []
+    if not isinstance(names, list) or len(names) > MAX_ENV_VARS:
+        raise bad_request(f"env.env_vars: a list of up to {MAX_ENV_VARS} variable names", "INVALID_MACHINE")
+    clean = []
+    for n in names:
+        n = str(n).strip()
+        if not VAR_RE.match(n):
+            raise bad_request(f"env.env_vars: {n!r} is not a variable name", "INVALID_MACHINE")
+        if n not in clean:
+            clean.append(n)
+    ca = _clean_text(e.get("ca_bundle"), "env.ca_bundle")
+    if ca:
+        if not (ca.startswith("/") or ca.startswith("~/")):
+            raise bad_request("env.ca_bundle: an absolute path on this server", "INVALID_MACHINE")
+        if not Path(ca).expanduser().is_file():
+            raise bad_request(f"env.ca_bundle: {ca} does not exist on this server", "INVALID_MACHINE")
+    return {"forward_env": bool(e.get("forward_env")), "env_vars": clean, "forward_proxy": bool(e.get("forward_proxy")),
+            "ca_bundle": ca or None}
 
 
 class MachineRegistry:
@@ -172,6 +209,7 @@ class MachineRegistry:
                 r.kind, r.ssh, r.port, r.user, r.identity_file = h.kind, h.ssh, h.port, h.user, h.identity_file
                 r.via_json, r.options_json, r.work_dir = json.dumps(h.via), "{}", h.work_dir
                 r.code_server, r.opencode, r.codex = h.code_server, h.opencode, h.codex
+                r.env_json = json.dumps(host_env(h))
             for name, r in rows.items():
                 if r.source == "config" and name not in cfg:
                     s.delete(r)
@@ -214,6 +252,7 @@ class MachineRegistry:
             "options": _loads(r.options_json, {}), "ssh_args": list(h.ssh_args) if h else [],
             "work_dir": r.work_dir, "code_server": r.code_server, "opencode": r.opencode, "codex": r.codex,
             "strict_host_keys": bool(h and h.strict_host_keys),
+            "env": host_env(h) if h else env_of(r),
             "status": r.status, "check": _loads(r.status_detail, None), "checked_at": iso(r.checked_at),
             "capabilities": _loads(r.capabilities_json, None), "probed_at": iso(r.probed_at),
             "ssh_command": conn.preview(self.dev, h) if h else None,
@@ -239,7 +278,8 @@ class MachineRegistry:
                         identity_file=f.get("identity_file"), via_json=json.dumps(f.get("via", [])),
                         options_json=json.dumps(f.get("options", {})), work_dir=f.get("work_dir", DEFAULT_WORK_DIR),
                         code_server=f.get("code_server", "code-server"), opencode=f.get("opencode", "opencode"),
-                        codex=f.get("codex", "codex"), status="unknown", created_at=_now(), updated_at=_now())
+                        codex=f.get("codex", "codex"), env_json=json.dumps(f.get("env") or validate_env({})),
+                        status="unknown", created_at=_now(), updated_at=_now())
             s.add(r)
         self.apply()
         self._changed(f["name"])
@@ -269,6 +309,8 @@ class MachineRegistry:
                     row.via_json = json.dumps(v)
                 elif k == "options":
                     row.options_json = json.dumps(v)
+                elif k == "env":
+                    row.env_json = json.dumps(v)
                 else:
                     setattr(row, k, v)
             row.status, row.status_detail, row.updated_at = "unknown", None, _now()

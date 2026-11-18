@@ -250,8 +250,9 @@ class CodexAdapter(AgentAdapter):
         return sb
 
     async def resume_turn(self, ctx: TurnContext) -> TurnHandle:
-        if not self.exe:
+        if not self.exe and ctx.remote is None:  # on a machine its own codex runs (RemoteExec.bins)
             raise ProviderError("PROVIDER_UNAVAILABLE", "codex executable not found")
+        exe = self.exe or "codex"
         cwd = ctx.cwd or ctx.workspace
         sandbox = self._sandbox(ctx)
         common = ["--json", "--skip-git-repo-check"]
@@ -265,7 +266,7 @@ class CodexAdapter(AgentAdapter):
         # "--image=PATH" (not "-i PATH"): the option takes several values and would swallow the "-" (prompt on stdin)
         common += [f"--image={p}" for p in ctx.attachments]
         if ctx.native_session_id:
-            args = [self.exe, "exec", "resume", *common, "-c", f'sandbox_mode="{sandbox}"', ctx.native_session_id, "-"]
+            args = [exe, "exec", "resume", *common, "-c", f'sandbox_mode="{sandbox}"', ctx.native_session_id, "-"]
         else:
-            args = [self.exe, "exec", *common, "-C", str(cwd), "-s", sandbox, "-"]
+            args = [exe, "exec", *common, "-C", str(cwd), "-s", sandbox, "-"]
         return CodexTurn(args, cwd=cwd, stdin_data=ctx.prompt.encode("utf-8"), remote=ctx.remote, provider="codex")

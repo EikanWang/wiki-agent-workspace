@@ -494,7 +494,26 @@ Machines view (`source = ui`) are defined here. When both have the same name the
 | `checked_at` | DATETIME, nullable | When it was checked. |
 | `capabilities_json` | TEXT (JSON), nullable | The last probe: OS, CPU, memory, free disk, GPUs, sudo, package manager, tools and versions. |
 | `probed_at` | DATETIME, nullable | When it was probed. |
+| `env_json` | TEXT (JSON) | What it gets from this server (`ui` machines; config hosts keep theirs in the config file): `forward_env`, `env_vars`, `forward_proxy`, `ca_bundle` (see CONFIGURATION.md). Names and settings only — the values are read when a command starts. |
 | `created_at`, `updated_at` | DATETIME | Timestamps. |
+
+## `machine_jobs` — work on a machine as a whole (Set up)
+
+Run by the app step by step over ssh, one at a time per machine; a job still `running` at startup was cut off by a
+restart and becomes `interrupted` (running setup again continues: what it installed is skipped).
+
+| Column | Type | Meaning |
+| --- | --- | --- |
+| `id` | TEXT, PK | UUID. |
+| `machine` | TEXT | The machine's name (`machines.name`). |
+| `kind` | TEXT | `bootstrap` (Set up). |
+| `title` | TEXT | Shown in the history, e.g. `Set up gpu-box`. |
+| `status` | TEXT | `running`, `passed`, `failed`, `cancelled`, `interrupted`. |
+| `error` | TEXT, nullable | Why it failed or stopped. |
+| `params_json` | TEXT (JSON) | What was asked: `tools`, `system_packages`, `agent_settings`, `update`. |
+| `result_json` | TEXT (JSON), nullable | What happened: tools installed (their release tags), skipped, failed; system packages; the OpenCode settings copied. |
+| `log_path` | TEXT | The log in `<state_dir>/machines/logs/<id>.log` (forwarded values already masked). |
+| `started_at`, `finished_at` | DATETIME | Timestamps. |
 
 ## `alembic_version`
 

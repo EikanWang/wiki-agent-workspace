@@ -1483,6 +1483,11 @@ body.resizing-h iframe { pointer-events: none; }
 .machine-section { border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; display: flex; flex-direction: column; gap: 6px; }
 .machine-section h4, .machine-caps h4 { margin: 4px 0; display: flex; gap: 8px; align-items: baseline; }
 .machine-table { border-collapse: collapse; font-size: 13px; }
+.machine-form { display: flex; flex-direction: column; gap: 6px; }
+.machine-form label { display: flex; flex-direction: column; gap: 2px; }
+.machine-form label:has(> input[type="checkbox"]) { flex-direction: row; align-items: center; gap: 6px; }
+.machine-log { max-height: 320px; overflow: auto; background: var(--code-bg, rgba(127, 127, 127, 0.08)); padding: 6px 8px; border-radius: 6px; white-space: pre-wrap; margin: 0; }
+.machine-jobs { list-style: none; padding: 0; margin: 4px 0; }
 .machine-table th, .machine-table td { text-align: left; padding: 3px 10px 3px 0; vertical-align: top; }
 .machine-table th { font-weight: 600; white-space: nowrap; }
 .machine-table tr.missing th { color: var(--muted); }

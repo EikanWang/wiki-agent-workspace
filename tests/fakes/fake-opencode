@@ -73,6 +73,7 @@ def main(argv):
         print("unknown command", file=sys.stderr)
         return 2
     args = argv[1:]
+    (STATE / "opencode_last_env.json").write_text(json.dumps(dict(os.environ)))
     if os.environ.get("WAW_TEST_TOKEN"):
         (STATE / "opencode_last_token").write_text(os.environ["WAW_TEST_TOKEN"])
     if os.environ.get("OPENCODE_CONFIG_CONTENT"):
