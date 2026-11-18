@@ -128,6 +128,8 @@ export default function DiscussionPanel({
   onSessionChanged,
   onAskDocument,
   docFormat,
+  side = false,
+  onShowQuote,
 }: {
   thread: Thread | null;
   threads: Thread[];
@@ -151,6 +153,10 @@ export default function DiscussionPanel({
   /** Ask a question about the open document as a whole (no passage). */
   onAskDocument?: (question: string) => Promise<void>;
   docFormat?: string;
+  /** a chat's side questions (each about a part of one of its answers) instead of a document's discussions */
+  side?: boolean;
+  /** show the part of the chat a side question is about */
+  onShowQuote?: (t: Thread) => void;
 }) {
   const [focusAsk, setFocusAsk] = useState(0); // bumped by "＋ New question": focus the box
   const askBox = onAskDocument ? <AskDocument onAsk={onAskDocument} format={docFormat} focusKey={focusAsk} draftKey={`ask.${docId ?? ""}`} /> : null;
@@ -174,9 +180,9 @@ export default function DiscussionPanel({
   }, [thread?.messages.length, liveJob?.text, liveJob?.status]);
 
   const modeSwitch = onModeChange ? (
-    <><SkillsChip workspace={getWorkspace()} docId={docId} /><span className="mode-switch" role="tablist" aria-label="Discussion panel mode">
-      <button role="tab" aria-selected={mode === "individual"} className={mode === "individual" ? "active" : ""} onClick={() => onModeChange("individual")} title="One discussion at a time" data-testid="mode-individual">Individual</button>
-      <button role="tab" aria-selected={mode === "flat"} className={mode === "flat" ? "active" : ""} onClick={() => onModeChange("flat")} title="All discussions of this document as one stream" data-testid="mode-flat">Flat</button>
+    <>{!side && <SkillsChip workspace={getWorkspace()} docId={docId} />}<span className="mode-switch" role="tablist" aria-label="Discussion panel mode">
+      <button role="tab" aria-selected={mode === "individual"} className={mode === "individual" ? "active" : ""} onClick={() => onModeChange("individual")} title={side ? "One side question at a time" : "One discussion at a time"} data-testid="mode-individual">Individual</button>
+      <button role="tab" aria-selected={mode === "flat"} className={mode === "flat" ? "active" : ""} onClick={() => onModeChange("flat")} title={side ? "All side questions of this chat as one stream" : "All discussions of this document as one stream"} data-testid="mode-flat">Flat</button>
     </span></>
   ) : null;
 
@@ -199,30 +205,31 @@ export default function DiscussionPanel({
         modeSwitch={modeSwitch}
         onSessionChanged={onSessionChanged}
         askBox={askBox}
+        side={side}
       />
     );
   }
 
   if (!thread) {
     return (
-      <aside className="discussion" data-testid="discussion-panel">
+      <aside className={`discussion ${side ? "side" : ""}`} data-testid="discussion-panel">
         {resizer}
         <div className="panel-head">
-          <span>Discussions</span>
-          <span className="muted">{threads.length} total</span>
+          <span>{side ? "Side questions" : "Discussions"}</span>
+          <span className="muted">{threads.length} total{side ? " · included when you distill" : ""}</span>
           <span className="spacer" />
           {modeSwitch}
           {onCollapse && <button className="icon-btn" onClick={onCollapse} title="Hide discussions panel" data-testid="panel-collapse">›</button>}
         </div>
         {askBox}
         <div className="thread-list">
-          {threads.length === 0 && <div className="muted pad">Ask above about the whole document, or select text in it to ask about a passage.</div>}
+          {threads.length === 0 && <div className="muted pad">{side ? "Select a part of an answer in the chat and ask about it: the side question is answered here, and the chat keeps its focus." : "Ask above about the whole document, or select text in it to ask about a passage."}</div>}
           {threads.map((t, i) => (
             <button key={t.id} className="thread-item" onClick={() => onSelectThread(t.id)} data-testid="thread-item">
-              <div className="thread-title">Discussion {i + 1} · {t.messages[0]?.content.slice(0, 50)}</div>
+              <div className="thread-title">{side ? "Side question" : "Discussion"} {i + 1} · {t.messages[0]?.content.slice(0, 50)}</div>
               <div className="thread-quote">{quoteLabel(t, 80)}</div>
               <div className="thread-meta">
-                <AnchorBadge state={t.anchor_state} />
+                <AnchorBadge state={badgeState(t)} />
                 <span className="muted">{t.messages.length} messages</span>
               </div>
             </button>
@@ -264,22 +271,27 @@ export default function DiscussionPanel({
   };
 
   return (
-    <aside className="discussion" data-testid="discussion-panel">
+    <aside className={`discussion ${side ? "side" : ""}`} data-testid="discussion-panel">
       {resizer}
       <div className="panel-head">
-        <button className="icon-btn" onClick={() => onSelectThread(null)} title="Back to the discussion list">‹</button>
-        <span className="panel-title">Discussion {idx + 1}/{threads.length}</span>
+        <button className="icon-btn" onClick={() => onSelectThread(null)} title={side ? "Back to the side questions" : "Back to the discussion list"} data-testid="thread-back">‹</button>
+        <span className="panel-title">{side ? "Side question" : "Discussion"} {idx + 1}/{threads.length}</span>
         {onAskDocument && (
           <button className="icon-btn" onClick={() => { onSelectThread(null); setFocusAsk((k) => k + 1); }} title="New question about this document" aria-label="New question" data-testid="new-doc-question"><PlusIcon size={15} /></button>
         )}
         <span className="spacer" />
         {modeSwitch}
-        <button className="btn small nowrap" onClick={showDiff} title="Show the diff between the version this discussion was created on and the current file" data-testid="thread-diff">Diff</button>
+        {!side && <button className="btn small nowrap" onClick={showDiff} title="Show the diff between the version this discussion was created on and the current file" data-testid="thread-diff">Diff</button>}
         {onCollapse && <button className="icon-btn" onClick={onCollapse} title="Hide discussions panel" data-testid="panel-collapse">›</button>}
       </div>
       <div className="thread-body">
         <section className="quote-box">
-          {thread.anchor_state === "page" ? (
+          {thread.target?.kind === "side" ? (
+            <>
+              <div className="label">About this part of the chat <AnchorBadge state="side" /></div>
+              <blockquote className={onShowQuote ? "clickable" : ""} onClick={() => onShowQuote?.(thread)} title={onShowQuote ? "Show this part in the chat" : undefined} data-testid="thread-quote">{thread.anchor.quote}</blockquote>
+            </>
+          ) : thread.anchor_state === "page" ? (
             <div data-testid="thread-target">
               <div className="label">{targetLabel(thread.target)} <AnchorBadge state={thread.anchor_state} /></div>
               {thread.target?.attachments?.map((n) => (
@@ -328,7 +340,7 @@ export default function DiscussionPanel({
           ))}
           <div ref={bottomRef} />
         </section>
-        <SelectionAsk container={messagesRef} hint="Added to this discussion" testId="thread-sel-ask"
+        <SelectionAsk container={messagesRef} hint={side ? "Added to this side question" : "Added to this discussion"} testId="thread-sel-ask"
           onAsk={(p, q) => onReply(thread.id, quotedQuestion(p.quote, q), sessionChoice === "__last__" ? null : sessionChoice)} />
         {diff && (
           <section className="diff-box">
@@ -394,8 +406,10 @@ export function statusLabel(s: string): string {
   }
 }
 
+const badgeState = (t: Thread) => (t.target?.kind === "side" ? "side" : t.anchor_state);
+
 function AnchorBadge({ state }: { state: string }) {
-  const label = { attached: "attached", moved: "moved", ambiguous: "ambiguous", orphaned: "orphaned", document: "whole document", page: "attached image" }[state] ?? state;
+  const label = { attached: "attached", moved: "moved", ambiguous: "ambiguous", orphaned: "orphaned", document: "whole document", page: "attached image", side: "side question" }[state] ?? state;
   return <span className={`chip anchor ${state}`} data-testid="anchor-state">{label}</span>;
 }
 
@@ -504,8 +518,9 @@ export function jobStatusLabel(s: string): string {
 /** Flat mode: every discussion of the document in one chronological stream. Each thread is a group headed by its
  *  quoted passage; messages keep their thread/session. The composer continues the selected thread (default: the
  *  most recent one) so related questions can be asked without switching threads. */
-function FlatPanel({ threads, sessions, sessionsById, defaultSessionId, liveJob, activeThreadId, onReply, onRetry, onCancel, onPermission, onSelectThread, onCollapse, resizer, modeSwitch, onSessionChanged, askBox }: {
+function FlatPanel({ threads, sessions, sessionsById, defaultSessionId, liveJob, activeThreadId, onReply, onRetry, onCancel, onPermission, onSelectThread, onCollapse, resizer, modeSwitch, onSessionChanged, askBox, side = false }: {
   askBox?: React.ReactNode;
+  side?: boolean;
   threads: Thread[];
   sessions: AgentSession[];
   sessionsById: Record<string, AgentSession>;
@@ -560,10 +575,10 @@ function FlatPanel({ threads, sessions, sessionsById, defaultSessionId, liveJob,
   };
 
   return (
-    <aside className="discussion flat" data-testid="discussion-panel" data-mode="flat">
+    <aside className={`discussion flat ${side ? "side" : ""}`} data-testid="discussion-panel" data-mode="flat">
       {resizer}
       <div className="panel-head">
-        <span>Discussions</span>
+        <span>{side ? "Side questions" : "Discussions"}</span>
         <span className="muted">{threads.length} · {totalMessages} messages</span>
         <span className="spacer" />
         {modeSwitch}
@@ -571,7 +586,7 @@ function FlatPanel({ threads, sessions, sessionsById, defaultSessionId, liveJob,
       </div>
       {askBox}
       <div className="thread-body flat-stream" data-testid="flat-stream" ref={streamRef}>
-        {ordered.length === 0 && <div className="muted pad">Ask above about the whole document, or select text in it to ask about a passage. In flat mode all discussions of this document appear here as one stream.</div>}
+        {ordered.length === 0 && <div className="muted pad">{side ? "Select a part of an answer in the chat and ask about it. In flat mode all side questions of this chat appear here as one stream." : "Ask above about the whole document, or select text in it to ask about a passage. In flat mode all discussions of this document appear here as one stream."}</div>}
         {ordered.map((t, i) => {
           const live = liveJob && liveJob.threadId === t.id ? liveJob : null;
           const liveMessageId = t.messages.find((m) => m.job_id === live?.jobId)?.id;
@@ -579,9 +594,9 @@ function FlatPanel({ threads, sessions, sessionsById, defaultSessionId, liveJob,
           return (
             <section key={t.id} className={`flat-group ${t.id === targetId ? "target" : ""}`} data-testid="flat-group" data-thread-id={t.id}>
               <header className="flat-group-head">
-                <button className="flat-quote" onClick={() => { setTargetId(t.id); onSelectThread(t.id); }} title="Reply to this discussion and scroll the document to its passage">
+                <button className="flat-quote" onClick={() => { setTargetId(t.id); onSelectThread(t.id); }} title={side ? "Reply to this side question and show its part in the chat" : "Reply to this discussion and scroll the document to its passage"} data-testid="flat-quote">
                   <span className="flat-index">#{i + 1}</span>
-                  <AnchorBadge state={t.anchor_state} />
+                  <AnchorBadge state={badgeState(t)} />
                   <span className="quote-text">{quoteLabel(t, 140)}</span>
                 </button>
                 <span className="muted small">{utc8(t.created_at)}{differs ? " · other session" : ""}</span>
@@ -594,7 +609,7 @@ function FlatPanel({ threads, sessions, sessionsById, defaultSessionId, liveJob,
         })}
         <div ref={bottomRef} />
       </div>
-      <SelectionAsk container={streamRef} hint="Added to that discussion" testId="thread-sel-ask"
+      <SelectionAsk container={streamRef} hint={side ? "Added to that side question" : "Added to that discussion"} testId="thread-sel-ask"
         onAsk={async (p, q) => { if (p.threadId) await onReply(p.threadId, quotedQuestion(p.quote, q), null); }} />
       <div className="composer">
         {target ? (
@@ -607,11 +622,11 @@ function FlatPanel({ threads, sessions, sessionsById, defaultSessionId, liveJob,
                 ))}
               </select>
             )}
-            <span> · select text in the document to start a new one</span>
+            <span> · select text in {side ? "the chat" : "the document"} to start a new one</span>
             {targetSess && onSessionChanged && <ModelPicker session={targetSess} onChanged={onSessionChanged} compact />}
           </div>
         ) : (
-          <div className="muted small">Select text in the document to start the first discussion.</div>
+          <div className="muted small">Select text in {side ? "an answer of the chat to ask the first side question" : "the document to start the first discussion"}.</div>
         )}
         <textarea value={text} onChange={(e) => setText(e.target.value)} disabled={!target} placeholder={target ? `Continue the discussion (${COMPOSER_HINT})` : "No discussion yet"} onKeyDown={(e) => composerKeyDown(e, () => void send(), setText)} rows={3} data-testid="flat-reply-input" />
         <div className="composer-row">
@@ -646,7 +661,7 @@ function quoteLabel(t: { anchor_state: string; anchor: { quote: string }; target
     const q = t.anchor.quote;
     return targetLabel(t.target) + (q ? ` · "${q.slice(0, max)}${q.length > max ? "…" : ""}"` : "");
   }
-  if (t.anchor_state === "document" || !t.anchor.quote) return "📄 whole document";
+  if (t.target?.kind !== "side" && (t.anchor_state === "document" || !t.anchor.quote)) return "📄 whole document";
   const q = t.anchor.quote;
   return `"${q.slice(0, max)}${q.length > max ? "…" : ""}"`;
 }

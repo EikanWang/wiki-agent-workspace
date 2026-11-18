@@ -789,6 +789,24 @@ class DevService:
                 "summary": {"files": len(files), "additions": sum(f["additions"] for f in files),
                             "deletions": sum(f["deletions"] for f in files)}}
 
+    async def refresh_base(self, dev_id: str) -> dict[str, Any]:
+        """Fetch the latest base branch from GitHub (a pull request's base moves on): the branch's diff against its
+        base is then against the base as it is now."""
+        row, t = self._ready(dev_id)
+        base_ref = row.base_ref or ""
+        if not base_ref.startswith("refs/waw/base/") or not row.github_repo:
+            raise conflict("NO_BASE_REMOTE", "the base is a local branch: there is nothing to fetch")
+        base = base_ref.removeprefix("refs/waw/base/")
+        wt = row.worktree_path
+        before = await self._commit_of(t, wt, base_ref)
+        remotes = {k.lower(): v for k, v in (await github_remotes(t, wt)).items()}
+        src = remotes.get(row.github_repo.lower()) or f"https://github.com/{row.github_repo}.git"
+        rc, _, err = await t.git(wt, ["fetch", "--no-tags", "--quiet", src, f"+refs/heads/{base}:{base_ref}"], timeout=900)
+        if rc != 0:
+            raise ApiError(502, "GIT_FETCH_FAILED", f"could not fetch {base}: {err.strip()[-400:]}")
+        after = await self._commit_of(t, wt, base_ref)
+        return {"base_ref": base_ref, "before": before, "after": after, "updated": before != after}
+
     async def refs(self, dev_id: str) -> dict[str, Any]:
         """What the Changes view can compare: the branch's own commits, recent history, and branches."""
         row, t = self._ready(dev_id)

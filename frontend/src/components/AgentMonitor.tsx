@@ -1,6 +1,7 @@
 import { Splitter, usePane } from "./Split";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ApiError, MachineInfo, WorkspaceInfo, get, post, put } from "../api";
+import { AgentSession, ApiError, MachineInfo, WorkspaceInfo, get, post, put } from "../api";
+import ModelChoice from "./ModelChoice";
 import { confirmAction } from "./Confirm";
 import FolderPicker from "./FolderPicker";
 import MarkdownView from "./MarkdownView";
@@ -34,6 +35,17 @@ const ago = (iso: string | null) => {
 };
 const LEVEL_ORDER = { alarm: 0, error: 1, warning: 2, busy: 3, ok: 4 };
 const STATE_LABEL: Record<string, string> = { working: "working", needs_input: "needs you", error: "error", stalled: "stalled", idle: "idle", missing: "not found" };
+
+/** What the next messages to a session run with (control commands of its composer); unset: the session's own. */
+interface Controls { model?: string; variant?: string; agent?: string }
+const COMMANDS: { name: string; args: string; help: string; providers?: Provider[] }[] = [
+  { name: "model", args: "[provider/model | default]", help: "the model the next messages use (no argument: choose one)" },
+  { name: "effort", args: "[level | default]", help: "the reasoning level (variant) of the next messages", providers: ["opencode", "codex"] },
+  { name: "agent", args: "[name | default]", help: "the OpenCode agent (build, plan, …) of the next messages", providers: ["opencode"] },
+  { name: "reset", args: "", help: "back to the session's own model, effort and agent" },
+  { name: "help", args: "", help: "list these commands" },
+];
+const commandsFor = (p: Provider) => COMMANDS.filter((c) => !c.providers || c.providers.includes(p));
 
 // ---------------------------------------------------------------- sidebar
 
@@ -435,6 +447,45 @@ function SessionStage({ item, onClose, onUnwatch, onChanged, onRename, onDelete 
   const stick = useRef(true);
   const base = `/monitor/session/${item.provider}/${encodeURIComponent(item.id)}`;
   const mq = onMachine(item);
+  const ctlKey = `waw.mon.ctl.${keyOf(item)}`;
+  const [ctl, setCtlState] = useState<Controls>(() => { try { return JSON.parse(localStorage.getItem(ctlKey) ?? "{}"); } catch { return {}; } });
+  const setCtl = (c: Controls) => {
+    const clean = Object.fromEntries(Object.entries(c).filter(([, v]) => v)) as Controls;
+    setCtlState(clean);
+    if (Object.keys(clean).length) localStorage.setItem(ctlKey, JSON.stringify(clean));
+    else localStorage.removeItem(ctlKey);
+  };
+  const [picker, setPicker] = useState<"model" | "agent" | null>(null);
+  const [agentText, setAgentText] = useState("");
+  const input = useRef<HTMLTextAreaElement>(null);
+  const cmds = commandsFor(item.provider);
+  /** a control command (`/model …`): true when `t` was one (it is not sent to the agent) */
+  const command = (t: string): boolean => {
+    const m = /^\/(\w+)(?:\s+([\s\S]*))?$/.exec(t.trim());
+    const c = m && cmds.find((x) => x.name === m[1].toLowerCase() || (m[1].toLowerCase() === "variant" && x.name === "effort"));
+    if (!m || !c) return false;
+    const arg = (m[2] ?? "").trim();
+    const reset = /^(default|reset|none)$/i.test(arg);
+    if (arg && !reset && !/^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$/.test(arg)) {
+      setErr(`/${c.name}: "${arg.slice(0, 60)}" is not a valid name`);
+      return true;
+    }
+    setErr(null);
+    if (c.name === "help") setNote(cmds.map((x) => `/${x.name} ${x.args} — ${x.help}`).join("\n"));
+    else if (c.name === "reset") { setCtl({}); setPicker(null); setNote("The next messages use the session's own model, effort and agent."); }
+    else if (c.name === "model") {
+      if (!arg) setPicker("model");
+      else { setCtl({ ...ctl, model: reset ? undefined : arg, ...(reset ? { variant: undefined } : {}) }); setPicker(null); }
+    } else if (c.name === "effort") {
+      if (!arg) setPicker("model");
+      else { setCtl({ ...ctl, variant: reset ? undefined : arg }); setPicker(null); }
+    } else if (c.name === "agent") {
+      if (!arg) { setAgentText(ctl.agent ?? ""); setPicker("agent"); }
+      else { setCtl({ ...ctl, agent: reset ? undefined : arg }); setPicker(null); }
+    }
+    return true;
+  };
+  const suggest = /^\/\w*$/.test(text) ? cmds.filter((c) => c.name.startsWith(text.slice(1).toLowerCase())) : [];
   const load = useCallback(async () => {
     try {
       setDetail(await get(`${base}?limit=${limit}${onMachine(item, "&")}`));
@@ -454,10 +505,14 @@ function SessionStage({ item, onClose, onUnwatch, onChanged, onRename, onDelete 
   const send = async () => {
     const t = text.trim();
     if (!t) return;
-    setErr(null);
     setNote(null);
+    if (command(t)) {
+      setText("");
+      return;
+    }
+    setErr(null);
     try {
-      const r = await post<{ busy_warning: boolean }>(`${base}/send${mq}`, { text: t });
+      const r = await post<{ busy_warning: boolean }>(`${base}/send${mq}`, { text: t, ...ctl });
       setText("");
       if (r.busy_warning) setNote("The session looked busy (maybe open in a terminal): your message was sent anyway.");
       stick.current = true;
@@ -519,8 +574,43 @@ function SessionStage({ item, onClose, onUnwatch, onChanged, onRename, onDelete 
         <div ref={bottom} />
       </div>
       <div className="mon-composer">
-        {note && <div className="muted small">{note}</div>}
-        <textarea rows={3} value={text} onChange={(e) => setText(e.target.value)} placeholder={`Message ${PROV_LABEL[d.provider]} in this session (${COMPOSER_HINT})`}
+        {note && <div className="muted small mon-note" data-testid="mon-note">{note}</div>}
+        {(Object.keys(ctl).length > 0 || picker) && (
+          <div className="mon-controls small" data-testid="mon-controls">
+            <span className="muted">Next messages:</span>
+            {ctl.model && <span className="chip mono" data-testid="mon-ctl-model">model {ctl.model} <button className="icon-btn small" onClick={() => setCtl({ ...ctl, model: undefined })} aria-label="Back to the session's model">×</button></span>}
+            {ctl.variant && <span className="chip" data-testid="mon-ctl-effort">effort {ctl.variant} <button className="icon-btn small" onClick={() => setCtl({ ...ctl, variant: undefined })} aria-label="Back to the session's effort">×</button></span>}
+            {ctl.agent && <span className="chip" data-testid="mon-ctl-agent">agent {ctl.agent} <button className="icon-btn small" onClick={() => setCtl({ ...ctl, agent: undefined })} aria-label="Back to the session's agent">×</button></span>}
+            {picker === "model" && (
+              <span className="mon-picker" data-testid="mon-model-picker">
+                <ModelChoice provider={d.provider} providers={[d.provider]} value={ctl.model || ctl.variant ? { provider: d.provider, model: ctl.model, variant: ctl.variant } : null}
+                  session={{ provider: d.provider, model: d.model, variant: null } as unknown as AgentSession}
+                  onChange={(v) => setCtl({ ...ctl, model: v?.model, variant: v?.variant })} />
+                <button className="btn small" onClick={() => setPicker(null)} data-testid="mon-picker-done">Done</button>
+              </span>
+            )}
+            {picker === "agent" && (
+              <span className="mon-picker" data-testid="mon-agent-picker">
+                <input value={agentText} onChange={(e) => setAgentText(e.target.value)} placeholder="agent name (build, plan, …)" className="mono" data-testid="mon-agent-input"
+                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); command(`/agent ${agentText.trim() || "default"}`); } }} />
+                <button className="btn small" onClick={() => command(`/agent ${agentText.trim() || "default"}`)} data-testid="mon-agent-set">Set</button>
+              </span>
+            )}
+            {!picker && <button className="link-btn small" onClick={() => setCtl({})} data-testid="mon-ctl-reset">reset</button>}
+          </div>
+        )}
+        {suggest.length > 0 && (
+          <div className="mon-cmd-suggest" role="listbox" data-testid="mon-cmd-suggest">
+            {suggest.map((c) => (
+              <button key={c.name} role="option" className="mon-cmd" data-testid="mon-cmd"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => { setText(""); setNote(null); command(`/${c.name}`); input.current?.focus(); }}>
+                <span className="mono">/{c.name}</span> <span className="muted">{c.args}</span> <span className="muted small">— {c.help}</span>
+              </button>
+            ))}
+          </div>
+        )}
+        <textarea ref={input} rows={3} value={text} onChange={(e) => setText(e.target.value)} placeholder={`Message ${PROV_LABEL[d.provider]} in this session — / for commands such as /model (${COMPOSER_HINT})`}
           onKeyDown={(e) => composerKeyDown(e, () => void send(), setText)} disabled={!d.found} data-testid="mon-input" />
         <div className="row">
           <span className="muted small">Runs in {d.directory ?? "~"} with the provider's permission rules; for interactive prompts use <b>Open in terminal</b>.</span>

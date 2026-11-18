@@ -108,6 +108,8 @@ def main(argv):
     rest = []
     while i < len(args):
         a = args[i]
+        if a == "--agent":
+            (STATE / "opencode_last_agent").write_text(args[i + 1])
         if a in ("--format", "--agent"):
             i += 2
             continue

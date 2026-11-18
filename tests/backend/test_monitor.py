@@ -96,6 +96,23 @@ async def test_monitor_discover_status_send(running_app, settings, homes, tmp_pa
         assert d["send"]["state"] == "done", d
         assert d["messages"][-1]["text"] == expect
     assert (await api.post("/api/v1/monitor/session/claude/nope-123/send", json={"text": "x"})).status_code == 404
+    # control commands (/model, /effort, /agent): for that message
+    for f in ("opencode_last_model", "opencode_last_variant", "opencode_last_agent"):
+        (fake_env / f).unlink(missing_ok=True)
+    r = await api.post(f"/api/v1/monitor/session/opencode/{oc_id}/send", json={"text": "with controls", "model": "acme/big", "variant": "high", "agent": "plan"})
+    assert r.status_code == 202, r.text
+    for _ in range(100):
+        d = (await api.get(f"/api/v1/monitor/session/opencode/{oc_id}")).json()
+        if d["send"] and d["send"]["state"] != "running":
+            break
+        await asyncio.sleep(0.05)
+    assert d["send"]["state"] == "done", d
+    assert (fake_env / "opencode_last_model").read_text() == "acme/big" and (fake_env / "opencode_last_variant").read_text() == "high"
+    assert (fake_env / "opencode_last_agent").read_text() == "plan"
+    for bad in ({"model": "--upload=x"}, {"agent": "a b"}, {"variant": "-x"}):
+        assert (await api.post(f"/api/v1/monitor/session/opencode/{oc_id}/send", json={"text": "x", **bad})).status_code == 400, bad
+    r = await api.post("/api/v1/monitor/session/claude/cl-q/send", json={"text": "x", "agent": "plan"})
+    assert r.status_code == 400 and r.json()["error"]["code"] == "UNSUPPORTED_CONTROL"
     # codex: the error of the last turn
     write_codex(homes["codex"], "cx-err", str(proj), [ev("task_started"), ev("task_complete", error={"message": "401 Unauthorized"})])
     d = (await api.get("/api/v1/monitor/session/codex/cx-err")).json()

@@ -42,7 +42,9 @@ function fingerprint(s: string): string {
  * commit, another branch), "Viewed" marks, questions to the agent about a file or some lines, and committing the
  * files you pick with a message the agent can draft, then pushing.
  */
-export default function DevChanges({ dev, refreshKey, onChanged, onAsk, onOpenFile, wide, onToggleWide, scope, onScope }: {
+export default function DevChanges({ dev, refreshKey, onChanged, onAsk, onOpenFile, wide, onToggleWide, scope, onScope, modeRequest }: {
+  /** switch to this comparison (e.g. the branch against its base, from the Pull request tab) */
+  modeRequest?: { mode: string; at: number } | null;
   /** only this folder / file of the worktree; null: everything */
   scope: string | null;
   onScope: (p: string | null) => void;
@@ -56,7 +58,9 @@ export default function DevChanges({ dev, refreshKey, onChanged, onAsk, onOpenFi
   wide: boolean;
   onToggleWide: () => void;
 }) {
-  const [mode, setMode] = useState<Mode>(() => sessionStorage.getItem(`waw.dev.compare.${dev.id}`) ?? "wt");
+  // a pull request's workspace opens on the branch's changes against its base, like the PR's "Files changed"
+  const [mode, setMode] = useState<Mode>(() => modeRequest?.mode ?? sessionStorage.getItem(`waw.dev.compare.${dev.id}`) ?? (dev.pr_number && dev.base_ref ? "branch" : "wt"));
+  useEffect(() => { if (modeRequest) setMode(modeRequest.mode); }, [modeRequest]);
   useEffect(() => { sessionStorage.setItem(`waw.dev.compare.${dev.id}`, mode); }, [mode, dev.id]);
   const [layout, setLayout] = useState<"unified" | "split">(() => (localStorage.getItem("waw.diffLayout") === "split" ? "split" : "unified"));
   useEffect(() => { localStorage.setItem("waw.diffLayout", layout); }, [layout]);
@@ -66,6 +70,7 @@ export default function DevChanges({ dev, refreshKey, onChanged, onAsk, onOpenFi
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  const [baseNote, setBaseNote] = useState<string | null>(null);
   const [msg, setMsg] = useState(() => sessionStorage.getItem(`waw.dev.commitmsg.${dev.id}`) ?? "");
   useEffect(() => { sessionStorage.setItem(`waw.dev.commitmsg.${dev.id}`, msg); }, [msg, dev.id]);
   const [busy, setBusy] = useState<string | null>(null);
@@ -262,6 +267,33 @@ export default function DevChanges({ dev, refreshKey, onChanged, onAsk, onOpenFi
               </optgroup>
             )}
           </select>
+          {refs?.base_ref && (
+            <span className="mode-switch" role="tablist" aria-label="Quick comparison">
+              <button role="tab" aria-selected={mode === "wt"} className={mode === "wt" ? "active" : ""} onClick={() => setMode("wt")} title="Only what is not committed yet" data-testid="dev-compare-wt">Uncommitted</button>
+              <button role="tab" aria-selected={mode === "branch" || mode === "branch-committed"} className={mode === "branch" || mode === "branch-committed" ? "active" : ""}
+                onClick={() => setMode("branch")} title={`Every change of this branch since it left ${refs.base_label ?? "its base"} (uncommitted work included)`} data-testid="dev-compare-branch">
+                Branch vs {refs.base_label ?? "base"}
+              </button>
+            </span>
+          )}
+          {refs?.base_ref?.startsWith("refs/waw/base/") && (mode === "branch" || mode === "branch-committed") && (
+            <button className="icon-btn small" disabled={busy === "base"} data-testid="dev-base-fetch"
+              title={`Fetch the latest ${refs.base_label ?? "base"} from GitHub: the diff is then against the base as it is now`}
+              onClick={async () => {
+                setBusy("base");
+                setErr(null);
+                try {
+                  const r = await post<{ updated: boolean }>(`/dev/workspaces/${dev.id}/base/fetch`);
+                  setBaseNote(r.updated ? `fetched the latest ${refs.base_label ?? "base"}` : `${refs.base_label ?? "the base"} is up to date`);
+                  await load();
+                } catch (e) {
+                  setErr((e as ApiError).message);
+                } finally {
+                  setBusy(null);
+                }
+              }}>{busy === "base" ? "…" : "⟳"}</button>
+          )}
+          {baseNote && (mode === "branch" || mode === "branch-committed") && <span className="muted small" data-testid="dev-base-note">{baseNote}</span>}
           {scope && (
             <span className="chip dev-scope" title={`Only the changes of ${scope}`} data-testid="dev-diff-scope">
               <span className="mono">{scope}</span>

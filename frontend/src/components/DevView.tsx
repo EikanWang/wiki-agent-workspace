@@ -31,6 +31,7 @@ export default function DevView({ devId, workspaces, sessions, onSessionsChanged
   onOpenPrReview?: (repo: string, number: number) => void;
 }) {
   const [dev, setDev] = useState<DevWorkspace | null>(null);
+  const [changesMode, setChangesMode] = useState<{ mode: string; at: number } | null>(null);
   const [info, setInfo] = useState<DevInfo | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -143,9 +144,10 @@ export default function DevView({ devId, workspaces, sessions, onSessionsChanged
     setReveal({ anchor: { root: "wt", file: path, start_line: line ?? null, end_line: line ?? null, quote: "" }, at: Date.now() });
   } : undefined;
   const showDiff = (path: string | null) => { setChangesScope(path); setChangesWide(true); };
+  const showBranchDiff = () => { setChangesScope(null); setChangesMode({ mode: "branch-committed", at: Date.now() }); setChangesWide(true); };
   const changes = (wide: boolean) => (
     <DevChanges key={dev.id} dev={dev} refreshKey={refresh} onChanged={() => void load()} onAsk={askAbout} onOpenFile={openFile}
-      scope={changesScope} onScope={setChangesScope}
+      scope={changesScope} onScope={setChangesScope} modeRequest={changesMode}
       wide={wide} onToggleWide={() => {
         setChangesWide(!wide);
         if (wide) { setBottom("changes"); setBottomOpen(true); } // back to the editor: the changes stay at hand below it
@@ -282,7 +284,7 @@ export default function DevView({ devId, workspaces, sessions, onSessionsChanged
                   {bottom === "changes" && (changesWide
                     ? <div className="muted small dev-hint">The changes are shown in the editor area. <button className="link-btn" onClick={() => setChangesWide(false)}>Show them here</button></div>
                     : changes(false))}
-                  {bottom === "pr" && <PrTab key={dev.id} dev={dev} onAsk={ask} onChanged={() => void load()} />}
+                  {bottom === "pr" && <PrTab key={dev.id} dev={dev} onAsk={ask} onChanged={() => void load()} onShowDiff={dev.base_ref ? showBranchDiff : undefined} />}
                 </div>
               )}
             </div>

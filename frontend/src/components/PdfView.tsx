@@ -358,9 +358,59 @@ function PdfPage({ pdf, n, size, scale, unit, discussions, onOpenThread, onAskPa
     };
   }, [visible, pdf, n, scale]);
 
-  const frac = (e: React.MouseEvent) => {
+  const frac = (e: { clientX: number; clientY: number }) => {
     const r = host.current!.querySelector(".pdfjs-page-body")!.getBoundingClientRect();
     return { x: Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)), y: Math.min(1, Math.max(0, (e.clientY - r.top) / r.height)) };
+  };
+  const onAreaRef = useRef(onArea);
+  onAreaRef.current = onArea;
+  // an area can be taller than the screen: the drag goes on outside the page, the view scrolls near its top and
+  // bottom edges (or with the wheel), and the rectangle follows
+  const startDrag = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const p0 = frac(e);
+    let pt = { clientX: e.clientX, clientY: e.clientY };
+    let cur = { x0: p0.x, y0: p0.y, x1: p0.x, y1: p0.y };
+    setDrag(cur);
+    const box = host.current?.closest<HTMLElement>(".pdfjs-pages") ?? null;
+    const update = () => {
+      const p = frac(pt);
+      cur = { ...cur, x1: p.x, y1: p.y };
+      setDrag(cur);
+    };
+    let moved = false; // no scrolling before the drag has begun (a start near an edge)
+    let raf = 0;
+    const tick = () => {
+      if (box && moved) {
+        const r = box.getBoundingClientRect();
+        const edge = 48;
+        const dy = pt.clientY < r.top + edge ? -Math.min(30, r.top + edge - pt.clientY) : pt.clientY > r.bottom - edge ? Math.min(30, pt.clientY - (r.bottom - edge)) : 0;
+        if (dy) {
+          box.scrollTop += dy;
+          update();
+        }
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    const move = (ev: MouseEvent) => {
+      moved ||= Math.hypot(ev.clientX - e.clientX, ev.clientY - e.clientY) > 8;
+      pt = { clientX: ev.clientX, clientY: ev.clientY };
+      update();
+    };
+    const up = () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+      box?.removeEventListener("scroll", update);
+      setDrag(null);
+      const x = Math.min(cur.x0, cur.x1), y = Math.min(cur.y0, cur.y1);
+      const rw = Math.abs(cur.x1 - cur.x0), rh = Math.abs(cur.y1 - cur.y0);
+      if (rw > 0.01 && rh > 0.01) onAreaRef.current([x, y, rw, rh]);
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+    box?.addEventListener("scroll", update);
   };
 
   return (
@@ -387,19 +437,7 @@ function PdfPage({ pdf, n, size, scale, unit, discussions, onOpenThread, onAskPa
           <div
             className="pdfjs-area"
             data-testid="pdfjs-area"
-            onMouseDown={(e) => {
-              e.preventDefault();
-              const p = frac(e);
-              setDrag({ x0: p.x, y0: p.y, x1: p.x, y1: p.y });
-            }}
-            onMouseMove={(e) => drag && setDrag({ ...drag, ...((p) => ({ x1: p.x, y1: p.y }))(frac(e)) })}
-            onMouseUp={() => {
-              if (!drag) return;
-              const x = Math.min(drag.x0, drag.x1), y = Math.min(drag.y0, drag.y1);
-              const rw = Math.abs(drag.x1 - drag.x0), rh = Math.abs(drag.y1 - drag.y0);
-              setDrag(null);
-              if (rw > 0.01 && rh > 0.01) onArea([x, y, rw, rh]);
-            }}
+            onMouseDown={startDrag}
             onKeyDown={(e) => e.key === "Escape" && onAreaMode(false)}
           >
             {drag && (

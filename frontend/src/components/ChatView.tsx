@@ -1,8 +1,9 @@
 import ModelChoice, { ModelChoiceValue } from "./ModelChoice";
 import SkillsChip from "./SkillsChip";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AgentSession, ApiError, OpenDocument, Thread, del, getWorkspace } from "../api";
-import { LiveJob, MessageView } from "./DiscussionPanel";
+import DiscussionPanel, { LiveJob, MessageView } from "./DiscussionPanel";
+import { Resizer } from "./Layout";
 import SelectionAsk from "./SelectionAsk";
 import { confirmAction } from "./Confirm";
 import { usePersistentState } from "../persist";
@@ -17,8 +18,9 @@ type Action = "distill" | "update";
  * A folder chat: an open conversation with the agent about the wiki folder (no particular document). When it has
  * produced something worth keeping, **Distill into a page** writes a new wiki page from it, or **Update source
  * pages** folds what it established back into the pages its content came from; the edits are reviewed in Diff.
- * Selecting a part of an answer asks a **side question** about it: answered in the side panel (its own session), so
- * the chat keeps its focus; a distill / update includes the side questions.
+ * Selecting a part of an answer asks a **side question** about it: answered in the discussion panel on the right (its
+ * own session; Individual / Flat like a document's discussions), so the chat keeps its focus; a distill / update
+ * includes the side questions.
  */
 export default function ChatView({ doc, folderName, threads, sessions, liveJob, sideLive = null, onStart, onSend, onAction, onRetry, onCancel, onPermission, onReviewChanges, onArchived, onWatchJob,
   onSideAsk, onSideReply, onWatchSideJob, workspaceId }: {
@@ -39,9 +41,9 @@ export default function ChatView({ doc, folderName, threads, sessions, liveJob, 
   onArchived: () => void;
   /** follow a running turn (e.g. one started elsewhere: a change summary, or after a reload) */
   onWatchJob?: (jobId: string) => void;
-  /** a side question about `quote` (a part of the answer `messageId` of the chat `mainId`) */
-  onSideAsk?: (mainId: string, messageId: string | null, quote: string, question: string) => Promise<void>;
-  onSideReply?: (threadId: string, text: string) => Promise<void>;
+  /** a side question about `quote` (a part of the answer `messageId` of the chat `mainId`): its thread's id */
+  onSideAsk?: (mainId: string, messageId: string | null, quote: string, question: string) => Promise<string | null>;
+  onSideReply?: (threadId: string, text: string, sessionChoice: string | null) => Promise<void>;
   onWatchSideJob?: (jobId: string) => void;
   /** the chat's project (folder) when it is not the window's active one */
   workspaceId?: string;
@@ -49,8 +51,12 @@ export default function ChatView({ doc, folderName, threads, sessions, liveJob, 
   const thread = threads.find((t) => t.target?.kind !== "side") ?? null; // a chat is one conversation…
   const sides = thread ? threads.filter((t) => t.target?.kind === "side" && t.target.of === thread.id) : []; // …and its side questions
   const [sideOpen, setSideOpen] = usePersistentState("chat.sideOpen", true);
+  const [sideMode, setSideMode] = usePersistentState<"individual" | "flat">("chat.sideMode", "individual");
+  const [sideWidth, setSideWidth] = usePersistentState("chat.sideWidth", 420);
+  const resizeSide = useCallback((dx: number) => setSideWidth((w) => Math.min(900, Math.max(280, w - dx))), [setSideWidth]);
+  const [activeSideId, setActiveSideId] = useState<string | null>(null);
+  const activeSide = sides.find((t) => t.id === activeSideId) ?? null;
   const messagesRef = useRef<HTMLElement>(null);
-  const sideBottom = useRef<HTMLDivElement>(null);
   const title = (doc.text.split("\n", 1)[0] || "Chat").replace(/^#\s*/, "");
   const [text, setText] = usePersistentState(`chat.${doc.document_id}`, ""); // an unsent message survives a reload
   const [busy, setBusy] = useState(false);
@@ -77,10 +83,6 @@ export default function ChatView({ doc, folderName, threads, sessions, liveJob, 
     if (sidePending && sidePending !== sideLive?.jobId) onWatchSideJob?.(sidePending);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sidePending]);
-  const sideCount = sides.reduce((n, t) => n + t.messages.length, 0);
-  useEffect(() => {
-    sideBottom.current?.scrollIntoView({ block: "end" });
-  }, [sideCount, sideLive?.text.length]);
   const showMessage = (id: string | null | undefined) => {
     const el = id ? messagesRef.current?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(id)}"]`) : null;
     el?.scrollIntoView({ block: "center", behavior: "smooth" });
@@ -131,6 +133,7 @@ export default function ChatView({ doc, folderName, threads, sessions, liveJob, 
   };
 
   return (
+    <div className="chat-wrap">
     <div className="chat-view" data-testid="chat-view">
       <header className="chat-head">
         <div>
@@ -142,7 +145,6 @@ export default function ChatView({ doc, folderName, threads, sessions, liveJob, 
         <button className="btn small" onClick={onReviewChanges} title="Review the folder's uncommitted changes (what a distill / update wrote)" data-testid="chat-review-changes">Review changes</button>
         <button className="btn small" onClick={archive} disabled={busy} data-testid="chat-archive">Archive</button>
       </header>
-      <div className="chat-body">
       <div className="chat-main">
       <section className="chat-messages messages" ref={messagesRef}>
         {!thread && <div className="chat-empty muted">Ask anything about this wiki — questions across pages, comparisons, open issues. When the conversation is worth keeping, distill it into a page or fold it back into the pages it came from.</div>}
@@ -153,9 +155,10 @@ export default function ChatView({ doc, folderName, threads, sessions, liveJob, 
         <div ref={bottom} />
       </section>
       {thread && onSideAsk && (
-        <SelectionAsk container={messagesRef} hint="Answered on the side; included when you distill" testId="chat-sel-ask"
+        <SelectionAsk container={messagesRef} hint="Answered in the side questions panel; included when you distill" testId="chat-sel-ask"
           onAsk={async (p, q) => {
-            await onSideAsk(thread.id, p.messageId, p.quote, q);
+            const id = await onSideAsk(thread.id, p.messageId, p.quote, q);
+            if (id) setActiveSideId(id);
             setSideOpen(true);
           }} />
       )}
@@ -195,72 +198,26 @@ export default function ChatView({ doc, folderName, threads, sessions, liveJob, 
         </div>
       </div>
       </div>
+    </div>
       {sides.length > 0 && !sideOpen && (
         <button className="chat-side-tab" onClick={() => setSideOpen(true)} title="Show the side questions" data-testid="chat-side-expand">‹ Side questions ({sides.length})</button>
       )}
       {sides.length > 0 && sideOpen && (
-        <aside className="chat-side" data-testid="chat-side">
-          <div className="panel-head">
-            <span>Side questions</span>
-            <span className="muted small">{sides.length} · included when you distill</span>
-            <span className="spacer" />
-            <button className="icon-btn" onClick={() => setSideOpen(false)} title="Hide the side questions" data-testid="chat-side-collapse">›</button>
-          </div>
-          <div className="chat-side-list">
-            {sides.map((t) => (
-              <SideQuestion key={t.id} thread={t} sessions={sessions} live={sideLive && sideLive.threadId === t.id ? sideLive : null}
-                onShow={() => showMessage(t.target?.message_id)} onReply={(q) => onSideReply ? onSideReply(t.id, q) : onSend(t.id, q)}
-                onRetry={(mid, sid) => onRetry(t.id, mid, sid)} onCancel={onCancel} onPermission={onPermission} />
-            ))}
-            <div ref={sideBottom} />
-          </div>
-        </aside>
+        <div className="chat-side" style={{ width: sideWidth }} data-testid="chat-side">
+          <DiscussionPanel side thread={activeSide} threads={sides} sessions={sessions} defaultSessionId={null} liveJob={sideLive}
+            onReply={(tid, q, sc) => (onSideReply ? onSideReply(tid, q, sc) : onSend(tid, q))}
+            onRetry={onRetry} onCancel={onCancel} onPermission={onPermission}
+            onSelectThread={(id) => {
+              setActiveSideId(id);
+              const t = sides.find((x) => x.id === id);
+              if (t) showMessage(t.target?.message_id);
+            }}
+            onShowQuote={(t) => showMessage(t.target?.message_id)}
+            docId={null} onRequestReanchor={() => undefined} reanchorArmed={false}
+            onCollapse={() => setSideOpen(false)} resizer={<Resizer side="left" onResize={resizeSide} />}
+            mode={sideMode} onModeChange={setSideMode} />
+        </div>
       )}
-      </div>
     </div>
-  );
-}
-
-/** A side question: the part of the answer it is about, its Q&A, and a box to go on. */
-function SideQuestion({ thread, sessions, live, onShow, onReply, onRetry, onCancel, onPermission }: {
-  thread: Thread;
-  sessions: AgentSession[];
-  live: LiveJob | null;
-  onShow: () => void;
-  onReply: (text: string) => Promise<void>;
-  onRetry: (messageId: string, sessionChoice: string | null) => Promise<void>;
-  onCancel: (jobId: string) => Promise<void>;
-  onPermission: (jobId: string, requestId: string, decision: string) => Promise<void>;
-}) {
-  const [text, setText] = usePersistentState(`chat.side.${thread.id}`, "");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const sessionsById = Object.fromEntries(sessions.map((s) => [s.id, s]));
-  const liveMessageId = thread.messages.find((m) => m.job_id === live?.jobId)?.id;
-  const send = () => {
-    const q = text.trim();
-    if (!q || busy) return;
-    setBusy(true);
-    setErr(null);
-    onReply(q)
-      .then(() => setText(""))
-      .catch((e) => setErr((e as ApiError).message))
-      .finally(() => setBusy(false));
-  };
-  return (
-    <section className="chat-side-item" data-testid="chat-side-item" data-thread-id={thread.id}>
-      <blockquote className="chat-side-quote" onClick={onShow} title="Show this part in the chat" data-testid="chat-side-quote">
-        {thread.anchor.quote.length > 400 ? `${thread.anchor.quote.slice(0, 400)}…` : thread.anchor.quote}
-      </blockquote>
-      <div className="messages">
-        {thread.messages.map((m) => (
-          <MessageView key={m.id} m={m} session={m.session_id ? sessionsById[m.session_id] : undefined} live={m.id === liveMessageId ? live : null}
-            onRetry={(sid) => onRetry(m.id, sid)} onCancel={onCancel} onPermission={onPermission} sessions={sessions} />
-        ))}
-      </div>
-      <textarea rows={2} value={text} onChange={(e) => setText(e.target.value)} disabled={busy} placeholder={`Follow up on this side question (${COMPOSER_HINT})`}
-        onKeyDown={(e) => composerKeyDown(e, send, setText, () => setText(""))} data-testid="chat-side-input" />
-      {err && <div className="error-text small" role="alert">{err}</div>}
-    </section>
   );
 }

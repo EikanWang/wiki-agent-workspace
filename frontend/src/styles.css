@@ -610,7 +610,11 @@ mark.waw-hl.review.needs_review { border-bottom: 2px dashed var(--warn); }
 .pdfjs-pages { position: relative; flex: 1; min-height: 0; overflow: auto; padding: 12px 20px; background: color-mix(in srgb, var(--fg) 6%, var(--bg)); display: flex; flex-direction: column; align-items: center; gap: 14px; }
 .pdfjs-page { display: flex; flex-direction: column; gap: 4px; scroll-margin-top: 8px; }
 .pdfjs-page.flash .pdfjs-page-body { outline: 3px solid var(--primary); }
-.pdfjs-page-bar { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+/* floats at the top of the view while its page is in view (a page can be taller than the screen) */
+.pdfjs-page-bar { display: flex; align-items: center; gap: 6px; font-size: 12px; position: sticky; top: 0; z-index: 4; padding: 4px 6px; margin: 0 -6px; border-radius: 6px; background: color-mix(in srgb, color-mix(in srgb, var(--fg) 6%, var(--bg)) 88%, transparent); backdrop-filter: blur(4px); }
+/* it floats over the page: a drag (select area) or a text selection under it reaches the page */
+.pdfjs-page-bar { pointer-events: none; }
+.pdfjs-page-bar button, .pdfjs-page-bar a, .pdfjs-page-bar select { pointer-events: auto; }
 .pdfjs-page-no { font-weight: 600; color: var(--muted); }
 .pdfjs-page-body { position: relative; background: #fff; box-shadow: 0 1px 6px rgba(0, 0, 0, 0.18); transition: outline 0.2s; }
 .pdfjs-page-body canvas { display: block; }
@@ -815,7 +819,7 @@ mark.waw-hl.review.needs_review { border-bottom: 2px dashed var(--warn); }
 .context-folders { display: flex; flex-direction: column; gap: 8px; min-width: 420px; max-width: 640px; padding: 12px 14px; background: var(--bg); border: 1px solid var(--border); border-radius: 10px; }
 /* folder chats */
 .layout.view-chat { grid-template-columns: var(--sidebar-width, 260px) 1fr; }
-.chat-view { display: flex; flex-direction: column; min-height: 0; flex: 1; width: 100%; max-width: 1600px; margin: 0 auto; padding: 8px 24px; box-sizing: border-box; }
+.chat-view { display: flex; flex-direction: column; min-height: 0; min-width: 0; flex: 1; padding: 8px 24px; box-sizing: border-box; }
 .chat-head { display: flex; align-items: flex-start; gap: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
 .chat-title { margin: 0; font-size: 18px; }
 .chat-messages { flex: 1; overflow: auto; padding: 12px 0; display: flex; flex-direction: column; gap: 10px; }
@@ -828,15 +832,13 @@ mark.waw-hl.review.needs_review { border-bottom: 2px dashed var(--warn); }
 /* under the text box: agent SDK, model, variant (effort) — then Send */
 .chat-composer-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .chat-composer textarea { flex: none; width: 100%; box-sizing: border-box; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; background: var(--bg); color: inherit; font: inherit; resize: vertical; }
-.chat-body { flex: 1; min-height: 0; display: flex; gap: 12px; }
+.chat-wrap { display: flex; flex: 1; min-height: 0; width: 100%; }
 .chat-main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
-.chat-side { flex: 0 0 min(420px, 40%); min-height: 0; display: flex; flex-direction: column; border-left: 1px solid var(--border); background: var(--card); }
-.chat-side-list { flex: 1; overflow: auto; padding: 8px 10px; display: flex; flex-direction: column; gap: 12px; }
-.chat-side-item { display: flex; flex-direction: column; gap: 6px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
-.chat-side-item .messages { display: flex; flex-direction: column; gap: 6px; }
-.chat-side-quote { margin: 0; padding: 4px 8px; border-left: 3px solid var(--primary); color: var(--muted); font-size: 13px; white-space: pre-wrap; cursor: pointer; }
-.chat-side-item textarea { width: 100%; box-sizing: border-box; border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; background: var(--bg); color: inherit; font: inherit; resize: vertical; }
-.chat-side-tab { writing-mode: vertical-rl; transform: rotate(180deg); border: none; border-right: 1px solid var(--border); background: transparent; color: var(--muted); cursor: pointer; padding: 12px 6px; font-size: 13px; white-space: nowrap; }
+/* the side questions: the discussion panel, flush with the right edge */
+.chat-side { flex: none; display: flex; min-height: 0; max-width: 60%; }
+.chat-side > .discussion { flex: 1; min-width: 0; }
+.discussion blockquote.clickable { cursor: pointer; }
+.chat-side-tab { writing-mode: vertical-rl; border: none; border-left: 1px solid var(--border); background: var(--card); color: var(--muted); cursor: pointer; padding: 12px 6px; font-size: 13px; white-space: nowrap; }
 .chat-side-tab:hover { color: var(--primary); }
 /* a question about the selected part of an answer */
 .sel-ask { position: fixed; z-index: 50; }
@@ -1213,6 +1215,12 @@ body.resizing-v iframe { pointer-events: none; }
 .mon-tool { color: var(--muted); padding-left: 10px; border-left: 2px solid var(--border); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mon-send-out { max-height: 200px; overflow: auto; font-size: 11px; background: var(--card); padding: 6px; white-space: pre-wrap; }
 .mon-composer { border-top: 1px solid var(--border); padding: 6px 10px; display: flex; flex-direction: column; gap: 4px; }
+.mon-note { white-space: pre-wrap; }
+.mon-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.mon-picker { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.mon-cmd-suggest { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 6px; background: var(--card); overflow: hidden; }
+.mon-cmd { text-align: left; border: none; background: none; color: inherit; padding: 4px 8px; cursor: pointer; font-size: 13px; }
+.mon-cmd:hover, .mon-cmd:focus { background: color-mix(in srgb, var(--primary) 10%, transparent); }
 .mon-composer textarea { width: 100%; border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; background: var(--bg); color: var(--fg); resize: vertical; font: inherit; }
 .mon-manual { margin-top: 2px; }
 .mon-manual input, .mon-manual select, .mon-filter { flex: 1; min-width: 0; border: 1px solid var(--border); border-radius: 6px; padding: 2px 6px; background: var(--bg); color: var(--fg); font-size: 12px; }

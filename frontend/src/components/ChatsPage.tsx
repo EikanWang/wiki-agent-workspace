@@ -179,13 +179,14 @@ export default function ChatsPage({ workspaces, target, onTarget, sessions, onRe
             onWatchJob={(j) => setJobId(j)}
             sideLive={sideLive}
             onSideAsk={async (mainId, messageId, quote, question) => {
-              const r = await post<{ job_id: string }>(`/documents/${doc.document_id}/threads`, { ...wholeDocument(), version_sha256: doc.sha256, quote, question,
+              const r = await post<{ job_id: string; thread_id: string }>(`/documents/${doc.document_id}/threads`, { ...wholeDocument(), version_sha256: doc.sha256, quote, question,
                 side_of: mainId, side_message_id: messageId ?? undefined }, { idempotencyKey: newIdempotencyKey(), workspace: ws });
               await loadThreads(doc, ws);
               setSideJobId(r.job_id);
+              return r.thread_id;
             }}
-            onSideReply={async (tid, text) => {
-              const r = await post<{ job_id: string }>(`/threads/${tid}/messages`, { text }, { idempotencyKey: newIdempotencyKey() });
+            onSideReply={async (tid, text, sc) => {
+              const r = await post<{ job_id: string }>(`/threads/${tid}/messages`, { text, session_id: sc ?? undefined }, { idempotencyKey: newIdempotencyKey() });
               await loadThreads(doc, ws);
               setSideJobId(r.job_id);
             }}

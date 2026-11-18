@@ -634,6 +634,12 @@ async def git_refs(dev_id: str, ctx: AppContext = Depends(require_auth)):
     return await _svc(ctx).refs(dev_id)
 
 
+@router.post("/dev/workspaces/{dev_id}/base/fetch")
+async def git_refresh_base(dev_id: str, ctx: AppContext = Depends(require_auth_mutating)):
+    """Fetch the latest base branch (what the branch's diff is against)."""
+    return await _svc(ctx).refresh_base(dev_id)
+
+
 @router.get("/dev/workspaces/{dev_id}/compare/file")
 async def git_file_at(dev_id: str, path: str = Query(min_length=1, max_length=4096), ref: str = Query("worktree", max_length=250),
                       ctx: AppContext = Depends(require_auth)):

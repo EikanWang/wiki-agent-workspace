@@ -1885,7 +1885,7 @@ test("PDF (PDF.js): ask about selected text, a whole page, an area — pictures 
     await expect(p2.getByTestId("pdfjs-page-threads")).toHaveText("1 discussion"); // the page shows its discussion
     // 3) an area of page 1
     const p1 = viewer.locator('[data-page="1"]');
-    await p1.scrollIntoViewIfNeeded();
+    await p1.evaluate((el) => el.scrollIntoView({ block: "start" }));
     await p1.getByTestId("pdfjs-select-area").click();
     const area = p1.getByTestId("pdfjs-area");
     const b = (await area.boundingBox())!;
@@ -1899,6 +1899,26 @@ test("PDF (PDF.js): ask about selected text, a whole page, an area — pictures 
     await page.getByTestId("selection-send").click();
     await expect(page.locator('[data-testid="message-agent"][data-status="completed"]').last()).toContainText("What is this figure?", { timeout: 20000 });
     await expect(page.getByTestId("thread-target")).toContainText("Area of page 1");
+    // 4) scrolled into the middle of a page, its Ask / Select area stay at the top of the view
+    const pages = viewer.locator(".pdfjs-pages");
+    await p1.evaluate((el) => {
+      const box = el.closest(".pdfjs-pages")!;
+      box.scrollTop += el.getBoundingClientRect().top - box.getBoundingClientRect().top + el.getBoundingClientRect().height * 0.4;
+    });
+    const top = (await pages.boundingBox())!.y;
+    const ask = (await p1.getByTestId("pdfjs-ask-page").boundingBox())!;
+    expect(ask.y).toBeGreaterThanOrEqual(top - 1);
+    expect(ask.y).toBeLessThan(top + 40);
+    // an area dragged past the bottom of the view: the view scrolls and the area goes on
+    await p1.getByTestId("pdfjs-select-area").click();
+    const vb = (await pages.boundingBox())!;
+    const st0 = await pages.evaluate((b) => b.scrollTop);
+    await page.mouse.move(vb.x + vb.width / 2 - 50, vb.y + 80);
+    await page.mouse.down();
+    await page.mouse.move(vb.x + vb.width / 2 + 50, vb.y + vb.height - 10, { steps: 5 });
+    await expect.poll(() => pages.evaluate((b) => b.scrollTop)).toBeGreaterThan(st0 + 40);
+    await page.mouse.up();
+    await expect(page.locator(".sel-head")).toContainText("Ask about an area of page");
   } finally {
     fs.rmSync(pdf, { force: true });
   }
@@ -3517,6 +3537,16 @@ test("PR Development: your pull requests of a repository; check one out in a fol
   await expect(page.getByTestId("dev-pr-closed")).toBeVisible();
   await page.getByTestId("dev-pr").getByTestId("dev-pr-reopen").click();
   await expect(page.getByTestId("dev-pr").getByTestId("dev-pr-close")).toBeVisible();
+  // the PR's files changed: the branch's commits against its base
+  await page.getByTestId("dev-pr-diff").click();
+  await expect(page.getByTestId("dev-compare")).toHaveValue("branch-committed");
+  await expect(page.getByTestId("dev-compare-branch")).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator('[data-testid="dev-diff-file"][data-path="app.py"]')).toBeVisible();
+  await page.getByTestId("dev-base-fetch").click();
+  await expect(page.getByTestId("dev-base-note")).toContainText(/up to date|fetched the latest/);
+  await page.getByTestId("dev-compare-wt").click();
+  await expect(page.getByTestId("dev-compare")).toHaveValue("wt");
+  await page.getByTestId("dev-changes-wide").click();
   // update the PR: change, commit, push to its branch
   fs.writeFileSync(path.join(proj, "app.py"), "VALUE = 3  # updated\n");
   await page.getByTestId("dev-changes-toggle").click();
@@ -4007,6 +4037,35 @@ test("Agents: find sessions in folders, add one by id, alarms, a session on stag
   await page.getByTestId("mon-input").fill("follow-up from the monitor");
   await page.getByTestId("mon-send").click();
   await expect(page.getByTestId("mon-transcript")).toContainText("echo: follow-up from the monitor", { timeout: 20000 });
+  // control commands: "/" lists them; /model opens the model picker, /model <id> and /agent <name> set them for the
+  // next messages (not sent to the agent)
+  await page.getByTestId("mon-input").fill("/");
+  await expect(page.getByTestId("mon-cmd-suggest")).toContainText("/model");
+  await page.getByTestId("mon-input").fill("/mo");
+  await expect(page.getByTestId("mon-cmd")).toHaveCount(1);
+  await page.getByTestId("mon-cmd").click();
+  await expect(page.getByTestId("mon-model-picker").getByTestId("model-choice")).toBeVisible();
+  await page.getByTestId("mon-picker-done").click();
+  await page.getByTestId("mon-input").fill("/model acme/big");
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("mon-ctl-model")).toContainText("acme/big");
+  await expect(page.getByTestId("mon-input")).toHaveValue("");
+  await page.getByTestId("mon-input").fill("/agent plan");
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("mon-ctl-agent")).toContainText("plan");
+  await page.getByTestId("mon-input").fill("/help");
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("mon-note")).toContainText("/effort");
+  const agentState = path.join(path.dirname(workspaceDir()), "fake-agent-state");
+  fs.rmSync(path.join(agentState, "opencode_last_agent"), { force: true });
+  await page.getByTestId("mon-input").fill("with the big model");
+  await page.getByTestId("mon-send").click();
+  await expect(page.getByTestId("mon-transcript")).toContainText("echo: with the big model", { timeout: 20000 });
+  expect(fs.readFileSync(path.join(agentState, "opencode_last_model"), "utf-8")).toBe("acme/big");
+  expect(fs.readFileSync(path.join(agentState, "opencode_last_agent"), "utf-8")).toBe("plan");
+  await expect(page.getByTestId("mon-transcript")).not.toContainText("echo: /model");
+  await page.getByTestId("mon-ctl-reset").click();
+  await expect(page.getByTestId("mon-controls")).toHaveCount(0);
   await page.getByTestId("mon-stage-close").click();
   await expect(stage).toHaveCount(0);
   // the list of all sessions is folded; unchecking an automatically monitored one removes it
@@ -4392,20 +4451,35 @@ test("chat: a side question about a selected part of an answer is answered on th
     await expect(page.getByTestId("chat-sel-ask-quote")).toHaveText("a guard check");
     await page.getByTestId("chat-sel-ask-input").fill("Explain guards more");
     await page.keyboard.press("Enter");
+    // the side questions panel is the discussion panel: flush with the right edge of the page
     const side = page.getByTestId("chat-side");
-    await expect(side.getByTestId("chat-side-quote")).toHaveText("a guard check");
+    await expect(side.getByTestId("thread-quote")).toHaveText("a guard check");
     await expect(side.locator('[data-testid="message-agent"][data-status="completed"]')).toHaveText(/echo: Explain guards more/, { timeout: 20000 });
     await expect(page.getByTestId("chat-sel-ask")).toHaveCount(0);
     await expect(main.locator('[data-testid="message-agent"]')).toHaveCount(1);
-    await side.getByTestId("chat-side-input").fill("And when do they fail?");
-    await side.getByTestId("chat-side-input").press("Enter");
+    const vw = page.viewportSize()!.width;
+    expect(Math.abs((await side.boundingBox())!.x + (await side.boundingBox())!.width - vw)).toBeLessThan(2);
+    await side.getByTestId("reply-input").fill("And when do they fail?");
+    await side.getByTestId("reply-input").press("Enter");
     await expect(side.locator('[data-testid="message-agent"][data-status="completed"]')).toHaveCount(2, { timeout: 20000 });
+    // selecting a part of a side answer asks more in the same side question
+    await selectInside(side.locator('[data-testid="message-agent"] .msg-body').last(), "when do they fail");
+    await page.getByTestId("thread-sel-ask-open").click();
+    await page.getByTestId("thread-sel-ask-input").fill("Which failures matter?");
+    await page.keyboard.press("Enter");
+    await expect(side.locator('[data-testid="message-agent"][data-status="completed"]')).toHaveCount(3, { timeout: 20000 });
+    await expect(side.locator(".panel-title")).toHaveText("Side question 1/1");
+    // flat: every side question of the chat as one stream; individual again
+    await side.getByTestId("mode-flat").click();
+    await expect(side.getByTestId("flat-group")).toHaveCount(1);
+    await expect(side.getByTestId("flat-stream")).toContainText("Which failures matter?");
+    await side.getByTestId("mode-individual").click();
     // the panel folds away and back (it survives a reload)
-    await page.getByTestId("chat-side-collapse").click();
+    await side.getByTestId("panel-collapse").click();
     await expect(side).toHaveCount(0);
     await page.getByTestId("chat-side-expand").click();
     await page.reload();
-    await expect(page.getByTestId("chat-side").getByTestId("chat-side-item")).toHaveCount(1, { timeout: 15000 });
+    await expect(page.getByTestId("chat-side").getByTestId("thread-item")).toHaveCount(1, { timeout: 15000 });
     // the distill includes the side questions
     await page.getByTestId("chat-action-distill").check();
     await page.getByTestId("chat-target").fill("side-notes/guards.md");

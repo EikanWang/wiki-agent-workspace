@@ -984,23 +984,50 @@ async def session_detail(provider: str, sid: str, limit: int = Query(200, ge=1, 
             "send_output": (send or {}).get("output", "")[-6000:] if send else None}
 
 
+_CONTROL = r"^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$"  # a model / variant / agent name (it reaches the provider's argv)
+
+
 class SendIn(BaseModel):
     text: str = Field(min_length=1, max_length=100_000)
+    # control commands of the monitor's composer (/model, /effort, /agent): for this message (none: the session's own)
+    model: str | None = Field(None, max_length=200, pattern=_CONTROL)
+    variant: str | None = Field(None, max_length=40, pattern=_CONTROL)
+    agent: str | None = Field(None, max_length=100, pattern=_CONTROL)
 
 
 def _send_argv(ctx: AppContext, provider: str, sid: str, text: str, cwd: str, version: str | None = None,
-               exe: str | None = None) -> tuple[list[str], bytes | None]:
+               exe: str | None = None, *, model: str | None = None, variant: str | None = None, agent: str | None = None,
+               current_model: str | None = None) -> tuple[list[str], bytes | None]:
     exe = exe or _bin(ctx, provider)
     if not exe:
         raise ApiError(503, "PROVIDER_UNAVAILABLE", f"{provider} is not installed on the server")
     if provider == "opencode":
         from .agents.opencode import is_v2
 
-        here = [] if is_v2(version) else ["--dir", cwd]  # v2 has no --dir: the process runs in cwd
-        return [exe, "run", "--session", sid, *here, "--format", "json", "--", text], None
+        v2 = is_v2(version)
+        here = [] if v2 else ["--dir", cwd]  # v2 has no --dir: the process runs in cwd
+        opts: list[str] = []
+        if v2:  # "provider/model#variant": an effort alone goes with the session's current model
+            m = (model or (current_model if variant else None) or "").split("#", 1)[0]
+            if variant and not m:
+                raise bad_request("the session's model is unknown: choose one with /model first", "MODEL_REQUIRED")
+            if m:
+                opts += ["--model", f"{m}#{variant}" if variant else m]
+        else:
+            opts += ["--model", model] if model else []
+            opts += ["--variant", variant] if variant else []
+        opts += ["--agent", agent] if agent else []
+        return [exe, "run", "--session", sid, *here, *opts, "--format", "json", "--", text], None
+    if agent:
+        raise bad_request(f"{provider} has no agents to choose (/agent is for OpenCode)", "UNSUPPORTED_CONTROL")
     if provider == "codex":
-        return [exe, "exec", "resume", "--json", "--skip-git-repo-check", sid, "-"], text.encode("utf-8")
-    return [exe, "-p", "--resume", sid, "--output-format", "text", text], None
+        opts = ["-m", model] if model else []
+        opts += ["-c", f'model_reasoning_effort="{variant}"'] if variant else []
+        return [exe, "exec", "resume", "--json", "--skip-git-repo-check", *opts, sid, "-"], text.encode("utf-8")
+    if variant:
+        raise bad_request("Claude Code has no reasoning level to choose here (/effort is for OpenCode and Codex)", "UNSUPPORTED_CONTROL")
+    opts = ["--model", model] if model else []
+    return [exe, "-p", "--resume", sid, *opts, "--output-format", "text", text], None
 
 
 def _remote_tool(ctx: AppContext, machine: str, provider: str) -> dict[str, Any]:
@@ -1053,18 +1080,20 @@ async def send(provider: str, sid: str, body: SendIn, machine: str | None = Mach
     snap = await snapshot(ctx, provider, sid, await opencode_listing(ctx) if provider == "opencode" and not machine else None, machine)
     if not snap.found:
         raise not_found(snap.missing or f"no {provider} session {sid} on this machine", "SESSION_NOT_FOUND")
+    controls: dict[str, Any] = {"model": body.model, "variant": body.variant, "agent": body.agent, "current_model": snap.model}
     if machine:
         tool = _remote_tool(ctx, machine, provider)
         if tool and not tool.get("ok"):
             raise ApiError(503, "PROVIDER_UNAVAILABLE", f"{provider} is not installed on {machine} (as of its last probe)")
         cwd = await _remote_cwd(ctx, machine, snap.directory)
-        argv, stdin = _send_argv(ctx, provider, sid, body.text, cwd, str(tool.get("version") or "") or None, remote.bin_of(ctx, machine, provider))
+        argv, stdin = _send_argv(ctx, provider, sid, body.text, cwd, str(tool.get("version") or "") or None, remote.bin_of(ctx, machine, provider),
+                                 **controls)
         argv = await _remote_argv(ctx, machine, provider, argv, cwd)
         lcwd, lenv = None, None
     else:
         cwd = snap.directory if snap.directory and Path(snap.directory).is_dir() else str(Path.home())
         version = (await ctx.providers.capabilities("opencode")).version if provider == "opencode" else None
-        argv, stdin = _send_argv(ctx, provider, sid, body.text, cwd, version)
+        argv, stdin = _send_argv(ctx, provider, sid, body.text, cwd, version, **controls)
         lcwd, lenv = cwd, agent_env(None, cwd)
     st: dict[str, Any] = {"state": "running", "started_at": _iso(time.time()), "rc": None, "output": "", "busy_warning": snap.turn_open}
     _sending[key] = st

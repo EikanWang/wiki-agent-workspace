@@ -108,7 +108,17 @@ export function TasksTab({ dev, onAsked }: { dev: DevWorkspace; onAsked: () => v
 
 /** The pull request: create one (description drafted by the agent if you like), or see its checks and hand review
  * comments / failing CI to the agent. */
-export function PrTab({ dev, onAsk, onChanged }: { dev: DevWorkspace; onAsk: (kind: string, text: string) => Promise<void>; onChanged: () => void }) {
+export function PrTab({ dev, onAsk, onChanged, onShowDiff }: {
+  dev: DevWorkspace;
+  onAsk: (kind: string, text: string) => Promise<void>;
+  onChanged: () => void;
+  /** show the branch's committed changes against its base (what the pull request contains) */
+  onShowDiff?: () => void;
+}) {
+  const baseLabel = (dev.base_ref ?? "").replace(/^refs\/waw\/base\/|^refs\/heads\//, "") || "base";
+  const diffBtn = onShowDiff && (
+    <button className="btn small" onClick={onShowDiff} title={`The changes committed on this branch since it left ${baseLabel}, like the pull request's Files changed`} data-testid="dev-pr-diff">Files changed vs {baseLabel}</button>
+  );
   const [checks, setChecks] = useState<{ name: string; state: string; link?: string; workflow?: string }[] | null>(null);
   const [checksNote, setChecksNote] = useState<string | null>(null);
   const [title, setTitle] = useState("");
@@ -149,6 +159,7 @@ export function PrTab({ dev, onAsk, onChanged }: { dev: DevWorkspace; onAsk: (ki
           {prInfo?.title && <span className="small">{prInfo.title}</span>}
           <span className="muted small">pushes go to <span className="mono">{dev.push_branch}</span></span>
           <span className="spacer" />
+          {diffBtn}
           {dev.github_repo && prInfo && <DevPrState repo={dev.github_repo} number={dev.pr_number} state={prInfo.state} onDone={(st) => setPrInfo({ ...prInfo, state: st })} />}
           <button className="btn small" onClick={() => void onAsk("review", "Address the pull request's review comments.")} data-testid="dev-ask-review">Address review comments</button>
           <button className="btn small" disabled={!failing.length && checks !== null && checks.length > 0} onClick={() => void onAsk("ci", "Fix the pull request's failing CI.")} data-testid="dev-ask-ci">Fix failing CI</button>
@@ -173,6 +184,7 @@ export function PrTab({ dev, onAsk, onChanged }: { dev: DevWorkspace; onAsk: (ki
       <div className="row">
         <button className="btn small" disabled={!!draftJob} onClick={() => void post<{ job_id: string }>(`/dev/workspaces/${dev.id}/draft?what=pr`).then((r) => setDraftJob(r.job_id)).catch((e) => setErr((e as ApiError).message))}>{draftJob ? "Drafting…" : "Draft with agent"}</button>
         <button className="btn small" onClick={() => void onAsk("verify", "Verify the changes of this branch against the wiki.")}>Verify against wiki first</button>
+        {diffBtn}
         <label className="small"><input type="checkbox" checked={draft} onChange={(e) => setDraft(e.target.checked)} /> draft</label>
         <span className="spacer" />
         <button className="btn small primary" disabled={!title.trim() || busy || !dev.github_repo} data-testid="dev-pr-create"

@@ -383,6 +383,26 @@ async def test_existing_pr_workspace(running_app, dev_settings, tmp_path, fake_e
     assert "# fixed" in (wt / "lib.py").read_text()
     st = (await api.get(f"/api/v1/dev/workspaces/{d['id']}/status")).json()
     assert st["commits_on_branch"] == 1 and st["unpushed"] == 0  # the PR's commit is already on GitHub
+    # the branch's diff against its base; the base moves on and the PR merges it: fetching the base keeps the diff
+    # to the PR's own changes
+    async def branch_files():
+        c = (await api.get(f"/api/v1/dev/workspaces/{d['id']}/compare", params={"base": "branch", "target": "HEAD"})).json()
+        return sorted(f["path"] for f in c["files"])
+    assert await branch_files() == ["lib.py"]
+    git(other, "checkout", "-q", "main")
+    (other / "later.txt").write_text("later on main\n")
+    git(other, "add", "later.txt")
+    git(other, "commit", "-q", "-m", "later on main")
+    git(other, "push", "-q", str(bare), "main")
+    git(wt, "config", "user.email", "dev@example.com")
+    git(wt, "config", "user.name", "Dev")
+    git(wt, "pull", "-q", "--no-rebase", "--no-edit", str(bare), "main")
+    assert await branch_files() == ["later.txt", "lib.py"]  # against the base as it was
+    r = (await api.post(f"/api/v1/dev/workspaces/{d['id']}/base/fetch")).json()
+    assert r["updated"] is True and r["base_ref"] == "refs/waw/base/main", r
+    assert await branch_files() == ["lib.py"]
+    assert (await api.post(f"/api/v1/dev/workspaces/{d['id']}/base/fetch")).json()["updated"] is False
+    git(wt, "push", "-q", str(bare), "HEAD:fix-thing")
     # PR-specific agent instructions
     r = await api.post(f"/api/v1/dev/workspaces/{d['id']}/ask", json={"text": "go", "kind": "review"})
     await api.wait_job(r.json()["job_id"])
