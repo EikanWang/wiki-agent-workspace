@@ -8,6 +8,7 @@ import asyncio
 import base64
 import hashlib
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,12 @@ from ..errors import ApiError, conflict
 from . import conn
 
 KEYSCAN_TIMEOUT = 10
+# ssh-keyscan makes one connection per key type, none of which logs in; OpenSSH >= 9.8 (PerSourcePenalties) shuts
+# out an address after ~15 of those. Only the types ssh uses for host keys, and the keys the user was shown are
+# reused when they confirm them (within SCAN_KEEP seconds) instead of scanning again.
+KEYSCAN_TYPES = "ed25519,ecdsa,rsa"
+SCAN_KEEP = 600
+_SCANS: dict[tuple, tuple[float, list[tuple[str, str]], str]] = {}
 
 
 async def _local(argv: list[str], timeout: float = 30, stdin: bytes | None = None) -> tuple[int, str, str]:
@@ -101,21 +108,27 @@ async def known_keys(dev: DevSettings, h: DevHost, name: str) -> list[dict[str, 
     return out
 
 
-async def scan(dev: DevSettings, h: DevHost, via: list[DevHost]) -> dict[str, Any]:
-    """The hop's host keys and how each compares with the trusted ones."""
+async def scan(dev: DevSettings, h: DevHost, via: list[DevHost], reuse: bool = False) -> dict[str, Any]:
+    """The hop's host keys and how each compares with the trusted ones (`reuse`: the keys scanned last, if recent)."""
     r = await resolve(dev, h)
-    argv = [dev.ssh_keyscan, "-T", str(KEYSCAN_TIMEOUT), "-p", str(r["port"]), r["hostname"]]
-    if via:
-        t = SshTarget(via[-1], dev.ssh, dev, via=via[:-1])
-        rc, out, err = await Target.run(t, argv, timeout=KEYSCAN_TIMEOUT * 4)
-        where = f"from bastion {via[-1].name}"
+    ck = (tuple(x.name for x in via), r["hostname"], r["port"])
+    kept = _SCANS.get(ck)
+    if reuse and kept and time.monotonic() - kept[0] < SCAN_KEEP:
+        keys, where = kept[1], kept[2]
     else:
-        rc, out, err = await _local(argv, timeout=KEYSCAN_TIMEOUT * 4)
-        where = "from this server"
-    keys = parse_keys(out)
-    if not keys:
-        msg = (err.strip().splitlines() or [f"exit {rc}"])[-1][:300]
-        raise ApiError(502, "HOSTKEY_SCAN_FAILED", f"could not read the host keys of {r['hostname']}:{r['port']} {where}: {msg}")
+        argv = [dev.ssh_keyscan, "-T", str(KEYSCAN_TIMEOUT), "-t", KEYSCAN_TYPES, "-p", str(r["port"]), r["hostname"]]
+        if via:
+            t = SshTarget(via[-1], dev.ssh, dev, via=via[:-1])
+            rc, out, err = await Target.run(t, argv, timeout=KEYSCAN_TIMEOUT * 4)
+            where = f"from bastion {via[-1].name}"
+        else:
+            rc, out, err = await _local(argv, timeout=KEYSCAN_TIMEOUT * 4)
+            where = "from this server"
+        keys = parse_keys(out)
+        if not keys:
+            msg = (err.strip().splitlines() or [f"exit {rc}"])[-1][:300]
+            raise ApiError(502, "HOSTKEY_SCAN_FAILED", f"could not read the host keys of {r['hostname']}:{r['port']} {where}: {msg}")
+        _SCANS[ck] = (time.monotonic(), keys, where)
     known = await known_keys(dev, h, r["known_name"])
     rows = []
     for typ, key in keys:
@@ -152,7 +165,8 @@ async def scan_path(dev: DevSettings, h: DevHost) -> list[dict[str, Any]]:
 
 
 async def trust(dev: DevSettings, h: DevHost, hop_name: str, fingerprints: list[str]) -> dict[str, Any]:
-    """Trust the hop's scanned keys whose fingerprints the user confirmed (scanned again: they must still match)."""
+    """Trust the hop's scanned keys whose fingerprints the user confirmed (the keys they were shown, or scanned
+    again when that was long ago: they must match)."""
     path = hop_path(dev, h)
     idx = next((i for i, x in enumerate(path) if x.name == hop_name), None)
     if idx is None:
@@ -161,7 +175,7 @@ async def trust(dev: DevSettings, h: DevHost, hop_name: str, fingerprints: list[
     if not hop.strict_host_keys or dev.known_hosts is None:
         raise ApiError(409, "MACHINE_READ_ONLY", f"{hop.name} comes from the config file and uses your own ssh settings: "
                                                  f"log in once with `ssh {hop.ssh}` in a terminal to accept its key")
-    r = await scan(dev, hop, path[:idx])
+    r = await scan(dev, hop, path[:idx], reuse=True)
     chosen = [(t, k) for t, k in r["_raw"] if fingerprint(k) in set(fingerprints)]
     if not chosen or len(chosen) != len(set(fingerprints)):
         raise conflict("HOSTKEY_MISMATCH", "the host now presents other keys than the ones you confirmed; check again")
@@ -181,7 +195,6 @@ async def trust(dev: DevSettings, h: DevHost, hop_name: str, fingerprints: list[
                 fh.write("\n")
             fh.write("\n".join(lines) + "\n")
     os.chmod(f, 0o600)
-    r.pop("_raw", None)
-    r = await scan(dev, hop, path[:idx])
+    r = await scan(dev, hop, path[:idx], reuse=True)
     r.pop("_raw", None)
     return r

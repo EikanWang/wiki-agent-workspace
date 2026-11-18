@@ -149,7 +149,8 @@ backend/app/
                    (DevSettings.host() merges both, config wins), validation, in-use checks, machine_changed events
     health.py      hop-by-hop check (each bastion, then the machine through them), ssh errors classified
     hostkeys.py    `ssh -G` resolve, ssh-keyscan (from the last bastion when behind one), SHA256 fingerprints, trust
-                   into the app's known_hosts after a re-scan
+                   into the app's known_hosts of the keys the user was shown (kept 10 min, else scanned again); only
+                   ed25519/ecdsa/rsa are scanned — few unauthenticated connections (OpenSSH PerSourcePenalties)
     probe.py       one sh script on stdin: OS, CPU, memory, disk, sudo, package manager, tools, GPUs (nvidia-smi,
                    xpu-smi, rocm-smi, lspci)
     keys.py        ~/.ssh keys (list, ed25519 generation), ssh-copy-id in an app terminal (password typed there only)

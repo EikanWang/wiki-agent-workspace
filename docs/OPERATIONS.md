@@ -36,6 +36,12 @@ workspace root … no longer exists; relocating …     # only after you moved t
 | Named workspaces (sets of folders) | `named_workspaces` table; terminal tabs reference them | deleting one keeps folders, data and running terminals |
 | Your wiki | `workspace.root` | the app only writes there when you explicitly ask an agent to edit, or apply a preview |
 | Provider transcripts | OpenCode's store / `~/.codex/sessions` | independent copies; the app keeps its own Q&A text |
+| SSH machines, recipes, benchmark definitions and results | `machines`, `machine_recipes`, `bench_defs`, `bench_runs` tables | machines of `[[development.hosts]]` are only in the config file |
+| Host keys trusted in the app | `<state_dir>/ssh/known_hosts` | not in the API backup: copy it too, or trust the keys again |
+| Shared SSH connections | `<state_dir>/ssh/cm/` (or `/tmp/waw-ssh-<uid>-…` when that path is too long for a socket) | sockets; safe to delete (connections are made again) |
+| Logs of machine setup jobs; downloads sent to machines without internet | `<state_dir>/machines/logs/`, `<state_dir>/cache/tools/` | the cache is safe to delete |
+| A/B benchmark worktrees while they run | `<state_dir>/bench/<id>/` here, `<work_dir>/bench/<id>/` on a machine | removed after the run |
+| On a machine (`work_dir`, default `~/.cache/wiki-agent-workspace`) | `bin/`, `tools/` (setup), `env.sh` (recipes' environment), `recipes/`, `runs/<id>/` (logs of builds, tests, benchmarks), `run/` (short-lived 0600 env files), `src/` (clones), `wiki/` (read-only snapshots), `opencode/` | deleting it is undone by **Set up** again; worktrees there are lost |
 
 ## Backup
 
@@ -109,6 +115,13 @@ dismissed.
 | Symptom | Cause / fix |
 | --- | --- |
 | Browser can't reach `http://host:8765` from another machine | Server binds to `127.0.0.1` by default. Use an SSH tunnel, or set `server.bind = "0.0.0.0"` and restart. Check `ss -ltn \| grep 8765` and the host firewall. |
+| A machine shows **unreachable** right after several **Host keys** scans or failed checks, then recovers | OpenSSH 9.8+ servers briefly shut out an address that opens many connections without logging in (`PerSourcePenalties`; `penalty:` in the server's log). Wait a minute and **Check** again. The app keeps its own scans to a minimum. |
+| **host key changed** | The machine (or a bastion) presents another key than the one trusted. If it was reinstalled, compare the new fingerprint under **Host keys** and **Trust** it; otherwise stop and ask its administrator. Config-file hosts: `ssh-keygen -R <host>` and log in once in a terminal. |
+| **login refused** | The key is not in the machine's `authorized_keys`: **Install key**. For a config-file host, `ssh <host> true` in a terminal shows what ssh does. |
+| `MACHINE_BUSY` when starting a build or test | A benchmark holds that machine (`exclusive = true`, the default). Wait for it or stop it in **Benchmarks**. |
+| A benchmark run says a metric was not found | The JSON path or regex matched nothing in the output: **Output** in the run shows what the command printed between the `@@waw-bench` marks. |
+| Set up fails at a recipe | Its log (Set up → the job) shows the script's output; **Run** runs that recipe again after a fix. Package installs need password-less sudo; otherwise the job shows the command for an administrator. |
+| Commands to a machine hang after it was rebooted or its network changed | A stale shared connection: editing the machine (or deleting `<state_dir>/ssh/cm/`) closes it. |
 | GitHub / `gh` / agent errors like "could not connect", "timed out", "certificate" only when the app runs them (fine in your shell) | The systemd service lacks your proxy, CA certificates or `PATH`. Run `scripts/service.sh install` again from a shell that has them; it writes them into the service and restarts it (see DEPLOYMENT §4). |
 | Browser shows a proxy "Access Denied" page | The browser sent the private address through a corporate proxy. Add the host/IP to the proxy bypass (`no_proxy`) list, or use the tunnel. |
 | `403 ORIGIN_NOT_ALLOWED` / `CSRF_INVALID` | Browser `Origin` doesn't match the `Host` the server sees (reverse proxy rewriting Host, or different hostname/port). Add the public origin to `allowed_origins`, set `trusted_proxies` so `X-Forwarded-Host` is honoured, or open the UI via the same URL the API uses. |

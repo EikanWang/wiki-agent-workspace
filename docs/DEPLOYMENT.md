@@ -258,6 +258,33 @@ ssh = "me@gpu-box"                 # key authentication (BatchMode); test with: 
 work_dir = "~/.cache/wiki-agent-workspace"
 ```
 
+### Another machine, step by step
+
+The app reaches other machines with this server's `ssh` (OpenSSH), as your user; nothing runs as root on either side
+and nothing needs to be installed there by hand except what the table below lists.
+
+| On the machine | Needed for |
+| --- | --- |
+| an SSH server you can log in to with a key (password only for the first login) | everything |
+| `sh`, `git`, `tar` and `curl` or `wget` | worktrees, setup |
+| `tmux` 2.1 or later (3.2+ for full colour) | terminals, builds/tests/benchmarks that go on through dropped connections and restarts (without it they stop when the connection drops) |
+| the sshd's `AllowStreamLocalForwarding` (OpenSSH default `yes`) | the VS Code editor and its integration extension |
+
+1. **Machines → Add machine**: name, `user@host` (or an alias of your `~/.ssh/config`), and the bastions it is
+   reached through, if any (add those first, *kind: bastion*). Or put it in `[[development.hosts]]` of the config
+   file (CONFIGURATION.md) — shown read-only in the app, using your own ssh settings and `~/.ssh/known_hosts`.
+2. **Host keys**: compare each hop's fingerprint with the one the administrator gives you, then **Trust**.
+3. **Install key** if the login needs a password: the app opens a terminal running `ssh-copy-id`; type the password
+   there. **Check** then says *online*, or which hop failed and why.
+4. **Probe** shows what it has (OS, GPUs, tools); **Environment** chooses what it gets from this server (API tokens
+   of the agent env script, proxy, CA bundle) — nothing by default.
+5. **Set up** installs opencode, code-server and gh into its work folder (downloaded there, or sent from this server
+   when it has no internet), then runs your **recipes** in order (conda, oneAPI, dependencies).
+6. **Development → New** and choose the machine: the worktree, editor, agent, builds/tests and benchmarks run there.
+
+Machines added in the app live in the database; the host keys you trusted are in `<state_dir>/ssh/known_hosts`
+(back it up with the database, or trust them again after a restore).
+
 ## 9. Remote access
 
 The server must never be reachable unauthenticated from a public network; plain HTTP on an untrusted network would

@@ -246,6 +246,26 @@ each bastion of a `via` chain keeps its own. Hosts of the config file keep your 
 added in the app accept only host keys confirmed in the app (stored in `<state_dir>/ssh/known_hosts`, checked after
 `~/.ssh/known_hosts`).
 
+### `.waw/bench.toml` — benchmarks of a repository
+
+Not part of the config file: a file in the repository (read from the workspace's worktree) with one `[[bench]]`
+table per benchmark. The same table can be kept in the app (**Benchmarks → New**, for a workspace or for every
+workspace of a repository); on a name clash the file wins. How runs, comparisons and A/B work: USER_GUIDE.md.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `name` | — (required) | Letters, digits, `-_.` (up to 64). |
+| `command` | — (required) | Shell command run in the worktree, once per warmup and repeat. |
+| `setup` | — | Run once before; skipped while the commit, the uncommitted changes and the setup itself are unchanged. |
+| `warmup` | `0` | Runs whose results are dropped (0–20). |
+| `repeat` | `5` | Measured runs (1–100). |
+| `timeout` | `1800` | Seconds, per command. |
+| `metrics` | `[]` | `{ name, json = "$.path" \| regex = "…( group )…", better = "lower" \| "higher", unit }`: from JSON in the output, or the last regex match. `wall_s` (how long each run took) is always recorded. |
+| `env` | `{}` | Extra environment variables. |
+| `exclusive` | `true` | Hold the whole machine: no build, test or other benchmark there meanwhile. |
+| `gpus` | `[]` | With `exclusive = false`: only benchmarks sharing one of these GPUs wait for each other. |
+| `threshold` | `5` | % change that counts as a regression or improvement (and at least 2 standard deviations). |
+
 ### `[development.completion]` — AI inline completion (optional)
 
 Ghost-text suggestions in the editor come from one short request to an **OpenAI-compatible** `/chat/completions`
