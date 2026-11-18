@@ -218,6 +218,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     ctx.extra["machines"] = MachineRegistry(ctx)  # the app's own machines join [[development.hosts]] (DevSettings.host)
     ctx.extra["machines"].load()
+    from .machines import rtmux
+
+    ctx.terminals.remote_for = lambda name: rtmux.for_machine(ctx.extra["machines"].dev, name, tmux.socket, settings.tmux_history_limit)
     from .development.editor import EditorManager
     from .development.tasks import TaskRunner
 
@@ -235,6 +238,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if n:
             log.info("marked %d unfinished jobs as interrupted", n)
         ctx.extra["dev_tasks"].mark_interrupted()
+        resumed = ctx.extra["dev_tasks"].resume()  # commands still running in tmux on a machine
+        if resumed:
+            log.info("following %d commands still running on machines", resumed)
         rec = ctx.terminals.reconcile()
         log.info("terminal reconcile: %s", rec)
         try:

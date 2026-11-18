@@ -209,6 +209,9 @@ async def open_terminal(ctx: AppContext, name: str, cwd: str | None, label: str 
             raise bad_request(f"{path} is not a folder on {name}", "CWD_NOT_FOUND")
     except TargetError as exc:
         raise ApiError(502 if exc.code == "DEV_HOST_UNREACHABLE" else 400, exc.code, exc.message)
+    if await asyncio.to_thread(ctx.terminals.remote_ready, name):  # in the machine's own tmux: survives disconnects
+        return await asyncio.to_thread(ctx.terminals.create_remote, name, path, label or name)
+    # no tmux there: the ssh login runs in this server's tmux (it ends with the connection)
     argv, _, _ = t.spawn_argv(["sh", "-c", 'exec "${SHELL:-sh}" -l'], path, None, ssh_opts=["-tt"])
     return await asyncio.to_thread(ctx.terminals.create, str(Path.home()), label or name, argv)
 

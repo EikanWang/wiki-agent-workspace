@@ -398,6 +398,7 @@ event. The user's terminal is never restricted.
 | `tab_order` | INTEGER | Tab position. |
 | `state` | `live` \| `exited` \| `unavailable` \| `closed` | `exited`: tmux session gone; `unavailable`: tmux missing; `closed`: user closed/dismissed (hidden). |
 | `named_workspace_id` | UUID, FK → `named_workspaces.id`, nullable | Workspace the tab is listed in; `NULL` = Default (tabs from before named workspaces, and tabs of deleted workspaces). |
+| `machine` | TEXT, nullable | Machine (Machines view) whose own app tmux (`tmux -L <socket>-r`) runs the session; the browser attaches with `ssh -tt … tmux attach`. `NULL`: this server's tmux. Its state is checked when a tab attaches, not at listing time. |
 | `created_at`, `updated_at` | DATETIME | Lifecycle. |
 
 ## `login_sessions` — browser logins
@@ -461,9 +462,11 @@ stub lives in `snapshots/dev/<id>.md`.
 | `dev_id` | TEXT, FK → dev_workspaces | The workspace. |
 | `kind` | TEXT | `build`, `test` or `custom`. |
 | `command` | TEXT | The shell command, run with `sh -c` in the worktree on the host. |
-| `status` | TEXT | `running`, `passed`, `failed`, `cancelled`, `interrupted` (cut off by a server restart). |
+| `status` | TEXT | `running`, `passed`, `failed`, `cancelled`, `interrupted` (cut off by a server restart, or gone on the machine without an exit code). |
 | `exit_code` | INTEGER, nullable | Exit status. |
-| `log_path` | TEXT | Output (stdout and stderr) in `<state_dir>/dev/logs/<id>.log`. |
+| `log_path` | TEXT | Output (stdout and stderr) in `<state_dir>/dev/logs/<id>.log` (for runs in tmux on a machine: a copy of the log there). |
+| `machine` | TEXT, nullable | Machine whose app tmux runs the command (session `wawrun-<id8>`); `NULL`: a child of the app (this server, or plain `ssh -tt`). |
+| `remote_dir` | TEXT, nullable | The run folder there (`<work_dir>/runs/<id>`: `cmd.sh`, `wrap.sh`, `log`, `pid`, `rc`), removed once the exit code is read. Runs with one are followed again after a restart. |
 | `started_at`, `finished_at` | DATETIME | Timestamps. |
 
 ## `machines` — SSH machines and bastions (Machines view)

@@ -212,6 +212,8 @@ async def running_app(settings):
             pass
     for tmux in tmuxes:
         tmux.kill_server()
+        if tmux.exe:  # the "machines" of the fake ssh are this machine: their app tmux server runs here too
+            subprocess.run([tmux.exe, "-L", f"{tmux.socket}-r", "kill-server"], capture_output=True, timeout=10)
 
 
 @pytest.fixture

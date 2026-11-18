@@ -326,6 +326,8 @@ class Terminal(Base):
     state: Mapped[str] = mapped_column(String(16), default="live")  # live | exited | unavailable | closed
     # the named workspace the tab belongs to (NULL: the Default workspace — terminals from before named workspaces)
     named_workspace_id: Mapped[str | None] = mapped_column(ForeignKey("named_workspaces.id"), nullable=True)
+    # a machine of the Machines view whose own tmux runs the session (NULL: this server's tmux)
+    machine: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 
@@ -470,6 +472,9 @@ class DevTaskRun(Base):
     status: Mapped[str] = mapped_column(String(12), nullable=False, default="running")  # running|passed|failed|cancelled|interrupted
     exit_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
     log_path: Mapped[str] = mapped_column(Text, nullable=False)
+    # run in tmux on a machine: the machine and the run's folder there (its log, pid and exit code); the local log is a copy
+    machine: Mapped[str | None] = mapped_column(Text, nullable=True)
+    remote_dir: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

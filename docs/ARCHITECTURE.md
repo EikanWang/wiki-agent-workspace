@@ -127,8 +127,10 @@ backend/app/
                    same-origin Origin for writes/WebSockets, X-Frame-Options SAMEORIGIN, own CSP kept)
     agent.py       prompts grounded in the whole reference wiki (local folder or read-only snapshot on the host),
                    editor context (file, selection, diagnostics, unsaved buffers, failed task output), task kinds
-    tasks.py       TaskRunner: build / test / custom runs (`sh -c` in the worktree, `ssh -tt` remotely), log files,
-                   cancel, interrupted on restart
+    tasks.py       TaskRunner: build / test / custom runs (`sh -c` in the worktree), log files, cancel. On a machine
+                   with tmux: a `wawrun-<id8>` session there writing <work_dir>/runs/<id>/{log,pid,rc}; followed over
+                   ssh into the local log (again after a dropped connection, resumed after a restart), cancel kills
+                   the process group. Else `ssh -tt` (interrupted on restart)
     files.py       the web editor's file access on the host: list, read, conditional write (sha256), create, rename,
                    delete, stat (follow agent edits), search (git grep / grep); wiki root read-only; no `..`, no .git,
                    no writes through symlinks leaving the worktree
@@ -136,7 +138,7 @@ backend/app/
                    pyright / pylsp) in the worktree; one WS message = one LSP message (Content-Length framing added)
     completion.py  AI inline completion via an OpenAI-compatible /chat/completions endpoint (cached, cleaned)
     routes.py      /dev/… API (also: code-anchored discussions → thread target_json {kind: "code"}, skills, worktree
-                   terminals: tmux sessions, `ssh -tt` login on SSH hosts, ids in kv dev_terminals:<id>); /dev/ext/<id>/… for the extension (Bearer token handed to its editor process)
+                   terminals: tmux sessions, in the host's own app tmux on SSH hosts, ids in kv dev_terminals:<id>); /dev/ext/<id>/… for the extension (Bearer token handed to its editor process)
   machines/        Machines: SSH hosts worked on like the server itself, and the bastions they are reached through
     conn.py        ssh argv per host: allowlisted options, ControlMaster per hop (<state_dir>/ssh/cm, short-path
                    fallback in the temp dir; ControlPath=none for -L/-R/-D/-W), bastion chains as nested app-built
@@ -150,6 +152,9 @@ backend/app/
                    xpu-smi, rocm-smi, lspci)
     keys.py        ~/.ssh keys (list, ed25519 generation), ssh-copy-id in an app terminal (password typed there only)
     routes.py      /machines…, /ssh-keys; terminals on a machine (also POST /terminals {machine})
+    rtmux.py       RemoteTmux: the app's own tmux server on a machine (`-L <socket>-r`, config under work_dir, adapted
+                   to its tmux version, 2.1+); terminals attach with `ssh -tt … tmux attach`; no tmux → ssh login in
+                   this server's tmux
   skills.py        skills of the connected folders and projects (SKILL.md under .opencode/.claude/.agents/.codex
                    skills): discovered per turn by JobManager (open folders + `_skill_folders` of the request), added to
                    OpenCode's config (OPENCODE_CONFIG_CONTENT skills.paths) and listed in every prompt

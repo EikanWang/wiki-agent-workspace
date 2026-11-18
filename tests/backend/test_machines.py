@@ -384,22 +384,69 @@ async def test_install_key_in_terminal(running_app, m_settings, home, fake_env):
 
 @requires_tmux
 async def test_terminal_on_machine(running_app, m_settings, tmp_path, fake_env):
-    api = (await running_app(m_settings)).api
+    h = await running_app(m_settings)
+    api = h.api
     await add(api, name="m1", ssh="m1.internal")
     r = await api.post("/api/v1/terminals", json={"machine": "m1", "cwd": str(tmp_path)})
     assert r.status_code == 201, r.text
-    assert r.json()["label"] == "m1"
-    for _ in range(100):
-        if any("-tt" in c and "m1.internal" in c for c in calls(fake_env)):
-            break
-        await asyncio.sleep(0.05)
-    else:
-        raise AssertionError(calls(fake_env))
+    t = r.json()
+    assert t["label"] == "m1" and t["machine"] == "m1" and t["cwd"] == str(tmp_path)
+    # the session lives in the machine's own app tmux (the fake ssh's machine is this one), not in the server's
+    rsock = f"{h.ctx.terminals.tmux.socket}-r"
+    assert subprocess.run(["tmux", "-L", rsock, "has-session", "-t", f"={t['tmux_session']}"]).returncode == 0
+    assert t["tmux_session"] not in h.ctx.terminals.tmux.list_sessions()
+    conf = Path(os.environ["HOME"]) / ".cache" / "wiki-agent-workspace" / "tmux" / f"{rsock}.conf"
+    assert "history-limit" in conf.read_text() and stat.S_IMODE(conf.stat().st_mode) == 0o600
+    # the server's tmux check at listing time leaves it alone; history comes from the machine
+    listing = (await api.get("/api/v1/terminals")).json()["terminals"]
+    assert next(x for x in listing if x["id"] == t["id"])["state"] == "live"
+    hist = await api.get(f"/api/v1/terminals/{t['id']}/history")
+    assert hist.status_code == 200 and "on m1" in hist.json()["note"]
+    # unreachable: closing still works (with a warning), the session may still run there
+    (fake_env / "ssh_down").write_text("m1.internal\n")
+    r = await api.get(f"/api/v1/terminals/{t['id']}/history")
+    assert r.status_code == 502 and r.json()["error"]["code"] == "DEV_HOST_UNREACHABLE"
+    (fake_env / "ssh_down").unlink()
+    r = await api.delete(f"/api/v1/terminals/{t['id']}")
+    assert r.status_code == 200 and "warning" not in r.json()
+    assert subprocess.run(["tmux", "-L", rsock, "has-session", "-t", f"={t['tmux_session']}"], capture_output=True).returncode != 0
     r = await api.post("/api/v1/terminals", json={"machine": "m1", "cwd": str(tmp_path / "missing")})
     assert r.status_code == 400 and r.json()["error"]["code"] == "CWD_NOT_FOUND"
     r = await api.post("/api/v1/terminals", json={"machine": "nope"})
     assert r.status_code == 400 and r.json()["error"]["code"] == "DEV_HOST_UNKNOWN"
     assert (await api.post("/api/v1/terminals", json={"machine": "local"})).status_code == 201
+
+
+@requires_tmux
+async def test_terminal_on_machine_without_tmux(running_app, m_settings, tmp_path, fake_env, monkeypatch):
+    """No tmux there: the ssh login runs in this server's tmux, as before (it ends with the connection)."""
+    from backend.app.machines import rtmux
+
+    monkeypatch.setattr(rtmux.RemoteTmux, "info", lambda self, refresh=False: rtmux.RemoteInfo(False, reason="no tmux"))
+    h = await running_app(m_settings)
+    api = h.api
+    await add(api, name="m2", ssh="m2.internal")
+    r = await api.post("/api/v1/terminals", json={"machine": "m2", "cwd": str(tmp_path)})
+    assert r.status_code == 201, r.text
+    t = r.json()
+    assert t["machine"] is None and t["tmux_session"] in h.ctx.terminals.tmux.list_sessions()
+    for _ in range(100):
+        if any("-tt" in c and "m2.internal" in c for c in calls(fake_env)):
+            break
+        await asyncio.sleep(0.05)
+    else:
+        raise AssertionError(calls(fake_env))
+
+
+def test_remote_tmux_conf_follows_the_version():
+    from backend.app.machines import rtmux
+
+    old = rtmux.conf_text("s", (2, 1), "screen", 5000)
+    new = rtmux.conf_text("s", (3, 4), "tmux-256color", 5000)
+    assert "window-size" not in old and "terminal-features" not in old and "focus-events" not in old
+    assert "window-size latest" in new and "terminal-features" in new and 'default-terminal "tmux-256color"' in new
+    assert rtmux.parse_version("tmux 3.2a") == (3, 2) and rtmux.parse_version("tmux next-3.5") == (3, 5)
+    assert rtmux.parse_version("") is None
 
 
 # ---------------------------------------------------------------------------------------------- real OpenSSH

@@ -144,7 +144,8 @@ class Tmux:
         except subprocess.TimeoutExpired:
             raise TmuxError("tmux did not respond")
         if p.returncode != 0:
-            if "no server running" in p.stderr or "No such file" in p.stderr or "error connecting" in p.stderr:
+            # ("server exited unexpectedly": the last session just ended and the server is shutting down)
+            if any(w in p.stderr for w in ("no server running", "No such file", "error connecting", "server exited")):
                 return []
             raise TmuxError(p.stderr.strip() or "tmux list-sessions failed")
         return [ln.strip() for ln in p.stdout.splitlines() if ln.strip().startswith(SESSION_PREFIX)]

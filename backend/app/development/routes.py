@@ -897,6 +897,8 @@ def dev_terminal_create(dev_id: str, ctx: AppContext = Depends(require_auth_muta
     label = f"{row.name[:30]}{f' {n}' if n > 1 else ''}"
     if t.is_local:
         term = ctx.terminals.create(row.worktree_path, label)
+    elif ctx.terminals.remote_ready(t.name):  # in the host's own tmux: survives disconnects and restarts
+        term = ctx.terminals.create_remote(t.name, row.worktree_path, f"{label} ({t.name})")
     else:
         argv, _, _ = t.spawn_argv(["sh", "-c", 'exec "${SHELL:-sh}" -l'], row.worktree_path, None, ssh_opts=["-tt"])
         # the remote login shell starts in the worktree; tmux runs the ssh command (shell-quoted argv)
