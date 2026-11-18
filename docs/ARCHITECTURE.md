@@ -165,6 +165,14 @@ backend/app/
                    (check → skip, first failure stops), scripts in <work_dir>/recipes; env_out sourced between two
                    `env -0` dumps, the difference → export lines → <work_dir>/env.sh, which targets.path_prefix sources
                    for every command there; import from *.sh header comments; outdated = version_ok ≠ content hash
+    bench.py       benchmarks: definitions (`.waw/bench.toml` in the worktree wins by name over `bench_defs`), a run =
+                   a dev task of kind `bench` running a generated script (setup cached per commit + changes in the
+                   worktree's git dir, warmups, repeats; A/B: two worktrees, A B / B A alternating) whose output parts
+                   are marked `@@waw-bench begin|end`; TaskRunner.finish_hooks parse the log into `bench_runs`
+                   (samples, median/mean/stdev). Locks in memory (whole machine, or GPUs), restored at startup;
+                   builds/tests refuse while a benchmark holds the machine. Compare: change % vs max(threshold, 2·stdev)
+    bench_routes.py /dev/workspaces/{id}/bench/{defs,run,ab}, /bench/defs…, /bench/runs… (export csv|json, cancel,
+                   explain → an agent turn of kind `perf`), /bench/compare?b=&a=
     routes.py      /machines…, /ssh-keys, /recipes…; POST /machines/{m}/setup (tools + recipes), GET /machines/{m}/fs/dirs
                    (folder picker over ssh); terminals on a machine (also POST /terminals {machine})
     rtmux.py       RemoteTmux: the app's own tmux server on a machine (`-L <socket>-r`, config under work_dir, adapted

@@ -542,7 +542,7 @@ export function subscribeJob(jobId: string, after: number, onEvent: (ev: JobEven
 const globalListeners = new Set<(ev: Record<string, any>) => void>();
 let globalSource: EventSource | null = null;
 const GLOBAL_TYPES = ["github_cache", "file_changed", "tree_changed", "job_event", "terminal_state", "preview_update", "watcher_ready", "workspaces_changed",
-  "review_finished", "commit", "dev_changed", "dev_task", "machine_changed", "message"];
+  "review_finished", "commit", "dev_changed", "dev_task", "machine_changed", "machine_job", "recipes_changed", "bench_run", "bench_defs_changed", "message"];
 
 export function subscribeGlobal(onEvent: (ev: Record<string, any>) => void): () => void {
   globalListeners.add(onEvent);
@@ -762,10 +762,27 @@ export interface DevRefs { branch_commits: DevCommitRef[]; commits: DevCommitRef
 export interface DevTaskRun {
   id: string;
   dev_id: string;
-  kind: "build" | "test" | "custom";
+  kind: "build" | "test" | "custom" | "bench";
   command: string;
   status: "running" | "passed" | "failed" | "cancelled" | "interrupted";
   exit_code: number | null;
   started_at: string;
   finished_at: string | null;
 }
+
+export interface BenchMetric { name: string; json: string | null; regex: string | null; better: "lower" | "higher"; unit: string | null }
+export interface BenchSpec {
+  name: string; setup: string | null; command: string; warmup: number; repeat: number; timeout: number;
+  metrics: BenchMetric[]; env: Record<string, string>; exclusive: boolean; gpus: number[]; threshold: number;
+}
+export interface BenchDef { name: string; source: "file" | "workspace" | "repo"; spec: BenchSpec; id: string | null; shadowed: boolean; toml: string }
+export interface BenchStat { n: number; median?: number; mean?: number; stdev?: number; min?: number; max?: number; better: "lower" | "higher"; unit: string | null }
+export interface BenchRun {
+  id: string; dev_id: string; repo: string | null; name: string; source: "file" | "app"; machine: string; kind: "run" | "ab";
+  variant: "a" | "b" | null; ab_id: string | null; label: string | null; branch: string | null; commit: string | null; dirty: boolean;
+  env_hash: string | null; status: "running" | "passed" | "failed" | "cancelled" | "interrupted"; error: string | null;
+  task_run_id: string | null; baseline_id: string | null; summary: Record<string, BenchStat>; started_at: string; finished_at: string | null;
+  spec?: BenchSpec; samples?: { i: number; rc: number | null; values: Record<string, number | null> }[];
+}
+export interface BenchCompareRow { name: string; better: string; unit: string | null; a: BenchStat | null; b: BenchStat; change_pct: number | null; limit_pct?: number; verdict: "same" | "regression" | "improvement" | "missing" }
+export interface BenchCompare { a: BenchRun | null; b: BenchRun; metrics: BenchCompareRow[]; warnings: string[]; regressions: number; threshold?: number }

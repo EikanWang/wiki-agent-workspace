@@ -461,7 +461,7 @@ stub lives in `snapshots/dev/<id>.md`.
 | --- | --- | --- |
 | `id` | TEXT, PK | UUID. |
 | `dev_id` | TEXT, FK → dev_workspaces | The workspace. |
-| `kind` | TEXT | `build`, `test` or `custom`. |
+| `kind` | TEXT | `build`, `test`, `custom`, or `bench` (a benchmark run's generated script; see `bench_runs`). |
 | `command` | TEXT | The shell command, run with `sh -c` in the worktree on the host. |
 | `status` | TEXT | `running`, `passed`, `failed`, `cancelled`, `interrupted` (cut off by a server restart, or gone on the machine without an exit code). |
 | `exit_code` | INTEGER, nullable | Exit status. |
@@ -542,6 +542,49 @@ restart and becomes `interrupted` (running setup again continues: what it instal
 | `error` | TEXT, nullable | Why it last failed (e.g. `exit 3`). |
 | `last_job_id` | TEXT, nullable | The machine job that last ran it (soft ref → `machine_jobs`). |
 | `last_run_at` | DATETIME, nullable | When. |
+
+## `bench_defs` — benchmark definitions kept in the app
+
+A repository's `.waw/bench.toml` is not stored; its definitions win over these by name.
+
+| Column | Type | Meaning |
+| --- | --- | --- |
+| `id` | TEXT, PK | UUID. |
+| `scope` | TEXT | `repo` (every workspace of that GitHub repository) or `workspace` (one development workspace). |
+| `scope_key` | TEXT | `owner/name`, or the development workspace's id. Unique with `scope` and `name`. |
+| `name` | TEXT | The benchmark's name. |
+| `spec_json` | TEXT | The checked definition: `name`, `setup`, `command`, `warmup`, `repeat`, `timeout`, `metrics` (`name`, `json` path or `regex`, `better`, `unit`), `env`, `exclusive`, `gpus`, `threshold`. |
+| `created_at`, `updated_at` | DATETIME | Timestamps. |
+
+## `bench_runs` — benchmark runs and their results
+
+| Column | Type | Meaning |
+| --- | --- | --- |
+| `id` | TEXT, PK | UUID. |
+| `dev_id` | TEXT | The development workspace (soft ref → `dev_workspaces`). |
+| `repo` | TEXT, nullable | Its GitHub repository (`owner/name`), to compare across workspaces. |
+| `def_name` | TEXT | The benchmark's name. |
+| `def_source` | TEXT | `file` (`.waw/bench.toml`) or `app` (`bench_defs`). |
+| `spec_json` | TEXT | The definition as it ran. |
+| `machine` | TEXT | `local` or the machine's name. |
+| `kind` | TEXT | `run`, or `ab` (one side of an A/B run). |
+| `variant` | TEXT, nullable | A/B: `a` (baseline) or `b` (candidate). |
+| `ab_id` | TEXT, nullable | The two sides of an A/B run share it. |
+| `label` | TEXT, nullable | Shown in the app (A/B: the refs compared). |
+| `branch` | TEXT, nullable | The workspace's branch (A/B baseline: the ref given); used to find "the latest run of the base branch". |
+| `commit` | TEXT, nullable | The commit that ran. |
+| `dirty_hash` | TEXT, nullable | Hash of the uncommitted changes; `NULL`: none. |
+| `env_hash` | TEXT, nullable | Hash of the machine's recipes and their versions (`NULL`: none / this server). |
+| `caps_json` | TEXT, nullable | The machine's last probe (OS, CPU, GPUs, drivers) at the time. |
+| `samples_json` | TEXT, nullable | Each repeat: `{i, rc, values: {metric: number or null}}`; `wall_s` is always there. |
+| `summary_json` | TEXT, nullable | Per metric: `n`, `median`, `mean`, `stdev`, `min`, `max`, `better`, `unit`. |
+| `lock_json` | TEXT, nullable | What it held while running: `{"machine": true}` or `{"gpus": [...]}`. |
+| `status` | TEXT | `running`, `passed`, `failed` (a command failed, or a metric was not found), `cancelled`, `interrupted`. |
+| `error` | TEXT, nullable | Why it failed. |
+| `task_run_id` | TEXT, nullable | The `dev_task_runs` row that ran the script (its log is the output); both A/B sides share it. |
+| `baseline_id` | TEXT, nullable | A/B candidate: its baseline run. |
+| `worktrees_json` | TEXT, nullable | A/B: the temporary worktrees, removed when the run ends. |
+| `started_at`, `finished_at` | DATETIME | Timestamps. |
 
 ## `alembic_version`
 

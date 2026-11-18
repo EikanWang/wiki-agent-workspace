@@ -546,6 +546,40 @@ reference wiki, and for a PR tab the PR's connected local checkout. Skills are t
 
 - **Build & test** — run the build, the tests or any command in the worktree; the output streams in; a failed run
   has **Fix with the agent** (the output goes with the request).
+- **Benchmarks** — benchmarks of the workspace, on the machine it is on. Define one with **New** (a `[[bench]]`
+  table, kept in the app for this workspace or for every workspace of the repository) or in the repository's
+  `.waw/bench.toml`, which wins by name:
+
+  ```toml
+  [[bench]]
+  name = "matmul-xpu"
+  setup = "python setup.py develop"   # optional: done again only when the commit, the changes or the setup change
+  command = "python bench/matmul.py --json"
+  warmup = 1
+  repeat = 5
+  timeout = 1800                      # seconds, per command
+  metrics = [
+    { name = "latency_ms", json = "$.latency_ms", better = "lower" },     # from JSON in the output
+    { name = "tflops", regex = "TFLOPS: ([0-9.]+)", better = "higher" },  # or the last match of a regex
+  ]
+  env = { ZE_AFFINITY_MASK = "0" }
+  exclusive = true                    # default: the whole machine — no other benchmark, build or test meanwhile
+  gpus = [0]                          # with exclusive = false: only benchmarks on one of these GPUs wait
+  threshold = 5                       # % change that counts (and at least 2 standard deviations)
+  ```
+
+  **Run** records each repeat (plus `wall_s`, how long the command took), the median, mean, stdev, min and max, the
+  commit and whether there were uncommitted changes, the machine's probe and its recipes. Click a run to compare it
+  with a baseline — by default its A/B baseline, else the latest run of the base branch on the same machine, else the
+  previous run here; any other run can be picked. Each metric shows its change and **regression**, **improvement** or
+  **same**; a different machine, GPU, driver or setup gives a warning. **A/B** runs a baseline (a branch, tag or
+  commit) against the workspace as it is (or another commit), each in its own worktree, alternating repeat by repeat.
+  If the setup installs into a shared environment (`pip install -e .`, `setup.py develop`), both sides use what was
+  installed last; prefer a setup that builds inside the worktree. **Explain the regression** sends both runs and
+  their output to the agent. **Output** shows the run's log; **CSV** / **JSON** export the history; a machine's page
+  lists the benchmarks run there. A run is a command like a build (shown in **Build & test** too): on a machine with
+  tmux it goes on through dropped connections and restarts. Benchmarks are shell commands with the same rights as a
+  terminal.
 - **Changes** — like the wiki's Diff view: every changed file with its own diff (new files included), **Unified** or
   **Side by side**, ↑/↓/↕ and **Expand all** for more context, **Viewed** to fold a file you have checked (the mark
   goes when its change changes). Choose what to compare: **Uncommitted changes** (default), **Everything on this

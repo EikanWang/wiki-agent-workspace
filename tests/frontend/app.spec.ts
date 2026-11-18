@@ -4115,3 +4115,35 @@ test("Machines: add a bastion and a machine behind it, check hop by hop, trust h
   await expect(page.locator('[data-testid="terminals-item"]', { hasText: `box-${tag}` })).toBeVisible();
   await page.getByTestId("activity-files").click();
 });
+
+test("Benchmarks: define one, run it twice, compare with the baseline, explain, the machine's history", async ({ page }) => {
+  await login(page);
+  await page.getByTestId("activity-development").click();
+  await page.getByTestId("dev-item").first().click();
+  await page.getByTestId("dev-tab-bench").click();
+  await expect(page.getByTestId("dev-bench")).toBeVisible({ timeout: 20000 });
+  await page.getByTestId("bench-new").click();
+  await page.getByTestId("bench-toml").fill('[[bench]]\nname = "e2e-bench"\ncommand = "echo \'{\\"t\\": 3}\'"\nrepeat = 2\n'
+    + 'metrics = [{ name = "t", json = "$.t", better = "lower", unit = "ms" }]\n');
+  await page.getByTestId("bench-save").click();
+  const def = page.locator('[data-testid="bench-def"][data-name="e2e-bench"]');
+  await expect(def).toBeVisible();
+  await def.getByTestId("bench-run-btn").click();
+  await expect(page.getByTestId("bench-run").first()).toHaveAttribute("data-status", "passed", { timeout: 20000 });
+  await expect(page.getByTestId("bench-detail")).toContainText("No baseline yet");
+  await def.getByTestId("bench-run-btn").click();
+  await expect(page.getByTestId("bench-run")).toHaveCount(2);
+  await expect(page.getByTestId("bench-run").first()).toHaveAttribute("data-status", "passed", { timeout: 20000 });
+  const row = page.locator('[data-testid="bench-compare-row"]').filter({ hasText: "t (ms)" });
+  await expect(row).toHaveAttribute("data-verdict", "same", { timeout: 10000 });
+  await expect(page.getByTestId("bench-spark").first()).toBeVisible();
+  await page.getByTestId("bench-show-log").click();
+  await expect(page.getByTestId("bench-log")).toContainText("@@waw-bench end a repeat 1 rc=0");
+  await page.getByTestId("bench-explain").click();
+  await expect(page.locator(".dev-side")).toBeVisible();
+  // the machine page lists the runs made there
+  const where = (await page.getByTestId("bench-run").first().locator("td").nth(3).innerText()).trim();
+  await page.getByTestId("activity-machines").click();
+  await page.locator(`[data-testid="machines-item"][data-name="${where === "this server" ? "local" : where}"]`).click();
+  await expect(page.getByTestId("machine-bench").getByTestId("bench-run")).toHaveCount(2, { timeout: 10000 });
+});

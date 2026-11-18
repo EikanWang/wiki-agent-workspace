@@ -468,7 +468,7 @@ class DevTaskRun(Base):
     __tablename__ = "dev_task_runs"
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     dev_id: Mapped[str] = mapped_column(ForeignKey("dev_workspaces.id"), nullable=False, index=True)
-    kind: Mapped[str] = mapped_column(String(12), nullable=False)  # build | test | custom
+    kind: Mapped[str] = mapped_column(String(12), nullable=False)  # build | test | custom | bench (machines.bench)
     command: Mapped[str] = mapped_column(Text, nullable=False)  # shell command, run in the worktree
     status: Mapped[str] = mapped_column(String(12), nullable=False, default="running")  # running|passed|failed|cancelled|interrupted
     exit_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -556,6 +556,52 @@ class MachineRecipeState(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_job_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class BenchDef(Base):
+    """A benchmark definition kept in the app (machines.bench); a `.waw/bench.toml` in the repository wins by name."""
+
+    __tablename__ = "bench_defs"
+    __table_args__ = (UniqueConstraint("scope", "scope_key", "name", name="uq_bench_defs_scope_name"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    scope: Mapped[str] = mapped_column(String(10), nullable=False)  # repo | workspace
+    scope_key: Mapped[str] = mapped_column(Text, nullable=False)  # owner/name (repo) or the dev workspace id
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    spec_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+class BenchRun(Base):
+    """One benchmark run (or one side of an A/B run) and its results."""
+
+    __tablename__ = "bench_runs"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    dev_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)  # soft ref → dev_workspaces
+    repo: Mapped[str | None] = mapped_column(Text, nullable=True)  # owner/name when known (comparisons across workspaces)
+    def_name: Mapped[str] = mapped_column(Text, nullable=False)
+    def_source: Mapped[str] = mapped_column(String(8), nullable=False)  # file | app
+    spec_json: Mapped[str] = mapped_column(Text, nullable=False)  # the definition as run
+    machine: Mapped[str] = mapped_column(Text, nullable=False)  # local or a machine name
+    kind: Mapped[str] = mapped_column(String(4), nullable=False, default="run")  # run | ab
+    variant: Mapped[str | None] = mapped_column(String(1), nullable=True)  # ab: a (baseline) | b (candidate)
+    ab_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    label: Mapped[str | None] = mapped_column(Text, nullable=True)
+    branch: Mapped[str | None] = mapped_column(Text, nullable=True)
+    commit: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    dirty_hash: Mapped[str | None] = mapped_column(String(16), nullable=True)  # uncommitted changes (NULL: none)
+    env_hash: Mapped[str | None] = mapped_column(String(16), nullable=True)  # the machine's recipes and env.sh
+    caps_json: Mapped[str | None] = mapped_column(Text, nullable=True)  # the machine's last probe
+    samples_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    summary_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    lock_json: Mapped[str | None] = mapped_column(Text, nullable=True)  # what it held: {"machine": true} or {"gpus": [...]}
+    status: Mapped[str] = mapped_column(String(12), nullable=False, default="running")
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    task_run_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)  # soft ref → dev_task_runs
+    baseline_id: Mapped[str | None] = mapped_column(String(36), nullable=True)  # soft ref → bench_runs
+    worktrees_json: Mapped[str | None] = mapped_column(Text, nullable=True)  # temporary A/B worktrees to remove
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 Index("ix_messages_job", Message.job_id)

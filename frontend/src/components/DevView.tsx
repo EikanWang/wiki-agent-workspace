@@ -4,12 +4,13 @@ import { AgentSession, ApiError, DevInfo, DevSettings, DevWorkspace, Thread, Wor
 import DevAgentPanel, { CodeAnchor, EditorFiles } from "./DevAgentPanel";
 import DevTerminal from "./DevTerminal";
 import { PrTab, TasksTab } from "./DevTabs";
+import { BenchTab } from "./DevBench";
 import DevChanges, { ChangesAsk } from "./DevChanges";
 import { confirmAction } from "./Confirm";
 import { removeWorkspaceDialog } from "./DevPanel";
 import { usePersistentState } from "../persist";
 
-type Bottom = "terminal" | "tasks" | "changes" | "pr";
+type Bottom = "terminal" | "tasks" | "bench" | "changes" | "pr";
 
 // the web editor (Monaco + language servers) is loaded only when a workspace shows it
 const WebIde = lazy(() => import("./webide/WebIde"));
@@ -263,9 +264,9 @@ export default function DevView({ devId, workspaces, sessions, onSessionsChanged
             <div className={`dev-bottom ${bottomOpen ? "" : "closed"}`} style={bottomOpen && bottomHeight ? { height: bottomHeight } : undefined}>
               {bottomOpen && <BottomSplitter onHeight={setBottomHeight} />}
               <div className="dev-bottom-tabs">
-                {(["terminal", "tasks", "changes", "pr"] as Bottom[]).map((b) => (
+                {(["terminal", "tasks", "bench", "changes", "pr"] as Bottom[]).map((b) => (
                   <button key={b} className={bottom === b && bottomOpen ? "active" : ""} onClick={() => { setBottom(b); setBottomOpen(true); }} data-testid={`dev-tab-${b}`}>
-                    {b === "terminal" ? "Terminal" : b === "tasks" ? `Build & test${dev.running_tasks ? ` (${dev.running_tasks})` : ""}` : b === "changes" ? "Changes" : dev.pr_number ? `Pull request #${dev.pr_number}` : "Pull request"}
+                    {b === "terminal" ? "Terminal" : b === "tasks" ? `Build & test${dev.running_tasks ? ` (${dev.running_tasks})` : ""}` : b === "bench" ? "Benchmarks" : b === "changes" ? "Changes" : dev.pr_number ? `Pull request #${dev.pr_number}` : "Pull request"}
                   </button>
                 ))}
                 <span className="spacer" />
@@ -277,6 +278,7 @@ export default function DevView({ devId, workspaces, sessions, onSessionsChanged
                     <DevTerminal key={dev.id} dev={dev} visible={bottom === "terminal" && bottomOpen} />
                   </div>
                   {bottom === "tasks" && <TasksTab key={dev.id} dev={dev} onAsked={() => setAgentOpen(true)} />}
+                  {bottom === "bench" && <BenchTab key={dev.id} dev={dev} onAsked={() => setAgentOpen(true)} />}
                   {bottom === "changes" && (changesWide
                     ? <div className="muted small dev-hint">The changes are shown in the editor area. <button className="link-btn" onClick={() => setChangesWide(false)}>Show them here</button></div>
                     : changes(false))}

@@ -90,6 +90,7 @@ class TaskRunner:
         self.follow_tasks: dict[str, asyncio.Task] = {}
         self.cancelled: set[str] = set()
         self.stopping = False
+        self.finish_hooks: list[Any] = []  # f(run_id, status, rc), e.g. machines.bench parsing its results
 
     def mark_interrupted(self) -> int:
         """Runs that were children of the app died with it; runs in tmux on a machine go on (see resume)."""
@@ -115,28 +116,34 @@ class TaskRunner:
             rows = s.query(DevTaskRun).filter_by(dev_id=dev_id).order_by(DevTaskRun.started_at.desc()).limit(limit).all()
         return [run_dict(r) for r in rows]
 
-    async def start(self, dev_id: str, kind: str, command: str | None) -> dict[str, Any]:
+    async def start(self, dev_id: str, kind: str, command: str | None, *, script: str | None = None,
+                    run_id: str | None = None) -> dict[str, Any]:
+        """`script` (kind bench, machines.bench): what runs, `command` only what is shown."""
         svc = DevService(self.ctx)
         row, target = svc._ready(dev_id)
-        if kind not in ("build", "test", "custom"):
+        if kind not in ("build", "test", "custom") and not (kind == "bench" and script):
             raise bad_request("kind must be build, test or custom", "INVALID_TASK")
         cfg = settings_of(row)
-        cmd = (command or "").strip() or (cfg.get(f"{kind}_command") if kind != "custom" else "") or ""
+        cmd = (command or "").strip() or (cfg.get(f"{kind}_command") if kind in ("build", "test") else "") or ""
         if not cmd:
             raise bad_request(f"no {kind} command is configured for this workspace; set it in the workspace settings", "NO_COMMAND")
         if len(cmd) > 8000 or "\0" in cmd:
             raise bad_request("command too long", "INVALID_TASK")
         if self.running_count(dev_id) >= MAX_PARALLEL:
             raise conflict("TOO_MANY_TASKS", f"{MAX_PARALLEL} commands are already running in this workspace")
-        run_id = new_id()
+        bench = self.ctx.extra.get("bench")
+        if bench is not None and kind != "bench":
+            bench.check_task_allowed(row.host)  # a benchmark holding the machine: no builds meanwhile
+        run_id = run_id or new_id()
         self.logs.mkdir(parents=True, exist_ok=True, mode=0o700)
         log_path = self.logs / f"{run_id}.log"
         log_path.touch(mode=0o600)
         env = {"TERM": "dumb", "CLICOLOR": "0", "PYTHONUNBUFFERED": "1"}
-        script = cmd
+        body = script or cmd
+        script = body
         py = cfg.get("python") or ""
         if "/" in py:  # the configured interpreter's folder (a virtual environment / conda env) first on PATH
-            script = f'PATH={shlex.quote(py.rsplit("/", 1)[0])}:"$PATH"; export PATH; {cmd}'
+            script = f'PATH={shlex.quote(py.rsplit("/", 1)[0])}:"$PATH"; export PATH; {body}'
         env_file = None
         if not target.is_local:
             from ..machines import envfwd
@@ -306,6 +313,11 @@ class TaskRunner:
                         fh.write(f"\n[{note}]\n")
         if dev_id:
             self._event(dev_id, run_id, status)
+            for hook in self.finish_hooks:
+                try:
+                    hook(run_id, status, rc)
+                except Exception:  # noqa: BLE001 - a hook must not break the run's end
+                    log.exception("finish hook for %s failed", run_id)
 
     def _event(self, dev_id: str, run_id: str, status: str) -> None:
         if self.ctx.events:

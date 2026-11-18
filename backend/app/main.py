@@ -238,6 +238,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from .machines.recipes import Recipes
 
     ctx.extra["recipes"] = Recipes(ctx)
+    from .machines.bench import Bench
+
+    ctx.extra["bench"] = Bench(ctx)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -249,6 +252,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         resumed = ctx.extra["dev_tasks"].resume()  # commands still running in tmux on a machine
         if resumed:
             log.info("following %d commands still running on machines", resumed)
+        ctx.extra["bench"].reconcile()
         rec = ctx.terminals.reconcile()
         log.info("terminal reconcile: %s", rec)
         try:
@@ -322,6 +326,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from .machines import routes as machine_routes
 
     api.include_router(machine_routes.router)
+    from .machines import bench_routes
+
+    api.include_router(bench_routes.router)
     from . import skills as skills_mod
 
     api.include_router(skills_mod.router)

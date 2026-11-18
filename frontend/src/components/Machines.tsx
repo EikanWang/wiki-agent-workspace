@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, BootstrapPlan, HostKeyHop, MachineCaps, MachineCheck, MachineEnv, MachineInfo, MachineJob, MachineRecipe, Recipe, SshKeyInfo, TerminalInfo, del, get, patch, post, put, subscribeGlobal } from "../api";
 import { writeClipboard } from "../clipboard";
+import { MachineBench } from "./DevBench";
 import { confirmAction } from "./Confirm";
 import FolderPicker from "./FolderPicker";
 import { PlusIcon } from "./Icons";
@@ -700,6 +701,7 @@ export default function MachineView({ machine, machines, allowed, onOpenTerminal
       {panel === "setup" && <SetupPanel machine={machine} onChanged={onChanged} />}
       {!isLocal && !isBastion && <EnvSection machine={machine} onChanged={onChanged} />}
       {machine.capabilities ? <CapsView caps={machine.capabilities} /> : !isBastion && <div className="muted small">Not probed yet: <b>Probe</b> shows its OS, CPU, GPUs and tools.</div>}
+      {!isBastion && <MachineBench machine={machine.name} />}
       {edit && <MachineDialog existing={machine} machines={machines} allowed={allowed} onClose={() => setEdit(false)} onSaved={async () => { setEdit(false); await onChanged(); }} />}
     </div>
   );
