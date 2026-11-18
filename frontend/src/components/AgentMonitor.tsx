@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AgentSession, ApiError, MachineInfo, WorkspaceInfo, get, post, put } from "../api";
 import ModelChoice from "./ModelChoice";
 import { PASTE_HINT, PictureStrip, picturesOnly, usePictures } from "./Pictures";
+import { MAX_CUSTOM_BYTES, SOUNDS, customSound, customSoundName, playSound, saveCustomSound, saveSound, saveVolume, savedSound, savedVolume } from "../sounds";
 import { confirmAction } from "./Confirm";
 import FolderPicker from "./FolderPicker";
 import MarkdownView from "./MarkdownView";
@@ -46,6 +47,54 @@ const COMMANDS: { name: string; args: string; help: string; providers?: Provider
   { name: "reset", args: "", help: "back to the session's own model, effort and agent" },
   { name: "help", args: "", help: "list these commands" },
 ];
+/** The sound played when a session starts needing you: choose one, try it, set its volume, or use a file of your own. */
+function SoundChooser({ sound, onSound }: { sound: string; onSound: (id: string) => void }) {
+  const [volume, setVolume] = useState(savedVolume);
+  const [err, setErr] = useState<string | null>(null);
+  const file = useRef<HTMLInputElement>(null);
+  const [customName, setCustomName] = useState(customSoundName);
+  const pickFile = (f: File | undefined) => {
+    if (!f) return;
+    if (f.size > MAX_CUSTOM_BYTES) { setErr("The sound file must be at most 1 MiB."); return; }
+    const r = new FileReader();
+    r.onload = () => {
+      try {
+        saveCustomSound(String(r.result), f.name);
+      } catch {
+        setErr("The browser could not keep this file (too large).");
+        return;
+      }
+      setErr(null);
+      setCustomName(f.name);
+      onSound("custom");
+      playSound("custom", volume);
+    };
+    r.readAsDataURL(f);
+  };
+  return (
+    <span className="mon-sound row nowrap small" title="A sound when a session starts needing you">
+      <span aria-hidden>🔔</span>
+      <select value={sound} aria-label="Sound when a session needs you" data-testid="mon-sound"
+        onChange={(e) => {
+          const id = e.target.value;
+          if (id === "custom" && !customSound()) { file.current?.click(); return; }
+          onSound(id);
+          playSound(id, volume);
+        }}>
+        {SOUNDS.map((s) => <option key={s.id} value={s.id}>{s.id === "custom" && customName ? `My own: ${customName}` : s.label}</option>)}
+      </select>
+      {sound === "custom" && <button type="button" className="link-btn small" onClick={() => file.current?.click()} title="Choose another sound file" data-testid="mon-sound-file">change…</button>}
+      <input ref={file} type="file" accept="audio/*" hidden data-testid="mon-sound-input" onChange={(e) => { pickFile(e.target.files?.[0]); e.target.value = ""; }} />
+      {sound !== "off" && <>
+        <input type="range" min={0} max={1} step={0.05} value={volume} aria-label="Volume" title={`Volume ${Math.round(volume * 100)}%`} data-testid="mon-sound-volume"
+          onChange={(e) => { const v = Number(e.target.value); setVolume(v); saveVolume(v); }} onPointerUp={() => playSound(sound, volume)} />
+        <button type="button" className="icon-btn small" onClick={() => playSound(sound, volume)} title="Play it" aria-label="Play the sound" data-testid="mon-sound-test">▶</button>
+      </>}
+      {err && <span className="warn small" role="alert">{err}</span>}
+    </span>
+  );
+}
+
 const commandsFor = (p: Provider) => COMMANDS.filter((c) => !c.providers || c.providers.includes(p));
 
 // ---------------------------------------------------------------- sidebar
@@ -280,7 +329,10 @@ export default function AgentMonitor({ watched, onWatched, visible, onAlarms, au
   const [stage, setStage] = useState<string | null>(() => localStorage.getItem("waw.mon.stage"));
   const listPane = usePane("mon.list", 220, 140, 900);
   const [notify, setNotify] = useState(() => localStorage.getItem("waw.mon.notify") === "1");
-  const alarmed = useRef<Set<string>>(new Set());
+  const alarmed = useRef<Set<string> | null>(null); // null until the first check: what already needs you then makes no sound
+  const [sound, setSound] = useState(savedSound);
+  const soundRef = useRef(sound);
+  soundRef.current = sound;
   useEffect(() => { if (stage) localStorage.setItem("waw.mon.stage", stage); else localStorage.removeItem("waw.mon.stage"); }, [stage]);
   useEffect(() => { localStorage.setItem("waw.mon.notify", notify ? "1" : "0"); }, [notify]);
   const wkey = watched.map(keyOf).join(",");
@@ -295,9 +347,12 @@ export default function AgentMonitor({ watched, onWatched, visible, onAlarms, au
       setErr(null);
       // a notification when a session starts needing you
       const now = new Set(r.items.filter((i) => i.status.level === "alarm").map(keyOf));
+      const before = alarmed.current ?? new Set<string>();
       if (notify && "Notification" in window && Notification.permission === "granted") {
-        for (const i of r.items) if (now.has(keyOf(i)) && !alarmed.current.has(keyOf(i))) new Notification(`${i.label ?? i.title ?? i.id} needs you`, { body: i.status.reason });
+        for (const i of r.items) if (now.has(keyOf(i)) && !before.has(keyOf(i))) new Notification(`${i.label ?? i.title ?? i.id} needs you`, { body: i.status.reason });
       }
+      // …and a sound (once per check, however many started needing you)
+      if (alarmed.current && [...now].some((k) => !before.has(k))) playSound(soundRef.current);
       alarmed.current = now;
     } catch (e) {
       setErr((e as ApiError).message);
@@ -374,6 +429,7 @@ export default function AgentMonitor({ watched, onWatched, visible, onAlarms, au
         <label className="small" title="A browser notification when a session starts needing you">
           <input type="checkbox" checked={notify} onChange={(e) => { setNotify(e.target.checked); if (e.target.checked && "Notification" in window && Notification.permission === "default") void Notification.requestPermission(); }} /> notify me
         </label>
+        <SoundChooser sound={sound} onSound={(id) => { setSound(id); saveSound(id); }} />
         {pickedItems.length > 0 && <>
           <span className="small">{pickedItems.length} selected</span>
           <button className="btn small danger" onClick={() => void removeItems(pickedItems)} data-testid="mon-delete-selected">Delete selected</button>

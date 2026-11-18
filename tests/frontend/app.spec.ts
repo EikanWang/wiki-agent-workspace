@@ -4618,6 +4618,72 @@ test("pictures: pasted into a discussion reply or a new chat, they go to the age
   expect(errs).toEqual([]);
 });
 
+test("Agents: a sound of your choice when a session starts needing you", async ({ page }) => {
+  // count the notes played (Web Audio) and the files played (<audio>)
+  await page.addInitScript(() => {
+    const w = window as unknown as { notes: number; files: string[] };
+    w.notes = 0;
+    w.files = [];
+    const osc = AudioContext.prototype.createOscillator;
+    AudioContext.prototype.createOscillator = function () { w.notes++; return osc.call(this); };
+    HTMLMediaElement.prototype.play = function () { w.files.push(this.src.slice(0, 20)); return Promise.resolve(); };
+  });
+  let alarm = false;
+  await page.route("**/api/v1/monitor/status", async (route) => {
+    const r = await route.fetch();
+    const body = await r.json();
+    // only a session of its own (the test does not depend on what earlier ones left), needing you when `alarm`
+    body.items = [{
+      provider: "codex", id: "sound-e2e", machine: null, label: "sound e2e", title: null, directory: null, folder: null, folder_name: null, model: null,
+      found: true, app_job: null, send: null,
+      status: { state: alarm ? "needs_input" : "idle", level: alarm ? "alarm" : "ok", reason: alarm ? "asks a question" : "", last_text: "", updated_at: null, messages: 1 },
+    }];
+    body.alarms = alarm ? 1 : 0;
+    await route.fulfill({ response: r, json: body });
+  });
+  const notes = () => page.evaluate(() => (window as unknown as { notes: number }).notes);
+  await login(page);
+  await page.getByTestId("activity-agents").click();
+  await expect(page.getByTestId("mon-card").first()).toBeVisible({ timeout: 15000 });
+  await expect(page.getByTestId("mon-alarms")).toHaveCount(0);
+  const sound = page.getByTestId("mon-sound");
+  await expect(sound).toHaveValue("off");
+  await expect(page.getByTestId("mon-sound-test")).toHaveCount(0);
+  await sound.selectOption("bell"); // choosing one plays it
+  await expect.poll(notes).toBeGreaterThan(0);
+  let n = await notes();
+  await page.getByTestId("mon-sound-test").click();
+  await expect.poll(notes).toBeGreaterThan(n);
+  // a session starts needing you → the sound; still needing you at the next check → no sound again
+  n = await notes();
+  alarm = true;
+  await page.getByTestId("mon-refresh").click();
+  await expect(page.getByTestId("mon-alarms")).toBeVisible();
+  await expect.poll(notes).toBeGreaterThan(n);
+  n = await notes();
+  await page.getByTestId("mon-refresh").click();
+  await expect(page.getByTestId("mon-refresh")).toBeEnabled();
+  await page.waitForTimeout(300);
+  expect(await notes()).toBe(n);
+  // a file of your own; the choice survives a reload
+  alarm = false;
+  await page.getByTestId("mon-refresh").click();
+  await expect(page.getByTestId("mon-alarms")).toHaveCount(0);
+  await page.getByTestId("mon-sound-input").setInputFiles({ name: "ding.wav", mimeType: "audio/wav", buffer: Buffer.from("RIFF0000WAVEfmt ") });
+  await expect(sound).toHaveValue("custom");
+  await expect(sound.locator("option:checked")).toHaveText("My own: ding.wav");
+  await page.reload();
+  await expect(page.getByTestId("mon-sound")).toHaveValue("custom", { timeout: 15000 });
+  await expect(page.getByTestId("mon-card").first()).toBeVisible({ timeout: 15000 });
+  await expect(page.getByTestId("mon-refresh")).toBeEnabled();
+  expect(await page.evaluate(() => (window as unknown as { files: string[] }).files)).toEqual([]);
+  alarm = true;
+  await page.getByTestId("mon-refresh").click();
+  await expect(page.getByTestId("mon-alarms")).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { files: string[] }).files)).toContain("data:audio/wav;base6");
+  await page.getByTestId("mon-sound").selectOption("off");
+});
+
 test("Office: switching between Layout and Text keeps the place in the document", async ({ page }) => {
   test.skip(!hasSoffice(), "LibreOffice not installed");
   const ws = workspaceDir();

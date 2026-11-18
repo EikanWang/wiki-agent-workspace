@@ -1595,3 +1595,6 @@ a.ref-path { text-decoration: none; }
 a.ref-path code { text-decoration: underline dotted; }
 .nav-arrows { display: inline-flex; gap: 2px; margin-left: 4px; }
 .nav-arrows .icon-btn:disabled { opacity: 0.35; cursor: default; }
+.mon-sound { gap: 4px; align-items: center; }
+.mon-sound select { font-size: 12px; }
+.mon-sound input[type=range] { width: 70px; }
