@@ -4684,6 +4684,46 @@ test("Agents: a sound of your choice when a session starts needing you", async (
   await page.getByTestId("mon-sound").selectOption("off");
 });
 
+test("activity bar: drag the icons into the order you like, or move them with the right-click menu; the order stays", async ({ page }) => {
+  await login(page);
+  const order = () => page.getByTestId("activity-slot").evaluateAll((els) => els.map((e) => e.getAttribute("data-activity")));
+  const initial = await order();
+  expect(initial.slice(0, 2)).toEqual(["files", "local"]);
+  expect(initial.slice(-4)).toEqual(["agents", "terminal", "insights", "machines"]);
+  // drag Agents onto the top half of Wiki: it goes first
+  const wiki = page.locator('[data-activity="files"]');
+  await page.locator('[data-activity="agents"]').dragTo(wiki, { targetPosition: { x: 18, y: 4 } });
+  await expect.poll(order).toEqual(["agents", ...initial.filter((x) => x !== "agents")]);
+  // drag Wiki below Machines: it goes last
+  await wiki.dragTo(page.locator('[data-activity="machines"]'), { targetPosition: { x: 18, y: 32 } });
+  const dragged = ["agents", ...initial.filter((x) => x !== "agents" && x !== "files"), "files"];
+  await expect.poll(order).toEqual(dragged);
+  // the buttons still work where they are now
+  await page.getByTestId("activity-agents").click();
+  await expect(page.getByTestId("agent-monitor")).toBeVisible();
+  await page.reload();
+  await expect.poll(order, { timeout: 15000 }).toEqual(dragged);
+  // right-click: move up / down; the first cannot go up
+  await page.getByTestId("activity-agents").click({ button: "right" });
+  await expect(page.getByTestId("activity-move-up")).toBeDisabled();
+  await page.getByTestId("activity-move-down").click();
+  await expect(page.getByTestId("activity-menu")).toHaveCount(0);
+  await expect.poll(order).toEqual([dragged[1], "agents", ...dragged.slice(2)]);
+  await page.getByTestId("activity-files").click({ button: "right" });
+  await expect(page.getByTestId("activity-move-down")).toBeDisabled();
+  await page.getByTestId("activity-move-up").click();
+  await expect.poll(async () => (await order()).slice(-2)).toEqual(["files", "machines"]);
+  // Escape closes the menu; reset brings back the default order
+  await page.getByTestId("activity-terminal").click({ button: "right" });
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("activity-menu")).toHaveCount(0);
+  await page.getByTestId("activity-terminal").click({ button: "right" });
+  await page.getByTestId("activity-reset-order").click();
+  await expect.poll(order).toEqual(initial);
+  await page.getByTestId("activity-files").click();
+  await expect(page.getByTestId("view-document")).toHaveClass(/active/);
+});
+
 test("Office: switching between Layout and Text keeps the place in the document", async ({ page }) => {
   test.skip(!hasSoffice(), "LibreOffice not installed");
   const ws = workspaceDir();

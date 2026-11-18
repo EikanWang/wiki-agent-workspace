@@ -38,6 +38,7 @@ import TerminalsPanel from "./components/TerminalsPanel";
 import { useGhAutoRefresh } from "./ghRefresh";
 import AgentMonitor, { AgentsPanel, Watch } from "./components/AgentMonitor";
 import LocalPanel from "./components/LocalPanel";
+import { ActivityButtons, orderOf } from "./components/ActivityOrder";
 const LocalEditor = lazy(() => import("./components/LocalEditor"));
 import DevPanel from "./components/DevPanel";
 import { ModelChoiceValue } from "./components/ModelChoice";
@@ -964,39 +965,41 @@ export default function App() {
       <main className={`layout view-${view === "diff" || view === "chats" || view === "development" || view === "local" || view === "agents" || view === "insights" || view === "machines" ? "terminal" : view} ${view === "diff" ? "view-diff" : ""} ${view === "chats" ? "view-chats" : ""} ${view === "document" && !panelDoc ? "no-panel" : ""}`} data-testid="layout">
         <aside className={`sidebar with-activity ${listOpen ? "" : "list-folded"}`} data-list={listOpen ? "open" : "folded"}>
           <nav className="activity-bar" aria-label="Sidebar views">
-            <button className={sidebarView === "files" ? "active" : ""} onClick={() => { if (sidebarView === "files") { updatePrefs({ listOpen: !listOpen }); if (listOpen) return; } updatePrefs({ sidebarView: "files", listOpen: true }); if (view === "development" || view === "local" || view === "agents" || view === "insights" || view === "machines" || sidebarView === "terminal") setView("document"); }} title="Wiki: read, discuss and edit the wiki folders with the agent" aria-label="Wiki" aria-pressed={sidebarView === "files"} data-testid="activity-files">
-              <WikiIcon size={20} />
-            </button>
-            <button className={sidebarView === "local" ? "active" : ""} onClick={() => { if (sidebarView === "local") { updatePrefs({ listOpen: !listOpen }); if (listOpen) return; } updatePrefs({ sidebarView: "local", listOpen: true }); setLocalUsed(true); setView("local"); }} title="Local files: browse and edit any folder or file on the server, like a file manager" aria-label="Local files" aria-pressed={sidebarView === "local"} data-testid="activity-local">
-              <FilesIcon size={20} />
-            </button>
-            {hub?.available && (
-              <button className={sidebarView === "reviews" ? "active" : ""} onClick={() => { if (sidebarView === "reviews") { updatePrefs({ listOpen: !listOpen }); if (listOpen) return; } updatePrefs({ sidebarView: "reviews", listOpen: true }); if (view === "development" || view === "local" || view === "agents" || view === "insights" || view === "machines" || sidebarView === "terminal") setView("document"); }} title="Pull requests waiting for your review" aria-label="Reviews" aria-pressed={sidebarView === "reviews"} data-testid="activity-reviews">
-                <PullRequestIcon size={20} />
-                {reviewBadge(reviews.queue) > 0 && <span className="activity-badge" data-testid="activity-reviews-badge">{reviewBadge(reviews.queue)}</span>}
-              </button>
-            )}
-            <button className={sidebarView === "development" ? "active" : ""} onClick={() => { if (sidebarView === "development") { updatePrefs({ listOpen: !listOpen }); if (listOpen) return; } updatePrefs({ sidebarView: "development", listOpen: true }); if (devId) setView("development"); }} title="PR Development: develop new or existing pull requests with an editor and the agent" aria-label="PR Development" aria-pressed={sidebarView === "development"} data-testid="activity-development">
-              <CodeIcon size={20} />
-            </button>
-            <button className={sidebarView === "agents" ? "active" : ""} onClick={() => { if (sidebarView === "agents") { updatePrefs({ listOpen: !listOpen }); if (listOpen) return; } updatePrefs({ sidebarView: "agents", listOpen: true }); setView("agents"); }} title="Agents: monitor the status and health of agent sessions" aria-label="Agents" aria-pressed={sidebarView === "agents"} data-testid="activity-agents">
-              <DashboardIcon size={20} />
-              {alarms > 0 && <span className="activity-badge alarm" data-testid="activity-agents-badge" title={`${alarms} session(s) need you`}>{alarms}</span>}
-            </button>
-            <button className={sidebarView === "terminal" ? "active" : ""} onClick={() => { if (sidebarView === "terminal") { updatePrefs({ listOpen: !listOpen }); if (listOpen) return; } updatePrefs({ sidebarView: "terminal", listOpen: true }); setView("terminal"); }}
-              title="Terminal: shells on the server (tmux; they keep running when the page closes)" aria-label="Terminal" aria-pressed={sidebarView === "terminal"} data-testid="activity-terminal">
-              <TerminalIcon size={20} />
-              {terminals.some((t) => t.state === "live") && <span className="activity-badge quiet" title={`${terminals.filter((t) => t.state === "live").length} live terminal(s)`}>{terminals.filter((t) => t.state === "live").length}</span>}
-            </button>
-            <button className={sidebarView === "insights" ? "active" : ""} onClick={() => { if (sidebarView === "insights") { updatePrefs({ listOpen: !listOpen }); if (listOpen) return; } updatePrefs({ sidebarView: "insights", listOpen: true }); setView("insights"); }}
-              title="Repo Insights: summaries of what happens in repositories — issues, PRs, commits, RFCs, XPU highlights — over any period" aria-label="Repo Insights" aria-pressed={sidebarView === "insights"} data-testid="activity-insights">
-              <InsightsIcon size={20} />
-            </button>
-            <button className={sidebarView === "machines" ? "active" : ""} onClick={() => { if (sidebarView === "machines") { updatePrefs({ listOpen: !listOpen }); if (listOpen) return; } updatePrefs({ sidebarView: "machines", listOpen: true }); setView("machines"); }}
-              title="Machines: this server and SSH machines to work on — connection checks, host keys, keys, what they have" aria-label="Machines" aria-pressed={sidebarView === "machines"} data-testid="activity-machines">
-              <ServerIcon size={20} />
-              {machinesState.machines.some((m) => m.status !== "online" && m.status !== "unknown") && <span className="activity-badge alarm" title="A machine is not reachable">!</span>}
-            </button>
+            <ActivityButtons order={orderOf(prefs.activityOrder)} onOrder={(o) => updatePrefs({ activityOrder: o })} buttons={{
+              files: <button className={sidebarView === "files" ? "active" : ""} onClick={() => { if (sidebarView === "files") { updatePrefs({ listOpen: !listOpen }); if (listOpen) return; } updatePrefs({ sidebarView: "files", listOpen: true }); if (view === "development" || view === "local" || view === "agents" || view === "insights" || view === "machines" || sidebarView === "terminal") setView("document"); }} title="Wiki: read, discuss and edit the wiki folders with the agent" aria-label="Wiki" aria-pressed={sidebarView === "files"} data-testid="activity-files">
+                <WikiIcon size={20} />
+              </button>,
+              local: <button className={sidebarView === "local" ? "active" : ""} onClick={() => { if (sidebarView === "local") { updatePrefs({ listOpen: !listOpen }); if (listOpen) return; } updatePrefs({ sidebarView: "local", listOpen: true }); setLocalUsed(true); setView("local"); }} title="Local files: browse and edit any folder or file on the server, like a file manager" aria-label="Local files" aria-pressed={sidebarView === "local"} data-testid="activity-local">
+                <FilesIcon size={20} />
+              </button>,
+              reviews: hub?.available ? (
+                <button className={sidebarView === "reviews" ? "active" : ""} onClick={() => { if (sidebarView === "reviews") { updatePrefs({ listOpen: !listOpen }); if (listOpen) return; } updatePrefs({ sidebarView: "reviews", listOpen: true }); if (view === "development" || view === "local" || view === "agents" || view === "insights" || view === "machines" || sidebarView === "terminal") setView("document"); }} title="Pull requests waiting for your review" aria-label="Reviews" aria-pressed={sidebarView === "reviews"} data-testid="activity-reviews">
+                  <PullRequestIcon size={20} />
+                  {reviewBadge(reviews.queue) > 0 && <span className="activity-badge" data-testid="activity-reviews-badge">{reviewBadge(reviews.queue)}</span>}
+                </button>
+              ) : null,
+              development: <button className={sidebarView === "development" ? "active" : ""} onClick={() => { if (sidebarView === "development") { updatePrefs({ listOpen: !listOpen }); if (listOpen) return; } updatePrefs({ sidebarView: "development", listOpen: true }); if (devId) setView("development"); }} title="PR Development: develop new or existing pull requests with an editor and the agent" aria-label="PR Development" aria-pressed={sidebarView === "development"} data-testid="activity-development">
+                <CodeIcon size={20} />
+              </button>,
+              agents: <button className={sidebarView === "agents" ? "active" : ""} onClick={() => { if (sidebarView === "agents") { updatePrefs({ listOpen: !listOpen }); if (listOpen) return; } updatePrefs({ sidebarView: "agents", listOpen: true }); setView("agents"); }} title="Agents: monitor the status and health of agent sessions" aria-label="Agents" aria-pressed={sidebarView === "agents"} data-testid="activity-agents">
+                <DashboardIcon size={20} />
+                {alarms > 0 && <span className="activity-badge alarm" data-testid="activity-agents-badge" title={`${alarms} session(s) need you`}>{alarms}</span>}
+              </button>,
+              terminal: <button className={sidebarView === "terminal" ? "active" : ""} onClick={() => { if (sidebarView === "terminal") { updatePrefs({ listOpen: !listOpen }); if (listOpen) return; } updatePrefs({ sidebarView: "terminal", listOpen: true }); setView("terminal"); }}
+                title="Terminal: shells on the server (tmux; they keep running when the page closes)" aria-label="Terminal" aria-pressed={sidebarView === "terminal"} data-testid="activity-terminal">
+                <TerminalIcon size={20} />
+                {terminals.some((t) => t.state === "live") && <span className="activity-badge quiet" title={`${terminals.filter((t) => t.state === "live").length} live terminal(s)`}>{terminals.filter((t) => t.state === "live").length}</span>}
+              </button>,
+              insights: <button className={sidebarView === "insights" ? "active" : ""} onClick={() => { if (sidebarView === "insights") { updatePrefs({ listOpen: !listOpen }); if (listOpen) return; } updatePrefs({ sidebarView: "insights", listOpen: true }); setView("insights"); }}
+                title="Repo Insights: summaries of what happens in repositories — issues, PRs, commits, RFCs, XPU highlights — over any period" aria-label="Repo Insights" aria-pressed={sidebarView === "insights"} data-testid="activity-insights">
+                <InsightsIcon size={20} />
+              </button>,
+              machines: <button className={sidebarView === "machines" ? "active" : ""} onClick={() => { if (sidebarView === "machines") { updatePrefs({ listOpen: !listOpen }); if (listOpen) return; } updatePrefs({ sidebarView: "machines", listOpen: true }); setView("machines"); }}
+                title="Machines: this server and SSH machines to work on — connection checks, host keys, keys, what they have" aria-label="Machines" aria-pressed={sidebarView === "machines"} data-testid="activity-machines">
+                <ServerIcon size={20} />
+                {machinesState.machines.some((m) => m.status !== "online" && m.status !== "unknown") && <span className="activity-badge alarm" title="A machine is not reachable">!</span>}
+              </button>,
+            }} />
             <span className="activity-spacer" />
             <button onClick={() => updatePrefs({ listOpen: !listOpen })} title={listOpen ? "Fold the list (folders, projects, pull requests…) — click the current icon to unfold it again" : "Show the list"}
               aria-label={listOpen ? "Fold the list" : "Show the list"} aria-pressed={!listOpen} data-testid="sidebar-list-fold">{listOpen ? "«" : "»"}</button>

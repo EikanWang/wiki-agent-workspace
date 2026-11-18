@@ -673,6 +673,16 @@ mark.waw-hl.review.needs_review { border-bottom: 2px dashed var(--warn); }
 .activity-bar { display: flex; flex-direction: column; gap: 4px; padding: 6px 4px; border-right: 1px solid var(--border); flex: none; }
 .activity-bar button { position: relative; border: none; background: transparent; color: var(--muted); width: 36px; height: 36px; border-radius: 8px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
 .activity-bar button:hover { color: var(--fg); background: var(--accent); }
+.activity-slot { position: relative; display: flex; }
+.activity-slot.dragging { opacity: 0.4; }
+.activity-slot.drop-before::before, .activity-slot.drop-after::after { content: ""; position: absolute; left: 4px; right: 4px; height: 2px; border-radius: 1px; background: var(--primary); }
+.activity-slot.drop-before::before { top: -3px; }
+.activity-slot.drop-after::after { bottom: -3px; }
+.activity-menu { position: fixed; z-index: 80; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25); padding: 6px; display: flex; flex-direction: column; gap: 2px; min-width: 200px; }
+.activity-menu button { border: none; background: transparent; text-align: left; padding: 5px 8px; border-radius: 6px; cursor: pointer; color: var(--fg); }
+.activity-menu button:hover:not(:disabled) { background: var(--accent); }
+.activity-menu button:disabled { color: var(--muted); cursor: default; }
+.activity-menu .muted { padding: 2px 8px 4px; }
 .activity-bar button.active { color: var(--primary); background: var(--accent); box-shadow: inset 2px 0 0 var(--primary); }
 .activity-badge { position: absolute; top: 2px; right: 1px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--primary); color: var(--primary-fg); font-size: 10px; font-weight: 700; line-height: 16px; text-align: center; }
 /* review queue */

@@ -67,6 +67,8 @@ export interface Prefs {
   /** the rectangle around the place a link led to: its color, and how long it shows (ms; 0 = none) */
   linkHighlightColor: string;
   linkHighlightMs: number;
+  /** the activity bar's views in the user's order (see ActivityOrder) */
+  activityOrder?: string[];
 }
 
 export const DEFAULT_PREFS: Prefs = {
