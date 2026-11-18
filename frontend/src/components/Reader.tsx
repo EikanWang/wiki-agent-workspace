@@ -314,10 +314,30 @@ export default function Reader(props: ReaderProps) {
 
   // In-document fragment navigation: exact id, then case-insensitive id, then heading-text slug.
   const [fragmentMissing, setFragmentMissing] = useState<string | null>(null);
+  const [goToPage, setGoToPage] = useState<{ page: number; at: number } | null>(null);
   const scrollToFragment = useCallback((fragment: string): boolean => {
     const el = containerRef.current;
-    if (!el) return false;
     const want = fragment.replace(/^#/, "");
+    const page = /^(?:page|slide)=(\d+)$/i.exec(want);
+    if (page) { // a PDF page / a slide (the layout view of an office document)
+      setGoToPage({ page: Number(page[1]), at: Date.now() });
+      setFragmentMissing(null);
+      return true;
+    }
+    if (!el) return false;
+    const lines = /^L(\d+)(?:-L?(\d+))?$/.exec(want);
+    if (lines) { // lines of a text / source file
+      const spans = Array.from(el.querySelectorAll<HTMLElement>("pre > code > .ln"));
+      const a = Number(lines[1]);
+      const b = Math.max(a, Number(lines[2] ?? a));
+      const hit = spans.slice(a - 1, b);
+      if (!hit.length) return false;
+      hit[0].scrollIntoView({ block: "center", behavior: "smooth" });
+      hit.forEach((s) => s.classList.add("waw-target"));
+      window.setTimeout(() => hit.forEach((s) => s.classList.remove("waw-target")), 1600);
+      setFragmentMissing(null);
+      return true;
+    }
     const wantLower = want.toLowerCase();
     const wantSlug = slugify(want.replace(/-/g, " "));
     let target: HTMLElement | null = null;
@@ -687,7 +707,7 @@ export default function Reader(props: ReaderProps) {
         )}
         {isOffice && layout && (
           <OfficeView path={doc.path} sha256={doc.sha256} onShowText={hasText ? () => setView("text") : null}
-            unit={slideDeck ? "slide" : "page"} threads={threads} activeThreadId={activeThreadId} onAsk={askPage} onOpenThread={onOpenThread} />
+            unit={slideDeck ? "slide" : "page"} threads={threads} activeThreadId={activeThreadId} onAsk={askPage} onOpenThread={onOpenThread} goToPage={goToPage} />
         )}
         {doc.format === "image" ? (
           <div className={`image-view ${imgZoom ? "zoomed" : ""}`} data-testid="image-view">
@@ -708,6 +728,7 @@ export default function Reader(props: ReaderProps) {
               activeThreadId={activeThreadId}
               onAsk={askPage}
               onOpenThread={onOpenThread}
+              goToPage={goToPage}
             />
           </div>
         ) : (

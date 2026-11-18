@@ -788,6 +788,14 @@ shows its date and time in **UTC+8** (e.g. `2026-11-12 15:03:21 UTC+8`): when yo
 - **Flat** — all discussions of the document as one chronological stream, grouped by passage; the reply box
   continues the selected discussion (default: newest). Useful when your questions are related.
 - Failed answers keep your question; **Retry** with the same or another session. **Cancel** stops a running turn.
+- **Links to what the agent refers to.** In discussions and chats the agent is asked to link every document, section,
+  page or lines it refers to — of the document discussed or any other — with the file's absolute path and the place
+  (`#Section heading`, `#page=7` for a PDF page or a slide, `#L120-L140` for lines); an absolute path it writes as
+  `code` is a link too. Clicking one opens the file and jumps there, like *go to definition* in a code editor: in
+  its folder of the window (the app switches folders), or in **Local files** when it is elsewhere on the server.
+  When the path is not where the agent says, the file is looked up by its name in the open folders; if several
+  files match, you choose which to open. An answer with several links shows **References (n) ▾**: the list of the
+  places it cites, to pick one first. Ctrl/⌘-click keeps the browser's own behaviour.
 
 ## Agent sessions and models
 

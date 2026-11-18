@@ -342,6 +342,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from . import localfs
 
     api.include_router(localfs.router)
+    from . import refs
+
+    api.include_router(refs.router)
     from . import dashboard
 
     api.include_router(dashboard.router)

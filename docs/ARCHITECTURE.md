@@ -95,6 +95,9 @@ backend/app/
                    and the track record per severity (from min_cases on) into the agent review's prompt
                    (<<<REVIEW_LEARNING>>>); the run records the lessons it used. Teach: a lesson from one comment, active at once
                    (WAW-REVIEW-TEACH words it). Settings in kv review_learning, last run in review_learning_state
+  refs.py          links in agent answers: citation_rules (the prompt part of document discussions and chats asking
+                   for absolute path + #heading / #page=N / #L10-L20 links) and POST /refs/resolve (target → the
+                   open folder's document, else a server file for Local files, else files of that name: the user picks)
   review_skills.py  the skills an agent PR review of a repository gets (jobs.skill_folders of its wiki root and
                    connected checkout; GET /github/review-skills, review-related flagged, git-tracked noted) and
                    editing one (GET/PUT /github/review-skills/file: only SKILL.md files some review gets, a PUT

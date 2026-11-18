@@ -107,10 +107,12 @@ def describe_target(target: dict[str, Any] | None, document_path: str) -> str | 
 
 def build_prompt(*, question: str, quote: str, document_path: str, sha256: str, heading: str | None,
                  prior: list[dict[str, str]] | None, versions: list[dict[str, Any]] | None, whole_document: bool = False,
-                 target: dict[str, Any] | None = None, extra: str | None = None) -> str:
+                 target: dict[str, Any] | None = None, extra: str | None = None, root: str | None = None,
+                 links: str | None = None) -> str:
     parts = [
         "You are assisting with a Markdown wiki document in this workspace via the Wiki Agent Workspace reader.",
-        f"Document path: {document_path}",
+        # absolute when the folder is known: the agent finds it whatever folder it runs in
+        f"Document path: {Path(root) / document_path} (in the folder {root})" if root else f"Document path: {document_path}",
         f"Document content SHA-256: {sha256}",
     ]
     if extra:
@@ -147,6 +149,8 @@ def build_prompt(*, question: str, quote: str, document_path: str, sha256: str, 
         "explicitly asks for a change; in that case edit the document file at the path above in place and summarize what changed. "
         "Do not ask for additional confirmation beyond your own configured permission rules."
     )
+    if links:
+        parts.append(links)
     return "\n\n".join(parts)
 
 
@@ -394,7 +398,7 @@ class ThreadService:
             prompt, dev_extra = await self._dev_prompt(doc, body.question, body.dev_kind, body.dev_context, None)
         elif is_chat_path(doc.path):
             prompt = build_chat_prompt(question=body.question, wiki_root=str(self.docs.root), prior=None, extra=self._extra(doc.path), about=self._chat_about(doc),
-                                       locked=self._locked(), brief=body.chat_brief)
+                                       locked=self._locked(), brief=body.chat_brief, links=self._links(None))
         elif is_pr_path(doc.path):
             text, cpath = _pr_copy(self.docs, doc.path)
             learning = None
@@ -409,7 +413,7 @@ class ThreadService:
         else:
             prompt = build_prompt(question=body.question, quote=body.quote, document_path=doc.path, sha256=sha, heading=heading,
                                   prior=None, versions=self.docs.list_versions(doc_id), whole_document=body.whole_document, target=target,
-                                  extra=self._extra(doc.path))
+                                  extra=self._extra(doc.path), root=str(self.docs.root), links=self._links(doc.path))
         job_id = self.jobs.enqueue_turn(session_id=sess.id, thread_id=thread_id, prompt=prompt,
                                         context={"document_id": doc_id, "document_path": doc.path, "sha256": sha, "quote": body.quote,
                                                  "attachments": attach, **self._skill_ctx(doc), **dev_extra},
@@ -482,7 +486,7 @@ class ThreadService:
             prompt, dev_extra = await self._dev_prompt(doc, body.text, body.dev_kind, dctx, prior)
         elif is_chat_path(doc.path):
             prompt = build_chat_prompt(question=shown, wiki_root=str(self.docs.root), prior=prior, extra=self._extra(doc.path), about=self._chat_about(doc),
-                                       locked=self._locked(), action=body.chat_action, target=target)
+                                       locked=self._locked(), action=body.chat_action, target=target, links=self._links(None))
         elif is_pr_path(doc.path):
             text, cpath = _pr_copy(self.docs, doc.path)
             prompt = build_pr_prompt(question=body.text, quote=t.cur_quote, copy_text=text, copy_path=cpath, wiki_root=str(self.docs.root),
@@ -490,7 +494,8 @@ class ThreadService:
         else:
             prompt = build_prompt(question=body.text, quote=t.cur_quote, document_path=doc.path, sha256=sha, heading=t.cur_heading,
                                   prior=prior, versions=self.docs.list_versions(doc.id), whole_document=t.anchor_state in ("document", "page"),
-                                  target=json.loads(t.target_json) if t.target_json else None, extra=self._extra(doc.path))
+                                  target=json.loads(t.target_json) if t.target_json else None, extra=self._extra(doc.path),
+                                  root=str(self.docs.root), links=self._links(doc.path))
         job_id = self.jobs.enqueue_turn(session_id=sess.id, thread_id=thread_id, prompt=prompt,
                                         context={"document_id": doc.id, "document_path": doc.path, "sha256": sha, "quote": t.cur_quote,
                                                  "attachments": image_attachments(self.docs, doc.path) + thread_attachments(self.docs.snapshots_dir, t),
@@ -544,6 +549,12 @@ class ThreadService:
     def _locked(self) -> list[str]:
         locks = self.ctx.locks
         return sorted({x["path"] or "(the whole folder)" for x in locks.list()}) if locks is not None else []
+
+    def _links(self, doc_path: str | None) -> str:
+        """Ask the agent to link what it refers to (the reader opens those links)."""
+        from .refs import citation_rules
+
+        return citation_rules(self.ctx, self.docs.root / doc_path if doc_path else None)
 
     def _extra(self, doc_path: str) -> str | None:
         """Extra reference folders the user added for this wiki folder / this PR's repository."""

@@ -1524,3 +1524,16 @@ body.resizing-h iframe { pointer-events: none; }
 .bench-log { max-height: 300px; }
 .chip.bench-regression { background: var(--red); color: #fff; }
 .chip.bench-improvement { background: var(--green); color: #fff; }
+
+/* links of agent answers to files: the references menu and the picker for a name several files have */
+.refs-menu { position: relative; align-self: flex-start; }
+.refs-list { list-style: none; margin: 4px 0 0; padding: 4px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); max-height: 50vh; overflow: auto; }
+.refs-menu .refs-list { position: absolute; z-index: 30; min-width: 280px; max-width: min(520px, 90vw); box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15); }
+.refs-list.static { margin: 0; }
+.refs-list button { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; width: 100%; text-align: left; background: none; border: 0; border-radius: 6px; padding: 5px 8px; cursor: pointer; color: inherit; }
+.refs-list button:hover, .refs-list button:focus-visible { background: var(--hover, rgba(127, 127, 127, 0.12)); }
+.refs-list .ref-label { overflow-wrap: anywhere; }
+.refs-list .muted { overflow-wrap: anywhere; }
+a.ref-path { text-decoration: none; }
+a.ref-path code { text-decoration: underline dotted; }
+pre > code > .ln.waw-target { animation: waw-target-flash 1.6s ease-out; }

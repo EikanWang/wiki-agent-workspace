@@ -27,6 +27,7 @@ import PrView from "./components/PrView";
 import { isChatPath } from "./components/ChatView";
 import ChatsPage, { ChatTarget } from "./components/ChatsPage";
 import { ConfirmHost, confirmAction } from "./components/Confirm";
+import { RefCandidate, RefContext, RefPicker } from "./components/Refs";
 import WorkspaceMenu from "./components/WorkspaceMenu";
 import AccountMenu from "./components/AccountMenu";
 import ReviewsPanel, { loadReviews, reviewBadge, useReviews } from "./components/ReviewsPanel";
@@ -411,6 +412,40 @@ export default function App() {
     [restoreLast, refreshSessions],
   );
 
+  // links in agent answers: open the place they point at (any open folder, else Local files); several files: choose
+  const [refPick, setRefPick] = useState<{ target: string; candidates: RefCandidate[] } | null>(null);
+  const goToRef = useCallback(async (c: RefCandidate) => {
+    setRefPick(null);
+    if (c.kind === "local") {
+      setLocalUsed(true);
+      setView("local");
+      setLocalOpen({ path: c.abs, at: Date.now() });
+      return;
+    }
+    if (c.workspace_id && c.workspace_id !== getWorkspace()) {
+      switchWorkspace(c.workspace_id, false);
+      if (getWorkspace() !== c.workspace_id) return; // stayed (unsaved edits)
+    }
+    setPendingFragment(c.fragment || null);
+    if (!(await openDocument(c.path!))) setPendingFragment(null);
+  }, [openDocument, switchWorkspace]);
+  const docPathRef = useRef<string | null>(null);
+  docPathRef.current = doc?.path ?? null;
+  const openRef = useCallback((href: string) => {
+    void (async () => {
+      try {
+        const from = docPathRef.current;
+        const r = await post<{ results: { target: string; candidates: RefCandidate[] }[] }>("/refs/resolve", { targets: [href], from_path: from && !isChatPath(from) ? from : null });
+        const cands = r.results[0]?.candidates ?? [];
+        if (!cands.length) notify(`Not found in the open folders or on the server: ${href.split("#")[0]}`);
+        else if (cands.length === 1) await goToRef(cands[0]);
+        else setRefPick({ target: href, candidates: cands });
+      } catch (e) {
+        notify((e as ApiError).message);
+      }
+    })();
+  }, [goToRef, notify]);
+
   useEffect(() => {
     localStorage.setItem(tabsKey(namedRef.current), JSON.stringify(docTabs));
   }, [docTabs]);
@@ -784,6 +819,7 @@ export default function App() {
   const providerWarn = boot.default_provider_warning;
 
   return (
+    <RefContext.Provider value={openRef}>
     <div
       className={`app ${sidebarOpen ? "" : "sidebar-collapsed"} ${panelOpen ? "" : "panel-collapsed"} pane-${mobilePane}`}
       style={{
@@ -1262,7 +1298,9 @@ export default function App() {
           onClose={() => setShowPreview(false)}
         />
       )}
+      {refPick && <RefPicker target={refPick.target} candidates={refPick.candidates} onPick={(c) => void goToRef(c)} onClose={() => setRefPick(null)} />}
       {toast && <div className="toast" role="status" data-testid="toast">{toast}</div>}
     </div>
+    </RefContext.Provider>
   );
 }

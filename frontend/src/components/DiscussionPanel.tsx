@@ -4,6 +4,7 @@ import { COMPOSER_HINT, composerKeyDown } from "./keys";
 import { AgentSession, ApiError, JobEvent, Message, Thread, get, subscribeJob, getWorkspace } from "../api";
 import DiffView from "./DiffView";
 import MarkdownView from "./MarkdownView";
+import { RefsMenu } from "./Refs";
 import { usePersistentState } from "../persist";
 
 /** An agent review's machine-readable comment list (```waw-review JSON) is for the app: its comments go to the
@@ -409,6 +410,7 @@ export function MessageView({ m, session, live, onRetry, onCancel, onPermission,
         {isAgent && status !== "completed" && <span className={`chip status ${status}`}>{jobStatusLabel(status)}</span>}
       </div>
       {content && (isAgent ? <MarkdownView text={content} className="msg-body" /> : <div className="msg-body">{content}</div>)}
+      {isAgent && content && status === "completed" && <RefsMenu text={content} />}
       {isAgent && live && live.activity.length > 0 && status !== "completed" && (
         <ul className="activity">
           {live.activity.slice(-6).map((a, i) => (

@@ -46,8 +46,10 @@ function scaledCopy(src: HTMLCanvasElement, sx: number, sy: number, sw: number, 
  * viewer, its text can be selected and asked about, and each page/slide (or an area of it) can be sent to the
  * agent as an image.
  */
-export default function PdfView({ url, unit, threads, activeThreadId, onAsk, onOpenThread, testId = "pdfjs-view" }: {
+export default function PdfView({ url, unit, threads, activeThreadId, onAsk, onOpenThread, testId = "pdfjs-view", goToPage = null }: {
   url: string;
+  /** a link to a page (#page=N) was followed: scroll there once the pages are laid out */
+  goToPage?: { page: number; at: number } | null;
   unit: "page" | "slide";
   threads: Thread[];
   activeThreadId: string | null;
@@ -124,6 +126,14 @@ export default function PdfView({ url, unit, threads, activeThreadId, onAsk, onO
     el?.classList.add("flash");
     window.setTimeout(() => el?.classList.remove("flash"), 1200);
   }, [activeThreadId, threads, sizes.length]);
+
+  useEffect(() => {
+    if (!goToPage || !sizes.length || !box.current) return;
+    const el = box.current.querySelector<HTMLElement>(`[data-page="${Math.min(goToPage.page, sizes.length)}"]`);
+    el?.scrollIntoView({ block: "start" });
+    el?.classList.add("flash");
+    window.setTimeout(() => el?.classList.remove("flash"), 1200);
+  }, [goToPage, sizes.length]);
 
   // text selected in a page's text layer → "Ask" chip
   const onMouseUp = useCallback((e: React.MouseEvent) => {

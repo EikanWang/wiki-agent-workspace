@@ -168,13 +168,14 @@ def check_action(ctx: AppContext, action: str | None, target: str | None) -> str
 
 def build_chat_prompt(*, question: str, wiki_root: str, prior: list[dict[str, str]] | None, extra: str | None,
                       locked: list[str], action: str | None = None, target: str | None = None, brief: str | None = None,
-                      about: dict[str, str] | None = None) -> str:
+                      about: dict[str, str] | None = None, links: str | None = None) -> str:
     parts = [
         f"You are chatting with the user about their wiki: the folder that is your working directory ({wiki_root}). "
         + (f"This conversation is about the {about['kind']} `{about['path']}` (relative to the working directory): focus on "
            f"it{' and what it contains' if about['kind'] == 'folder' else ''}, and look at the rest of the folder when it helps."
            if about else "This is an open conversation, not about one particular document."),
-        "Answer from the wiki: search and read its pages as needed, cite the pages you rely on (relative paths), and say "
+        "Answer from the wiki: search and read its pages as needed, cite the pages you rely on"
+        + (" (as links, see the end)" if links else " (relative paths)") + ", and say "
         "clearly when something is not covered by the wiki (then answer from general knowledge and mark it as such).",
     ]
     if extra:
@@ -206,6 +207,8 @@ def build_chat_prompt(*, question: str, wiki_root: str, prior: list[dict[str, st
         parts.append("Instructions: answer the user. Only modify files if this user message explicitly asks for a change; "
                      "then edit the wiki's files in place and summarize what changed. Do not ask for additional "
                      "confirmation beyond your own configured permission rules.")
+        if links:
+            parts.append(links)
     return "\n\n".join(parts)
 
 

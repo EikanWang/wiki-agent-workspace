@@ -2739,6 +2739,44 @@ test("review learning: severity, edits and discard reasons are learned; you acce
   await signOut(page);
 });
 
+test("references in an answer: a link opens its place, a name several files have asks which, the References menu lists them", async ({ page }) => {
+  const ws = workspaceDir();
+  const dir = path.join(ws, "e2e-refs");
+  for (const [sub, title] of [["a", "Notes A"], ["b", "Notes B"]]) {
+    fs.mkdirSync(path.join(dir, sub), { recursive: true });
+    fs.writeFileSync(path.join(dir, sub, "e2e-refnotes.md"), `# ${title}\n\n## Alpha\n\ntext\n`);
+  }
+  try {
+    await login(page);
+    await openGuide(page);
+    await selectText(page, "captures");
+    // the fake agent echoes the question: its links are the answer's
+    await page.getByTestId("selection-question").fill(`Refs e2e: see [the capture section](${ws}/docs/guide.md#Capture) and [the notes](/elsewhere/e2e-refnotes.md#Alpha)`);
+    await page.getByTestId("selection-send").click();
+    const answer = page.locator('[data-testid="message-agent"][data-status="completed"]').last();
+    await expect(answer).toContainText("the notes", { timeout: 20000 });
+    // the agent's folder was wrong: the file is looked up by its name; two match, you choose
+    await answer.getByRole("link", { name: "the notes" }).click();
+    await expect(page.getByTestId("ref-picker")).toBeVisible();
+    await expect(page.getByTestId("ref-candidate")).toHaveCount(2);
+    await page.getByTestId("ref-candidate").filter({ hasText: "e2e-refs/b/e2e-refnotes.md" }).click();
+    await expect(page.getByTestId("markdown-body").locator("h1")).toHaveText("Notes B");
+    await expect(page.getByTestId("ref-picker")).toHaveCount(0);
+    // back in the guide's discussion: References lists both places, choosing one jumps to its section
+    await openGuide(page);
+    const item = page.getByTestId("thread-item").filter({ hasText: "Refs e2e" });
+    await expect(item.or(page.getByTestId("refs-menu"))).toBeVisible(); // the guide's open discussion may come back by itself
+    if (await item.count()) await item.click();
+    await page.getByTestId("refs-menu").click();
+    await expect(page.getByTestId("refs-item")).toHaveCount(2);
+    await expect(page.getByTestId("refs-item").first()).toContainText("guide.md › Capture");
+    await page.getByTestId("refs-item").first().click();
+    await expect(page.getByTestId("markdown-body").locator("h2.waw-target")).toHaveText("Capture");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("review skills: listed per repository, edited in a dialog (checked against the disk), the list shows what the next review gets", async ({ page }) => {
   const dir = path.join(workspaceDir(), ".claude/skills/e2e-pr-review");
   const file = path.join(dir, "SKILL.md");

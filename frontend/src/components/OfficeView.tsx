@@ -22,8 +22,9 @@ const qs = (path: string, extra: Record<string, string> = {}) => {
  * Layout view of an Office file: the server renders it to PDF with LibreOffice (cached per content), the browser's
  * PDF viewer shows it, so pages, slides and diagrams look as their authors made them (zoom, page navigation, search).
  */
-export default function OfficeView({ path, sha256, onShowText, unit, threads, activeThreadId, onAsk, onOpenThread }: {
+export default function OfficeView({ path, sha256, onShowText, unit, threads, activeThreadId, onAsk, onOpenThread, goToPage = null }: {
   path: string;
+  goToPage?: { page: number; at: number } | null;
   sha256: string;
   onShowText: (() => void) | null;
   unit: "page" | "slide";
@@ -69,7 +70,7 @@ export default function OfficeView({ path, sha256, onShowText, unit, threads, ac
         <div className="muted small office-note">
           Original layout (rendered by LibreOffice) · <a href={download} download={name}>Download the original</a>
         </div>
-        <PdfView url={`/api/v1/office/pdf?${qs(path, { k: st.key ?? "" })}`} unit={unit} threads={threads} activeThreadId={activeThreadId} onAsk={onAsk} onOpenThread={onOpenThread} testId="office-pdf" />
+        <PdfView url={`/api/v1/office/pdf?${qs(path, { k: st.key ?? "" })}`} unit={unit} threads={threads} activeThreadId={activeThreadId} onAsk={onAsk} onOpenThread={onOpenThread} testId="office-pdf" goToPage={goToPage} />
       </div>
     );
   }
