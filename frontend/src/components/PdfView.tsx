@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { PDFDocumentProxy, PDFPageProxy } from "pdfjs-dist";
 import { Thread } from "../api";
 import { MinusIcon, PlusIcon } from "./Icons";
-import { linkHighlightMs } from "../linkHighlight";
+import { linkHighlightMs, whenSettled } from "../linkHighlight";
 
 /** What the user points at in a laid-out document (sent with the question). */
 export interface PageTarget {
@@ -134,9 +134,11 @@ export default function PdfView({ url, unit, threads, activeThreadId, onAsk, onO
     el?.scrollIntoView({ block: "start" });
     const ms = el ? linkHighlightMs(el) : 0;
     if (!el || !ms) return;
-    el.classList.add("link-flash");
-    el.style.setProperty("--link-hl-dur", `${ms}ms`);
-    window.setTimeout(() => el.classList.remove("link-flash"), ms);
+    whenSettled(el, () => { // pages above may still be laid out: show it once the page stays put
+      el.classList.add("link-flash");
+      el.style.setProperty("--link-hl-dur", `${ms}ms`);
+      window.setTimeout(() => el.classList.remove("link-flash"), ms);
+    });
   }, [goToPage, sizes.length]);
 
   // text selected in a page's text layer → "Ask" chip

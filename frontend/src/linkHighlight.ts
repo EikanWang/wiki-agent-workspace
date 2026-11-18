@@ -19,10 +19,35 @@ export function sectionOf(heading: HTMLElement): HTMLElement[] {
   return out;
 }
 
-/** Draw the rectangle around `els` inside `scroller` (positioned, scrolling); at most a screen high, so it is seen whole. */
+/** Call `fn` once `el` stopped moving on the screen (the smooth scroll to it ended, the page finished laying out):
+ * its position unchanged over `quiet` ms, or after `max` ms at the latest. */
+export function whenSettled(el: Element, fn: () => void, quiet = 150, max = 4000) {
+  const t0 = performance.now();
+  let last = el.getBoundingClientRect().top;
+  let since = t0;
+  const tick = (now: number) => {
+    const top = el.getBoundingClientRect().top;
+    if (Math.abs(top - last) > 0.5) {
+      last = top;
+      since = now;
+    }
+    if (!el.isConnected) return;
+    if (now - since >= quiet || now - t0 >= max) fn();
+    else requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}
+
+/** Draw the rectangle around `els` inside `scroller` (positioned, scrolling) once the scroll to them stopped; at most a
+ * screen high, so it is seen whole. */
 export function flashRect(scroller: HTMLElement, els: HTMLElement[]) {
+  if (!linkHighlightMs(scroller) || !els.length) return;
+  whenSettled(els[0], () => drawRect(scroller, els));
+}
+
+function drawRect(scroller: HTMLElement, els: HTMLElement[]) {
   const ms = linkHighlightMs(scroller);
-  if (!ms || !els.length) return;
+  if (!ms || !scroller.isConnected) return;
   const s = scroller.getBoundingClientRect();
   let top = Infinity, left = Infinity, right = -Infinity, bottom = -Infinity;
   for (const e of els) {
