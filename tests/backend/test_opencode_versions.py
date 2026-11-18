@@ -109,3 +109,18 @@ async def test_only_an_effort_on_a_machine_uses_its_own_default_model(fake_env: 
     # unreachable machine: no model, so the effort cannot be carried; the turn still starts
     down = RemoteExec([str(FAKES / "fake-ssh"), "unreachable-box"], {"opencode": "opencode"}, "/w", versions={"opencode": "2.3.2"})
     assert await ad.remote_default_model(down) == {"model": None, "variant": None}
+
+
+@pytest.mark.parametrize("version", ["1.18.3", "opencode v2.3.2"])
+async def test_a_turn_runs_in_the_documents_folder_whatever_the_servers_pwd(running_app, settings, workspace, fake_env: Path,
+                                                                          monkeypatch, version):
+    """v2 takes its folder from PWD: the server's own (inherited) must not win over the document's folder."""
+    (fake_env / "opencode_version").write_text(version)
+    monkeypatch.setenv("PWD", "/srv/the-servers-own-folder")
+    api = (await running_app(settings)).api
+    doc = await api.open_doc()
+    a = anchor_for(doc["text"], "TorchDynamo")
+    r = await api.post(f"/api/v1/documents/{doc['document_id']}/threads", json={**a, "version_sha256": doc["sha256"], "question": "one"})
+    assert (await api.wait_job(r.json()["job_id"]))[-1]["type"] == "completed"
+    sessions = json.loads((fake_env / "opencode_sessions.json").read_text())
+    assert sessions[-1]["directory"] == str(workspace), sessions[-1]

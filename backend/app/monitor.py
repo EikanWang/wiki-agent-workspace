@@ -127,7 +127,7 @@ async def _export(exe: str, sid: str) -> tuple[int, str]:
     with tempfile.TemporaryFile() as fh:
         try:
             proc = await asyncio.create_subprocess_exec(exe, "export", sid, stdout=fh, stderr=asyncio.subprocess.DEVNULL,
-                                                        stdin=asyncio.subprocess.DEVNULL, env=agent_env(None), cwd=str(Path.home()))
+                                                        stdin=asyncio.subprocess.DEVNULL, env=agent_env(None, Path.home()), cwd=str(Path.home()))
         except OSError:
             return 1, ""
         try:
@@ -803,7 +803,7 @@ async def send(provider: str, sid: str, body: SendIn, ctx: AppContext = Depends(
 
     async def run() -> None:
         try:
-            proc = await asyncio.create_subprocess_exec(*argv, cwd=cwd, env=agent_env(None), stdin=asyncio.subprocess.PIPE if stdin else asyncio.subprocess.DEVNULL,
+            proc = await asyncio.create_subprocess_exec(*argv, cwd=cwd, env=agent_env(None, cwd), stdin=asyncio.subprocess.PIPE if stdin else asyncio.subprocess.DEVNULL,
                                                         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, start_new_session=True)
             if stdin and proc.stdin:
                 proc.stdin.write(stdin)

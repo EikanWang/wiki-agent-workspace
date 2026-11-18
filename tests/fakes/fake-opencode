@@ -102,7 +102,8 @@ def main(argv):
         (STATE / "opencode_last_config_content").write_text(os.environ["OPENCODE_CONFIG_CONTENT"])
     session = None
     title = None
-    directory = os.getcwd()
+    # like OpenCode v2: the working folder is $PWD when set (an inherited one wins over the real cwd), v1 has --dir
+    directory = os.getcwd() if v1() else (os.environ.get("PWD") or os.getcwd())
     i = 0
     rest = []
     while i < len(args):

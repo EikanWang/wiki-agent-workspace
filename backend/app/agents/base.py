@@ -205,10 +205,13 @@ def _script_vars() -> dict[str, str]:
     return out
 
 
-def agent_env(base: dict[str, str] | None = None) -> dict[str, str] | None:
+def agent_env(base: dict[str, str] | None = None, cwd: str | Path | None = None) -> dict[str, str] | None:
     """The environment for an agent process: `base` (default: the server's) plus the env script's variables.
-    None when there is nothing to add (inherit)."""
+    None when there is nothing to add (inherit). With `cwd`, PWD says it too: OpenCode v2 takes its working
+    folder from PWD (the server's own folder when inherited), not from the process's real one."""
     extra = _script_vars()
+    if cwd is not None:
+        extra = {**extra, "PWD": str(cwd)}
     if not extra:
         return base
     return {**(base if base is not None else os.environ), **extra}
@@ -223,7 +226,7 @@ async def run_capture(args: list[str], cwd: Path | None = None, timeout: float =
         stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        env=agent_env(env),
+        env=agent_env(env, cwd),
     )
     try:
         out, err = await asyncio.wait_for(proc.communicate(stdin), timeout=timeout)
@@ -261,7 +264,7 @@ class SubprocessTurn(TurnHandle):
             stdin=subprocess.PIPE if self.stdin_data is not None else subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            env=agent_env(self.env),
+            env=agent_env(self.env, self.cwd),
             start_new_session=True,
         )
         if self.stdin_data is not None:
