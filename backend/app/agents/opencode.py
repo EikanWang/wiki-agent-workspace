@@ -238,8 +238,11 @@ class OpenCodeCliAdapter(AgentAdapter):
             args += ["--agent", self.cfg.profile]
         if v2:  # no --variant: the model is "provider/model#variant", so a variant alone needs the default model
             model = ctx.model
-            if ctx.variant and not model and ctx.remote is None:
-                model = (await self.default_model(ctx.cwd or ctx.workspace)).get("model")
+            if ctx.variant and not model:
+                if ctx.remote is None:
+                    model = (await self.default_model(ctx.cwd or ctx.workspace)).get("model")
+                else:  # the machine's own config decides (the copy Set up made, or its own)
+                    model = (await self.remote_default_model(ctx.remote)).get("model")
             if model:
                 base = model.split("#", 1)[0]
                 args += ["--model", f"{base}#{ctx.variant}" if ctx.variant else model]
@@ -284,6 +287,22 @@ class OpenCodeCliAdapter(AgentAdapter):
             rc, out, _err = await run_capture([self.exe, "debug", "config"], cwd=workspace, timeout=30)
         except (ProviderError, OSError):
             return none
+        return self._parse_debug_config(rc, out)
+
+    async def remote_default_model(self, remote: Any) -> dict[str, str | None]:
+        """The same, from `opencode debug config` on the machine (its PATH, OPENCODE_CONFIG and worktree), over the
+        shared connection. The forwarded-variables file is left for the turn itself (sourcing it deletes it)."""
+        import dataclasses
+
+        argv = dataclasses.replace(remote, env_file="").wrap([self.exe or "opencode", "debug", "config"], "opencode")
+        try:
+            rc, out, _err = await run_capture(argv, cwd=Path.home(), timeout=30)
+        except (ProviderError, OSError):
+            return {"model": None, "variant": None}
+        return self._parse_debug_config(rc, out)
+
+    def _parse_debug_config(self, rc: int, out: str) -> dict[str, str | None]:
+        none: dict[str, str | None] = {"model": None, "variant": None}
         starts = [i for i in (out.find("{"), out.find("[")) if i >= 0]  # v1: one object; v2: a list of documents
         if rc != 0 or not starts:
             return none

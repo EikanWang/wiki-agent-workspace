@@ -86,3 +86,26 @@ def test_monitor_send_follows_the_version(monkeypatch):
     v1, _ = monitor._send_argv(None, "opencode", "s1", "hi", "/p", "1.18.3")
     v2, _ = monitor._send_argv(None, "opencode", "s1", "hi", "/p", "opencode v2.3.2")
     assert v1[v1.index("--dir") + 1] == "/p" and "--dir" not in v2 and v2[-2:] == ["--", "hi"]
+
+
+@pytest.mark.parametrize("version", ["opencode v2.3.2", "1.18.3"])
+async def test_only_an_effort_on_a_machine_uses_its_own_default_model(fake_env: Path, tmp_path: Path, version):
+    (fake_env / "opencode_config.json").write_text(json.dumps({"model": "remote/own-default"}))
+    envf = tmp_path / "env-fwd.sh"
+    envf.write_text("export X=1\n")
+    ad = OpenCodeCliAdapter(ProviderConfig(bin=str(FAKES / "fake-opencode")))
+    rex = RemoteExec([str(FAKES / "fake-ssh"), "box"], {"opencode": str(FAKES / "fake-opencode")}, str(tmp_path),
+                     env_file=str(envf), versions={"opencode": version})
+    h = await ad.resume_turn(TurnContext(prompt="hi", workspace=tmp_path, native_session_id=None, cwd=tmp_path,
+                                         variant="high", remote=rex))
+    script = h.args[-1]
+    if version.startswith("1."):
+        assert "--variant high" in script and "--model" not in script, script
+    else:
+        assert "--model" in script and "remote/own-default#high" in script and "--variant" not in script, script
+        calls = [json.loads(x) for x in (fake_env / "opencode_calls.log").read_text().splitlines()]
+        assert ["debug", "config"] in calls  # asked on the machine (through ssh)
+    assert envf.exists()  # left for the turn, which sources and deletes it
+    # unreachable machine: no model, so the effort cannot be carried; the turn still starts
+    down = RemoteExec([str(FAKES / "fake-ssh"), "unreachable-box"], {"opencode": "opencode"}, "/w", versions={"opencode": "2.3.2"})
+    assert await ad.remote_default_model(down) == {"model": None, "variant": None}
