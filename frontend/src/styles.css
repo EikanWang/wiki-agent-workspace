@@ -671,6 +671,19 @@ mark.waw-hl.review.needs_review { border-bottom: 2px dashed var(--warn); }
 .activity-badge { position: absolute; top: 2px; right: 1px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--primary); color: var(--primary-fg); font-size: 10px; font-weight: 700; line-height: 16px; text-align: center; }
 /* review queue */
 .reviews-panel { display: flex; flex-direction: column; flex: 1; min-height: 0; font-size: 13px; }
+.reviews-tabs { padding-top: 4px; padding-bottom: 4px; }
+.reviews-tabs .activity-badge { position: static; margin-left: 4px; }
+.monitors-wrap:not([hidden]), .monitors { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.mon-form { display: flex; flex-direction: column; gap: 4px; }
+.mon-item { text-decoration: none; }
+.mon-item.unseen .review-pr-title { font-weight: 600; }
+.mon-kind { flex: none; width: 14px; text-align: center; margin-top: 1px; color: var(--green); }
+.mon-kind.closed { color: var(--red); }
+.mon-kind.merged { color: #8250df; }
+.mon-mark { flex: none; font-size: 10px; border-radius: 999px; padding: 0 6px; margin-top: 2px; border: 1px solid currentColor; }
+.mon-mark.new { color: var(--green); }
+.mon-mark.updated { color: #b26b00; }
+.activity-badge.mon-unseen { position: static; }
 .reviews-controls { padding: 6px 8px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; }
 .reviews-filter { width: 100%; box-sizing: border-box; font: inherit; padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--fg); }
 .reviews-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; }

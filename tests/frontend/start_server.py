@@ -7,6 +7,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -243,6 +244,21 @@ def add_fake_review_queue(app) -> None:
                 {"commit": {"authors": {"nodes": [{"name": "Alice A.", "email": "alice@intel.com", "user": alice},
                                                   {"name": "Dan Helper", "email": "dan@example.org", "user": None}]}}},
                 {"commit": {"authors": {"nodes": [{"name": "Alice A.", "email": "alice@intel.com", "user": alice}]}}}]}}}}
+        if "query MonitorItems" in query:  # Reviews → Monitors: a rule's search ("later" adds one created just now)
+            q = variables["q"]
+            lab = {"nodes": [{"name": "module: xpu", "color": "1d76db"}]}
+            items = [{"__typename": "PullRequest", "number": 101, "title": "Monitored pull request", "url": "https://github.com/pytorch/pytorch/pull/101",
+                      "state": "OPEN", "isDraft": False, "createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-02T00:00:00Z", "author": {"login": "alice"},
+                      "repository": {"nameWithOwner": "pytorch/pytorch"}, "labels": lab, "comments": {"totalCount": 2}},
+                     {"__typename": "Issue", "number": 555, "title": "Monitored issue", "url": "https://github.com/pytorch/pytorch/issues/555",
+                      "state": "OPEN", "createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-03T00:00:00Z", "author": {"login": "bob"},
+                      "repository": {"nameWithOwner": "pytorch/pytorch"}, "labels": lab, "comments": {"totalCount": 0}}]
+            if "is:issue" in q:
+                items = items[1:]
+            if "later" in q:
+                now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+                items.insert(0, {**items[-1], "number": 556, "title": "Brand new issue", "createdAt": now, "updatedAt": now})
+            return {"search": {"issueCount": len(items), "nodes": items}}
         if "query InsightsItems" in query:  # Repo Insights: issues / PRs active in a period
             q = variables["q"]
             day = re.search(r"updated:>=(\S+)", q).group(1)

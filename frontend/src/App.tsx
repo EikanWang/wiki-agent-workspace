@@ -1030,7 +1030,7 @@ export default function App() {
           </div>
           {sidebarView === "reviews" && (
             <div className="sidebar-content">
-              <ReviewsPanel onOpen={(pr) => openPr(pr.repo, pr.number, `#${pr.number} ${pr.title}`)} />
+              <ReviewsPanel onOpen={(pr) => openPr(pr.repo, pr.number, `#${pr.number} ${pr.title}`)} onOpenPr={openPr} />
             </div>
           )}
           {sidebarView === "local" && (

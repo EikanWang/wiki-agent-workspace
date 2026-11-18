@@ -301,6 +301,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from . import github_hub
 
     api.include_router(github_hub.router)
+    from . import gh_monitors
+
+    api.include_router(gh_monitors.router)
     from . import batch_review
 
     api.include_router(batch_review.router)

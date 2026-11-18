@@ -1,6 +1,6 @@
 """Small JSON settings in the kv_settings table, and the extra reference folders given to the agent.
 
-Keys: `github_hub_prefs` (review hub preferences), `context:repo:<owner>/<name>` (folders for that repository's PRs),
+Keys: `github_hub_prefs` (review hub preferences), `github_monitors` (Reviews → Monitors rules), `context:repo:<owner>/<name>` (folders for that repository's PRs),
 `context:ws:<workspace id>` (folders for questions about documents of that wiki folder).
 """
 

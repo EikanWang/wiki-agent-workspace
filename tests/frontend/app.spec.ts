@@ -4496,3 +4496,63 @@ Path(${JSON.stringify(file)}).write_bytes(_minimal_docx(["Sync paragraph number 
     fs.rmSync(file, { force: true });
   }
 });
+
+test("Reviews → Monitors: per-repository GitHub search rules list PRs and issues, mark what is new, leave the review queue alone", async ({ page }) => {
+  await ensureGithubSignIn(page);
+  await page.goto("/");
+  await page.getByTestId("login-github").click();
+  await expect(page.getByTestId("view-document")).toBeVisible({ timeout: 15000 });
+  const badge = page.getByTestId("activity-reviews-badge");
+  await expect(badge).not.toHaveText("", { timeout: 15000 });
+  const badge0 = await badge.innerText();
+  await page.getByTestId("activity-reviews").click();
+  await page.getByTestId("reviews-tab-monitors").click();
+  const mon = page.getByTestId("monitors");
+  await expect(mon).toBeVisible();
+  await expect(page.getByTestId("reviews-filter")).toBeHidden(); // the queue's controls are not shown here
+  // a rule: a GitHub search within one repository (repo: in the query is refused)
+  await page.getByTestId("monitor-add").click();
+  await page.getByTestId("monitor-repo").fill("pytorch/pytorch");
+  await page.getByTestId("monitor-query").fill("is:open repo:a/b");
+  await page.getByTestId("monitor-add-save").click();
+  await expect(page.getByTestId("monitors-error")).toContainText("its own repository");
+  await page.getByTestId("monitor-query").fill('is:open label:"module: xpu"');
+  await page.getByTestId("monitor-name").fill("XPU work");
+  await page.getByTestId("monitor-add-save").click();
+  const rule = mon.getByTestId("monitor-rule").filter({ hasText: "XPU work" });
+  await expect(rule).toHaveCount(1);
+  await expect(mon.getByTestId("monitor-repo-group").first()).toHaveAttribute("data-repo", "pytorch/pytorch");
+  await expect(rule.getByTestId("monitor-count")).toHaveText("2");
+  await rule.getByTestId("monitor-rule-head").click();
+  await expect(rule.getByTestId("monitor-item")).toHaveCount(2);
+  await expect(rule.locator('[data-testid="monitor-item"][data-kind="issue"]')).toHaveAttribute("href", "https://github.com/pytorch/pytorch/issues/555");
+  await expect(rule.getByTestId("monitor-mark")).toHaveCount(0); // the first look is the base
+  // something new since it was opened is marked
+  await rule.getByTestId("monitor-edit").click();
+  await page.getByTestId("monitor-edit-query").fill('is:open label:"module: xpu" later');
+  await page.getByTestId("monitor-edit-save").click();
+  await expect(rule.getByTestId("monitor-item")).toHaveCount(3);
+  await expect(rule.locator('[data-testid="monitor-item"][data-number="556"]').getByTestId("monitor-mark")).toHaveText("new");
+  await rule.getByTestId("monitor-rule-head").click(); // folded: the count of new ones shows, also on the tab
+  await expect(rule.getByTestId("monitor-unseen")).toHaveText("1");
+  await page.getByTestId("reviews-tab-queue").click();
+  await expect(page.getByTestId("reviews-monitors-badge")).toHaveText("1");
+  await expect(badge).toHaveText(badge0); // the review queue's badge is its own
+  await page.getByTestId("reviews-tab-monitors").click();
+  await rule.getByTestId("monitor-rule-head").click();
+  await expect(rule.getByTestId("monitor-mark")).toHaveCount(1); // still marked while open…
+  // a PR opens in a tab
+  await rule.locator('[data-testid="monitor-item"][data-number="101"]').click();
+  await expect(page.getByTestId("pr-view")).toBeVisible({ timeout: 15000 });
+  await page.reload(); // …and seen after
+  await expect(page.getByTestId("activity-reviews")).toBeVisible({ timeout: 15000 });
+  if (!(await page.getByTestId("monitors").isVisible())) await page.getByTestId("activity-reviews").click();
+  await expect(page.getByTestId("monitors")).toBeVisible({ timeout: 15000 });
+  const rule2 = page.getByTestId("monitor-rule").filter({ hasText: "XPU work" });
+  await expect(rule2.getByTestId("monitor-item")).toHaveCount(3, { timeout: 15000 });
+  await expect(rule2.getByTestId("monitor-mark")).toHaveCount(0);
+  await rule2.getByTestId("monitor-delete").click();
+  await page.getByTestId("confirm-ok").click();
+  await expect(page.getByTestId("monitor-rule")).toHaveCount(0);
+  await page.getByTestId("reviews-tab-queue").click();
+});

@@ -3,6 +3,7 @@ import DeferMenu, { Deferral, deferLabel } from "./DeferMenu";
 import GithubRate from "./GithubRate";
 import { ApiError, get, post, put } from "../api";
 import RefreshButton from "./RefreshButton";
+import MonitorsPanel from "./MonitorsPanel";
 import { confirmAction } from "./Confirm";
 import GhUser from "./GhUser";
 import { useRestoredScroll } from "../persist";
@@ -194,7 +195,11 @@ const CI_LABEL: Record<string, string> = { SUCCESS: "checks passed", FAILURE: "c
 type Sort = "updated" | "waiting" | "size";
 
 /** Sidebar view: the pull requests waiting for your review, grouped by repository. */
-export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => void }) {
+export default function ReviewsPanel({ onOpen, onOpenPr }: { onOpen: (pr: ReviewPR) => void; onOpenPr: (repo: string, number: number, title: string) => void }) {
+  // Review queue | Monitors (saved GitHub searches per repository; they leave the queue, Deferred and the badge alone)
+  const [tab, setTab] = useState<"queue" | "monitors">(() => (localStorage.getItem("waw.reviews.tab") === "monitors" ? "monitors" : "queue"));
+  useEffect(() => localStorage.setItem("waw.reviews.tab", tab), [tab]);
+  const [monUnseen, setMonUnseen] = useState(0);
   const { queue, error, loading } = useReviews();
   const [filter, setFilter] = useState("");
   const [showDrafts, setShowDrafts] = useState(() => localStorage.getItem("waw.reviews.drafts") === "1");
@@ -481,13 +486,26 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
       <div className="tree-header">
         <span className="ws-name">Reviews{queue ? ` · ${reviewBadge(queue)}` : ""}</span>
         <span className="spacer" />
-        {prefs && (
+        {prefs && tab === "queue" && (
           <button className={`icon-btn settings-badged ${settings ? "active" : ""}`} onClick={() => setSettings((v) => !v)} title={learnWaiting ? `Repositories and priority · ${learnWaiting} lesson(s) the agent learned wait for you (Agent learning)` : "Repositories, priority and agent learning"} aria-label="Reviews settings" aria-pressed={settings} data-testid="reviews-settings">
             ⚙{learnWaiting > 0 && <span className="activity-badge" data-testid="reviews-learning-badge">{learnWaiting}</span>}
           </button>
         )}
-        <RefreshButton onRefresh={() => loadReviews(true)} title="Refresh from GitHub" testId="reviews-refresh" />
+        {tab === "queue" && <RefreshButton onRefresh={() => loadReviews(true)} title="Refresh from GitHub" testId="reviews-refresh" />}
       </div>
+      <div className="pad-x reviews-tabs">
+        <span className="mode-switch" role="tablist" aria-label="Reviews view">
+          <button role="tab" aria-selected={tab === "queue"} className={tab === "queue" ? "active" : ""} onClick={() => setTab("queue")} title="Pull requests waiting for your review" data-testid="reviews-tab-queue">Review queue</button>
+          <button role="tab" aria-selected={tab === "monitors"} className={tab === "monitors" ? "active" : ""} onClick={() => setTab("monitors")} title="Pull requests and issues picked by your rules (GitHub searches), per repository" data-testid="reviews-tab-monitors">
+            Monitors{monUnseen > 0 && tab !== "monitors" && <span className="activity-badge" data-testid="reviews-monitors-badge">{monUnseen}</span>}
+          </button>
+        </span>
+      </div>
+      {/* kept mounted while hidden: its count of new / updated items shows on the tab */}
+      <div className="monitors-wrap" hidden={tab !== "monitors"}>
+        <MonitorsPanel repos={[...new Set([...(queue?.items ?? []).map((p) => p.repo), ...(prefs?.watched_repos ?? [])])]} onOpenPr={onOpenPr} onUnseen={setMonUnseen} />
+      </div>
+      {tab === "queue" && (<>
       <div className="pad-x"><GithubRate /></div>
       {settings && prefs && <ReviewsSettings prefs={prefs} busy={busy} change={change} problems={[...(queue?.watch_problems ?? []), ...(queue?.codeowned_problems ?? [])]} status={queue?.priority_agent ?? null} maintainers={queue?.maintainers ?? []} codeowned={queue?.codeowned ?? []} />}
       <div className="reviews-search">
@@ -621,6 +639,7 @@ export default function ReviewsPanel({ onOpen }: { onOpen: (pr: ReviewPR) => voi
         {(queue?.approved_hidden ?? 0) > 0 && <div className="muted small reviews-meta" data-testid="reviews-approved-hidden">{queue!.approved_hidden} PR(s) you approved with nothing new since are not listed (tick “approved” to show them).</div>}
         {(queue?.hidden_count ?? 0) > 0 && <div className="muted small reviews-meta">{queue!.hidden_count} request(s) in hidden repositories (⚙ to show them)</div>}
       </div>
+      </>)}
     </div>
   );
 }
