@@ -1,5 +1,6 @@
 import RefreshButton from "./RefreshButton";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { CopyLinesButton, linesText, sideOf, useCopyLines } from "../diffCopy";
 import { COMPOSER_HINT, composerKeyDown } from "./keys";
 import { AgentSession, ApiError, DiffComment, DiffFile, DiffResult, GitRefs, Review, ReviewComment, del, get, getWorkspace, post, put } from "../api";
 import { FileIcon } from "./FileIcon";
@@ -228,6 +229,11 @@ export default function DiffReview({
     setRange({ file, from: Math.min(anchor, index), to: Math.max(anchor, index) });
   };
 
+  // the selected lines' code: Ctrl/⌘+C or Copy (any file, also those comments cannot be attached to)
+  const copySide = useRef<"left" | "right" | null>(null);
+  const copyText = range ? linesText((parsed[range.file]?.lines ?? []).slice(range.from, range.to + 1), copySide.current) : null;
+  useCopyLines(copyText);
+
   const selectedLines = (r: Range): Line[] => {
     const ls = parsed[r.file]?.lines ?? [];
     return ls.slice(r.from, r.to + 1).filter((l) => l.kind === "add" || l.kind === "del" || l.kind === "ctx");
@@ -350,8 +356,9 @@ export default function DiffReview({
               <option key={s.id} value={s.id}>{s.provider} · {s.display_name ?? s.short_id ?? s.id.slice(0, 8)}</option>
             ))}
           </select>
-          <button className="btn primary small" disabled={busy || !question.trim()} onClick={() => void send("review")} data-testid="diff-comment-stash" title="Stash this comment in the pending review; submit all comments at once later">Add to review</button>
-          <button className="btn small" disabled={busy || !question.trim()} onClick={() => void send("now")} data-testid="diff-comment-send" title="Start a discussion for this comment right away">Ask now</button>
+          <button className="btn primary small" disabled={busy || !question.trim() || !file.commentable} onClick={() => void send("review")} data-testid="diff-comment-stash" title="Stash this comment in the pending review; submit all comments at once later">Add to review</button>
+          <button className="btn small" disabled={busy || !question.trim() || !file.commentable} onClick={() => void send("now")} data-testid="diff-comment-send" title="Start a discussion for this comment right away">Ask now</button>
+          <CopyLinesButton text={copyText ?? ""} testId="diff-copy-lines" />
           <button className="btn small" onClick={() => { setComposer(null); setRange(null); }}>Cancel</button>
         </div>
         {!file.commentable && <div className="warn small">Comments can only be attached to files the reader can open (Markdown, text/source, .docx).</div>}
@@ -457,7 +464,7 @@ export default function DiffReview({
             onToggle={() => toggle(f.path)}
             onOpen={() => onOpenDocument(f.path)}
             onOpenThread={(tid) => onOpenThread(f.path, tid)}
-            onStart={(i, shift) => f.commentable && startSelect(f.path, i, shift)}
+            onStart={(i, shift, side) => { copySide.current = side; startSelect(f.path, i, shift); }}
             onExtend={(i) => extendSelect(f.path, i)}
             onViewed={(v) => void setViewed(f, v)}
             onReload={() => void load()}
@@ -498,7 +505,7 @@ function FileDiff({ file, lines, comments: allComments, pending, lastReview, col
   onToggle: () => void;
   onOpen: () => void;
   onOpenThread: (threadId: string) => void;
-  onStart: (index: number, shift: boolean) => void;
+  onStart: (index: number, shift: boolean, side: "left" | "right" | null) => void;
   onExtend: (index: number) => void;
   onViewed: (viewed: boolean) => void;
   onReload: () => void;
@@ -569,7 +576,7 @@ function FileDiff({ file, lines, comments: allComments, pending, lastReview, col
     onPointerDown: (e: React.PointerEvent) => {
       if (e.button !== 0) return;
       e.preventDefault();
-      onStart(i, e.shiftKey);
+      onStart(i, e.shiftKey, sideOf(e));
     },
     onPointerEnter: () => onExtend(i),
   });

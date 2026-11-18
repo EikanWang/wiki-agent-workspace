@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, DevCompare, DevDiffFile, DevGitStatus, DevRefs, DevWorkspace, get, post } from "../api";
 import { writeClipboard } from "../clipboard";
+import { CopyLinesButton, linesText, sideOf, useCopyLines } from "../diffCopy";
 import { COMPOSER_HINT, composerKeyDown } from "./keys";
 import { Line, SplitCols, UnifiedCols, buildSplitRows, numColStyle, parseUnified } from "./DiffReview";
 import { Gap, expandLines } from "./PrDiff";
@@ -414,6 +415,9 @@ function DevFileDiff({ file, layout, devId, targetRef, collapsed, viewed, inComm
   };
   const inSel = (i: number) => !!sel && i >= sel.from && i <= sel.to;
   const cancel = () => { setComposer(null); setSel(null); setText(""); };
+  const copySide = useRef<"left" | "right" | null>(null);
+  const copyText = sel ? linesText(lines.slice(sel.from, sel.to + 1), copySide.current) : null;
+  useCopyLines(copyText);
   const chosen: Line[] = composer ? lines.slice(composer.from, composer.to + 1).filter((l) => ["add", "del", "ctx"].includes(l.kind)) : [];
   const newSide = chosen.filter((l) => l.newNo !== null);
   const range = chosen.length ? (() => {
@@ -439,7 +443,7 @@ function DevFileDiff({ file, layout, devId, targetRef, collapsed, viewed, inComm
     }
   };
   const cell = (i: number) => ({
-    onPointerDown: (e: React.PointerEvent) => { if (e.button !== 0) return; e.preventDefault(); start(i, e.shiftKey); },
+    onPointerDown: (e: React.PointerEvent) => { if (e.button !== 0) return; e.preventDefault(); copySide.current = sideOf(e); start(i, e.shiftKey); },
     onPointerEnter: () => extend(i),
   });
   const composerNode = composer && (
@@ -450,6 +454,7 @@ function DevFileDiff({ file, layout, devId, targetRef, collapsed, viewed, inComm
       <div className="row">
         <button className="btn small primary" disabled={busy || !text.trim()} onClick={() => void send(askSel())} title="The answer appears in the agent panel" data-testid="dev-diff-ask">Ask agent</button>
         {onOpen && newSide.length > 0 && <button className="btn small" onClick={() => onOpen(newSide[0].newNo!)} data-testid="dev-diff-open-line">Open in editor</button>}
+        <CopyLinesButton text={copyText ?? ""} testId="dev-diff-copy-lines" />
         <button className="btn small" onClick={cancel}>Cancel</button>
       </div>
     </div>

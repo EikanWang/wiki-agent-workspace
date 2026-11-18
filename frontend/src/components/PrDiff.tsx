@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, del, get, patch, post } from "../api";
 import { writeClipboard } from "../clipboard";
+import { CopyLinesButton, linesText, sideOf, useCopyLines } from "../diffCopy";
 import { renderGithubMarkdown } from "../markdown";
 import { COMPOSER_HINT, composerKeyDown } from "./keys";
 import MentionTextarea from "./MentionTextarea";
@@ -202,6 +203,9 @@ export function PrFileDiff({ file, layout, threads, drafts, apiBase, canAsk, col
   };
   const inSel = (i: number) => !!sel && i >= sel.from && i <= sel.to;
   const cancel = () => { setComposer(null); setSel(null); setText(""); };
+  const copySide = useRef<"left" | "right" | null>(null);
+  const copyText = sel ? linesText(lines.slice(sel.from, sel.to + 1), copySide.current) : null;
+  useCopyLines(copyText);
 
   const selected = composer ? lines.slice(composer.from, composer.to + 1).filter((l) => ["add", "del", "ctx"].includes(l.kind)) : [];
   const label = () => {
@@ -302,6 +306,7 @@ export function PrFileDiff({ file, layout, threads, drafts, apiBase, canAsk, col
         <button className="btn small primary" disabled={busy || !text.trim()} onClick={() => void addComment()} title="Saved here; published to GitHub when you submit the review" data-testid="pr-add-comment">Add review comment</button>
         <button className="btn small" disabled={busy || !text.trim() || !canAsk} onClick={() => void ask()} title={canAsk ? "Ask the agent about these lines (the answer appears in the discussions panel)" : "Choose the agent's wiki first"} data-testid="pr-ask-lines">Ask agent</button>
         <button className="btn small" disabled={!suggestable} onClick={insertSuggestion} title={suggestable ? "Propose replacement code (GitHub 'suggested change')" : "Suggestions apply to new or unchanged lines"} data-testid="pr-suggest">Suggest change</button>
+        <CopyLinesButton text={copyText ?? ""} testId="pr-copy-lines" />
         <button className="btn small" onClick={cancel}>Cancel</button>
       </div>
     </div>
@@ -341,7 +346,7 @@ export function PrFileDiff({ file, layout, threads, drafts, apiBase, canAsk, col
     );
   };
   const cell = (i: number) => (lines[i]?.expanded ? {} : {
-    onPointerDown: (e: React.PointerEvent) => { if (e.button !== 0) return; e.preventDefault(); start(i, e.shiftKey); },
+    onPointerDown: (e: React.PointerEvent) => { if (e.button !== 0) return; e.preventDefault(); copySide.current = sideOf(e); start(i, e.shiftKey); },
     onPointerEnter: () => extend(i),
   });
   const has = (ln: Line) => { const x = at(ln); return x.threads.length + x.drafts.length > 0; };

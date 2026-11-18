@@ -795,7 +795,8 @@ test("selection popover offers Copy; the model of a session can be switched from
   await expect(page.getByTestId("session-model-tag")).toHaveCount(0, { timeout: 10000 });
 });
 
-test("diff: multi-line range comments, side-by-side layout, Diff tab follows the open document", async ({ page }) => {
+test("diff: multi-line range comments, side-by-side layout, Diff tab follows the open document", async ({ page, context }) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   await login(page);
   const ws = workspaceDir();
   gitCommitAll(ws, "snapshot2");
@@ -815,6 +816,14 @@ test("diff: multi-line range comments, side-by-side layout, Diff tab follows the
   await rows.nth(2).dispatchEvent("pointerdown", { button: 0, shiftKey: true });
   await expect(page.locator('[data-testid="diff-row"][data-selected="1"]')).toHaveCount(3);
   await expect(page.getByTestId("diff-composer")).toContainText("3 lines");
+  // the selected lines' code can be copied (no line numbers, no +/- markers): the Copy button and Ctrl+C
+  await page.getByTestId("diff-copy-lines").click();
+  await expect(page.getByTestId("diff-copy-lines")).toContainText("Copied");
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("- alpha line\n- beta line\n- gamma line");
+  await page.evaluate(() => navigator.clipboard.writeText(""));
+  await page.getByTestId("diff-comment-input").blur();
+  await page.keyboard.press("Control+c");
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("- alpha line\n- beta line\n- gamma line");
   await page.getByTestId("diff-comment-input").fill("Why these three together?");
   await page.getByTestId("diff-comment-send").click(); // "Ask now": immediate discussion
   const rangeThread = page.getByTestId("diff-comment-marker").first();
@@ -2772,6 +2781,38 @@ test("references in an answer: a link opens its place, a name several files have
     await expect(page.getByTestId("refs-item").first()).toContainText("guide.md › Capture");
     await page.getByTestId("refs-item").first().click();
     await expect(page.getByTestId("markdown-body").locator("h2.waw-target")).toHaveText("Capture");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("back / forward after following a link in an answer return to the document you were reading", async ({ page }) => {
+  const ws = workspaceDir();
+  const dir = path.join(ws, "e2e-nav");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "e2e-navtarget.md"), "# Nav Target\n\n## Beta\n\ntext\n");
+  try {
+    await login(page);
+    await openGuide(page);
+    await expect(page.getByTestId("nav-back")).toBeDisabled();
+    await page.getByTestId("ask-whole-document").click();
+    await page.getByTestId("selection-question").fill(`Nav e2e: see [the target](${ws}/e2e-nav/e2e-navtarget.md#Beta)`);
+    await page.getByTestId("selection-send").click();
+    const answer = page.locator('[data-testid="message-agent"][data-status="completed"]').last();
+    await expect(answer).toContainText("the target", { timeout: 20000 });
+    const guideTitle = await page.getByTestId("markdown-body").locator("h1").first().textContent();
+    await answer.getByRole("link", { name: "the target" }).click();
+    await expect(page.getByTestId("markdown-body").locator("h1")).toHaveText("Nav Target");
+    await expect(page.getByTestId("nav-forward")).toBeDisabled();
+    await page.getByTestId("nav-back").click();
+    await expect(page.getByTestId("markdown-body").locator("h1").first()).toHaveText(guideTitle ?? "");
+    await expect(page.getByTestId("nav-back")).toBeDisabled();
+    await page.getByTestId("nav-forward").click();
+    await expect(page.getByTestId("markdown-body").locator("h1")).toHaveText("Nav Target");
+    // Alt+← works too
+    await page.getByTestId("markdown-body").click();
+    await page.keyboard.press("Alt+ArrowLeft");
+    await expect(page.getByTestId("markdown-body").locator("h1").first()).toHaveText(guideTitle ?? "");
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

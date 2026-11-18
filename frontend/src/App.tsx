@@ -416,8 +416,65 @@ export default function App() {
   const [refPick, setRefPick] = useState<{ target: string; candidates: RefCandidate[] } | null>(null);
   const docPathRef = useRef<string | null>(null);
   docPathRef.current = doc?.path ?? null;
+  // Back / forward over link jumps (agent answers, links between documents), like a browser: where you were
+  // (the page shown, the document and how far it was scrolled) is remembered before each jump.
+  type NavEntry = { view: View; ws: string | null; path: string | null; top: number };
+  const navBack = useRef<NavEntry[]>([]);
+  const navFwd = useRef<NavEntry[]>([]);
+  const [, setNavTick] = useState(0);
+  const viewRef = useRef(view);
+  viewRef.current = view;
+  const navHere = (): NavEntry => ({
+    view: viewRef.current, ws: getWorkspace(), path: docPathRef.current,
+    top: document.querySelector<HTMLElement>(".center .reader-body")?.scrollTop ?? 0,
+  });
+  const pushNav = useCallback(() => {
+    const h = navHere();
+    const last = navBack.current[navBack.current.length - 1];
+    if (!(last && last.view === h.view && last.ws === h.ws && last.path === h.path && last.top === h.top)) navBack.current = [...navBack.current, h].slice(-100);
+    navFwd.current = [];
+    setNavTick((n) => n + 1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const navGo = useCallback(async (dir: -1 | 1) => {
+    const from = dir < 0 ? navBack : navFwd;
+    const to = dir < 0 ? navFwd : navBack;
+    const e = from.current[from.current.length - 1];
+    if (!e) return;
+    const here = navHere();
+    if (e.ws && e.ws !== getWorkspace()) {
+      switchWorkspace(e.ws, false);
+      if (getWorkspace() !== e.ws) return; // stayed (unsaved edits)
+    }
+    if (e.view === "document" && e.path) {
+      if (docPathRef.current !== e.path && !(await openDocument(e.path))) return;
+      setView("document");
+      setMobilePane("doc");
+      setPendingFragment(`waw-top=${Math.round(e.top)}`);
+    } else {
+      if (e.view === "local") setLocalUsed(true);
+      setView(e.view);
+    }
+    from.current = from.current.slice(0, -1);
+    to.current = [...to.current, here];
+    setNavTick((n) => n + 1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openDocument, switchWorkspace]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || (e.key !== "ArrowLeft" && e.key !== "ArrowRight")) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable || t.closest(".xterm, .cm-editor"))) return;
+      e.preventDefault();
+      void navGo(e.key === "ArrowLeft" ? -1 : 1);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [navGo]);
+
   const goToRef = useCallback(async (c: RefCandidate) => {
     setRefPick(null);
+    pushNav();
     if (c.kind === "local") {
       setLocalUsed(true);
       setView("local");
@@ -435,7 +492,7 @@ export default function App() {
     } else if (!(await openDocument(c.path!))) return;
     // after the document is there: set before, the one shown until then would look for the place and give up
     setPendingFragment(c.fragment || null);
-  }, [openDocument, switchWorkspace]);
+  }, [openDocument, switchWorkspace, pushNav]);
   const openRef = useCallback((href: string) => {
     void (async () => {
       try {
@@ -849,6 +906,10 @@ export default function App() {
         </button>
         <span className="brand-mark">W</span>
         <span className="brand-title">Wiki Reader</span>
+        <span className="nav-arrows">
+          <button className="icon-btn small" disabled={!navBack.current.length} onClick={() => void navGo(-1)} title="Back to where you were before following a link (Alt+←)" aria-label="Back" data-testid="nav-back">←</button>
+          <button className="icon-btn small" disabled={!navFwd.current.length} onClick={() => void navGo(1)} title="Forward (Alt+→)" aria-label="Forward" data-testid="nav-forward">→</button>
+        </span>
         <WorkspaceMenu initial={boot.named_workspaces} onNew={() => setShowNewWorkspace(true)} beforeSwitch={confirmLeaveEditor} onNotify={notify} />
         {workspaces.filter((w) => w.available).length > 1 ? (
           <select className="ws-switch hide-mobile" value={activeWs ?? ""} onChange={(e) => switchWorkspace(e.target.value)} title="Folder (wiki) the window is working in" data-testid="workspace-switch">
@@ -1076,6 +1137,7 @@ export default function App() {
               onMarkReviewed={(a) => void markReviewed(a)}
               onReanchor={reanchorArmed ? (a) => void reanchor(a) : null}
               onOpenInternalLink={(p, frag) => {
+                pushNav();
                 setPendingFragment(frag);
                 if (p === doc.path) return; // same document: Reader scrolls via initialFragment
                 void openDocument(p).catch(() => setPendingFragment(null));

@@ -1537,3 +1537,5 @@ body.resizing-h iframe { pointer-events: none; }
 a.ref-path { text-decoration: none; }
 a.ref-path code { text-decoration: underline dotted; }
 pre > code > .ln.waw-target { animation: waw-target-flash 1.6s ease-out; }
+.nav-arrows { display: inline-flex; gap: 2px; margin-left: 4px; }
+.nav-arrows .icon-btn:disabled { opacity: 0.35; cursor: default; }

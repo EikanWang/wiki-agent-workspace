@@ -318,6 +318,13 @@ export default function Reader(props: ReaderProps) {
   const scrollToFragment = useCallback((fragment: string): boolean => {
     const el = containerRef.current;
     const want = fragment.replace(/^#/, "");
+    const top = /^waw-top=(\d+)$/.exec(want);
+    if (top) { // back / forward: where the document was scrolled to
+      const scroller = scrollRef.current;
+      if (scroller) requestAnimationFrame(() => { scroller.scrollTop = Number(top[1]); });
+      setFragmentMissing(null);
+      return true;
+    }
     const page = /^(?:page|slide)=(\d+)$/i.exec(want);
     if (page) { // a PDF page / a slide (the layout view of an office document)
       setGoToPage({ page: Number(page[1]), at: Date.now() });
@@ -377,7 +384,7 @@ export default function Reader(props: ReaderProps) {
 
   useEffect(() => {
     if (!initialFragment) return;
-    if (layout && hasText && !/^#?(?:page|slide)=\d+$/i.test(initialFragment)) {
+    if (layout && hasText && !/^#?(?:page|slide)=\d+$|^waw-top=/i.test(initialFragment)) {
       setLocalView("text"); // a section lives in the text view of an Office document: show it, then scroll
       return;
     }
