@@ -16,6 +16,7 @@ import ModelPicker from "./ModelPicker";
 import { utc8 } from "../time";
 import { PlusIcon } from "./Icons";
 import SelectionAsk, { quotedQuestion } from "./SelectionAsk";
+import { MessageImages, PASTE_HINT, PictureStrip, picturesOnly, usePictures } from "./Pictures";
 
 export interface LiveJob {
   jobId: string;
@@ -136,7 +137,8 @@ export default function DiscussionPanel({
   sessions: AgentSession[];
   defaultSessionId: string | null;
   liveJob: LiveJob | null;
-  onReply: (threadId: string, text: string, sessionChoice: string | null) => Promise<void>;
+  /** `images`: pictures pasted into the composer (data: URLs) */
+  onReply: (threadId: string, text: string, sessionChoice: string | null, images?: string[]) => Promise<void>;
   onRetry: (threadId: string, messageId: string, sessionChoice: string | null) => Promise<void>;
   onCancel: (jobId: string) => Promise<void>;
   onPermission: (jobId: string, requestId: string, decision: string) => Promise<void>;
@@ -151,7 +153,7 @@ export default function DiscussionPanel({
   /** Called after a session's model/variant was changed so the caller can refresh its session list. */
   onSessionChanged?: (s: AgentSession) => void;
   /** Ask a question about the open document as a whole (no passage). */
-  onAskDocument?: (question: string) => Promise<void>;
+  onAskDocument?: (question: string, images?: string[]) => Promise<void>;
   docFormat?: string;
   /** a chat's side questions (each about a part of one of its answers) instead of a document's discussions */
   side?: boolean;
@@ -161,6 +163,7 @@ export default function DiscussionPanel({
   const [focusAsk, setFocusAsk] = useState(0); // bumped by "＋ New question": focus the box
   const askBox = onAskDocument ? <AskDocument onAsk={onAskDocument} format={docFormat} focusKey={focusAsk} draftKey={`ask.${docId ?? ""}`} /> : null;
   const [text, setText] = usePersistentState(`reply.${thread?.id ?? ""}`, ""); // an unsent reply survives a reload
+  const pics = usePictures();
   const [sessionChoice, setSessionChoice] = useState<string>("__last__");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -246,12 +249,14 @@ export default function DiscussionPanel({
   const liveMessageId = thread.messages.find((m) => m.job_id === liveJob?.jobId)?.id;
 
   const send = async () => {
-    if (!text.trim()) return;
+    const q = text.trim() || (pics.pictures.length ? picturesOnly(pics.pictures.length) : "");
+    if (!q) return;
     setBusy(true);
     setError(null);
     try {
-      await onReply(thread.id, text.trim(), sessionChoice === "__last__" ? null : sessionChoice);
+      await onReply(thread.id, q, sessionChoice === "__last__" ? null : sessionChoice, pics.urls);
       setText("");
+      pics.clear();
     } catch (e) {
       setError((e as ApiError).message);
     } finally {
@@ -341,7 +346,7 @@ export default function DiscussionPanel({
           <div ref={bottomRef} />
         </section>
         <SelectionAsk container={messagesRef} hint={side ? "Added to this side question" : "Added to this discussion"} testId="thread-sel-ask"
-          onAsk={(p, q) => onReply(thread.id, quotedQuestion(p.quote, q), sessionChoice === "__last__" ? null : sessionChoice)} />
+          onAsk={(p, q, images) => onReply(thread.id, quotedQuestion(p.quote, q), sessionChoice === "__last__" ? null : sessionChoice, images)} />
         {diff && (
           <section className="diff-box">
             <div className="label">
@@ -353,10 +358,12 @@ export default function DiscussionPanel({
         )}
       </div>
       <div className="composer">
+        <PictureStrip pics={pics} />
         <textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder={running ? "The agent is answering… you can keep typing" : `Type your message (${COMPOSER_HINT})`}
+          placeholder={running ? "The agent is answering… you can keep typing" : `Type your message (${COMPOSER_HINT}; ${PASTE_HINT})`}
+          {...pics.handlers}
           onKeyDown={(e) => composerKeyDown(e, () => void send(), setText)}
           rows={3}
           data-testid="reply-input"
@@ -371,7 +378,7 @@ export default function DiscussionPanel({
               </option>
             ))}
           </select>
-          <button className="btn primary" onClick={() => void send()} disabled={busy || !text.trim()} data-testid="reply-send">Send</button>
+          <button className="btn primary" onClick={() => void send()} disabled={busy || (!text.trim() && !pics.pictures.length)} data-testid="reply-send">Send</button>
         </div>
         {error && <div className="error-text" role="alert">{error}</div>}
       </div>
@@ -428,6 +435,7 @@ export function MessageView({ m, session, live, onRetry, onCancel, onPermission,
         {isAgent && status !== "completed" && <span className={`chip status ${status}`}>{jobStatusLabel(status)}</span>}
       </div>
       {content && (isAgent ? <MarkdownView text={content} className="msg-body" /> : <UserText text={content} />)}
+      <MessageImages threadId={m.thread_id} names={m.images} />
       {isAgent && content && status === "completed" && <RefsMenu text={content} />}
       {isAgent && live && live.activity.length > 0 && status !== "completed" && (
         <ul className="activity">
@@ -527,7 +535,8 @@ function FlatPanel({ threads, sessions, sessionsById, defaultSessionId, liveJob,
   defaultSessionId: string | null;
   liveJob: LiveJob | null;
   activeThreadId: string | null;
-  onReply: (threadId: string, text: string, sessionChoice: string | null) => Promise<void>;
+  /** `images`: pictures pasted into the composer (data: URLs) */
+  onReply: (threadId: string, text: string, sessionChoice: string | null, images?: string[]) => Promise<void>;
   onRetry: (threadId: string, messageId: string, sessionChoice: string | null) => Promise<void>;
   onCancel: (jobId: string) => Promise<void>;
   onPermission: (jobId: string, requestId: string, decision: string) => Promise<void>;
@@ -560,13 +569,16 @@ function FlatPanel({ threads, sessions, sessionsById, defaultSessionId, liveJob,
   const target = threads.find((t) => t.id === targetId) ?? null;
   const targetSess = target?.last_session_id ? sessionsById[target.last_session_id] : undefined;
 
+  const pics = usePictures();
   const send = async () => {
-    if (!text.trim() || !target) return;
+    const q = text.trim() || (pics.pictures.length ? picturesOnly(pics.pictures.length) : "");
+    if (!q || !target) return;
     setBusy(true);
     setError(null);
     try {
-      await onReply(target.id, text.trim(), sessionChoice === "__last__" ? null : sessionChoice);
+      await onReply(target.id, q, sessionChoice === "__last__" ? null : sessionChoice, pics.urls);
       setText("");
+      pics.clear();
     } catch (e) {
       setError((e as ApiError).message);
     } finally {
@@ -610,7 +622,7 @@ function FlatPanel({ threads, sessions, sessionsById, defaultSessionId, liveJob,
         <div ref={bottomRef} />
       </div>
       <SelectionAsk container={streamRef} hint={side ? "Added to that side question" : "Added to that discussion"} testId="thread-sel-ask"
-        onAsk={async (p, q) => { if (p.threadId) await onReply(p.threadId, quotedQuestion(p.quote, q), null); }} />
+        onAsk={async (p, q, images) => { if (p.threadId) await onReply(p.threadId, quotedQuestion(p.quote, q), null, images); }} />
       <div className="composer">
         {target ? (
           <div className="muted small flat-target" data-testid="flat-target">
@@ -628,7 +640,8 @@ function FlatPanel({ threads, sessions, sessionsById, defaultSessionId, liveJob,
         ) : (
           <div className="muted small">Select text in {side ? "an answer of the chat to ask the first side question" : "the document to start the first discussion"}.</div>
         )}
-        <textarea value={text} onChange={(e) => setText(e.target.value)} disabled={!target} placeholder={target ? `Continue the discussion (${COMPOSER_HINT})` : "No discussion yet"} onKeyDown={(e) => composerKeyDown(e, () => void send(), setText)} rows={3} data-testid="flat-reply-input" />
+        <PictureStrip pics={pics} />
+        <textarea value={text} onChange={(e) => setText(e.target.value)} disabled={!target} placeholder={target ? `Continue the discussion (${COMPOSER_HINT}; ${PASTE_HINT})` : "No discussion yet"} {...pics.handlers} onKeyDown={(e) => composerKeyDown(e, () => void send(), setText)} rows={3} data-testid="flat-reply-input" />
         <div className="composer-row">
           <select value={sessionChoice} onChange={(e) => setSessionChoice(e.target.value)} data-testid="flat-reply-session">
             <option value="__last__">This discussion's last session{targetSess ? ` · ${targetSess.provider} ${targetSess.short_id ?? targetSess.status}` : ""}</option>
@@ -637,7 +650,7 @@ function FlatPanel({ threads, sessions, sessionsById, defaultSessionId, liveJob,
               <option key={s.id} value={s.id}>{s.provider} · {s.display_name ?? s.short_id ?? s.id.slice(0, 8)} {s.status !== "ready" ? `(${s.status})` : ""}</option>
             ))}
           </select>
-          <button className="btn primary" onClick={() => void send()} disabled={busy || !text.trim() || !target} data-testid="flat-reply-send">Send</button>
+          <button className="btn primary" onClick={() => void send()} disabled={busy || (!text.trim() && !pics.pictures.length) || !target} data-testid="flat-reply-send">Send</button>
         </div>
         {error && <div className="error-text" role="alert">{error}</div>}
       </div>
@@ -667,8 +680,9 @@ function quoteLabel(t: { anchor_state: string; anchor: { quote: string }; target
 }
 
 /** "Ask about this document": a question box at the top of the panel, always about the whole open document. */
-function AskDocument({ onAsk, format, focusKey = 0, draftKey = "ask" }: { onAsk: (q: string) => Promise<void>; format?: string; focusKey?: number; draftKey?: string }) {
+function AskDocument({ onAsk, format, focusKey = 0, draftKey = "ask" }: { onAsk: (q: string, images?: string[]) => Promise<void>; format?: string; focusKey?: number; draftKey?: string }) {
   const [q, setQ] = usePersistentState(draftKey, "");
+  const pics = usePictures();
   const box = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
     if (focusKey) box.current?.focus();
@@ -677,12 +691,14 @@ function AskDocument({ onAsk, format, focusKey = 0, draftKey = "ask" }: { onAsk:
   const [error, setError] = useState<string | null>(null);
   const what = format === "pdf" ? "this PDF" : format === "image" ? "this image" : "this document";
   const send = async () => {
-    if (!q.trim() || busy) return;
+    const question = q.trim() || (pics.pictures.length ? picturesOnly(pics.pictures.length) : "");
+    if (!question || busy) return;
     setBusy(true);
     setError(null);
     try {
-      await onAsk(q.trim());
+      await onAsk(question, pics.urls);
       setQ("");
+      pics.clear();
     } catch (e) {
       const ae = e as ApiError;
       setError(ae.code === "DOCUMENT_VERSION_CONFLICT" ? "The document changed meanwhile; refresh it and send again (your question is kept)." : ae.message || "Send failed");
@@ -692,8 +708,10 @@ function AskDocument({ onAsk, format, focusKey = 0, draftKey = "ask" }: { onAsk:
   };
   return (
     <div className="ask-document" data-testid="ask-document">
+      <PictureStrip pics={pics} />
       <textarea
         ref={box}
+        {...pics.handlers}
         value={q}
         onChange={(e) => setQ(e.target.value)}
         onKeyDown={(e) => composerKeyDown(e, () => void send(), setQ, () => setQ(""))}
@@ -704,7 +722,7 @@ function AskDocument({ onAsk, format, focusKey = 0, draftKey = "ask" }: { onAsk:
       />
       <div className="ask-document-row">
         <span className="muted small">{format === "image" ? "The image is attached for the agent." : "The agent reads the whole file."} Select text to ask about a passage.</span>
-        <button className="btn small primary" onClick={() => void send()} disabled={busy || !q.trim()} data-testid="ask-document-send">{busy ? "Sending…" : "Ask"}</button>
+        <button className="btn small primary" onClick={() => void send()} disabled={busy || (!q.trim() && !pics.pictures.length)} data-testid="ask-document-send">{busy ? "Sending…" : "Ask"}</button>
       </div>
       {error && <div className="error-text small" role="alert">{error}</div>}
     </div>

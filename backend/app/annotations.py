@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
@@ -202,10 +203,53 @@ def thread_attachments(snapshots_dir: Path, t: Thread) -> list[str]:
     return [str(d / n) for n in names if (d / n).is_file()]
 
 
+MAX_PASTED_IMAGES = 6
+_PASTED = re.compile(r"m-([0-9a-f-]{36})-(\d)\.(png|jpg|gif|webp)")
+
+
+def decode_pasted(urls: list[str]) -> list[tuple[bytes, str]]:
+    """Pictures pasted into a composer (data: URLs), checked before anything is written."""
+    if len(urls) > MAX_PASTED_IMAGES:
+        raise bad_request(f"at most {MAX_PASTED_IMAGES} pictures per message", "TOO_MANY_IMAGES")
+    return [decode_image(u) for u in urls]
+
+
+def save_pasted(snapshots_dir: Path, thread_id: str, message_id: str, pictures: list[tuple[bytes, str]]) -> list[str]:
+    """Store a message's pasted pictures with its discussion; their paths go with that turn of the agent."""
+    if not pictures:
+        return []
+    d = attachments_dir(snapshots_dir, thread_id)
+    d.mkdir(parents=True, exist_ok=True)
+    out = []
+    for n, (raw, ext) in enumerate(pictures):
+        f = d / f"m-{message_id}-{n}.{ext}"
+        f.write_bytes(raw)
+        out.append(str(f))
+    return out
+
+
+def message_images(snapshots_dir: Path | None, thread_id: str) -> dict[str, list[str]]:
+    """{message id: names of its pasted pictures} of a discussion."""
+    if snapshots_dir is None:
+        return {}
+    d = attachments_dir(snapshots_dir, thread_id)
+    out: dict[str, list[str]] = {}
+    try:
+        names = sorted(os.listdir(d))
+    except OSError:
+        return {}
+    for n in names:
+        m = _PASTED.fullmatch(n)
+        if m:
+            out.setdefault(m.group(1), []).append(n)
+    return out
+
+
 # ---------------------------------------------------------------------- service
 
 
-def thread_dict(t: Thread, messages: list[Message], jobs_by_message: dict[str, Job]) -> dict[str, Any]:
+def thread_dict(t: Thread, messages: list[Message], jobs_by_message: dict[str, Job], snapshots_dir: Path | None = None) -> dict[str, Any]:
+    images = message_images(snapshots_dir, t.id)
     return {
         "id": t.id,
         "document_id": t.document_id,
@@ -219,10 +263,11 @@ def thread_dict(t: Thread, messages: list[Message], jobs_by_message: dict[str, J
         "updated_at": iso(t.updated_at),
         "messages": [
             {
-                "id": m.id, "role": m.role, "content": m.content, "status": m.status, "session_id": m.session_id,
+                "id": m.id, "thread_id": t.id, "role": m.role, "content": m.content, "status": m.status, "session_id": m.session_id,
                 "job_id": m.job_id, "created_at": iso(m.created_at),
                 "error_code": (jobs_by_message[m.id].error_code if m.id in jobs_by_message else None),
                 "error_message": (jobs_by_message[m.id].error_message if m.id in jobs_by_message else None),
+                "images": images.get(m.id, []),
             }
             for m in messages
         ],
@@ -265,7 +310,7 @@ class ThreadService:
                         j = s.get(Job, m.job_id)
                         if j:
                             jobs[m.id] = j
-                d = thread_dict(t, msgs, jobs)
+                d = thread_dict(t, msgs, jobs, self.docs.snapshots_dir)
                 if t.anchor_state in ("document", "page"):
                     d["anchor_state"] = t.anchor_state
                     d["current_start"] = None
@@ -322,6 +367,7 @@ class ThreadService:
             body.whole_document = True  # older clients: "Ask about this PDF" sent the path as the quote
         target: dict[str, Any] | None = None
         image: tuple[bytes, str] | None = decode_image(body.image) if body.image else None
+        pasted = decode_pasted(body.images)
         if body.target is not None:
             # a page / slide / area / picture of a laid-out document (or a picture in the text view): no text anchor
             target = {"kind": body.target.kind, "page": body.target.page, "unit": body.target.unit,
@@ -432,10 +478,10 @@ class ThreadService:
             prompt = build_prompt(question=body.question, quote=body.quote, document_path=doc.path, sha256=sha, heading=heading,
                                   prior=None, versions=self.docs.list_versions(doc_id), whole_document=body.whole_document, target=target,
                                   extra=self._extra(doc.path), root=str(self.docs.root), links=self._links(doc.path))
-        job_id = self.jobs.enqueue_turn(session_id=sess.id, thread_id=thread_id, prompt=prompt,
-                                        context={"document_id": doc_id, "document_path": doc.path, "sha256": sha, "quote": body.quote,
-                                                 "attachments": attach, **self._skill_ctx(doc), **dev_extra},
-                                        agent_message_id=agent_msg_id)
+        context = {"document_id": doc_id, "document_path": doc.path, "sha256": sha, "quote": body.quote,
+                   "attachments": attach, **self._skill_ctx(doc), **dev_extra}
+        context["attachments"] = [*context.get("attachments", []), *save_pasted(self.docs.snapshots_dir, thread_id, user_msg_id, pasted)]
+        job_id = self.jobs.enqueue_turn(session_id=sess.id, thread_id=thread_id, prompt=prompt, context=context, agent_message_id=agent_msg_id)
         with self.ctx.db.write() as s:
             m = s.get(Message, agent_msg_id)
             if m:
@@ -455,6 +501,7 @@ class ThreadService:
             doc = s.get(Document, t.document_id)
             prior = [{"role": m.role, "content": m.content} for m in s.query(Message).filter_by(thread_id=thread_id).order_by(Message.created_at).all() if m.status == "completed"]
         assert doc is not None
+        pasted = decode_pasted(body.images)
         if body.session_id == "new":
             sess = await self._new_default_session_for_thread(doc, t.last_session_id)
         elif body.session_id:
@@ -520,11 +567,11 @@ class ThreadService:
                                   prior=prior, versions=self.docs.list_versions(doc.id), whole_document=t.anchor_state in ("document", "page"),
                                   target=json.loads(t.target_json) if t.target_json else None, extra=self._extra(doc.path),
                                   root=str(self.docs.root), links=self._links(doc.path))
-        job_id = self.jobs.enqueue_turn(session_id=sess.id, thread_id=thread_id, prompt=prompt,
-                                        context={"document_id": doc.id, "document_path": doc.path, "sha256": sha, "quote": t.cur_quote,
-                                                 "attachments": image_attachments(self.docs, doc.path) + thread_attachments(self.docs.snapshots_dir, t),
-                                                 **self._skill_ctx(doc), **dev_extra},
-                                        agent_message_id=agent_msg_id)
+        context = {"document_id": doc.id, "document_path": doc.path, "sha256": sha, "quote": t.cur_quote,
+                   "attachments": image_attachments(self.docs, doc.path) + thread_attachments(self.docs.snapshots_dir, t),
+                   **self._skill_ctx(doc), **dev_extra}
+        context["attachments"] = [*context.get("attachments", []), *save_pasted(self.docs.snapshots_dir, thread_id, user_msg_id, pasted)]
+        job_id = self.jobs.enqueue_turn(session_id=sess.id, thread_id=thread_id, prompt=prompt, context=context, agent_message_id=agent_msg_id)
         with self.ctx.db.write() as s:
             m = s.get(Message, agent_msg_id)
             if m:
@@ -733,6 +780,8 @@ class ThreadCreateIn(BaseModel):
     # folder chats: a side question about a part (quote) of an answer in the chat's conversation (thread side_of)
     side_of: str | None = Field(None, max_length=64)
     side_message_id: str | None = Field(None, max_length=64)
+    # pictures pasted into the composer (data:image/…;base64 URLs): they go with this message
+    images: list[Annotated[str, Field(max_length=17_000_000)]] = Field(default_factory=list, max_length=MAX_PASTED_IMAGES)
 
 
 class MessageIn(BaseModel):
@@ -745,6 +794,8 @@ class MessageIn(BaseModel):
     target_path: str | None = Field(None, max_length=1000)
     dev_kind: str | None = Field(None, max_length=20)  # PR Development (see ThreadCreateIn)
     dev_context: dict[str, Any] | None = None
+    # pictures pasted into the composer (data:image/…;base64 URLs): they go with this message
+    images: list[Annotated[str, Field(max_length=17_000_000)]] = Field(default_factory=list, max_length=MAX_PASTED_IMAGES)
 
 
 class AnchorUpdateIn(BaseModel):
@@ -781,11 +832,12 @@ def get_attachment(thread_id: str, name: str, ctx: AppContext = Depends(require_
     """An image stored with a discussion (page render, area crop, picture): shown as a thumbnail in the panel."""
     from fastapi.responses import FileResponse
 
-    if not re.fullmatch(r"[a-z]+\.(png|jpg|gif|webp)", name):
+    pasted = _PASTED.fullmatch(name) is not None
+    if not pasted and not re.fullmatch(r"[a-z]+\.(png|jpg|gif|webp)", name):
         raise not_found("attachment not found", "ATTACHMENT_NOT_FOUND")
     with ctx.db.read() as s:
         t = s.get(Thread, thread_id)
-    if t is None or name not in (json.loads(t.target_json).get("attachments", []) if t.target_json else []):
+    if t is None or (not pasted and name not in (json.loads(t.target_json).get("attachments", []) if t.target_json else [])):
         raise not_found("attachment not found", "ATTACHMENT_NOT_FOUND")
     p = attachments_dir(ctx.documents.snapshots_dir, thread_id) / name
     if not p.is_file():

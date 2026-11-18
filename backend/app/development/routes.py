@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
@@ -75,6 +75,8 @@ class AskIn(BaseModel):
     model_choice: ModelChoiceIn | None = None  # another model / reasoning level for this discussion
     # a picture that goes with the question: a PDF page / area, or an image (data:image/png;base64,…)
     image: str | None = Field(None, max_length=17_000_000)
+    # pictures pasted into the composer (data:image/…;base64 URLs), shown with the message
+    images: list[Annotated[str, Field(max_length=17_000_000)]] = Field(default_factory=list, max_length=6)
 
 
 class DraftIn(BaseModel):
@@ -298,7 +300,7 @@ async def ask(ctx: AppContext, dev_id: str, body: AskIn) -> dict[str, Any]:
         if t is None or t.document_id != doc.id:
             raise not_found("thread not found", "THREAD_NOT_FOUND")
         out = await svc.add_message(body.thread_id, MessageIn(text=body.text, session_id=body.session_id, dev_kind=body.kind,
-                                                               dev_context=body.context, model_choice=body.model_choice))
+                                                               dev_context=body.context, model_choice=body.model_choice, images=body.images))
         out["thread_id"] = body.thread_id
         a = _json_target(t)
         if a and a.get("file") and (body.model_choice is not None or not file_sessions(ctx, dev_id).get(f"{a.get('root') or 'wt'}:{a['file']}")):
@@ -326,7 +328,8 @@ async def ask(ctx: AppContext, dev_id: str, body: AskIn) -> dict[str, Any]:
         session_id = file_session(ctx, dev_id, body.anchor.root, body.anchor.file) or "new"
     out = await svc.create_thread(doc.id, ThreadCreateIn(version_sha256=sha, question=body.text, whole_document=True,
                                                          session_id=session_id,
-                                                         dev_kind=body.kind, dev_context=context, model_choice=body.model_choice))
+                                                         dev_kind=body.kind, dev_context=context, model_choice=body.model_choice,
+                                                         images=body.images))
     if body.anchor is not None:
         import json as _json
 
@@ -466,7 +469,7 @@ def conversation(dev_id: str, ctx: AppContext = Depends(require_auth)):
         for t in threads:
             msgs = s.query(Message).filter_by(thread_id=t.id).order_by(Message.created_at).all()
             jobs = {m.id: j for m in msgs if m.job_id and (j := s.get(Job, m.job_id)) is not None}
-            out.append(thread_dict(t, msgs, jobs))
+            out.append(thread_dict(t, msgs, jobs, ctx.settings.snapshots_dir))
     keys = {f"{(a.get('root') or 'wt')}:{a['file']}" for t in out if (a := t.get("target")) and a.get("kind") == "code" and a.get("file")}
     fs = file_sessions(ctx, dev_id)
     for k in keys - set(fs):

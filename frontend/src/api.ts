@@ -409,6 +409,8 @@ export interface Message {
   created_at: string;
   error_code: string | null;
   error_message: string | null;
+  thread_id?: string;
+  images?: string[]; // pictures pasted into the composer with this message (names under /threads/<id>/attachments/)
 }
 
 export interface Thread {
@@ -601,7 +603,7 @@ export interface DiffComment {
   last_status: string | null;
   message_count: number;
   last_session_id?: string | null;
-  messages?: { id: string; role: string; content: string; status: string; job_id: string | null; created_at: string | null }[];
+  messages?: { id: string; role: string; content: string; status: string; job_id: string | null; created_at: string | null; thread_id?: string; images?: string[] }[];
 }
 
 export interface DiffResult {

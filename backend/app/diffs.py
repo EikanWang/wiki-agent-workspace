@@ -10,7 +10,7 @@ from __future__ import annotations
 import difflib
 import json
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
@@ -224,7 +224,10 @@ class DiffService:
         """A comment on a diff line becomes a normal discussion on the target document, so the agent can answer
         with the same workflow (session, streaming, retry). The anchor is the commented line's text when it exists
         in the current file; otherwise the thread records the diff context only."""
+        from .annotations import decode_pasted, save_pasted
+
         rel = self._rel(body.path)
+        pasted = decode_pasted(body.images)
         if document_format(Path(rel).name) not in ("markdown", "text", "docx", "pptx", "visio"):
             raise bad_request("comments can only be attached to files the reader can open (Markdown, text/source, .docx, .pptx, .vsdx)", "UNSUPPORTED_FORMAT")
         doc = self.docs.get_or_create_document(rel)
@@ -309,6 +312,7 @@ class DiffService:
             if body.hunk:
                 prompt_question += "\n\nDiff hunk for reference:\n```diff\n" + body.hunk[:4000] + "\n```"
         thread_id, user_msg_id, agent_msg_id = new_id(), new_id(), new_id()
+        pictures = save_pasted(self.docs.snapshots_dir, thread_id, user_msg_id, pasted)
         if body.defer_agent:
             with self.ctx.db.write() as s:
                 t = Thread(
@@ -337,7 +341,8 @@ class DiffService:
                               versions=self.docs.list_versions(doc.id), extra=extra_context(self.ctx, rel, self.docs.workspace_id))
         assert self.ctx.jobs
         job_id = self.ctx.jobs.enqueue_turn(session_id=sess.id, thread_id=thread_id, prompt=prompt,
-                                            context={"document_id": doc.id, "document_path": rel, "sha256": sha, "quote": quote, "diff": diff_ctx},
+                                            context={"document_id": doc.id, "document_path": rel, "sha256": sha, "quote": quote, "diff": diff_ctx,
+                                                     "attachments": pictures},
                                             agent_message_id=agent_msg_id)
         with self.ctx.db.write() as s:
             m = s.get(Message, agent_msg_id)
@@ -353,8 +358,11 @@ class DiffService:
                 return {}
             threads = s.query(Thread).filter(Thread.document_id.in_(list(docs)), Thread.diff_json.isnot(None)).order_by(Thread.created_at).all()
             out: dict[str, list[dict[str, Any]]] = {}
+            from .annotations import message_images
+
             for t in threads:
                 msgs = s.query(Message).filter_by(thread_id=t.id).order_by(Message.created_at).all()
+                images = message_images(self.docs.snapshots_dir, t.id)
                 first = msgs[0] if msgs else None
                 last = msgs[-1] if msgs else None
                 out.setdefault(docs[t.document_id], []).append({
@@ -362,8 +370,8 @@ class DiffService:
                     "last_status": last.status if last else None, "message_count": len(msgs),
                     "last_session_id": t.last_session_id,
                     # the whole mini-thread so the diff view can show answers inline without leaving the review
-                    "messages": [{"id": m.id, "role": m.role, "content": m.content, "status": m.status, "job_id": m.job_id,
-                                  "created_at": m.created_at.isoformat() if m.created_at else None} for m in msgs],
+                    "messages": [{"id": m.id, "thread_id": t.id, "role": m.role, "content": m.content, "status": m.status, "job_id": m.job_id,
+                                  "created_at": m.created_at.isoformat() if m.created_at else None, "images": images.get(m.id, [])} for m in msgs],
                 })
             return out
 
@@ -397,6 +405,8 @@ class DiffCommentIn(BaseModel):
     session_id: str | None = None
     # Reviews: create the thread and the user's comment but do not start an agent turn (one review job answers all).
     defer_agent: bool = False
+    # pictures pasted into the composer (data:image/…;base64 URLs), sent with the question
+    images: list[Annotated[str, Field(max_length=17_000_000)]] = Field(default_factory=list, max_length=6)
 
 
 @router.get("/diff")

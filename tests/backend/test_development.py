@@ -161,11 +161,19 @@ async def test_new_branch_workspace_editor_proxy_and_agent(running_app, dev_sett
     # continue the same conversation from the app
     conv = (await api.get(f"/api/v1/dev/workspaces/{d['id']}/conversation")).json()
     tid = conv["threads"][0]["id"]
-    r2 = await api.post(f"/api/v1/dev/workspaces/{d['id']}/ask", json={"text": "and now explain", "kind": "explain", "thread_id": tid})
+    import base64
+
+    png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+    (fake_env / "opencode_last_files").unlink(missing_ok=True)
+    r2 = await api.post(f"/api/v1/dev/workspaces/{d['id']}/ask", json={"text": "and now explain", "kind": "explain", "thread_id": tid,
+                                                                     "images": ["data:image/png;base64," + base64.b64encode(png).decode()]})
     assert r2.status_code == 201, r2.text
     await api.wait_job(r2.json()["job_id"])
     conv = (await api.get(f"/api/v1/dev/workspaces/{d['id']}/conversation")).json()
     assert len(conv["threads"]) == 1 and [m["role"] for m in conv["threads"][0]["messages"]] == ["user", "agent", "user", "agent"]
+    # a pasted picture goes with the message (and is listed with it)
+    assert conv["threads"][0]["messages"][2]["images"] == [f"m-{r2.json()['message_id']}-0.png"]
+    assert [Path(f).read_bytes() for f in (fake_env / "opencode_last_files").read_text().split()] == [png]
 
     # --- git: status / diff (untracked included) / commit / push
     st = (await api.get(f"/api/v1/dev/workspaces/{d['id']}/status")).json()

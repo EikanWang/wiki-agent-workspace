@@ -6,6 +6,7 @@ import ChatView from "./ChatView";
 import { useJobStream } from "./DiscussionPanel";
 import { COMPOSER_HINT, composerKeyDown } from "./keys";
 import { usePersistentState } from "../persist";
+import { PASTE_HINT, PictureStrip, picturesOnly, usePictures } from "./Pictures";
 
 interface ChatItem { path: string; title: string; messages: number; updated_at: string | null; about?: { path: string; kind: string } | null }
 /** path null: a new chat (nothing sent yet); about: a sub-folder or file of the project the new chat is about */
@@ -31,6 +32,7 @@ export default function ChatsPage({ workspaces, target, onTarget, sessions, onRe
   const [jobId, setJobId] = useState<string | null>(null);
   const [sideJobId, setSideJobId] = useState<string | null>(null); // a side question's turn, streamed next to the chat's
   const [first, setFirst] = usePersistentState(`chat.new.${ws ?? ""}`, "");
+  const firstPics = usePictures();
   const [busy, setBusy] = useState(false);
   const [firstModel, setFirstModel] = useState<ModelChoiceValue | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -80,7 +82,7 @@ export default function ChatsPage({ workspaces, target, onTarget, sessions, onRe
 
   const startNew = async () => {
     const mc = firstModel;
-    const q = first.trim();
+    const q = first.trim() || (firstPics.pictures.length ? picturesOnly(firstPics.pictures.length) : "");
     if (!q || !ws) return;
     setBusy(true);
     setErr(null);
@@ -88,9 +90,10 @@ export default function ChatsPage({ workspaces, target, onTarget, sessions, onRe
       const title = q.replace(/\s+/g, " ").slice(0, 60) + (q.length > 60 ? "…" : "");
       const c = await post<{ path: string }>("/chats", { title, about: target?.about || undefined }, { workspace: ws });
       const d = await getIn<OpenDocument>(ws, `/documents/open?path=${encodeURIComponent(c.path)}`);
-      const r = await post<{ job_id: string }>(`/documents/${d.document_id}/threads`, { ...wholeDocument(), version_sha256: d.sha256, question: q, model_choice: mc ?? undefined },
+      const r = await post<{ job_id: string }>(`/documents/${d.document_id}/threads`, { ...wholeDocument(), version_sha256: d.sha256, question: q, model_choice: mc ?? undefined, images: firstPics.urls },
         { idempotencyKey: newIdempotencyKey(), workspace: ws });
       setFirst("");
+      firstPics.clear();
       setFirstModel(null);
       onTarget({ ws, path: c.path });
       setJobId(r.job_id);
@@ -135,12 +138,13 @@ export default function ChatsPage({ workspaces, target, onTarget, sessions, onRe
               When the conversation is worth keeping, distill it into a page or fold it back into the pages it came from.
             </div>
             <div className="chat-composer">
-              <textarea autoFocus rows={4} value={first} onChange={(e) => setFirst(e.target.value)} placeholder={`Ask anything about ${project?.name ?? "the project"} (${COMPOSER_HINT})`}
-                onKeyDown={(e) => composerKeyDown(e, () => void startNew(), setFirst)} data-testid="chat-first" />
+              <PictureStrip pics={firstPics} />
+              <textarea autoFocus rows={4} value={first} onChange={(e) => setFirst(e.target.value)} placeholder={`Ask anything about ${project?.name ?? "the project"} (${COMPOSER_HINT}; ${PASTE_HINT})`}
+                {...firstPics.handlers} onKeyDown={(e) => composerKeyDown(e, () => void startNew(), setFirst)} data-testid="chat-first" />
               <div className="chat-composer-bar">
                 <ModelChoice value={firstModel} onChange={setFirstModel} />
                 <span className="spacer" />
-                <button className="btn primary" disabled={busy || !first.trim()} onClick={() => void startNew()} data-testid="chat-first-send">{busy ? "Starting…" : "Send"}</button>
+                <button className="btn primary" disabled={busy || (!first.trim() && !firstPics.pictures.length)} onClick={() => void startNew()} data-testid="chat-first-send">{busy ? "Starting…" : "Send"}</button>
               </div>
             </div>
           </div>
@@ -152,12 +156,12 @@ export default function ChatsPage({ workspaces, target, onTarget, sessions, onRe
             threads={threads}
             sessions={sessions}
             liveJob={live}
-            onStart={async (q, mc) => {
-              const r = await post<{ job_id: string }>(`/documents/${doc.document_id}/threads`, { ...wholeDocument(), version_sha256: doc.sha256, question: q, model_choice: mc ?? undefined }, { idempotencyKey: newIdempotencyKey(), workspace: ws });
+            onStart={async (q, mc, images) => {
+              const r = await post<{ job_id: string }>(`/documents/${doc.document_id}/threads`, { ...wholeDocument(), version_sha256: doc.sha256, question: q, model_choice: mc ?? undefined, images }, { idempotencyKey: newIdempotencyKey(), workspace: ws });
               await after(r.job_id);
             }}
-            onSend={async (tid, text, mc) => {
-              const r = await post<{ job_id: string }>(`/threads/${tid}/messages`, { text, model_choice: mc ?? undefined }, { idempotencyKey: newIdempotencyKey() });
+            onSend={async (tid, text, mc, images) => {
+              const r = await post<{ job_id: string }>(`/threads/${tid}/messages`, { text, model_choice: mc ?? undefined, images }, { idempotencyKey: newIdempotencyKey() });
               await after(r.job_id);
             }}
             onAction={async (tid, action, tgt, note) => {
@@ -178,15 +182,15 @@ export default function ChatsPage({ workspaces, target, onTarget, sessions, onRe
             }}
             onWatchJob={(j) => setJobId(j)}
             sideLive={sideLive}
-            onSideAsk={async (mainId, messageId, quote, question) => {
+            onSideAsk={async (mainId, messageId, quote, question, images) => {
               const r = await post<{ job_id: string; thread_id: string }>(`/documents/${doc.document_id}/threads`, { ...wholeDocument(), version_sha256: doc.sha256, quote, question,
-                side_of: mainId, side_message_id: messageId ?? undefined }, { idempotencyKey: newIdempotencyKey(), workspace: ws });
+                side_of: mainId, side_message_id: messageId ?? undefined, images }, { idempotencyKey: newIdempotencyKey(), workspace: ws });
               await loadThreads(doc, ws);
               setSideJobId(r.job_id);
               return r.thread_id;
             }}
-            onSideReply={async (tid, text, sc) => {
-              const r = await post<{ job_id: string }>(`/threads/${tid}/messages`, { text, session_id: sc ?? undefined }, { idempotencyKey: newIdempotencyKey() });
+            onSideReply={async (tid, text, sc, images) => {
+              const r = await post<{ job_id: string }>(`/threads/${tid}/messages`, { text, session_id: sc ?? undefined, images }, { idempotencyKey: newIdempotencyKey() });
               await loadThreads(doc, ws);
               setSideJobId(r.job_id);
             }}

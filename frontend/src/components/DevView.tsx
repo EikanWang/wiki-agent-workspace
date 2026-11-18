@@ -132,8 +132,8 @@ export default function DevView({ devId, workspaces, sessions, onSessionsChanged
       setErr((e as ApiError).message);
     }
   };
-  const askAbout = async ({ text, anchor, context }: ChangesAsk) => {
-    const r = await post<{ thread_id: string }>(`/dev/workspaces/${dev.id}/ask`, { text, kind: "ask", context, anchor });
+  const askAbout = async ({ text, anchor, context, images }: ChangesAsk) => {
+    const r = await post<{ thread_id: string }>(`/dev/workspaces/${dev.id}/ask`, { text, kind: "ask", context, anchor, images });
     setAgentOpen(true);
     onSessionsChanged();
     await loadThreads();
@@ -230,8 +230,8 @@ export default function DevView({ devId, workspaces, sessions, onSessionsChanged
                 <WebIde key={dev.id} dev={dev} completionEnabled={!!info?.completion.enabled} refreshKey={refresh} threads={threads} reveal={reveal} onDiff={showDiff}
                   onFiles={setFiles} onOpenThread={(id) => { setAgentOpen(true); setFocusThread({ id, at: Date.now() }); }}
                   discussSession={(a) => { const sid = a ? fileSessions[`${a.root}:${a.file}`] : undefined; return sid ? sessions.find((x) => x.id === sid) ?? null : null; }}
-                  onAsk={async ({ kind, text, context, anchor, threadId, image, modelChoice }) => {
-                    const r = await post<{ thread_id: string }>(`/dev/workspaces/${dev.id}/ask`, { text, kind, context, anchor, thread_id: threadId, image, model_choice: modelChoice ?? undefined });
+                  onAsk={async ({ kind, text, context, anchor, threadId, image, modelChoice, images }) => {
+                    const r = await post<{ thread_id: string }>(`/dev/workspaces/${dev.id}/ask`, { text, kind, context, anchor, thread_id: threadId, image, model_choice: modelChoice ?? undefined, images });
                     setAgentOpen(true);
                     onSessionsChanged();
                     await loadThreads();

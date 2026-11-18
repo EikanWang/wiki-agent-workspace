@@ -2,6 +2,7 @@ import { Splitter, usePane } from "./Split";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AgentSession, ApiError, MachineInfo, WorkspaceInfo, get, post, put } from "../api";
 import ModelChoice from "./ModelChoice";
+import { PASTE_HINT, PictureStrip, picturesOnly, usePictures } from "./Pictures";
 import { confirmAction } from "./Confirm";
 import FolderPicker from "./FolderPicker";
 import MarkdownView from "./MarkdownView";
@@ -45,27 +46,6 @@ const COMMANDS: { name: string; args: string; help: string; providers?: Provider
   { name: "reset", args: "", help: "back to the session's own model, effort and agent" },
   { name: "help", args: "", help: "list these commands" },
 ];
-/** A picture pasted (or dropped) into a session's composer, sent with the next message. */
-interface Picture { url: string; name: string }
-const MAX_PICTURES = 6;
-const MAX_PICTURE_BYTES = 12 * 1024 * 1024;
-/** A pasted image file as a data: URL the server accepts (PNG / JPEG / GIF / WebP; anything else becomes a PNG). */
-async function pictureOf(f: File): Promise<string> {
-  const url = await new Promise<string>((ok, fail) => {
-    const r = new FileReader();
-    r.onload = () => ok(String(r.result));
-    r.onerror = () => fail(r.error);
-    r.readAsDataURL(f);
-  });
-  if (/^data:image\/(png|jpeg|gif|webp);base64,/.test(url)) return url;
-  const img = new Image();
-  await new Promise((ok, fail) => { img.onload = ok; img.onerror = fail; img.src = url; });
-  const c = document.createElement("canvas");
-  c.width = img.naturalWidth;
-  c.height = img.naturalHeight;
-  c.getContext("2d")!.drawImage(img, 0, 0);
-  return c.toDataURL("image/png");
-}
 const commandsFor = (p: Provider) => COMMANDS.filter((c) => !c.providers || c.providers.includes(p));
 
 // ---------------------------------------------------------------- sidebar
@@ -477,26 +457,7 @@ function SessionStage({ item, onClose, onUnwatch, onChanged, onRename, onDelete 
     else localStorage.removeItem(ctlKey);
   };
   const [picker, setPicker] = useState<"model" | "agent" | null>(null);
-  const [pictures, setPictures] = useState<Picture[]>([]);
-  const addPictures = async (files: File[]) => {
-    const imgs = files.filter((f) => f.type.startsWith("image/"));
-    if (!imgs.length) return false;
-    setErr(null);
-    const room = MAX_PICTURES - pictures.length;
-    if (imgs.length > room) setErr(`At most ${MAX_PICTURES} pictures per message.`);
-    const added: Picture[] = [];
-    for (const f of imgs.slice(0, Math.max(0, room))) {
-      try {
-        const url = await pictureOf(f);
-        if (url.length * 0.75 > MAX_PICTURE_BYTES) { setErr(`${f.name || "The picture"} is larger than 12 MiB.`); continue; }
-        added.push({ url, name: f.name || `pasted.${f.type.split("/")[1] ?? "png"}` });
-      } catch {
-        setErr(`Could not read ${f.name || "the pasted picture"}.`);
-      }
-    }
-    setPictures((p) => [...p, ...added].slice(0, MAX_PICTURES));
-    return true;
-  };
+  const pics = usePictures();
   const [agentText, setAgentText] = useState("");
   const input = useRef<HTMLTextAreaElement>(null);
   const cmds = commandsFor(item.provider);
@@ -545,7 +506,7 @@ function SessionStage({ item, onClose, onUnwatch, onChanged, onRename, onDelete 
   useEffect(() => { if (stick.current) bottom.current?.scrollIntoView({ block: "end" }); }, [detail?.total_messages, detail?.send_output?.length]);
   const send = async () => {
     const t = text.trim();
-    if (!t && !pictures.length) return;
+    if (!t && !pics.pictures.length) return;
     setNote(null);
     if (t && command(t)) {
       setText("");
@@ -554,10 +515,10 @@ function SessionStage({ item, onClose, onUnwatch, onChanged, onRename, onDelete 
     setErr(null);
     try {
       const r = await post<{ busy_warning: boolean }>(`${base}/send${mq}`, {
-        text: t || `Please look at the attached picture${pictures.length > 1 ? "s" : ""}.`, ...ctl, images: pictures.map((p) => p.url),
+        text: t || picturesOnly(pics.pictures.length), ...ctl, images: pics.urls,
       });
       setText("");
-      setPictures([]);
+      pics.clear();
       if (r.busy_warning) setNote("The session looked busy (maybe open in a terminal): your message was sent anyway.");
       stick.current = true;
       await load();
@@ -654,41 +615,15 @@ function SessionStage({ item, onClose, onUnwatch, onChanged, onRename, onDelete 
             ))}
           </div>
         )}
-        {pictures.length > 0 && (
-          <div className="mon-pictures" data-testid="mon-pictures">
-            {pictures.map((p, n) => (
-              <span key={n} className="mon-picture" title={p.name} data-testid="mon-picture">
-                <img src={p.url} alt={p.name} />
-                <button className="icon-btn small" onClick={() => setPictures((x) => x.filter((_, k) => k !== n))} aria-label={`Remove ${p.name}`} data-testid="mon-picture-remove">×</button>
-              </span>
-            ))}
-            <span className="muted small">sent with your message</span>
-          </div>
-        )}
+        <PictureStrip pics={pics} />
         <textarea ref={input} rows={3} value={text} onChange={(e) => setText(e.target.value)}
-          placeholder={`Message ${PROV_LABEL[d.provider]} in this session — paste a picture with Ctrl+V; / for commands such as /model (${COMPOSER_HINT})`}
-          onPaste={(e) => {
-            const files = Array.from(e.clipboardData.files);
-            if (files.some((f) => f.type.startsWith("image/"))) {
-              e.preventDefault(); // the picture, not its file name; text pasted along still goes into the box
-              const plain = e.clipboardData.getData("text/plain");
-              if (plain) document.execCommand("insertText", false, plain);
-              void addPictures(files);
-            }
-          }}
-          onDragOver={(e) => { if (Array.from(e.dataTransfer.items).some((i) => i.type.startsWith("image/"))) e.preventDefault(); }}
-          onDrop={(e) => {
-            const files = Array.from(e.dataTransfer.files);
-            if (files.some((f) => f.type.startsWith("image/"))) {
-              e.preventDefault();
-              void addPictures(files);
-            }
-          }}
+          placeholder={`Message ${PROV_LABEL[d.provider]} in this session — ${PASTE_HINT}; / for commands such as /model (${COMPOSER_HINT})`}
+          {...pics.handlers}
           onKeyDown={(e) => composerKeyDown(e, () => void send(), setText)} disabled={!d.found} data-testid="mon-input" />
         <div className="row">
           <span className="muted small">Runs in {d.directory ?? "~"} with the provider's permission rules; for interactive prompts use <b>Open in terminal</b>.</span>
           <span className="spacer" />
-          <button className="btn small primary" disabled={(!text.trim() && !pictures.length) || d.send?.state === "running" || !d.found} onClick={() => void send()} data-testid="mon-send">Send</button>
+          <button className="btn small primary" disabled={(!text.trim() && !pics.pictures.length) || d.send?.state === "running" || !d.found} onClick={() => void send()} data-testid="mon-send">Send</button>
         </div>
       </div>
     </section>

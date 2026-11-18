@@ -50,7 +50,7 @@ async def test_folder_diff_vs_head_includes_modified_and_untracked_markdown(api:
     assert ([c["sha"] for c in refs["commits"]][:2] == [second, first] and "master" in refs["branches"]) or "main" in refs["branches"]
 
 
-async def test_diff_comment_becomes_anchored_discussion(api: Api, workspace: Path):
+async def test_diff_comment_becomes_anchored_discussion(api: Api, workspace: Path, fake_env: Path):
     _commit_all(workspace, "base")
     guide = workspace / "docs" / "guide.md"
     guide.write_text(guide.read_text().replace("TorchInductor converts the graph into device code.", "TorchInductor lowers the graph into device code."))
@@ -79,9 +79,17 @@ async def test_diff_comment_becomes_anchored_discussion(api: Api, workspace: Pat
     assert d2["comments"]["docs/guide.md"][0]["thread_id"] == out["thread_id"]
     # a comment on a removed line still creates a discussion, flagged as not anchored to current text
     removed = next(ln[1:] for ln in unified.splitlines() if ln.startswith("-") and not ln.startswith("---"))
-    r2 = await api.post("/api/v1/diff/comments", json={"path": "docs/guide.md", "side": "deleted", "line_text": removed, "question": "why removed?"})
+    import base64
+
+    png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+    (fake_env / "opencode_last_files").unlink(missing_ok=True)
+    r2 = await api.post("/api/v1/diff/comments", json={"path": "docs/guide.md", "side": "deleted", "line_text": removed, "question": "why removed?",
+                                                       "images": ["data:image/png;base64," + base64.b64encode(png).decode()]})
     assert r2.status_code == 201 and r2.json()["anchored"] is False
     await api.wait_job(r2.json()["job_id"])
+    assert [Path(f).read_bytes() for f in (fake_env / "opencode_last_files").read_text().split()] == [png]  # a pasted picture goes with it
+    c = next(x for x in (await api.get("/api/v1/diff", params={"path": "docs"})).json()["comments"]["docs/guide.md"] if x["thread_id"] == r2.json()["thread_id"])
+    assert len(c["messages"][0]["images"]) == 1
     t2 = next(x for x in (await api.threads(out["document_id"]))["threads"] if x["id"] == r2.json()["thread_id"])
     assert t2["diff"]["side"] == "deleted" and t2["anchor_state"] in ("orphaned", "attached")
     # files the reader cannot open (binary) cannot take comments

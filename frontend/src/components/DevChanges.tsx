@@ -8,9 +8,10 @@ import { Gap, expandLines } from "./PrDiff";
 import { useJobStream } from "./DiscussionPanel";
 import { isArtifact } from "./DevTabs";
 import { CodeAnchor } from "./DevAgentPanel";
+import { PASTE_HINT, PictureStrip, picturesOnly, usePictures } from "./Pictures";
 
 /** What the agent is asked about from the Changes view. */
-export interface ChangesAsk { text: string; anchor?: CodeAnchor; context: Record<string, unknown> }
+export interface ChangesAsk { text: string; anchor?: CodeAnchor; context: Record<string, unknown>; images?: string[] }
 
 /** What to compare: the uncommitted work, the whole branch, a single commit, or the worktree against a branch. */
 type Mode = string; // "wt" | "branch" | "branch-committed" | "c:<sha>" | "b:<branch>"
@@ -332,8 +333,8 @@ export default function DevChanges({ dev, refreshKey, onChanged, onAsk, onOpenFi
                 inCommit={isWt && statusOf(f.path) !== undefined ? !excluded.has(f.path) : null}
                 onInCommit={(on) => setExcluded((x) => { const n = new Set(x); if (on) n.delete(f.path); else n.add(f.path); return n; })}
                 onOpen={onOpenFile && f.status !== "deleted" && isWt ? (line) => onOpenFile(f.path, line) : undefined}
-                onAsk={(text, sel) => onAsk({
-                  text,
+                onAsk={(text, sel, images) => onAsk({
+                  text, images,
                   // lines of the current file (new side) anchor the discussion there; otherwise it is about the file
                   anchor: f.status === "deleted" || !isWt ? undefined
                     : sel && sel.start ? { root: "wt", file: f.path, start_line: sel.start, end_line: sel.end, quote: sel.quote } : { root: "wt", file: f.path, quote: "" },
@@ -365,7 +366,7 @@ function DevFileDiff({ file, layout, devId, targetRef, collapsed, viewed, inComm
   onViewed: (v: boolean) => void;
   onInCommit: (on: boolean) => void;
   onOpen?: (line?: number) => void;
-  onAsk: (text: string, sel: AskSel | null) => Promise<void>;
+  onAsk: (text: string, sel: AskSel | null, images: string[]) => Promise<void>;
   onError: (m: string) => void;
 }) {
   const base = useMemo(() => parseUnified(file.unified).lines, [file.unified]);
@@ -446,7 +447,8 @@ function DevFileDiff({ file, layout, devId, targetRef, collapsed, viewed, inComm
     setSel({ from: Math.min(anchorIdx.current, i), to: Math.max(anchorIdx.current, i) });
   };
   const inSel = (i: number) => !!sel && i >= sel.from && i <= sel.to;
-  const cancel = () => { setComposer(null); setSel(null); setText(""); };
+  const pics = usePictures();
+  const cancel = () => { setComposer(null); setSel(null); setText(""); pics.clear(); };
   const copySide = useRef<"left" | "right" | null>(null);
   const copyText = sel ? linesText(lines.slice(sel.from, sel.to + 1), copySide.current) : null;
   useCopyLines(copyText);
@@ -461,11 +463,11 @@ function DevFileDiff({ file, layout, devId, targetRef, collapsed, viewed, inComm
     quote: newSide.map((l) => l.text).join("\n"), diff: chosen.map((l) => l.raw).join("\n"),
   });
   const send = async (sel: AskSel | null) => {
-    const q = text.trim();
+    const q = text.trim() || (pics.pictures.length ? picturesOnly(pics.pictures.length) : "");
     if (!q) return;
     setBusy(true);
     try {
-      await onAsk(q, sel);
+      await onAsk(q, sel, pics.urls);
       cancel();
       setFileComposer(false);
     } catch (e) {
@@ -481,10 +483,11 @@ function DevFileDiff({ file, layout, devId, targetRef, collapsed, viewed, inComm
   const composerNode = composer && (
     <div className="diff-composer" data-testid="dev-diff-composer" onPointerDown={(e) => e.stopPropagation()}>
       <div className="muted small">{range} of {file.path}</div>
-      <textarea autoFocus rows={3} value={text} onChange={(e) => setText(e.target.value)} placeholder={`Ask the agent about these lines (${COMPOSER_HINT})`}
-        onKeyDown={(e) => composerKeyDown(e, () => void send(askSel()), setText, cancel)} data-testid="dev-diff-question" />
+      <PictureStrip pics={pics} />
+      <textarea autoFocus rows={3} value={text} onChange={(e) => setText(e.target.value)} placeholder={`Ask the agent about these lines (${COMPOSER_HINT}; ${PASTE_HINT})`}
+        {...pics.handlers} onKeyDown={(e) => composerKeyDown(e, () => void send(askSel()), setText, cancel)} data-testid="dev-diff-question" />
       <div className="row">
-        <button className="btn small primary" disabled={busy || !text.trim()} onClick={() => void send(askSel())} title="The answer appears in the agent panel" data-testid="dev-diff-ask">Ask agent</button>
+        <button className="btn small primary" disabled={busy || (!text.trim() && !pics.pictures.length)} onClick={() => void send(askSel())} title="The answer appears in the agent panel" data-testid="dev-diff-ask">Ask agent</button>
         {onOpen && newSide.length > 0 && <button className="btn small" onClick={() => onOpen(newSide[0].newNo!)} data-testid="dev-diff-open-line">Open in editor</button>}
         <CopyLinesButton text={copyText ?? ""} testId="dev-diff-copy-lines" />
         <button className="btn small" onClick={cancel}>Cancel</button>
@@ -536,11 +539,12 @@ function DevFileDiff({ file, layout, devId, targetRef, collapsed, viewed, inComm
         <div className="pr-file-level pad">
           <div className="diff-composer" data-testid="dev-diff-file-composer">
             <div className="muted small">All of this file's changes</div>
-            <textarea autoFocus rows={3} value={text} onChange={(e) => setText(e.target.value)} placeholder={`Ask the agent about ${file.path} (${COMPOSER_HINT})`}
-              onKeyDown={(e) => composerKeyDown(e, () => void send(null), setText, () => setFileComposer(false))} data-testid="dev-diff-file-question" />
+            <PictureStrip pics={pics} />
+            <textarea autoFocus rows={3} value={text} onChange={(e) => setText(e.target.value)} placeholder={`Ask the agent about ${file.path} (${COMPOSER_HINT}; ${PASTE_HINT})`}
+              {...pics.handlers} onKeyDown={(e) => composerKeyDown(e, () => void send(null), setText, () => setFileComposer(false))} data-testid="dev-diff-file-question" />
             <div className="row">
-              <button className="btn small primary" disabled={busy || !text.trim()} onClick={() => void send(null)} data-testid="dev-diff-file-send">Ask agent</button>
-              <button className="btn small" onClick={() => { setFileComposer(false); setText(""); }}>Cancel</button>
+              <button className="btn small primary" disabled={busy || (!text.trim() && !pics.pictures.length)} onClick={() => void send(null)} data-testid="dev-diff-file-send">Ask agent</button>
+              <button className="btn small" onClick={() => { setFileComposer(false); setText(""); pics.clear(); }}>Cancel</button>
             </div>
           </div>
         </div>

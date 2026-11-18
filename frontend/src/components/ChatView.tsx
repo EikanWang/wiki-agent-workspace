@@ -8,6 +8,7 @@ import SelectionAsk from "./SelectionAsk";
 import { confirmAction } from "./Confirm";
 import { usePersistentState } from "../persist";
 import { COMPOSER_HINT, composerKeyDown } from "./keys";
+import { PASTE_HINT, PictureStrip, picturesOnly, usePictures } from "./Pictures";
 
 export const CHAT_PREFIX = ".waw-chat/";
 export const isChatPath = (p: string | null | undefined) => !!p && p.startsWith(CHAT_PREFIX);
@@ -31,8 +32,8 @@ export default function ChatView({ doc, folderName, threads, sessions, liveJob, 
   liveJob: LiveJob | null;
   /** the running side question's turn */
   sideLive?: LiveJob | null;
-  onStart: (question: string, modelChoice?: ModelChoiceValue | null) => Promise<void>;
-  onSend: (threadId: string, text: string, modelChoice?: ModelChoiceValue | null) => Promise<void>;
+  onStart: (question: string, modelChoice?: ModelChoiceValue | null, images?: string[]) => Promise<void>;
+  onSend: (threadId: string, text: string, modelChoice?: ModelChoiceValue | null, images?: string[]) => Promise<void>;
   onAction: (threadId: string, action: Action, target: string | null, note: string) => Promise<void>;
   onRetry: (threadId: string, messageId: string, sessionChoice: string | null) => Promise<void>;
   onCancel: (jobId: string) => Promise<void>;
@@ -42,8 +43,8 @@ export default function ChatView({ doc, folderName, threads, sessions, liveJob, 
   /** follow a running turn (e.g. one started elsewhere: a change summary, or after a reload) */
   onWatchJob?: (jobId: string) => void;
   /** a side question about `quote` (a part of the answer `messageId` of the chat `mainId`): its thread's id */
-  onSideAsk?: (mainId: string, messageId: string | null, quote: string, question: string) => Promise<string | null>;
-  onSideReply?: (threadId: string, text: string, sessionChoice: string | null) => Promise<void>;
+  onSideAsk?: (mainId: string, messageId: string | null, quote: string, question: string, images?: string[]) => Promise<string | null>;
+  onSideReply?: (threadId: string, text: string, sessionChoice: string | null, images?: string[]) => Promise<void>;
   onWatchSideJob?: (jobId: string) => void;
   /** the chat's project (folder) when it is not the window's active one */
   workspaceId?: string;
@@ -61,6 +62,7 @@ export default function ChatView({ doc, folderName, threads, sessions, liveJob, 
   const [text, setText] = usePersistentState(`chat.${doc.document_id}`, ""); // an unsent message survives a reload
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const pics = usePictures();
   const [action, setAction] = useState<Action | null>(null);
   const [target, setTarget] = useState("");
   const [note, setNote] = useState("");
@@ -106,13 +108,14 @@ export default function ChatView({ doc, folderName, threads, sessions, liveJob, 
   const [modelChoice, setModelChoice] = useState<ModelChoiceValue | null>(null);
   const chatSession = thread?.last_session_id ? sessions.find((x) => x.id === thread.last_session_id) ?? null : null;
   const send = () => {
-    const q = text.trim();
+    const q = text.trim() || (pics.pictures.length ? picturesOnly(pics.pictures.length) : "");
     if (!q || running) return;
     void run(async () => {
-      if (thread) await onSend(thread.id, q, modelChoice);
-      else await onStart(q, modelChoice);
+      if (thread) await onSend(thread.id, q, modelChoice, pics.urls);
+      else await onStart(q, modelChoice, pics.urls);
       setModelChoice(null);
       setText("");
+      pics.clear();
     });
   };
   const doAction = () => {
@@ -156,8 +159,8 @@ export default function ChatView({ doc, folderName, threads, sessions, liveJob, 
       </section>
       {thread && onSideAsk && (
         <SelectionAsk container={messagesRef} hint="Answered in the side questions panel; included when you distill" testId="chat-sel-ask"
-          onAsk={async (p, q) => {
-            const id = await onSideAsk(thread.id, p.messageId, p.quote, q);
+          onAsk={async (p, q, images) => {
+            const id = await onSideAsk(thread.id, p.messageId, p.quote, q, images);
             if (id) setActiveSideId(id);
             setSideOpen(true);
           }} />
@@ -188,13 +191,14 @@ export default function ChatView({ doc, folderName, threads, sessions, liveJob, 
         </div>
       )}
       <div className="chat-composer">
+        <PictureStrip pics={pics} />
         <textarea rows={3} value={text} onChange={(e) => setText(e.target.value)} disabled={busy}
-          placeholder={`${thread ? "Continue the conversation" : `Ask about ${folderName}`} (${COMPOSER_HINT})`}
-          onKeyDown={(e) => composerKeyDown(e, send, setText, () => setText(""))} data-testid="chat-input" autoFocus />
+          placeholder={`${thread ? "Continue the conversation" : `Ask about ${folderName}`} (${COMPOSER_HINT}; ${PASTE_HINT})`}
+          {...pics.handlers} onKeyDown={(e) => composerKeyDown(e, send, setText, () => setText(""))} data-testid="chat-input" autoFocus />
         <div className="chat-composer-bar">
           <ModelChoice value={modelChoice} onChange={setModelChoice} session={chatSession} />
           <span className="spacer" />
-          <button className="btn primary" disabled={busy || running || !text.trim()} onClick={send} data-testid="chat-send">{running ? "Agent is answering…" : "Send"}</button>
+          <button className="btn primary" disabled={busy || running || (!text.trim() && !pics.pictures.length)} onClick={send} data-testid="chat-send">{running ? "Agent is answering…" : "Send"}</button>
         </div>
       </div>
       </div>
@@ -205,7 +209,7 @@ export default function ChatView({ doc, folderName, threads, sessions, liveJob, 
       {sides.length > 0 && sideOpen && (
         <div className="chat-side" style={{ width: sideWidth }} data-testid="chat-side">
           <DiscussionPanel side thread={activeSide} threads={sides} sessions={sessions} defaultSessionId={null} liveJob={sideLive}
-            onReply={(tid, q, sc) => (onSideReply ? onSideReply(tid, q, sc) : onSend(tid, q))}
+            onReply={(tid, q, sc, images) => (onSideReply ? onSideReply(tid, q, sc, images) : onSend(tid, q, null, images))}
             onRetry={onRetry} onCancel={onCancel} onPermission={onPermission}
             onSelectThread={(id) => {
               setActiveSideId(id);

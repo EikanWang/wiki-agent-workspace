@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ApiError } from "../api";
 import { COMPOSER_HINT, composerKeyDown } from "./keys";
+import { PictureStrip, picturesOnly, usePictures } from "./Pictures";
 
 /** The part of an agent's answer the user selected, and where it is. */
 export interface PickedPart {
@@ -20,7 +21,8 @@ export function quotedQuestion(quote: string, question: string): string {
  */
 export default function SelectionAsk({ container, onAsk, hint, testId = "sel-ask" }: {
   container: React.RefObject<HTMLElement | null>;
-  onAsk: (part: PickedPart, question: string) => Promise<void>;
+  /** `images`: pictures pasted into the box (data: URLs) */
+  onAsk: (part: PickedPart, question: string, images: string[]) => Promise<void>;
   hint: string;
   testId?: string;
 }) {
@@ -29,6 +31,7 @@ export default function SelectionAsk({ container, onAsk, hint, testId = "sel-ask
   const [q, setQ] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const pics = usePictures();
   const openRef = useRef(false);
   openRef.current = open;
 
@@ -65,13 +68,14 @@ export default function SelectionAsk({ container, onAsk, hint, testId = "sel-ask
     setOpen(false);
     setQ("");
     setErr(null);
+    pics.clear();
   };
   const send = () => {
-    const question = q.trim();
+    const question = q.trim() || (pics.pictures.length ? picturesOnly(pics.pictures.length) : "");
     if (!pick || !question || busy) return;
     setBusy(true);
     setErr(null);
-    onAsk(pick, question)
+    onAsk(pick, question, pics.urls)
       .then(() => {
         close();
         window.getSelection()?.removeAllRanges();
@@ -83,7 +87,7 @@ export default function SelectionAsk({ container, onAsk, hint, testId = "sel-ask
   if (!pick) return null;
   const w = open ? 360 : 130;
   const left = Math.max(8, Math.min(pick.x - w / 2, window.innerWidth - w - 8));
-  const top = Math.max(8, Math.min(pick.y, window.innerHeight - (open ? 230 : 40)));
+  const top = Math.max(8, Math.min(pick.y, window.innerHeight - (open ? (pics.pictures.length ? 300 : 230) : 40)));
   return (
     <div className={`sel-ask ${open ? "open" : ""}`} style={{ left, top, width: open ? w : undefined }} onMouseDown={(e) => !open && e.preventDefault()} data-testid={testId}>
       {!open ? (
@@ -91,13 +95,14 @@ export default function SelectionAsk({ container, onAsk, hint, testId = "sel-ask
       ) : (
         <>
           <blockquote className="sel-ask-quote" data-testid={`${testId}-quote`}>{pick.quote.length > 300 ? `${pick.quote.slice(0, 300)}…` : pick.quote}</blockquote>
+          <PictureStrip pics={pics} />
           <textarea autoFocus rows={3} value={q} onChange={(e) => setQ(e.target.value)} disabled={busy} placeholder={`Your question about this part (${COMPOSER_HINT})`}
-            onKeyDown={(e) => composerKeyDown(e, send, setQ, close)} data-testid={`${testId}-input`} />
+            {...pics.handlers} onKeyDown={(e) => composerKeyDown(e, send, setQ, close)} data-testid={`${testId}-input`} />
           <div className="sel-ask-bar">
             <span className="muted small">{hint}</span>
             <span className="spacer" />
             <button className="btn small" onClick={close}>Cancel</button>
-            <button className="btn small primary" disabled={busy || !q.trim()} onClick={send} data-testid={`${testId}-send`}>{busy ? "Asking…" : "Ask"}</button>
+            <button className="btn small primary" disabled={busy || (!q.trim() && !pics.pictures.length)} onClick={send} data-testid={`${testId}-send`}>{busy ? "Asking…" : "Ask"}</button>
           </div>
           {err && <div className="error-text small" role="alert">{err}</div>}
         </>

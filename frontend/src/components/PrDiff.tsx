@@ -9,6 +9,7 @@ import GhUser from "./GhUser";
 import { loadReviews } from "./ReviewsPanel";
 import { Line, SplitCols, UnifiedCols, buildSplitRows, numColStyle, parseUnified } from "./DiffReview";
 import { DISCARD_REASONS, TeachBox } from "./ReviewLearning";
+import { PASTE_HINT, PictureStrip, picturesOnly, usePictures } from "./Pictures";
 
 /** A review thread on GitHub (line or whole-file), with all its comments. */
 export interface GhThread {
@@ -101,13 +102,14 @@ export function PrFileDiff({ file, layout, threads, drafts, apiBase, canAsk, col
   canAsk: boolean;
   collapsedDefault: boolean;
   onChanged: () => Promise<void>;
-  onAsk: (quote: string, label: string, question: string) => Promise<void>;
+  onAsk: (quote: string, label: string, question: string, images?: string[]) => Promise<void>;
   onError: (m: string) => void;
 }) {
   const [collapsed, setCollapsed] = useState(collapsedDefault || file.viewed === "VIEWED");
   useEffect(() => { if (file.viewed === "VIEWED") setCollapsed(true); }, [file.viewed]);
   const [fileComposer, setFileComposer] = useState(false);
   const [fileText, setFileText] = useState("");
+  const filePics = usePictures();
   const base = useMemo(() => parseUnified(file.unified).lines, [file.unified]);
   // expanding context, as on GitHub: the file at the PR's head fills the gaps between (and around) the hunks
   const [content, setContent] = useState<string[] | null>(null);
@@ -165,6 +167,7 @@ export function PrFileDiff({ file, layout, threads, drafts, apiBase, canAsk, col
     setComposer(map);
   }, [lines]);
   const [text, setText] = useState("");
+  const pics = usePictures();
   const [busy, setBusy] = useState(false);
   const anchor = useRef<number | null>(null);
   const dragging = useRef(false);
@@ -202,7 +205,7 @@ export function PrFileDiff({ file, layout, threads, drafts, apiBase, canAsk, col
     setSel({ from: Math.min(anchor.current, i), to: Math.max(anchor.current, i) });
   };
   const inSel = (i: number) => !!sel && i >= sel.from && i <= sel.to;
-  const cancel = () => { setComposer(null); setSel(null); setText(""); };
+  const cancel = () => { setComposer(null); setSel(null); setText(""); pics.clear(); };
   const copySide = useRef<"left" | "right" | null>(null);
   const copyText = sel ? linesText(lines.slice(sel.from, sel.to + 1), copySide.current) : null;
   useCopyLines(copyText);
@@ -216,11 +219,13 @@ export function PrFileDiff({ file, layout, threads, drafts, apiBase, canAsk, col
   };
 
   const askFile = async () => {
-    if (!fileText.trim()) return;
+    const q = fileText.trim() || (filePics.pictures.length ? picturesOnly(filePics.pictures.length) : "");
+    if (!q) return;
     setBusy(true);
     try {
-      await onAsk((file.unified || "").slice(0, 20000), `${file.path} (all of this file's changes)`, fileText.trim());
+      await onAsk((file.unified || "").slice(0, 20000), `${file.path} (all of this file's changes)`, q, filePics.urls);
       setFileText("");
+      filePics.clear();
       setFileComposer(false);
     } catch (e) {
       onError((e as ApiError).message);
@@ -267,10 +272,11 @@ export function PrFileDiff({ file, layout, threads, drafts, apiBase, canAsk, col
     }
   };
   const ask = async () => {
-    if (!text.trim() || !selected.length) return;
+    const q = text.trim() || (pics.pictures.length ? picturesOnly(pics.pictures.length) : "");
+    if (!q || !selected.length) return;
     setBusy(true);
     try {
-      await onAsk(selected.map((l) => l.raw).join("\n"), label(), text.trim());
+      await onAsk(selected.map((l) => l.raw).join("\n"), label(), q, pics.urls);
       cancel();
     } catch (e) {
       onError((e as ApiError).message);
@@ -300,11 +306,12 @@ export function PrFileDiff({ file, layout, threads, drafts, apiBase, canAsk, col
   const composerNode = composer && (
     <div className="diff-composer" data-testid="pr-composer" onPointerDown={(e) => e.stopPropagation()}>
       <div className="muted small">{selected.length > 1 ? `Lines ${label().slice(file.path.length + 1)}` : `Line ${label().slice(file.path.length + 1)}`}</div>
-      <MentionTextarea apiBase={apiBase} autoFocus rows={3} value={text} onValue={setText} placeholder={`Leave a review comment, or ask the agent about these lines (${COMPOSER_HINT})`}
-        onKeyDown={(e) => composerKeyDown(e, () => void addComment(), setText, cancel)} data-testid="pr-composer-text" />
+      <PictureStrip pics={pics} />
+      <MentionTextarea apiBase={apiBase} autoFocus rows={3} value={text} onValue={setText} placeholder={`Leave a review comment, or ask the agent about these lines (${COMPOSER_HINT}; ${PASTE_HINT} for the agent)`}
+        {...pics.handlers} onKeyDown={(e) => composerKeyDown(e, () => void (pics.pictures.length ? ask() : addComment()), setText, cancel)} data-testid="pr-composer-text" />
       <div className="row">
-        <button className="btn small primary" disabled={busy || !text.trim()} onClick={() => void addComment()} title="Saved here; published to GitHub when you submit the review" data-testid="pr-add-comment">Add review comment</button>
-        <button className="btn small" disabled={busy || !text.trim() || !canAsk} onClick={() => void ask()} title={canAsk ? "Ask the agent about these lines (the answer appears in the discussions panel)" : "Choose the agent's wiki first"} data-testid="pr-ask-lines">Ask agent</button>
+        <button className="btn small primary" disabled={busy || !text.trim() || pics.pictures.length > 0} onClick={() => void addComment()} title={pics.pictures.length ? "Pictures go to the agent only (Ask agent)" : "Saved here; published to GitHub when you submit the review"} data-testid="pr-add-comment">Add review comment</button>
+        <button className="btn small" disabled={busy || (!text.trim() && !pics.pictures.length) || !canAsk} onClick={() => void ask()} title={canAsk ? "Ask the agent about these lines (the answer appears in the discussions panel)" : "Choose the agent's wiki first"} data-testid="pr-ask-lines">Ask agent</button>
         <button className="btn small" disabled={!suggestable} onClick={insertSuggestion} title={suggestable ? "Propose replacement code (GitHub 'suggested change')" : "Suggestions apply to new or unchanged lines"} data-testid="pr-suggest">Suggest change</button>
         <CopyLinesButton text={copyText ?? ""} testId="pr-copy-lines" />
         <button className="btn small" onClick={cancel}>Cancel</button>
@@ -404,12 +411,13 @@ export function PrFileDiff({ file, layout, threads, drafts, apiBase, canAsk, col
           {fileComposer && (
             <div className="diff-composer" data-testid="pr-file-composer">
               <div className="muted small">The whole file: comment on it (published with your review), or ask the agent about its changes</div>
-              <MentionTextarea apiBase={apiBase} autoFocus rows={3} value={fileText} onValue={setFileText} placeholder={`Comment on ${file.path} (${COMPOSER_HINT})`}
-                onKeyDown={(e) => composerKeyDown(e, () => void addFileComment(), setFileText, () => setFileComposer(false))} data-testid="pr-file-composer-text" />
+              <PictureStrip pics={filePics} />
+              <MentionTextarea apiBase={apiBase} autoFocus rows={3} value={fileText} onValue={setFileText} placeholder={`Comment on ${file.path} (${COMPOSER_HINT}; ${PASTE_HINT} for the agent)`}
+                {...filePics.handlers} onKeyDown={(e) => composerKeyDown(e, () => void (filePics.pictures.length ? askFile() : addFileComment()), setFileText, () => setFileComposer(false))} data-testid="pr-file-composer-text" />
               <div className="row">
-                <button className="btn small primary" disabled={busy || !fileText.trim()} onClick={() => void addFileComment()} data-testid="pr-file-composer-add">Add review comment</button>
-                <button className="btn small" disabled={busy || !fileText.trim() || !canAsk} onClick={() => void askFile()} title={canAsk ? "Ask the agent about this file's changes; the answer is in the discussions panel" : "Choose the agent's wiki first"} data-testid="pr-file-composer-ask">Ask agent</button>
-                <button className="btn small" onClick={() => setFileComposer(false)}>Cancel</button>
+                <button className="btn small primary" disabled={busy || !fileText.trim() || filePics.pictures.length > 0} onClick={() => void addFileComment()} title={filePics.pictures.length ? "Pictures go to the agent only (Ask agent)" : undefined} data-testid="pr-file-composer-add">Add review comment</button>
+                <button className="btn small" disabled={busy || (!fileText.trim() && !filePics.pictures.length) || !canAsk} onClick={() => void askFile()} title={canAsk ? "Ask the agent about this file's changes; the answer is in the discussions panel" : "Choose the agent's wiki first"} data-testid="pr-file-composer-ask">Ask agent</button>
+                <button className="btn small" onClick={() => { setFileComposer(false); filePics.clear(); }}>Cancel</button>
               </div>
             </div>
           )}
@@ -477,10 +485,18 @@ export function PrFileDiff({ file, layout, threads, drafts, apiBase, canAsk, col
 
 function ThreadBox({ thread, apiBase, onChanged, onError, canAsk, onAsk }: {
   thread: GhThread; apiBase: string; onChanged: () => Promise<void>; onError: (m: string) => void;
-  canAsk: boolean; onAsk: (quote: string, label: string, question: string) => Promise<void>;
+  canAsk: boolean; onAsk: (quote: string, label: string, question: string, images?: string[]) => Promise<void>;
 }) {
   const [reply, setReply] = useState<string | null>(null);
   const [asking, setAsking] = useState<string | null>(null);
+  const askPics = usePictures();
+  const askThread = () => run(async () => {
+    const q = (asking ?? "").trim() || (askPics.pictures.length ? picturesOnly(askPics.pictures.length) : "");
+    if (!q) return;
+    await onAsk(transcript(), `thread on ${where}`, q, askPics.urls);
+    setAsking(null);
+    askPics.clear();
+  });
   const [show, setShow] = useState(!thread.resolved);
   const [busy, setBusy] = useState(false);
   useEffect(() => setShow(!thread.resolved), [thread.resolved]);
@@ -538,10 +554,11 @@ function ThreadBox({ thread, apiBase, onChanged, onError, canAsk, onAsk }: {
           )}
           {asking !== null && (
             <div className="gh-reply-box">
-              <textarea autoFocus rows={2} value={asking} onChange={(e) => setAsking(e.target.value)} placeholder={`Ask the agent about this thread, e.g. "Is the reviewer right?" (${COMPOSER_HINT})`}
-                onKeyDown={(e) => composerKeyDown(e, () => void run(async () => { await onAsk(transcript(), `thread on ${where}`, asking); setAsking(null); }), (v) => setAsking(v), () => setAsking(null))} data-testid="gh-ask-text" />
+              <PictureStrip pics={askPics} />
+              <textarea autoFocus rows={2} value={asking} onChange={(e) => setAsking(e.target.value)} placeholder={`Ask the agent about this thread, e.g. "Is the reviewer right?" (${COMPOSER_HINT}; ${PASTE_HINT})`}
+                {...askPics.handlers} onKeyDown={(e) => composerKeyDown(e, () => void askThread(), (v) => setAsking(v), () => setAsking(null))} data-testid="gh-ask-text" />
               <div className="row">
-                <button className="btn small primary" disabled={busy || !asking.trim()} onClick={() => void run(async () => { await onAsk(transcript(), `thread on ${where}`, asking); setAsking(null); })} data-testid="gh-ask-send">Ask agent</button>
+                <button className="btn small primary" disabled={busy || (!asking.trim() && !askPics.pictures.length)} onClick={() => void askThread()} data-testid="gh-ask-send">Ask agent</button>
                 <button className="btn small" onClick={() => setAsking(null)}>Cancel</button>
               </div>
             </div>
@@ -554,7 +571,7 @@ function ThreadBox({ thread, apiBase, onChanged, onError, canAsk, onAsk }: {
 
 function DraftBox({ draft, apiBase, onChanged, onError, canAsk = false, onAsk }: {
   draft: GhDraft; apiBase: string; onChanged: () => Promise<void>; onError: (m: string) => void;
-  canAsk?: boolean; onAsk?: (quote: string, label: string, question: string) => Promise<void>;
+  canAsk?: boolean; onAsk?: (quote: string, label: string, question: string, images?: string[]) => Promise<void>;
 }) {
   const [edit, setEdit] = useState<string | null>(null);
   const [asking, setAsking] = useState<string | null>(null);
@@ -577,9 +594,12 @@ function DraftBox({ draft, apiBase, onChanged, onError, canAsk = false, onAsk }:
   const decide = (d: "accepted" | "proposed" | "discarded") => run(async () => { await patch(`${apiBase}/drafts/${draft.id}`, { decision: d }); await onChanged(); });
   const because = (r: string) => run(async () => { await patch(`${apiBase}/drafts/${draft.id}`, { discard_reason: draft.discard_reason === r ? "" : r }); await onChanged(); });
   const where = draft.subject === "file" ? draft.path : `${draft.path} ${draft.side === "LEFT" ? "L" : "R"}${draft.start_line ? `${draft.start_line}–` : ""}${draft.line}`;
+  const askPics = usePictures();
   const ask = () => onAsk && run(async () => {
-    await onAsk(`${draft.line_text ? draft.line_text + "\n\n" : ""}Suggested review comment (by the agent): ${draft.body}`, `suggested comment on ${where}`, asking ?? "");
+    const q = (asking ?? "").trim() || (askPics.pictures.length ? picturesOnly(askPics.pictures.length) : "");
+    await onAsk(`${draft.line_text ? draft.line_text + "\n\n" : ""}Suggested review comment (by the agent): ${draft.body}`, `suggested comment on ${where}`, q, askPics.urls);
     setAsking(null);
+    askPics.clear();
   });
   return (
     <div className={`gh-thread draft ${agent ? `agent ${decision}` : ""}`} data-testid="pr-draft" data-id={draft.id} data-origin={draft.origin ?? "user"} data-decision={decision}>
@@ -621,10 +641,11 @@ function DraftBox({ draft, apiBase, onChanged, onError, canAsk = false, onAsk }:
           )}
           {asking !== null && (
             <div className="gh-reply-box">
-              <textarea autoFocus rows={2} value={asking} onChange={(e) => setAsking(e.target.value)} placeholder={`e.g. "Is this really a bug? Show me where." (${COMPOSER_HINT})`}
-                onKeyDown={(e) => composerKeyDown(e, () => void ask(), (v) => setAsking(v), () => setAsking(null))} data-testid="pr-draft-ask-text" />
+              <PictureStrip pics={askPics} />
+              <textarea autoFocus rows={2} value={asking} onChange={(e) => setAsking(e.target.value)} placeholder={`e.g. "Is this really a bug? Show me where." (${COMPOSER_HINT}; ${PASTE_HINT})`}
+                {...askPics.handlers} onKeyDown={(e) => composerKeyDown(e, () => void ask(), (v) => setAsking(v), () => setAsking(null))} data-testid="pr-draft-ask-text" />
               <div className="row">
-                <button className="btn small primary" disabled={busy || !asking.trim()} onClick={() => void ask()} data-testid="pr-draft-ask-send">Ask agent</button>
+                <button className="btn small primary" disabled={busy || (!asking.trim() && !askPics.pictures.length)} onClick={() => void ask()} data-testid="pr-draft-ask-send">Ask agent</button>
                 <button className="btn small" onClick={() => setAsking(null)}>Cancel</button>
               </div>
             </div>

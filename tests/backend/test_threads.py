@@ -618,6 +618,43 @@ async def test_questions_about_a_page_area_or_picture_with_attached_image(api, w
     assert not stored.exists()
 
 
+async def test_pictures_pasted_into_a_question_or_reply_go_with_that_turn(api, workspace, fake_env, settings):
+    """Ctrl+V in a composer: the pictures are stored with the discussion, shown with the message, sent with its turn only."""
+    import base64
+
+    png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+    gif = b"GIF89a" + b"\x00" * 20
+    url = lambda raw, t: f"data:image/{t};base64," + base64.b64encode(raw).decode()  # noqa: E731
+    d = await api.open_doc()
+    (fake_env / "opencode_last_files").unlink(missing_ok=True)
+    r = await api.post(f"/api/v1/documents/{d['document_id']}/threads",
+                       json={"version_sha256": d["sha256"], "whole_document": True, "question": "what is this?", "images": [url(png, "png"), url(gif, "gif")]})
+    assert r.status_code == 201, r.text
+    tid, mid = r.json()["thread_id"], r.json()["message_id"]
+    await api.wait_job(r.json()["job_id"])
+    files = (fake_env / "opencode_last_files").read_text().split()
+    assert [Path(f).name for f in files] == [f"m-{mid}-0.png", f"m-{mid}-1.gif"] and Path(files[0]).read_bytes() == png
+    t = next(x for x in (await api.threads(d["document_id"]))["threads"] if x["id"] == tid)
+    assert t["messages"][0]["images"] == [f"m-{mid}-0.png", f"m-{mid}-1.gif"] and t["messages"][1]["images"] == []
+    got = await api.get(f"/api/v1/threads/{tid}/attachments/m-{mid}-1.gif")
+    assert got.status_code == 200 and got.content == gif
+    assert (await api.get(f"/api/v1/threads/{tid}/attachments/m-{mid}-7.gif")).status_code == 404
+    # a reply with its own picture: only that one goes with it
+    (fake_env / "opencode_last_files").unlink()
+    r = await api.post(f"/api/v1/threads/{tid}/messages", json={"text": "and this?", "images": [url(png, "png")]})
+    assert r.status_code == 202 or r.status_code == 201, r.text
+    await api.wait_job(r.json()["job_id"])
+    assert [Path(f).name for f in (fake_env / "opencode_last_files").read_text().split()] == [f"m-{r.json()['message_id']}-0.png"]
+    (fake_env / "opencode_last_files").unlink()
+    r = await api.post(f"/api/v1/threads/{tid}/messages", json={"text": "no picture"})
+    await api.wait_job(r.json()["job_id"])
+    assert not (fake_env / "opencode_last_files").exists()
+    # refused: not a picture, too many
+    for bad in (["data:image/png;base64,AAAA"], ["https://example.com/a.png"], [url(png, "png")] * 7):
+        r = await api.post(f"/api/v1/threads/{tid}/messages", json={"text": "x", "images": bad})
+        assert r.status_code == 400, r.text
+
+
 def test_prompt_names_the_page_or_slide():
     from backend.app.annotations import build_prompt
 
@@ -655,3 +692,21 @@ async def test_agent_env_script_is_sourced_for_agent_processes(running_app, sett
     from backend.app.agents.base import configure_env_script
 
     configure_env_script(None)
+
+
+async def test_a_turn_on_an_ssh_host_gets_its_pictures_copied_there(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from backend.app.agents.jobs import JobManager
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    a, b = tmp_path / "m-1-0.png", tmp_path / "page.jpg"
+    a.write_bytes(b"\x89PNG one")
+    b.write_bytes(b"\xff\xd8 two")
+    remote = SimpleNamespace(ssh_prefix=["sh", "-c", 'eval "$1"', "ssh"])  # "ssh host" ran here: the last argument is the command
+    out = await JobManager._remote_attachments(None, remote, [a, b], "job1")
+    d = home / ".cache/wiki-agent-workspace/attachments/job1"
+    assert out == [d / "0-m-1-0.png", d / "1-page.jpg"]
+    assert out[0].read_bytes() == b"\x89PNG one" and out[1].read_bytes() == b"\xff\xd8 two"

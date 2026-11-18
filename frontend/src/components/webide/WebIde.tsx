@@ -10,6 +10,7 @@ import MarkdownPreview from "./MarkdownPreview";
 import FileViewer, { viewerKind } from "./FileViewer";
 import { Splitter, usePane } from "../Split";
 import { FilesIcon, ProblemsIcon, SearchIcon } from "../Icons";
+import { PASTE_HINT, PictureStrip, picturesOnly, usePictures } from "../Pictures";
 
 /**
  * The web editor of a development workspace — a VS Code-like workbench in the page: activity bar (Explorer,
@@ -35,7 +36,7 @@ type Side = "explorer" | "search" | "problems";
 
 const isDark = () => window.matchMedia?.("(prefers-color-scheme: dark)").matches;
 
-export interface AgentRequest { kind: string; text: string; context: Record<string, unknown>; anchor?: CodeAnchor; threadId?: string; image?: string; modelChoice?: ModelChoiceValue | null }
+export interface AgentRequest { kind: string; text: string; context: Record<string, unknown>; anchor?: CodeAnchor; threadId?: string; image?: string; modelChoice?: ModelChoiceValue | null; images?: string[] }
 
 /** image: a picture that goes with the question (a PDF page / area); label: what it shows */
 interface DiscussBox { anchor: CodeAnchor | null; top: number; left: number; image?: string | null; label?: string }
@@ -413,11 +414,11 @@ export default function WebIde({ dev, completionEnabled, refreshKey, onAsk, thre
   }, [currentAnchor]);
   const openDiscussRef = useRef(openDiscuss);
   openDiscussRef.current = openDiscuss;
-  const sendDiscuss = async (text: string, kind: string, scope: FileScope, modelChoice: ModelChoiceValue | null) => {
+  const sendDiscuss = async (text: string, kind: string, scope: FileScope, modelChoice: ModelChoiceValue | null, images: string[]) => {
     const anchor = discuss?.anchor ?? undefined;
     await saveAll();
     const filesOf = scopeFiles(scope, filesNow());
-    await askRef.current({ kind, text, anchor, image: discuss?.image ?? undefined, modelChoice,
+    await askRef.current({ kind, text, anchor, image: discuss?.image ?? undefined, modelChoice, images,
       context: { ...(anchor ? {} : agentContext(kind)), ...(discuss?.label ? { page: discuss.label } : {}),
         ...(anchor && !anchor.start_line && anchor.quote ? { page_text: anchor.quote } : {}), ...(filesOf.length ? { files: filesOf } : {}) } });
     setDiscuss(null);
@@ -1180,20 +1181,22 @@ function DiscussComposer({ box, files, onCancel, onSend, session }: {
   session?: AgentSession | null;
   files: EditorFiles;
   onCancel: () => void;
-  onSend: (text: string, kind: string, scope: FileScope, modelChoice: ModelChoiceValue | null) => Promise<void>;
+  onSend: (text: string, kind: string, scope: FileScope, modelChoice: ModelChoiceValue | null, images: string[]) => Promise<void>;
 }) {
   const [text, setText] = useState("");
+  const pics = usePictures();
   const [kind, setKind] = useState("ask");
   const [modelChoice, setModelChoice] = useState<ModelChoiceValue | null>(null);
   const [scope, setScope] = useState<FileScope>(box.anchor ? "none" : files.selected.length ? "selected" : "current");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const send = async () => {
-    if (!text.trim() || busy) return;
+    const q = text.trim() || (pics.pictures.length ? picturesOnly(pics.pictures.length) : "");
+    if (!q || busy) return;
     setBusy(true);
     setErr(null);
     try {
-      await onSend(text.trim(), kind, scope, modelChoice);
+      await onSend(q, kind, scope, modelChoice, pics.urls);
     } catch (e) {
       setErr((e as ApiError).message);
       setBusy(false);
@@ -1209,8 +1212,9 @@ function DiscussComposer({ box, files, onCancel, onSend, session }: {
       </div>
       {box.image && <img className="webide-discuss-image" src={box.image} alt="" data-testid="webide-discuss-image" />}
       {a && a.quote && <pre className="webide-discuss-quote">{a.quote.split("\n").slice(0, 4).join("\n")}{a.quote.split("\n").length > 4 ? "\n…" : ""}</pre>}
-      <textarea autoFocus rows={3} value={text} onChange={(e) => setText(e.target.value)} placeholder={a ? "Ask about these lines, or what to change…" : "Ask about these files, or what to change…"}
-        onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }} data-testid="webide-discuss-input" />
+      <PictureStrip pics={pics} />
+      <textarea autoFocus rows={3} value={text} onChange={(e) => setText(e.target.value)} placeholder={`${a ? "Ask about these lines, or what to change…" : "Ask about these files, or what to change…"} (${PASTE_HINT})`}
+        {...pics.handlers} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }} data-testid="webide-discuss-input" />
       <div className="row nowrap">
         <select value={kind} onChange={(e) => setKind(e.target.value)} data-testid="webide-discuss-kind">
           {DISCUSS_KINDS.map(([id, l]) => <option key={id} value={id}>{l}</option>)}
@@ -1222,7 +1226,7 @@ function DiscussComposer({ box, files, onCancel, onSend, session }: {
           <option value="selected">{a ? "+ " : ""}Selected files ({files.selected.length})</option>
         </select>
         <span className="spacer" />
-        <button className="btn small primary" disabled={!text.trim() || busy} onClick={() => void send()} data-testid="webide-discuss-send">{busy ? "Sending…" : "Send"}</button>
+        <button className="btn small primary" disabled={(!text.trim() && !pics.pictures.length) || busy} onClick={() => void send()} data-testid="webide-discuss-send">{busy ? "Sending…" : "Send"}</button>
       </div>
       <div className="row nowrap"><ModelChoice value={modelChoice} onChange={setModelChoice} session={session ?? null} /></div>
       {err && <div className="error-text small">{err}</div>}

@@ -283,10 +283,13 @@ class JobManager:
                     remote.env = {"OPENCODE_CONFIG_CONTENT": opencode_env([Path(x) for x in r["skill_dirs"]], {})["OPENCODE_CONFIG_CONTENT"]}
                 if r.get("machine"):
                     await self._remote_setup(remote, str(r["machine"]), provider)
+            attachments = [Path(p) for p in context.get("attachments", []) if Path(p).is_file()]
+            if remote and attachments:  # pictures go with the turn: copied to the host, where the CLI reads them
+                attachments = await self._remote_attachments(remote, attachments, job_id)
             turn = TurnContext(prompt=prompt, workspace=root, native_session_id=native_id,
                                title=display_name or (doc_path and f"Wiki: {doc_path}"),
                                cwd=cwd, sandbox=sandbox, model=model, variant=variant,
-                               attachments=[] if remote else [Path(p) for p in context.get("attachments", []) if Path(p).is_file()],
+                               attachments=attachments,
                                remote=remote, skill_roots=[] if remote else skill_roots)
             handle = await adapter.resume_turn(turn)
         except ProviderError as exc:
@@ -391,6 +394,27 @@ class JobManager:
             if p is not None and p not in folders:
                 folders.append(p)
         return folders
+
+    async def _remote_attachments(self, remote: Any, files: list[Path], job_id: str) -> list[Path]:
+        """Local pictures of a turn copied to the SSH host (~/.cache/wiki-agent-workspace/attachments/<job>/): their paths there."""
+        import shlex
+
+        out: list[Path] = []
+        for f in files:
+            name = shlex.quote(f"{len(out)}-{f.name}")
+            script = (f'd="$HOME/.cache/wiki-agent-workspace/attachments/{job_id}"; mkdir -p "$d" && umask 077 && '
+                      f'cat > "$d"/{name} && printf %s "$d"/{name}')
+            proc = await asyncio.create_subprocess_exec(*remote.ssh_prefix, "sh -c " + shlex.quote(script), stdin=asyncio.subprocess.PIPE,
+                                                        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            try:
+                so, se = await asyncio.wait_for(proc.communicate(f.read_bytes()), timeout=120)
+            except TimeoutError:
+                proc.kill()
+                raise ProviderError("ATTACHMENT_COPY_FAILED", "copying a picture to the host timed out")
+            if proc.returncode != 0 or not so.strip():
+                raise ProviderError("ATTACHMENT_COPY_FAILED", f"could not copy a picture to the host: {se.decode(errors='replace').strip()[:300]}")
+            out.append(Path(so.decode().strip()))
+        return out
 
     async def _remote_setup(self, remote: Any, machine: str, provider: str) -> None:
         """A turn on a machine: its CLI must be there (as of the last probe); it gets the variables the machine is

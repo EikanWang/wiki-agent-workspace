@@ -4084,14 +4084,14 @@ test("Agents: find sessions in folders, add one by id, alarms, a session on stag
   await page.getByTestId("mon-input").fill("what is in this picture?");
   await pastePng("one.png");
   await pastePng("two.png");
-  await expect(page.getByTestId("mon-picture")).toHaveCount(2);
+  await expect(page.getByTestId("composer-picture")).toHaveCount(2);
   await expect(page.getByTestId("mon-input")).toHaveValue("what is in this picture?");
-  await page.getByTestId("mon-picture-remove").last().click();
-  await expect(page.getByTestId("mon-picture")).toHaveCount(1);
+  await page.getByTestId("composer-picture-remove").last().click();
+  await expect(page.getByTestId("composer-picture")).toHaveCount(1);
   fs.rmSync(path.join(agentState, "opencode_last_files"), { force: true });
   await page.getByTestId("mon-send").click();
   await expect(page.getByTestId("mon-transcript")).toContainText("echo: what is in this picture?", { timeout: 20000 });
-  await expect(page.getByTestId("mon-picture")).toHaveCount(0);
+  await expect(page.getByTestId("composer-picture")).toHaveCount(0);
   const sentFiles = fs.readFileSync(path.join(agentState, "opencode_last_files"), "utf-8").trim().split("\n");
   expect(sentFiles).toHaveLength(1);
   expect(fs.readFileSync(sentFiles[0]).subarray(0, 4).toString("latin1")).toBe("\x89PNG");
@@ -4545,6 +4545,63 @@ test("discussion: a question about a selected part of an answer is added to that
   await expect(asked).toContainText("What does lowered mean here?");
   await expect(panel.locator('[data-testid="message-agent"][data-status="completed"]')).toHaveCount(2, { timeout: 20000 });
   await expect(panel.locator('[data-testid="message-agent"]').last()).toContainText("What does lowered mean here?");
+});
+
+test("pictures: pasted into a discussion reply or a new chat, they go to the agent and show in the message", async ({ page }) => {
+  const errs: string[] = [];
+  page.on("pageerror", (e) => errs.push(String(e)));
+  const agentState = path.join(path.dirname(workspaceDir()), "fake-agent-state");
+  const lastFiles = path.join(agentState, "opencode_last_files");
+  const paste = (testId: string, name: string) => page.getByTestId(testId).first().evaluate((el, n) => {
+    const b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+    const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    const dt = new DataTransfer();
+    dt.items.add(new File([bytes], n, { type: "image/png" }));
+    el.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
+  }, name);
+  const sentPngs = () => fs.readFileSync(lastFiles, "utf-8").trim().split("\n").filter((f) => fs.readFileSync(f).subarray(0, 4).toString("latin1") === "\x89PNG");
+  await login(page);
+  await openGuide(page);
+  await page.getByTestId("mode-individual").click();
+  const panel = page.getByTestId("discussion-panel");
+  await panel.getByTestId("reply-input").fill("Pictures e2e: what is shown here?");
+  await paste("reply-input", "one.png");
+  await paste("reply-input", "two.png");
+  await expect(panel.getByTestId("composer-picture")).toHaveCount(2);
+  await expect(panel.getByTestId("reply-input")).toHaveValue("Pictures e2e: what is shown here?");
+  fs.rmSync(lastFiles, { force: true });
+  const before = await panel.locator('[data-testid="message-agent"][data-status="completed"]').count();
+  await panel.getByTestId("reply-send").click();
+  await expect(panel.getByTestId("composer-picture")).toHaveCount(0);
+  await expect(panel.locator('[data-testid="message-agent"][data-status="completed"]')).toHaveCount(before + 1, { timeout: 20000 });
+  const asked = panel.locator('[data-testid="message-user"]').last();
+  await expect(asked).toContainText("Pictures e2e: what is shown here?");
+  await expect(asked.getByTestId("msg-image")).toHaveCount(2);
+  await expect.poll(() => asked.getByTestId("msg-image").first().evaluate((i: HTMLImageElement) => i.naturalWidth)).toBe(1);
+  expect(sentPngs()).toHaveLength(2);
+  // a new chat with only a picture
+  const root = page.getByTestId("tree-root").first();
+  await root.locator(".tree-root").hover();
+  await page.getByTestId("tree-chats-root").click();
+  await paste("chat-first", "only.png");
+  await expect(page.getByTestId("composer-picture")).toHaveCount(1);
+  fs.rmSync(lastFiles, { force: true });
+  await page.getByTestId("chat-first").press("Enter");
+  const chat = page.getByTestId("chat-view");
+  await expect(chat.locator('[data-testid="message-agent"][data-status="completed"]')).toContainText("attached picture", { timeout: 20000 });
+  await expect(chat.locator('[data-testid="message-user"]').getByTestId("msg-image")).toHaveCount(1);
+  expect(sentPngs()).toHaveLength(1);
+  // and in the chat's composer
+  await paste("chat-input", "more.png");
+  await page.getByTestId("chat-input").fill("And this one?");
+  fs.rmSync(lastFiles, { force: true });
+  await page.getByTestId("chat-send").click();
+  await expect(chat.locator('[data-testid="message-agent"][data-status="completed"]')).toHaveCount(2, { timeout: 20000 });
+  await expect(chat.locator('[data-testid="message-user"]').last().getByTestId("msg-image")).toHaveCount(1);
+  expect(sentPngs()).toHaveLength(1);
+  await page.getByTestId("chat-archive").click();
+  await page.getByTestId("confirm-ok").click();
+  expect(errs).toEqual([]);
 });
 
 test("Office: switching between Layout and Text keeps the place in the document", async ({ page }) => {

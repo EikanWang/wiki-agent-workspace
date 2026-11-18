@@ -10,6 +10,7 @@ import { renderMarkdown, sanitizeHtml, slugify } from "../markdown";
 import { SelectionAnchor, TextModel, anchorFromSelection, buildTextModel, makeAnchor, offsetToDom, rangeFromOffsets, resolveAnchor, wholeDocument } from "../textmodel";
 import { flashRect, sectionOf } from "../linkHighlight";
 import { ViewPos, findPart, squash, squashMap } from "../viewSync";
+import { PictureStrip, picturesOnly, usePictures } from "./Pictures";
 
 export interface ReaderProps {
   doc: OpenDocument;
@@ -21,7 +22,7 @@ export interface ReaderProps {
   onRelink: () => void;
   onOpenThread: (id: string) => void;
   /** Create a discussion; resolves when the thread is created (throws ApiError on failure). */
-  onSend: (anchor: SelectionAnchor, question: string, sessionChoice: string | null, modelChoice?: ModelChoiceValue | null) => Promise<void>;
+  onSend: (anchor: SelectionAnchor, question: string, sessionChoice: string | null, modelChoice?: ModelChoiceValue | null, images?: string[]) => Promise<void>;
   onMarkReviewed: (anchor: SelectionAnchor) => void;
   sessions: AgentSession[];
   defaultSessionId: string | null;
@@ -840,8 +841,8 @@ export default function Reader(props: ReaderProps) {
             sessions={sessions}
             defaultSessionId={defaultSessionId}
             defaultProvider={defaultProvider}
-            onSend={async (q, sid, mc) => {
-              await onSend(freshAnchor(popover.anchor), q, sid, mc);
+            onSend={async (q, sid, mc, images) => {
+              await onSend(freshAnchor(popover.anchor), q, sid, mc, images);
               setPopover(null);
             }}
             onMark={() => {
@@ -871,8 +872,8 @@ export default function Reader(props: ReaderProps) {
               defaultSessionId={defaultSessionId}
               defaultProvider={defaultProvider}
               className="sheet"
-              onSend={async (q, sid, mc) => {
-                await onSend(freshAnchor(sheet), q, sid, mc);
+              onSend={async (q, sid, mc, images) => {
+                await onSend(freshAnchor(sheet), q, sid, mc, images);
                 setSheet(null);
               }}
               onMark={() => {
@@ -906,7 +907,8 @@ export function SelectionPopover({ anchor, style, sessions, defaultSessionId, de
   defaultSessionId: string | null;
   defaultProvider: string | null;
   className?: string;
-  onSend: (question: string, sessionChoice: string | null, modelChoice?: ModelChoiceValue | null) => Promise<void>;
+  /** `images`: pictures pasted into the question box (data: URLs) */
+  onSend: (question: string, sessionChoice: string | null, modelChoice?: ModelChoiceValue | null, images?: string[]) => Promise<void>;
   onMark: () => void;
   onReanchor: (() => void) | null;
   onClose: () => void;
@@ -917,6 +919,7 @@ export function SelectionPopover({ anchor, style, sessions, defaultSessionId, de
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
+  const pics = usePictures();
   const taRef = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
     // focusing the input must not clear the document selection; we only move focus after a tick
@@ -924,11 +927,13 @@ export function SelectionPopover({ anchor, style, sessions, defaultSessionId, de
     return () => window.clearTimeout(t);
   }, []);
   const send = async () => {
-    if (!question.trim()) return;
+    const q = question.trim() || (pics.pictures.length ? picturesOnly(pics.pictures.length) : "");
+    if (!q) return;
     setBusy(true);
     setError(null);
     try {
-      await onSend(question.trim(), session === "__default__" ? null : session, modelChoice);
+      await onSend(q, session === "__default__" ? null : session, modelChoice, pics.urls);
+      pics.clear();
     } catch (e) {
       const ae = e as ApiError;
       if (ae.code === "DOCUMENT_VERSION_CONFLICT") setError("The document changed after you selected the text. Your question is kept: refresh the document, reselect the passage and send again.");
@@ -970,8 +975,10 @@ export function SelectionPopover({ anchor, style, sessions, defaultSessionId, de
       </div>
       )}
       {anchor.heading && <div className="sel-heading">Section: {anchor.heading}</div>}
+      <PictureStrip pics={pics} />
       <textarea
         ref={taRef}
+        {...pics.handlers}
         className="sel-input"
         placeholder={`Your question about ${anchor.target ? targetTitle(anchor).replace(/^Ask about /, "") : anchor.whole_document ? "the document" : "the selected text"} (${COMPOSER_HINT})`}
         value={question}
@@ -999,7 +1006,7 @@ export function SelectionPopover({ anchor, style, sessions, defaultSessionId, de
       </div>
       {error && <div className="error-text" role="alert" data-testid="selection-error">{error}</div>}
       <div className="sel-actions">
-        <button className="btn primary" onClick={() => void send()} disabled={busy || !question.trim()} data-testid="selection-send">{busy ? "Sending…" : "Send"}</button>
+        <button className="btn primary" onClick={() => void send()} disabled={busy || (!question.trim() && !pics.pictures.length)} data-testid="selection-send">{busy ? "Sending…" : "Send"}</button>
         {!anchor.whole_document && !anchor.target && <button className="btn" onClick={onMark} title="Explicitly mark as reviewed; scrolling never marks automatically">Mark reviewed</button>}
         {onReanchor && !anchor.whole_document && !anchor.target && <button className="btn" onClick={onReanchor}>Reanchor current discussion here</button>}
       </div>

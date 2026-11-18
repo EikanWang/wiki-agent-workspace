@@ -684,11 +684,11 @@ export default function App() {
   }, [threads, activeThread, liveJobId]);
 
   const createThread = useCallback(
-    async (anchor: SelectionAnchor, question: string, sessionChoice: string | null, modelChoice?: ModelChoiceValue | null) => {
+    async (anchor: SelectionAnchor, question: string, sessionChoice: string | null, modelChoice?: ModelChoiceValue | null, images?: string[]) => {
       if (!doc) return;
       const r = await post<{ thread_id: string; job_id: string }>(
         `/documents/${doc.document_id}/threads`,
-        { ...anchor, version_sha256: doc.sha256, question, session_id: sessionChoice ?? undefined, model_choice: modelChoice ?? undefined },
+        { ...anchor, version_sha256: doc.sha256, question, session_id: sessionChoice ?? undefined, model_choice: modelChoice ?? undefined, images },
         { idempotencyKey: newIdempotencyKey() },
       );
       pendingSelection.current = null;
@@ -706,8 +706,8 @@ export default function App() {
   );
 
   const reply = useCallback(
-    async (threadId: string, text: string, sessionChoice: string | null) => {
-      const r = await post<{ job_id: string }>(`/threads/${threadId}/messages`, { text, session_id: sessionChoice ?? undefined }, { idempotencyKey: newIdempotencyKey() });
+    async (threadId: string, text: string, sessionChoice: string | null, images?: string[]) => {
+      const r = await post<{ job_id: string }>(`/threads/${threadId}/messages`, { text, session_id: sessionChoice ?? undefined, images }, { idempotencyKey: newIdempotencyKey() });
       if (doc) await refreshThreads(doc.document_id);
       void refreshSessions();
       setLiveJobId(r.job_id);
@@ -1270,7 +1270,7 @@ export default function App() {
             mode={prefs.panelMode}
             onModeChange={(m) => updatePrefs({ panelMode: m })}
             onSessionChanged={() => void refreshSessions()}
-            onAskDocument={(q) => createThread(wholeDocument(), q, null)}
+            onAskDocument={(q, images) => createThread(wholeDocument(), q, null, null, images)}
             docFormat={panelDoc.format}
             thread={activeThreadObj}
             threads={threads}

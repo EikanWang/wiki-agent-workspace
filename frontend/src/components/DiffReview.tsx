@@ -9,6 +9,7 @@ import CommitPanel from "./CommitPanel";
 import MarkdownView from "./MarkdownView";
 import { utc8 } from "../time";
 import { useJobStream } from "./DiscussionPanel";
+import { MessageImages, PASTE_HINT, PictureStrip, picturesOnly, usePictures } from "./Pictures";
 
 export interface Line {
   kind: "add" | "del" | "ctx" | "hunk" | "file";
@@ -141,6 +142,7 @@ export default function DiffReview({
   const [range, setRange] = useState<Range | null>(null); // current selection (may be mid-drag)
   const [composer, setComposer] = useState<Range | null>(null); // confirmed selection with the comment box open
   const [question, setQuestion] = useState("");
+  const pics = usePictures();
   const [sessionChoice, setSessionChoice] = useState<string>("__default__");
   const [busy, setBusy] = useState(false);
   const [posted, setPosted] = useState<{ thread_id: string; file: string } | null>(null);
@@ -240,7 +242,8 @@ export default function DiffReview({
   };
 
   const send = async (mode: "now" | "review" = "now") => {
-    if (!composer || !question.trim()) return;
+    const q = question.trim() || (pics.pictures.length ? picturesOnly(pics.pictures.length) : "");
+    if (!composer || !q) return;
     const sel = selectedLines(composer);
     if (!sel.length) return;
     const kinds = new Set(sel.map((l) => l.kind));
@@ -258,7 +261,7 @@ export default function DiffReview({
           line_end: sel.length > 1 ? last.newNo ?? last.oldNo : null,
           line_text: sel.map((l) => l.text).join("\n"),
           hunk: parsed[composer.file]?.hunks[first.hunkIndex] ?? "",
-          body: question.trim(),
+          body: q,
         });
         setQuestion("");
         setComposer(null);
@@ -276,9 +279,11 @@ export default function DiffReview({
         line_end: sel.length > 1 ? last.newNo ?? last.oldNo : null,
         line_text: sel.map((l) => l.text).join("\n"),
         hunk: parsed[composer.file]?.hunks[first.hunkIndex] ?? "",
-        question: question.trim(),
+        question: q,
         session_id: sessionChoice === "__default__" ? null : sessionChoice,
+        images: pics.urls,
       });
+      pics.clear();
       // Stay in the diff: the comment appears inline under the line and the agent's answer streams there too.
       // The user can jump to the full discussion with the marker's "Open discussion" link.
       setPosted({ thread_id: r.thread_id, file: composer.file });
@@ -346,8 +351,9 @@ export default function DiffReview({
           Comment on {sel.length > 1 ? `${sel.length} lines (${a}–${b})` : `line ${a}`}:
           <code className="diff-sel-preview">{sel.map((l) => l.text).join("\n").slice(0, 160)}{sel.map((l) => l.text).join("\n").length > 160 ? "…" : ""}</code>
         </div>
-        <textarea autoFocus rows={3} value={question} onChange={(e) => setQuestion(e.target.value)} placeholder={`Your comment or question about this change (${COMPOSER_HINT})`} data-testid="diff-comment-input"
-          onKeyDown={(e) => composerKeyDown(e, () => void send("review"), setQuestion, () => { setComposer(null); setRange(null); })} />
+        <PictureStrip pics={pics} />
+        <textarea autoFocus rows={3} value={question} onChange={(e) => setQuestion(e.target.value)} placeholder={`Your comment or question about this change (${COMPOSER_HINT}; ${PASTE_HINT} for "Ask now")`} data-testid="diff-comment-input"
+          {...pics.handlers} onKeyDown={(e) => composerKeyDown(e, () => void send(pics.pictures.length ? "now" : "review"), setQuestion, () => { setComposer(null); setRange(null); })} />
         <div className="row">
           <select value={sessionChoice} onChange={(e) => setSessionChoice(e.target.value)}>
             <option value="__default__">{defaultProvider ? `Document session (${defaultProvider})` : "No agent provider configured"}</option>
@@ -356,10 +362,10 @@ export default function DiffReview({
               <option key={s.id} value={s.id}>{s.provider} · {s.display_name ?? s.short_id ?? s.id.slice(0, 8)}</option>
             ))}
           </select>
-          <button className="btn primary small" disabled={busy || !question.trim() || !file.commentable} onClick={() => void send("review")} data-testid="diff-comment-stash" title="Stash this comment in the pending review; submit all comments at once later">Add to review</button>
-          <button className="btn small" disabled={busy || !question.trim() || !file.commentable} onClick={() => void send("now")} data-testid="diff-comment-send" title="Start a discussion for this comment right away">Ask now</button>
+          <button className="btn primary small" disabled={busy || !question.trim() || !file.commentable || pics.pictures.length > 0} onClick={() => void send("review")} data-testid="diff-comment-stash" title={pics.pictures.length ? "Pictures can only be sent with \"Ask now\"" : "Stash this comment in the pending review; submit all comments at once later"}>Add to review</button>
+          <button className="btn small" disabled={busy || (!question.trim() && !pics.pictures.length) || !file.commentable} onClick={() => void send("now")} data-testid="diff-comment-send" title="Start a discussion for this comment right away">Ask now</button>
           <CopyLinesButton text={copyText ?? ""} testId="diff-copy-lines" />
-          <button className="btn small" onClick={() => { setComposer(null); setRange(null); }}>Cancel</button>
+          <button className="btn small" onClick={() => { setComposer(null); setRange(null); pics.clear(); }}>Cancel</button>
         </div>
         {!file.commentable && <div className="warn small">Comments can only be attached to files the reader can open (Markdown, text/source, .docx).</div>}
       </div>
@@ -468,8 +474,8 @@ export default function DiffReview({
             onExtend={(i) => extendSelect(f.path, i)}
             onViewed={(v) => void setViewed(f, v)}
             onReload={() => void load()}
-            onAskFile={async (q) => {
-              const r = await post<{ thread_id: string }>("/diff/comments", { path: f.path, base, target, side: "file", line_no: null, line_text: "", hunk: f.unified.slice(0, 20000), question: q });
+            onAskFile={async (q, images) => {
+              const r = await post<{ thread_id: string }>("/diff/comments", { path: f.path, base, target, side: "file", line_no: null, line_text: "", hunk: f.unified.slice(0, 20000), question: q, images });
               setPosted({ thread_id: r.thread_id, file: f.path });
               await load();
               window.setTimeout(() => setPosted(null), 6000);
@@ -510,20 +516,23 @@ function FileDiff({ file, lines, comments: allComments, pending, lastReview, col
   onViewed: (viewed: boolean) => void;
   onReload: () => void;
   /** ask the agent about all of this file's changes (like GitHub's per-file "Ask"): a discussion of the document */
-  onAskFile: (question: string) => Promise<void>;
+  onAskFile: (question: string, images: string[]) => Promise<void>;
 }) {
   const fileComments = allComments.filter((c) => c.diff.side === "file");
   const comments = allComments.filter((c) => c.diff.side !== "file");
   const [asking, setAsking] = useState<string | null>(null);
   const [askBusy, setAskBusy] = useState(false);
   const [askErr, setAskErr] = useState<string | null>(null);
+  const askPics = usePictures();
   const ask = async () => {
-    if (!asking?.trim()) return;
+    const q = asking?.trim() || (askPics.pictures.length ? picturesOnly(askPics.pictures.length) : "");
+    if (!q) return;
     setAskBusy(true);
     setAskErr(null);
     try {
-      await onAskFile(asking.trim());
+      await onAskFile(q, askPics.urls);
       setAsking(null);
+      askPics.clear();
     } catch (e) {
       setAskErr((e as ApiError).message);
     } finally {
@@ -605,11 +614,12 @@ function FileDiff({ file, lines, comments: allComments, pending, lastReview, col
       </header>
       {asking !== null && (
         <div className="diff-file-ask" data-testid="diff-ask-file-box">
-          <textarea autoFocus rows={2} value={asking} onChange={(e) => setAsking(e.target.value)} placeholder={`Ask the agent about the changes of ${file.path}, e.g. "Is anything lost?" (${COMPOSER_HINT})`}
-            onKeyDown={(e) => composerKeyDown(e, () => void ask(), (v) => setAsking(v), () => setAsking(null))} data-testid="diff-ask-file-text" />
+          <PictureStrip pics={askPics} />
+          <textarea autoFocus rows={2} value={asking} onChange={(e) => setAsking(e.target.value)} placeholder={`Ask the agent about the changes of ${file.path}, e.g. "Is anything lost?" (${COMPOSER_HINT}; ${PASTE_HINT})`}
+            {...askPics.handlers} onKeyDown={(e) => composerKeyDown(e, () => void ask(), (v) => setAsking(v), () => setAsking(null))} data-testid="diff-ask-file-text" />
           {askErr && <div className="small del">{askErr}</div>}
           <div className="row">
-            <button className="btn small primary" disabled={askBusy || !asking.trim()} onClick={() => void ask()} data-testid="diff-ask-file-send">Ask agent</button>
+            <button className="btn small primary" disabled={askBusy || (!asking.trim() && !askPics.pictures.length)} onClick={() => void ask()} data-testid="diff-ask-file-send">Ask agent</button>
             <button className="btn small" onClick={() => setAsking(null)}>Cancel</button>
           </div>
         </div>
@@ -719,13 +729,16 @@ function InlineThread({ comment, decision, onOpen, onChanged, testId = "diff-com
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [open, setOpen] = useState(true);
+  const pics = usePictures();
   const send = async () => {
-    if (!reply.trim()) return;
+    const text = reply.trim() || (pics.pictures.length ? picturesOnly(pics.pictures.length) : "");
+    if (!text) return;
     setBusy(true);
     setErr(null);
     try {
-      await post(`/threads/${comment.thread_id}/messages`, { text: reply.trim() });
+      await post(`/threads/${comment.thread_id}/messages`, { text, images: pics.urls });
       setReply("");
+      pics.clear();
       onChanged();
     } catch (e) {
       setErr((e as ApiError).message);
@@ -758,13 +771,15 @@ function InlineThread({ comment, decision, onOpen, onChanged, testId = "diff-com
                 ) : (
                   <span className="diff-msg-text">{content}</span>
                 )}
+                <MessageImages threadId={m.thread_id ?? comment.thread_id} names={m.images} />
                 {m.role === "agent" && status !== "completed" && <span className={`chip status ${status}`}>{status}</span>}
               </div>
             );
           })}
+          <PictureStrip pics={pics} />
           <div className="diff-reply">
-            <input value={reply} onChange={(e) => setReply(e.target.value)} placeholder="Reply… (Enter to send)" disabled={busy} onKeyDown={(e) => { if (e.key === "Enter" && !e.nativeEvent.isComposing) void send(); }} data-testid="diff-reply-input" />
-            <button className="btn small" disabled={busy || !reply.trim()} onClick={() => void send()}>Reply</button>
+            <input value={reply} onChange={(e) => setReply(e.target.value)} placeholder={`Reply… (Enter to send; ${PASTE_HINT})`} disabled={busy} {...pics.handlers} onKeyDown={(e) => { if (e.key === "Enter" && !e.nativeEvent.isComposing) void send(); }} data-testid="diff-reply-input" />
+            <button className="btn small" disabled={busy || (!reply.trim() && !pics.pictures.length)} onClick={() => void send()}>Reply</button>
           </div>
           {err && <div className="error-text small">{err}</div>}
         </>

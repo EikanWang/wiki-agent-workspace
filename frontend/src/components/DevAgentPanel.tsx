@@ -6,6 +6,7 @@ import ModelPicker from "./ModelPicker";
 import { usePersistentState } from "../persist";
 import { utc8 } from "../time";
 import { COMPOSER_HINT, composerKeyDown } from "./keys";
+import { PASTE_HINT, PictureStrip, picturesOnly, usePictures } from "./Pictures";
 
 export const DEV_KINDS: { id: string; label: string; hint: string; pr?: boolean }[] = [
   { id: "implement", label: "Implement", hint: "Plan from the wiki, edit, add tests, build and test" },
@@ -64,6 +65,7 @@ export default function DevAgentPanel({ dev, sessions, threads, fileSessions = {
   onRevealAnchor?: (a: CodeAnchor) => void;
 }) {
   const [text, setText] = usePersistentState(`dev.compose.${dev.id}`, "");
+  const pics = usePictures();
   const [kind, setKind] = usePersistentState(`dev.kind.${dev.id}`, "implement");
   const [scope, setScope] = usePersistentState<FileScope>(`dev.scope.${dev.id}`, "current");
   const [target, setTarget] = useState<string>("__last__"); // a thread id, "__new__", or the latest task
@@ -132,7 +134,7 @@ export default function DevAgentPanel({ dev, sessions, threads, fileSessions = {
   const chosen = scopeFiles(scope, files);
 
   const send = async () => {
-    const body = text.trim();
+    const body = text.trim() || (pics.pictures.length ? picturesOnly(pics.pictures.length) : "");
     if (!body || running) return;
     setBusy(true);
     setErr(null);
@@ -141,10 +143,11 @@ export default function DevAgentPanel({ dev, sessions, threads, fileSessions = {
       const anchor = !targetThread && fileView && activeFile ? { root: activeFile.root, file: activeFile.path } : undefined;
       const r = await post<{ job_id: string; thread_id: string }>(`/dev/workspaces/${dev.id}/ask`, {
         text: body, kind, thread_id: targetThread?.id, anchor, context: chosen.length ? { files: chosen } : undefined,
-        model_choice: modelChoice ?? undefined,
+        model_choice: modelChoice ?? undefined, images: pics.urls,
       });
       setModelChoice(null);
       setText("");
+      pics.clear();
       setJobId(r.job_id);
       if (target === "__new__") setTarget("__last__");
       await onReload();
@@ -282,12 +285,13 @@ export default function DevAgentPanel({ dev, sessions, threads, fileSessions = {
             <span className="muted small dev-scope-list" title={chosen.map((f) => f.path).join("\n")}>{chosen.length ? chosen.map((f) => f.path.split("/").pop()).join(", ") : scope === "selected" ? "Ctrl-click files in the explorer" : ""}</span>
           </div>
         )}
-        <textarea value={text} onChange={(e) => setText(e.target.value)} rows={3} placeholder={DEV_KINDS.find((k) => k.id === kind)?.hint}
-          onKeyDown={(e) => composerKeyDown(e, () => void send(), setText)} data-testid="dev-input" />
+        <PictureStrip pics={pics} />
+        <textarea value={text} onChange={(e) => setText(e.target.value)} rows={3} placeholder={`${DEV_KINDS.find((k) => k.id === kind)?.hint ?? ""} (${PASTE_HINT})`}
+          {...pics.handlers} onKeyDown={(e) => composerKeyDown(e, () => void send(), setText)} data-testid="dev-input" />
         <div className="row">
           <ModelChoice value={modelChoice} onChange={setModelChoice} session={lastSession ?? null} />
           <span className="spacer" />
-          <button className="btn small primary" disabled={!text.trim() || running || busy} onClick={() => void send()} data-testid="dev-send">{running ? "Working…" : "Send"}</button>
+          <button className="btn small primary" disabled={(!text.trim() && !pics.pictures.length) || running || busy} onClick={() => void send()} data-testid="dev-send">{running ? "Working…" : "Send"}</button>
         </div>
         {err && <div className="error-text small" role="alert">{err}</div>}
       </div>

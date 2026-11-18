@@ -21,6 +21,7 @@ import RefreshButton from "./RefreshButton";
 import { GhRefreshSelect, useGhAutoRefresh } from "../ghRefresh";
 import { LevelMenu } from "./ReviewPriority";
 import { utc8 } from "../time";
+import { PASTE_HINT, PictureStrip, picturesOnly, usePictures } from "./Pictures";
 
 interface Check { name: string | null; state: string; url: string | null }
 export interface PrData {
@@ -103,7 +104,7 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
   docReady: boolean;
   /** data loaded and a wiki is chosen: open the PR's discussion document in that folder */
   onReady: (workspaceId: string, docPath: string, title: string) => void;
-  onSend: (anchor: SelectionAnchor, question: string, sessionChoice: string | null, modelChoice?: ModelChoiceValue | null) => Promise<void>;
+  onSend: (anchor: SelectionAnchor, question: string, sessionChoice: string | null, modelChoice?: ModelChoiceValue | null, images?: string[]) => Promise<void>;
   sessions: AgentSession[];
   defaultSessionId: string | null;
   defaultProvider: string | null;
@@ -276,8 +277,8 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
   };
   const draftsFor = (path: string) => review.drafts.filter((d) => d.path === path);
   /** ask the agent about something said on the PR (a comment, a review, a line comment with its code) */
-  const askAbout = (quote: string, label: string, question: string) =>
-    onSend({ quote, prefix: "", suffix: "", start: 0, end: 0, heading: null, target: { kind: "text", page: null, unit: "page", label } }, question, null);
+  const askAbout = (quote: string, label: string, question: string, images?: string[]) =>
+    onSend({ quote, prefix: "", suffix: "", start: 0, end: 0, heading: null, target: { kind: "text", page: null, unit: "page", label } }, question, null, null, images);
 
   if (error && !data && notPr) return <IssueView repo={repo} number={number} />;
   if (error && !data) return <div className="pr-view"><div className="banner warn" data-testid="pr-error">{error} <button className="btn small" onClick={() => void load(true)}>Retry</button> <a className="btn small" href={`https://github.com/${repo}/issues/${number}`} target="_blank" rel="noreferrer">Open on GitHub</a></div></div>;
@@ -511,7 +512,7 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
             <PrFileDiff key={f.path} file={f} layout={layout} threads={threadsFor(f.path)} drafts={draftsFor(f.path)} apiBase={apiBase} canAsk={docReady}
               collapsedDefault={f.unified.split("\n").length > FOLD_LINES && !threadsFor(f.path).length && !draftsFor(f.path).length}
               onChanged={loadComments} onError={(m) => setError(m)} onViewed={(v) => setViewed(f.path, v)}
-              onAsk={(quote, label, question) => onSend({ quote, prefix: "", suffix: "", start: 0, end: 0, heading: null, target: { kind: "text", page: null, unit: "page", label } }, question, null)} />
+              onAsk={(quote, label, question, images) => onSend({ quote, prefix: "", suffix: "", start: 0, end: 0, heading: null, target: { kind: "text", page: null, unit: "page", label } }, question, null, null, images)} />
           ))}
         </div>
       )}
@@ -519,7 +520,7 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
         <div className="sheet-backdrop" onClick={() => setSheet(null)}>
           <div onClick={(e) => e.stopPropagation()}>
             <SelectionPopover anchor={sheet} style={{}} sessions={sessions} initialQuestion={sheet.pr_review ? AGENT_REVIEW_QUESTION : sheet.about ? `About ${sheet.about.endsWith("/") ? "the folder" : "the file"} \`${sheet.about}\` of this PR (its changes and the code around them): ` : undefined} defaultSessionId={defaultSessionId} defaultProvider={defaultProvider} className="sheet"
-              onSend={async (q, sid, mc) => { await onSend(sheet, q, sid, mc); setSheet(null); if (sheet.pr_review) await loadComments(); }} onMark={() => setSheet(null)} onReanchor={null} onClose={() => setSheet(null)} />
+              onSend={async (q, sid, mc, images) => { await onSend(sheet, q, sid, mc, images); setSheet(null); if (sheet.pr_review) await loadComments(); }} onMark={() => setSheet(null)} onReanchor={null} onClose={() => setSheet(null)} />
           </div>
         </div>
       )}
@@ -609,17 +610,20 @@ function Contributors({ apiBase, tick = 0 }: { apiBase: string; tick?: number })
 }
 
 /** "Ask agent…" under a comment: the question goes to the agent with the comment (and its code) as the quote. */
-function AskComment({ quote, label, canAsk, onAsk }: { quote: string; label: string; canAsk: boolean; onAsk: (quote: string, label: string, question: string) => Promise<void> }) {
+function AskComment({ quote, label, canAsk, onAsk }: { quote: string; label: string; canAsk: boolean; onAsk: (quote: string, label: string, question: string, images?: string[]) => Promise<void> }) {
   const [text, setText] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const pics = usePictures();
   const send = async () => {
-    if (!text?.trim()) return;
+    const q = text?.trim() || (pics.pictures.length ? picturesOnly(pics.pictures.length) : "");
+    if (!q) return;
     setBusy(true);
     setErr(null);
     try {
-      await onAsk(quote.slice(0, 20000), label, text.trim());
+      await onAsk(quote.slice(0, 20000), label, q, pics.urls);
       setText(null);
+      pics.clear();
     } catch (e) {
       setErr((e as ApiError).message);
     } finally {
@@ -635,11 +639,12 @@ function AskComment({ quote, label, canAsk, onAsk }: { quote: string; label: str
   }
   return (
     <div className="gh-reply-box">
-      <textarea autoFocus rows={2} value={text} onChange={(e) => setText(e.target.value)} placeholder={`Ask the agent about this comment, e.g. "Is the reviewer right?" (${COMPOSER_HINT})`}
-        onKeyDown={(e) => composerKeyDown(e, () => void send(), setText, () => setText(null))} data-testid="pr-conv-ask-text" />
+      <PictureStrip pics={pics} />
+      <textarea autoFocus rows={2} value={text} onChange={(e) => setText(e.target.value)} placeholder={`Ask the agent about this comment, e.g. "Is the reviewer right?" (${COMPOSER_HINT}; ${PASTE_HINT})`}
+        {...pics.handlers} onKeyDown={(e) => composerKeyDown(e, () => void send(), setText, () => setText(null))} data-testid="pr-conv-ask-text" />
       {err && <div className="small del">{err}</div>}
       <div className="row">
-        <button className="btn small primary" disabled={busy || !text.trim()} onClick={() => void send()} data-testid="pr-conv-ask-send">Ask agent</button>
+        <button className="btn small primary" disabled={busy || (!text.trim() && !pics.pictures.length)} onClick={() => void send()} data-testid="pr-conv-ask-send">Ask agent</button>
         <button className="btn small" onClick={() => setText(null)}>Cancel</button>
       </div>
     </div>
@@ -747,11 +752,12 @@ interface CiFailure { name: string; conclusion: string; url: string | null; log_
 
 /** Ask the agent about failing CI: the server downloads the failing jobs' logs first, so the agent can read them. */
 function CiAsk({ apiBase, canAsk, onAsk, checks, label, compact = false }: {
-  apiBase: string; canAsk: boolean; onAsk: (quote: string, label: string, question: string) => Promise<void>; checks?: string[]; label: string; compact?: boolean;
+  apiBase: string; canAsk: boolean; onAsk: (quote: string, label: string, question: string, images?: string[]) => Promise<void>; checks?: string[]; label: string; compact?: boolean;
 }) {
   const [text, setText] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const pics = usePictures();
   const send = async () => {
     setBusy("Downloading the CI logs…");
     setErr(null);
@@ -768,8 +774,9 @@ function CiAsk({ apiBase, canAsk, onAsk, checks, label, compact = false }: {
       ].join("\n\n");
       setBusy("Asking the agent…");
       const q = (text ?? "").trim() || "Investigate these CI failures.";
-      await onAsk(quote.slice(0, 20000), `CI: ${label}`, `${q}\n\nRead the full CI logs listed above, find the root cause of each failure, and say whether it is caused by this PR (point at the change), a flaky or known issue, or the CI infrastructure; suggest a fix or a re-run.`);
+      await onAsk(quote.slice(0, 20000), `CI: ${label}`, `${q}\n\nRead the full CI logs listed above, find the root cause of each failure, and say whether it is caused by this PR (point at the change), a flaky or known issue, or the CI infrastructure; suggest a fix or a re-run.`, pics.urls);
       setText(null);
+      pics.clear();
     } catch (e) {
       setErr((e as ApiError).message);
     } finally {
@@ -786,8 +793,9 @@ function CiAsk({ apiBase, canAsk, onAsk, checks, label, compact = false }: {
   }
   return (
     <div className="gh-reply-box ci-ask-box" data-testid="pr-ci-ask-box">
-      <textarea autoFocus rows={2} value={text} onChange={(e) => setText(e.target.value)} placeholder={`Optional: what to look at, e.g. "only the XPU jobs" (${COMPOSER_HINT})`}
-        onKeyDown={(e) => composerKeyDown(e, () => void send(), setText, () => setText(null))} data-testid="pr-ci-ask-text" />
+      <PictureStrip pics={pics} />
+      <textarea autoFocus rows={2} value={text} onChange={(e) => setText(e.target.value)} placeholder={`Optional: what to look at, e.g. "only the XPU jobs" (${COMPOSER_HINT}; ${PASTE_HINT})`}
+        {...pics.handlers} onKeyDown={(e) => composerKeyDown(e, () => void send(), setText, () => setText(null))} data-testid="pr-ci-ask-text" />
       {err && <div className="small del" role="alert" data-testid="pr-ci-ask-error">{err}</div>}
       <div className="row">
         <button className="btn small primary" disabled={!!busy} onClick={() => void send()} data-testid="pr-ci-ask-send">{busy ?? "Investigate"}</button>
