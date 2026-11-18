@@ -1216,6 +1216,10 @@ body.resizing-v iframe { pointer-events: none; }
 .mon-send-out { max-height: 200px; overflow: auto; font-size: 11px; background: var(--card); padding: 6px; white-space: pre-wrap; }
 .mon-composer { border-top: 1px solid var(--border); padding: 6px 10px; display: flex; flex-direction: column; gap: 4px; }
 .mon-note { white-space: pre-wrap; }
+.mon-pictures { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.mon-picture { position: relative; display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; background: var(--bg); }
+.mon-picture img { height: 56px; max-width: 120px; object-fit: contain; display: block; }
+.mon-picture button { position: absolute; top: 0; right: 0; background: color-mix(in srgb, var(--card) 85%, transparent); }
 .mon-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .mon-picker { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .mon-cmd-suggest { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 6px; background: var(--card); overflow: hidden; }

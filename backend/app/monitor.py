@@ -27,16 +27,18 @@ import asyncio
 import json
 import logging
 import os
+import shlex
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 
 from .agents.base import ProviderError, agent_env, resolve_executable, run_capture
 from .agents.codex import codex_home
+from .db import new_id
 from .deps import AppContext, require_auth, require_auth_mutating
 from .errors import ApiError, bad_request, conflict, not_found
 from .kv import kv_get, kv_put
@@ -190,6 +192,8 @@ def parse_opencode(s: Snapshot, rc: int, out: str, meta: dict[str, Any] | None) 
             pt = p.get("type")
             if pt == "text" and not p.get("synthetic"):
                 texts.append(p.get("text") or "")
+            elif pt == "file":
+                texts.append(f"📎 {p.get('filename') or Path(str(p.get('url') or 'file')).name}")
             elif pt == "tool":
                 st = p.get("state") or {}
                 status = st.get("status")
@@ -984,6 +988,7 @@ async def session_detail(provider: str, sid: str, limit: int = Query(200, ge=1, 
             "send_output": (send or {}).get("output", "")[-6000:] if send else None}
 
 
+MAX_IMAGES = 6
 _CONTROL = r"^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$"  # a model / variant / agent name (it reaches the provider's argv)
 
 
@@ -993,11 +998,14 @@ class SendIn(BaseModel):
     model: str | None = Field(None, max_length=200, pattern=_CONTROL)
     variant: str | None = Field(None, max_length=40, pattern=_CONTROL)
     agent: str | None = Field(None, max_length=100, pattern=_CONTROL)
+    # pictures pasted into the composer (data:image/…;base64 URLs), attached to the message
+    images: list[Annotated[str, Field(max_length=17_000_000)]] = Field(default_factory=list, max_length=MAX_IMAGES)
 
 
 def _send_argv(ctx: AppContext, provider: str, sid: str, text: str, cwd: str, version: str | None = None,
                exe: str | None = None, *, model: str | None = None, variant: str | None = None, agent: str | None = None,
-               current_model: str | None = None) -> tuple[list[str], bytes | None]:
+               current_model: str | None = None, images: list[str] | None = None) -> tuple[list[str], bytes | None]:
+    images = images or []
     exe = exe or _bin(ctx, provider)
     if not exe:
         raise ApiError(503, "PROVIDER_UNAVAILABLE", f"{provider} is not installed on the server")
@@ -1017,16 +1025,21 @@ def _send_argv(ctx: AppContext, provider: str, sid: str, text: str, cwd: str, ve
             opts += ["--model", model] if model else []
             opts += ["--variant", variant] if variant else []
         opts += ["--agent", agent] if agent else []
+        # --file swallows the following arguments: right before "--" (which ends them)
+        opts += [f"--file={p}" for p in images]
         return [exe, "run", "--session", sid, *here, *opts, "--format", "json", "--", text], None
     if agent:
         raise bad_request(f"{provider} has no agents to choose (/agent is for OpenCode)", "UNSUPPORTED_CONTROL")
     if provider == "codex":
         opts = ["-m", model] if model else []
         opts += ["-c", f'model_reasoning_effort="{variant}"'] if variant else []
+        opts += [f"--image={p}" for p in images]  # "--image=PATH": the option takes several values
         return [exe, "exec", "resume", "--json", "--skip-git-repo-check", *opts, sid, "-"], text.encode("utf-8")
     if variant:
         raise bad_request("Claude Code has no reasoning level to choose here (/effort is for OpenCode and Codex)", "UNSUPPORTED_CONTROL")
     opts = ["--model", model] if model else []
+    if images:  # Claude Code reads a picture whose path the message gives
+        text += "\n\n" + "\n".join(f"[Attached image: {p}]" for p in images)
     return [exe, "-p", "--resume", sid, *opts, "--output-format", "text", text], None
 
 
@@ -1068,6 +1081,42 @@ async def _remote_cwd(ctx: AppContext, machine: str, directory: str | None) -> s
         raise ApiError(502, getattr(exc, "code", "DEV_HOST_UNREACHABLE"), getattr(exc, "message", str(exc)))
 
 
+def _local_images(ctx: AppContext, pictures: list[tuple[bytes, str]]) -> list[str]:
+    """The pasted pictures as files of this server (the provider is given their paths)."""
+    if not pictures:
+        return []
+    d = ctx.settings.snapshots_dir / "attachments" / f"monitor-{new_id()}"
+    d.mkdir(parents=True, exist_ok=True)
+    out = []
+    for n, (raw, ext) in enumerate(pictures, 1):
+        f = d / f"image-{n}.{ext}"
+        f.write_bytes(raw)
+        out.append(str(f))
+    return out
+
+
+async def _remote_images(ctx: AppContext, machine: str, pictures: list[tuple[bytes, str]]) -> list[str]:
+    """The pasted pictures copied to the machine (its provider reads them there)."""
+    if not pictures:
+        return []
+    from .development.targets import TargetError
+
+    t = remote.target(ctx, machine)
+    try:
+        d = await t.expand(f"~/.cache/wiki-agent-workspace/attachments/monitor-{new_id()}")
+        out = []
+        for n, (raw, ext) in enumerate(pictures, 1):
+            f = f"{d}/image-{n}.{ext}"
+            script = f"mkdir -p {shlex.quote(d)} && umask 077 && cat > {shlex.quote(f)}"
+            rc, _, err = await t.run(["sh", "-c", script], timeout=120, stdin=raw)
+            if rc != 0:
+                raise ApiError(502, "ATTACHMENT_COPY_FAILED", f"could not copy the picture to {machine}: {err.strip()[:300]}")
+            out.append(f)
+        return out
+    except TargetError as exc:
+        raise ApiError(502 if exc.code == "DEV_HOST_UNREACHABLE" else 400, exc.code, exc.message)
+
+
 @router.post("/monitor/session/{provider}/{sid}/send", status_code=202)
 async def send(provider: str, sid: str, body: SendIn, machine: str | None = MachineQ, ctx: AppContext = Depends(require_auth_mutating)):
     """Continue the session with a message, run non-interactively in the session's folder (on its machine)."""
@@ -1081,11 +1130,15 @@ async def send(provider: str, sid: str, body: SendIn, machine: str | None = Mach
     if not snap.found:
         raise not_found(snap.missing or f"no {provider} session {sid} on this machine", "SESSION_NOT_FOUND")
     controls: dict[str, Any] = {"model": body.model, "variant": body.variant, "agent": body.agent, "current_model": snap.model}
+    from .annotations import decode_image
+
+    pictures = [decode_image(u) for u in body.images]  # checked before anything is written
     if machine:
         tool = _remote_tool(ctx, machine, provider)
         if tool and not tool.get("ok"):
             raise ApiError(503, "PROVIDER_UNAVAILABLE", f"{provider} is not installed on {machine} (as of its last probe)")
         cwd = await _remote_cwd(ctx, machine, snap.directory)
+        controls["images"] = await _remote_images(ctx, machine, pictures)
         argv, stdin = _send_argv(ctx, provider, sid, body.text, cwd, str(tool.get("version") or "") or None, remote.bin_of(ctx, machine, provider),
                                  **controls)
         argv = await _remote_argv(ctx, machine, provider, argv, cwd)
@@ -1093,6 +1146,7 @@ async def send(provider: str, sid: str, body: SendIn, machine: str | None = Mach
     else:
         cwd = snap.directory if snap.directory and Path(snap.directory).is_dir() else str(Path.home())
         version = (await ctx.providers.capabilities("opencode")).version if provider == "opencode" else None
+        controls["images"] = _local_images(ctx, pictures)
         argv, stdin = _send_argv(ctx, provider, sid, body.text, cwd, version, **controls)
         lcwd, lenv = cwd, agent_env(None, cwd)
     st: dict[str, Any] = {"state": "running", "started_at": _iso(time.time()), "rc": None, "output": "", "busy_warning": snap.turn_open}

@@ -4066,6 +4066,28 @@ test("Agents: find sessions in folders, add one by id, alarms, a session on stag
   await expect(page.getByTestId("mon-transcript")).not.toContainText("echo: /model");
   await page.getByTestId("mon-ctl-reset").click();
   await expect(page.getByTestId("mon-controls")).toHaveCount(0);
+  // a picture pasted (Ctrl+V) into the box goes with the text
+  const pastePng = (name: string) => page.getByTestId("mon-input").evaluate((el, n) => {
+    const b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+    const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    const dt = new DataTransfer();
+    dt.items.add(new File([bytes], n, { type: "image/png" }));
+    el.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
+  }, name);
+  await page.getByTestId("mon-input").fill("what is in this picture?");
+  await pastePng("one.png");
+  await pastePng("two.png");
+  await expect(page.getByTestId("mon-picture")).toHaveCount(2);
+  await expect(page.getByTestId("mon-input")).toHaveValue("what is in this picture?");
+  await page.getByTestId("mon-picture-remove").last().click();
+  await expect(page.getByTestId("mon-picture")).toHaveCount(1);
+  fs.rmSync(path.join(agentState, "opencode_last_files"), { force: true });
+  await page.getByTestId("mon-send").click();
+  await expect(page.getByTestId("mon-transcript")).toContainText("echo: what is in this picture?", { timeout: 20000 });
+  await expect(page.getByTestId("mon-picture")).toHaveCount(0);
+  const sentFiles = fs.readFileSync(path.join(agentState, "opencode_last_files"), "utf-8").trim().split("\n");
+  expect(sentFiles).toHaveLength(1);
+  expect(fs.readFileSync(sentFiles[0]).subarray(0, 4).toString("latin1")).toBe("\x89PNG");
   await page.getByTestId("mon-stage-close").click();
   await expect(stage).toHaveCount(0);
   // the list of all sessions is folded; unchecking an automatically monitored one removes it

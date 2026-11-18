@@ -113,6 +113,31 @@ async def test_monitor_discover_status_send(running_app, settings, homes, tmp_pa
         assert (await api.post(f"/api/v1/monitor/session/opencode/{oc_id}/send", json={"text": "x", **bad})).status_code == 400, bad
     r = await api.post("/api/v1/monitor/session/claude/cl-q/send", json={"text": "x", "agent": "plan"})
     assert r.status_code == 400 and r.json()["error"]["code"] == "UNSUPPORTED_CONTROL"
+    # pictures pasted into the composer go with the message: OpenCode --file, Claude Code by their path
+    import base64
+
+    png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==")
+    url = "data:image/png;base64," + base64.b64encode(png).decode()
+    (fake_env / "opencode_last_files").unlink(missing_ok=True)
+
+    async def sent(provider, sid, body):
+        r = await api.post(f"/api/v1/monitor/session/{provider}/{sid}/send", json=body)
+        assert r.status_code == 202, r.text
+        for _ in range(100):
+            d = (await api.get(f"/api/v1/monitor/session/{provider}/{sid}")).json()
+            if d["send"] and d["send"]["state"] != "running":
+                break
+            await asyncio.sleep(0.05)
+        assert d["send"]["state"] == "done", d
+        return d
+    await sent("opencode", oc_id, {"text": "what is in this picture?", "images": [url, url]})
+    files = (fake_env / "opencode_last_files").read_text().split()
+    assert len(files) == 2 and all(Path(f).read_bytes() == png for f in files)
+    d = await sent("claude", "cl-q", {"text": "and this one?", "images": [url]})
+    assert "[Attached image: " in d["messages"][-2]["text"]
+    for bad in (["data:image/png;base64,AAAA"], ["https://example.com/x.png"], [url] * 7):
+        r = await api.post(f"/api/v1/monitor/session/opencode/{oc_id}/send", json={"text": "x", "images": bad})
+        assert r.status_code == 400, r.text
     # codex: the error of the last turn
     write_codex(homes["codex"], "cx-err", str(proj), [ev("task_started"), ev("task_complete", error={"message": "401 Unauthorized"})])
     d = (await api.get("/api/v1/monitor/session/codex/cx-err")).json()
@@ -312,3 +337,28 @@ async def test_sessions_of_a_folder_on_a_machine(running_app, settings, homes, t
     r = (await api.post("/api/v1/monitor/delete", json={"sessions": [{"provider": "claude", "id": "cl-r", "machine": "box"}]})).json()
     assert r["deleted"] == ["claude:cl-r@box"], r
     assert not list(homes["claude"].glob("projects/*/cl-r.jsonl"))
+
+
+async def test_pasted_pictures_are_copied_to_the_machine(monkeypatch, tmp_path):
+    from backend.app import monitor
+
+    calls = []
+
+    class T:
+        async def expand(self, p):
+            assert p.startswith("~/")
+            return str(tmp_path) + p[1:]
+
+        async def run(self, args, timeout=60, stdin=None, **_):
+            calls.append(args)
+            import subprocess
+
+            r = subprocess.run(args, input=stdin, capture_output=True)
+            return r.returncode, r.stdout.decode(), r.stderr.decode()
+
+    monkeypatch.setattr(monitor.remote, "target", lambda ctx, machine: T())
+    out = await monitor._remote_images(None, "box", [(b"\x89PNG one", "png"), (b"\xff\xd8 two", "jpg")])
+    assert [Path(p).name for p in out] == ["image-1.png", "image-2.jpg"]
+    assert Path(out[0]).read_bytes() == b"\x89PNG one" and Path(out[1]).read_bytes() == b"\xff\xd8 two"
+    assert all(str(tmp_path / ".cache/wiki-agent-workspace/attachments") in p for p in out)
+    assert await monitor._remote_images(None, "box", []) == [] and len(calls) == 2
