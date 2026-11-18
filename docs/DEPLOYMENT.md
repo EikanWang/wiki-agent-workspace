@@ -209,7 +209,7 @@ A first tour: the **Wiki** sidebar lists your folder → open a page → select 
 | --- | --- | --- | --- |
 | Log in once, as your user | `opencode auth login` | `codex login` | `claude` (first run) |
 | Used for | discussions, chats, PR reviews, PR Development | same | the Agents monitor (watch, continue its sessions) |
-| How the app runs it | `opencode run --format json --dir WS [--session ID]` (or `mode = "server"`) | `codex exec --json …` / `codex exec resume …` | `claude -p --resume ID` when you continue a session |
+| How the app runs it | `opencode run --format json [--session ID]` in WS (1.x: `--dir WS`; or `mode = "server"`) | `codex exec --json …` / `codex exec resume …` | `claude -p --resume ID` when you continue a session |
 | Its sessions (Agents monitor) | `opencode session list` | `$CODEX_HOME/sessions` | `$CLAUDE_CONFIG_DIR/projects` (`~/.claude`) |
 
 Agents are optional: without any, reading, editing, diffs, commits and terminals work and the UI explains what is

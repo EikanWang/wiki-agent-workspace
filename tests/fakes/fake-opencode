@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """Controllable fake `opencode` executable for tests (no credentials needed).
 
-State dir: $FAKE_AGENT_STATE (default /tmp/fake-agent-state). Prompt directives:
+State dir: $FAKE_AGENT_STATE (default /tmp/fake-agent-state). Acts as OpenCode v2 unless the state file
+opencode_version says otherwise (e.g. "1.18.3": `run` takes --dir and --variant, `debug config` prints one object).
+Prompt directives:
   [[fail:msg]]  [[auth]]  [[busy]]  [[sleep:N]]  [[edit:rel:::old:::new]]  [[write:rel:::content]]
   [[permission]]  [[noid]]  — otherwise replies "echo: <user message>".
 """
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -29,10 +32,20 @@ def log_call(argv):
         fh.write(json.dumps(argv) + "\n")
 
 
+def version():
+    f = STATE / "opencode_version"
+    return f.read_text().strip() if f.exists() else "opencode v2.3.2-fake"
+
+
+def v1():
+    m = re.search(r"(\d+)\.\d+", version())
+    return bool(m) and int(m.group(1)) < 2
+
+
 def main(argv):
     log_call(argv)
     if argv[:1] == ["--version"]:
-        print("0.0.0-fake")
+        print(version())
         return 0
     if argv[:1] == ["models"]:
         print("fake/alpha\nfake/beta\nother/gamma")
@@ -40,7 +53,16 @@ def main(argv):
     if argv[:2] == ["debug", "config"]:
         # the merged config; tests override it via $FAKE_AGENT_STATE/opencode_config.json
         cfg = STATE / "opencode_config.json"
-        print(cfg.read_text() if cfg.exists() else json.dumps({"$schema": "https://opencode.ai/config.json", "model": "fake/alpha"}))
+        merged = json.loads(cfg.read_text()) if cfg.exists() else {"$schema": "https://opencode.ai/config.json", "model": "fake/alpha"}
+        if v1() or isinstance(merged, list):
+            print(json.dumps(merged, indent=2))
+        else:  # v2: the config documents, the model as {providerID, model}
+            info = dict(merged)
+            if isinstance(info.get("model"), str) and "/" in info["model"]:
+                prov, _, mod = info["model"].partition("/")
+                info["model"] = {"providerID": prov, "model": mod}
+            print(json.dumps([{"type": "document", "path": str(cfg), "info": info},
+                              {"type": "directory", "path": str(STATE)}], indent=2))
         return 0
     if argv[:1] == ["export"]:
         sid = argv[1]
@@ -88,8 +110,26 @@ def main(argv):
         if a in ("--format", "--agent"):
             i += 2
             continue
-        if a in ("--model", "--variant"):
-            (STATE / f"opencode_last_{a[2:]}").write_text(args[i + 1])
+        if a in ("--dir", "--variant") and not v1():  # removed in OpenCode v2
+            print(f"Unrecognized flag: {a} in command opencode run", file=sys.stderr)
+            return 1
+        if a == "--dir":
+            directory = args[i + 1]
+            i += 2
+            continue
+        if a == "--variant":
+            (STATE / "opencode_last_variant").write_text(args[i + 1])
+            i += 2
+            continue
+        if a == "--model" and v1():
+            (STATE / "opencode_last_model").write_text(args[i + 1])  # v1 has no "#variant": kept as given
+            i += 2
+            continue
+        if a == "--model":  # v2: "provider/model#variant"
+            model, _, variant = args[i + 1].partition("#")
+            (STATE / "opencode_last_model").write_text(model)
+            if variant:
+                (STATE / "opencode_last_variant").write_text(variant)
             i += 2
             continue
         if a == "--session":
@@ -98,10 +138,6 @@ def main(argv):
             continue
         if a == "--title":
             title = args[i + 1]
-            i += 2
-            continue
-        if a == "--dir":
-            directory = args[i + 1]
             i += 2
             continue
         if a == "--":  # end of options: everything after it is the message

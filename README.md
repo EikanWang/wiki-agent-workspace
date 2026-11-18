@@ -156,7 +156,7 @@ Everything below is explained step by step in **[docs/USER_GUIDE.md](docs/USER_G
 
 | Provider | How app-driven turns run | Notes |
 | --- | --- | --- |
-| OpenCode (`mode = "cli"`, default) | `opencode run --format json --dir WS [--session ID] <prompt>` | Uses your existing login/config. JSON events carry whole text parts (not token deltas). Permission prompts cannot be relayed in CLI mode; OpenCode applies its configured rules. |
+| OpenCode (`mode = "cli"`, default) | `opencode run --format json [--session ID] [--model P/M#VARIANT] <prompt>` (run in WS); OpenCode 1.x: `--dir WS`, `--model P/M`, `--variant V` | The flags follow `opencode --version` (on a machine: its last probe). Uses your existing login/config. JSON events carry whole text parts (not token deltas). Permission prompts cannot be relayed in CLI mode; OpenCode applies its configured rules. |
 | OpenCode (`mode = "server"`) | HTTP API of a known `opencode serve` instance (`server_url`) | Streams deltas, relays real permission requests (`permission.v2.asked` → reply endpoint), interrupts the app's own turn. Start `opencode serve --port 4096` once and attach your terminal TUI with `opencode --attach http://127.0.0.1:4096` so both share one backend. A separate `opencode serve` does **not** attach to a TUI's own server. |
 | Codex | `codex exec --json -C WS -s <sandbox> -` / `codex exec resume --json -c sandbox_mode="<sandbox>" ID -` (prompt on stdin) | Saved CLI login reused. `agents.codex.sandbox` (default `workspace-write`, set at setup) is applied to app-driven turns only; your interactive `codex` config is untouched. Sessions are listed from `$CODEX_HOME/session_index.jsonl` and rollout files. Codex emits whole messages, not deltas. |
 

@@ -54,6 +54,7 @@ class RemoteExec:
     env: dict[str, str] = field(default_factory=dict)  # set for the provider on the host (e.g. OPENCODE_CONFIG_CONTENT)
     pre: str = ""        # shell run first (PATH with <work_dir>/bin)
     env_file: str = ""   # a file on the host with forwarded variables, sourced then deleted (machines.envfwd)
+    versions: dict[str, str] = field(default_factory=dict)  # provider -> its `--version` there (the last probe)
 
     def wrap(self, args: list[str], provider: str | None = None) -> list[str]:
         argv = list(args)

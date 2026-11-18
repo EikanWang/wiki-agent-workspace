@@ -408,6 +408,8 @@ class JobManager:
         if tool is not None and not tool.get("ok"):
             raise ProviderError("PROVIDER_UNAVAILABLE", f"{provider} is not installed on {machine} (as of its last probe): "
                                 f"install it with Machines → {machine} → Set up, or probe the machine again")
+        if tool and tool.get("version"):
+            remote.versions[provider] = str(tool["version"])
         try:
             t = target_for(self.machines.dev, machine)
             if provider == "opencode":

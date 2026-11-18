@@ -1,8 +1,10 @@
 """OpenCode adapters.
 
-* CLI mode: `opencode run --format json [--session ID] --dir WS <prompt>` and
-  `opencode session list --format json`. Each JSON line carries `type`, `sessionID` and a
-  `part` (text/tool/step events). Observed with opencode 1.18.x.
+* CLI mode, chosen by `opencode --version` (on a machine: its last probe; unknown = v2, what Set up installs):
+  v2: `opencode run --format json [--session ID] [--model P/M[#VARIANT]] <prompt>` (cwd = WS);
+  v1: `opencode run --format json --dir WS [--session ID] [--model P/M] [--variant V] <prompt>`;
+  and `opencode session list --format json`. Each JSON line carries `type`, `sessionID` and a
+  `part` (text/tool/step events). Observed with opencode 1.18.x and 2.3.x.
 * Server mode: a known loopback `opencode serve` instance (config `server_url`). Uses the
   documented HTTP API (`/api/session`, `/api/session/{id}/prompt`, `/api/event` SSE,
   `/api/session/{id}/permission/{rid}/reply`, `/api/session/{id}/interrupt`).
@@ -14,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -43,19 +46,51 @@ def _ms_to_iso(ms: Any) -> str | None:
         return None
 
 
+def opencode_major(version: str | None) -> int | None:
+    """2 for "opencode v2.3.2" / "2.3.2"; None when there is no version."""
+    m = re.search(r"(\d+)\.\d+", version or "")
+    return int(m.group(1)) if m else None
+
+
+def is_v2(version: str | None) -> bool:
+    """OpenCode v2's `run` (no --dir, no --variant). An unknown version counts as v2: Set up installs the latest."""
+    major = opencode_major(version)
+    return major is None or major >= 2
+
+
+def _model_of(src: Any) -> tuple[str | None, str | None]:
+    """(provider/model, variant) of a config's `model`: "p/m" (v1), "p/m#variant" or {providerID, model, variant} (v2)."""
+    v = src.get("model") if isinstance(src, dict) else None
+    variant = src.get("variant") if isinstance(src, dict) and isinstance(src.get("variant"), str) else None
+    if isinstance(v, str) and v.strip():
+        base, _, var = v.strip().partition("#")
+        return base, var or variant
+    if isinstance(v, dict) and isinstance(v.get("providerID"), str) and isinstance(v.get("model"), str):
+        return f"{v['providerID']}/{v['model']}", v.get("variant") if isinstance(v.get("variant"), str) else variant
+    return None, None
+
+
 def _default_from_config(cfg: Any, profile: str | None) -> dict[str, str | None]:
     """The model OpenCode uses without `--model`: the agent's own model (when the app runs with `--agent`),
-    else the top-level `model` of the merged config."""
+    else the top-level `model`. `cfg` is v1's merged config, or v2's list of config documents (later ones win)."""
     out: dict[str, str | None] = {"model": None, "variant": None}
-    if not isinstance(cfg, dict):
+    if isinstance(cfg, list):
+        layers = [x["info"] for x in cfg if isinstance(x, dict) and isinstance(x.get("info"), dict)]
+    elif isinstance(cfg, dict):
+        layers = [cfg]
+    else:
         return out
-    agent = ((cfg.get("agent") or {}).get(profile) if profile else None) or {}
-    for src in (agent, cfg):
-        if isinstance(src, dict) and isinstance(src.get("model"), str) and src["model"].strip():
-            out["model"] = src["model"].strip()
-            if isinstance(src.get("variant"), str) and src["variant"].strip():
-                out["variant"] = src["variant"].strip()
-            break
+    agent = top = (None, None)
+    for layer in layers:
+        for key in ("agent", "agents"):  # v2: `agents` (`agent` is deprecated)
+            a = (layer.get(key) or {}).get(profile) if profile and isinstance(layer.get(key), dict) else None
+            if _model_of(a)[0]:
+                agent = _model_of(a)
+        if _model_of(layer)[0]:
+            top = _model_of(layer)
+    model, variant = agent if agent[0] else top
+    out["model"] = model.strip() if model else None
+    out["variant"] = variant.strip() if variant and variant.strip() else None
     return out
 
 
@@ -187,17 +222,32 @@ class OpenCodeCliAdapter(AgentAdapter):
     async def resume_turn(self, ctx: TurnContext) -> TurnHandle:
         if not self.exe and ctx.remote is None:  # on a machine its own opencode runs (RemoteExec.bins)
             raise ProviderError("PROVIDER_UNAVAILABLE", "opencode executable not found")
-        args = [self.exe or "opencode", "run", "--format", "json", "--dir", str(ctx.cwd or ctx.workspace)]
+        if ctx.remote is not None:
+            version = ctx.remote.versions.get("opencode")
+        else:
+            version = (await self.capabilities()).version
+        v2 = is_v2(version)
+        args = [self.exe or "opencode", "run", "--format", "json"]
+        if not v2:
+            args += ["--dir", str(ctx.cwd or ctx.workspace)]  # v2 has no --dir: the process cwd is the session folder
         if ctx.native_session_id:
             args += ["--session", ctx.native_session_id]
         elif ctx.title:
             args += ["--title", ctx.title[:120]]
         if self.cfg.profile:
             args += ["--agent", self.cfg.profile]
-        if ctx.model:
-            args += ["--model", ctx.model]
-        if ctx.variant:
-            args += ["--variant", ctx.variant]
+        if v2:  # no --variant: the model is "provider/model#variant", so a variant alone needs the default model
+            model = ctx.model
+            if ctx.variant and not model and ctx.remote is None:
+                model = (await self.default_model(ctx.cwd or ctx.workspace)).get("model")
+            if model:
+                base = model.split("#", 1)[0]
+                args += ["--model", f"{base}#{ctx.variant}" if ctx.variant else model]
+        else:
+            if ctx.model:
+                args += ["--model", ctx.model]
+            if ctx.variant:
+                args += ["--variant", ctx.variant]
         args += list(self.cfg.extra_args)
         # --file takes several values and swallows every following argument, even in the "--file=PATH" form
         # (the prompt then becomes a "file": "File not found: <prompt>"). "--" ends the options, so the prompt
@@ -234,11 +284,11 @@ class OpenCodeCliAdapter(AgentAdapter):
             rc, out, _err = await run_capture([self.exe, "debug", "config"], cwd=workspace, timeout=30)
         except (ProviderError, OSError):
             return none
-        start = out.find("{")
-        if rc != 0 or start < 0:
+        starts = [i for i in (out.find("{"), out.find("[")) if i >= 0]  # v1: one object; v2: a list of documents
+        if rc != 0 or not starts:
             return none
         try:
-            return _default_from_config(json.loads(out[start:]), self.cfg.profile)
+            return _default_from_config(json.loads(out[min(starts):]), self.cfg.profile)
         except json.JSONDecodeError:
             return none
 
