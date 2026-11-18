@@ -36,7 +36,7 @@ import MachineView, { MachineDialog, MachinesPanel, useMachines } from "./compon
 import InsightsView, { InsightsPanel } from "./components/Insights";
 import TerminalsPanel from "./components/TerminalsPanel";
 import { useGhAutoRefresh } from "./ghRefresh";
-import AgentMonitor, { AgentsPanel, Provider } from "./components/AgentMonitor";
+import AgentMonitor, { AgentsPanel, Watch } from "./components/AgentMonitor";
 import LocalPanel from "./components/LocalPanel";
 const LocalEditor = lazy(() => import("./components/LocalEditor"));
 import DevPanel from "./components/DevPanel";
@@ -127,14 +127,14 @@ export default function App() {
   const [localActive, setLocalActive] = useState<string | null>(null);
   const [localUsed, setLocalUsed] = useState(false);
   // Agents dashboard: the monitored sessions
-  const [watched, setWatchedState] = useState<{ provider: Provider; id: string; label?: string }[]>([]);
+  const [watched, setWatchedState] = useState<Watch[]>([]);
   const [alarms, setAlarms] = useState(0);
   const [autoVersion, setAutoVersion] = useState(0);
   useEffect(() => {
     if (!authed) return;
-    void get<{ sessions: { provider: Provider; id: string; label?: string }[] }>("/monitor/watched").then((r) => setWatchedState(r.sessions)).catch(() => undefined);
+    void get<{ sessions: Watch[] }>("/monitor/watched").then((r) => setWatchedState(r.sessions)).catch(() => undefined);
   }, [authed]);
-  const setWatched = useCallback((w: { provider: Provider; id: string; label?: string }[]) => {
+  const setWatched = useCallback((w: Watch[]) => {
     setWatchedState(w);
     void put("/monitor/watched", { sessions: w }).catch(() => undefined);
   }, []);

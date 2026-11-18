@@ -137,7 +137,7 @@ class TerminalManager:
             raise ApiError(503, "TMUX_ERROR", str(exc))
         return self._add(tid, name, label, str(start), None)
 
-    def create_remote(self, machine: str, cwd: str, label: str | None) -> dict[str, Any]:
+    def create_remote(self, machine: str, cwd: str, label: str | None, argv: list[str] | None = None) -> dict[str, Any]:
         """A shell in the machine's own app tmux, starting in `cwd` (an absolute path there): it keeps running when
         the connection drops or this server restarts. Blocks (ssh)."""
         from ..development.targets import TargetError
@@ -147,7 +147,7 @@ class TerminalManager:
         tid = str(uuid.uuid4())
         name = f"{SESSION_PREFIX}{tid[:8]}"
         try:
-            rt.new_session(name, cwd, envfwd.login_shell(rt.target.host, envfwd.push_sync(rt.target)))
+            rt.new_session(name, cwd, envfwd.login_shell(rt.target.host, envfwd.push_sync(rt.target), argv))
         except TargetError as exc:
             raise ApiError(502 if exc.code == "DEV_HOST_UNREACHABLE" else 503, exc.code, exc.message)
         return self._add(tid, name, label, cwd, machine)

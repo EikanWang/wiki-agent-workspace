@@ -1,6 +1,6 @@
 import { Splitter, usePane } from "./Split";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ApiError, WorkspaceInfo, get, post, put } from "../api";
+import { ApiError, MachineInfo, WorkspaceInfo, get, post, put } from "../api";
 import { confirmAction } from "./Confirm";
 import FolderPicker from "./FolderPicker";
 import MarkdownView from "./MarkdownView";
@@ -9,19 +9,24 @@ import { utc8 } from "../time";
 import { COMPOSER_HINT, composerKeyDown } from "./keys";
 
 export type Provider = "opencode" | "codex" | "claude";
-interface Watch { provider: Provider; id: string; label?: string }
-interface Found { provider: Provider; id: string; title: string | null; directory: string | null; folder: string; folder_name: string; updated_at: string | null; watched: boolean; auto: boolean; excluded: boolean; label?: string | null }
+export interface Watch { provider: Provider; id: string; label?: string; machine?: string }
+interface Found { provider: Provider; id: string; machine?: string | null; title: string | null; directory: string | null; folder: string; folder_name: string; updated_at: string | null; watched: boolean; auto: boolean; excluded: boolean; label?: string | null }
 interface AutoCfg { folders: string[] | null; days: number; exclude: string[] }
 interface Status { state: "working" | "needs_input" | "error" | "stalled" | "idle" | "missing"; level: "alarm" | "error" | "warning" | "busy" | "ok"; reason: string; last_text: string; updated_at: string | null; messages: number }
 export interface MonItem {
-  provider: Provider; id: string; label: string | null; title: string | null; directory: string | null; folder: string | null; folder_name: string | null;
+  provider: Provider; id: string; machine?: string | null; label: string | null; title: string | null; directory: string | null; folder: string | null; folder_name: string | null;
   model: string | null; found: boolean; status: Status; app_job: { job_id: string; status: string } | null;
   send: { state: string; started_at: string; rc: number | null; busy_warning: boolean } | null;
 }
 interface Msg { role: string; text: string; tool?: string; status?: string; time: string | null }
 
 const PROV_LABEL: Record<Provider, string> = { opencode: "OpenCode", codex: "Codex", claude: "Claude Code" };
-const keyOf = (x: { provider: string; id: string }) => `${x.provider}:${x.id}`;
+/** A session's key: `provider:id`, `provider:id@machine` for one on a machine (as the server keys it). */
+const keyOf = (x: { provider: string; id: string; machine?: string | null }) => `${x.provider}:${x.id}${x.machine ? `@${x.machine}` : ""}`;
+const watchOf = (x: { provider: Provider; id: string; machine?: string | null }): Watch => ({ provider: x.provider, id: x.id, ...(x.machine ? { machine: x.machine } : {}) });
+/** The `?machine=` of a session's routes. */
+const onMachine = (x: { machine?: string | null }, sep = "?") => (x.machine ? `${sep}machine=${encodeURIComponent(x.machine)}` : "");
+interface RemoteError { machine: string; error: string }
 const ago = (iso: string | null) => {
   if (!iso) return "";
   const s = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
@@ -32,10 +37,13 @@ const STATE_LABEL: Record<string, string> = { working: "working", needs_input: "
 
 // ---------------------------------------------------------------- sidebar
 
-/** Sidebar of Agents: folders (the wiki folders and any local folders you add), sessions found in them, and
- * sessions added by id. Checked sessions are monitored on the main page. */
+/** Sidebar of Agents: folders (the wiki folders, local folders you add, folders on a machine — `machine:/path`),
+ * sessions found in them, and sessions added by id. Checked sessions are monitored on the main page. */
 export function AgentsPanel({ workspaces, watched, onWatched, onAutoChanged }: { workspaces: WorkspaceInfo[]; watched: Watch[]; onWatched: (w: Watch[]) => void; onAutoChanged: () => void }) {
-  const [extra, setExtra] = useState<{ path: string; name: string; exists: boolean }[]>([]);
+  const [extra, setExtra] = useState<{ path: string; name: string; exists: boolean; machine?: string | null }[]>([]);
+  const [machines, setMachines] = useState<string[]>([]);
+  const [remotePick, setRemotePick] = useState<string | null>(null); // the machine being browsed for a folder
+  const [remoteErrs, setRemoteErrs] = useState<RemoteError[]>([]);
   // checked folders: their recent sessions are monitored automatically (server-side, so every browser agrees)
   const [auto, setAuto] = useState<AutoCfg | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -64,21 +72,25 @@ export function AgentsPanel({ workspaces, watched, onWatched, onAutoChanged }: {
   const [pick, setPick] = useState(false);
   const [filter, setFilter] = useState("");
   const [busy, setBusy] = useState(false);
-  const [manual, setManual] = useState<{ provider: Provider; id: string; label: string }>({ provider: "opencode", id: "", label: "" });
+  const [manual, setManual] = useState<{ provider: Provider; id: string; label: string; machine: string }>({ provider: "opencode", id: "", label: "", machine: "" });
   const [more, setMore] = useState<Record<string, boolean>>({});
   const folders = useMemo(() => [
-    ...workspaces.filter((w) => w.available).map((w) => ({ path: w.root, name: w.name, wiki: true })),
-    ...extra.filter((f) => !workspaces.some((w) => w.root === f.path)).map((f) => ({ path: f.path, name: f.name, wiki: false })),
+    ...workspaces.filter((w) => w.available).map((w) => ({ path: w.root, name: w.name, wiki: true, machine: null as string | null })),
+    ...extra.filter((f) => !workspaces.some((w) => w.root === f.path)).map((f) => ({ path: f.path, name: f.name, wiki: false, machine: f.machine ?? null })),
   ], [workspaces, extra]);
   const chosen = sel ?? folders.map((f) => f.path);
   useEffect(() => { void get<{ folders: typeof extra }>("/monitor/folders").then((r) => setExtra(r.folders)).catch(() => undefined); }, []);
+  useEffect(() => {
+    void get<{ machines: MachineInfo[] }>("/machines").then((r) => setMachines(r.machines.filter((m) => m.kind === "machine" && m.name !== "local").map((m) => m.name))).catch(() => undefined);
+  }, []);
   const discover = useCallback(async () => {
     if (!chosen.length) { setFound([]); return; }
     setBusy(true);
     try {
-      const r = await get<{ sessions: Found[]; providers: Record<string, boolean> }>(`/monitor/discover?folders=${encodeURIComponent(chosen.join("\n"))}`);
+      const r = await get<{ sessions: Found[]; providers: Record<string, boolean>; remote_errors?: RemoteError[] }>(`/monitor/discover?folders=${encodeURIComponent(chosen.join("\n"))}`);
       setFound(r.sessions);
       setProviders(r.providers);
+      setRemoteErrs(r.remote_errors ?? []);
       setErr(null);
     } catch (e) {
       setErr((e as ApiError).message);
@@ -91,20 +103,20 @@ export function AgentsPanel({ workspaces, watched, onWatched, onAutoChanged }: {
     const t = setInterval(() => { if (document.visibilityState === "visible") void discover(); }, 30000);
     return () => clearInterval(t);
   }, [discover]);
-  const isWatched = (x: { provider: string; id: string }) => watched.some((w) => keyOf(w) === keyOf(x));
+  const isWatched = (x: { provider: string; id: string; machine?: string | null }) => watched.some((w) => keyOf(w) === keyOf(x));
   const monitored = (x: Found) => isWatched(x) || x.auto;
   const toggle = (x: Found) => {
     if (isWatched(x)) return onWatched(watched.filter((w) => keyOf(w) !== keyOf(x)));
     if (x.auto && auto) { setFound((f) => f && f.map((y) => (keyOf(y) === keyOf(x) ? { ...y, auto: false, excluded: true } : y))); return void saveAuto({ ...auto, exclude: [...auto.exclude, keyOf(x)] }); }
     if (x.excluded && auto) setFound((f) => f && f.map((y) => (keyOf(y) === keyOf(x) ? { ...y, excluded: false } : y)));
     if (x.excluded && auto) void saveAuto({ ...auto, exclude: auto.exclude.filter((k) => k !== keyOf(x)) });
-    onWatched([...watched, { provider: x.provider, id: x.id }]);
+    onWatched([...watched, watchOf(x)]);
   };
   /** Monitor (or stop monitoring) every session of a folder at once. */
   const setAllOf = (list: Found[], on: boolean) => {
     const keys = new Set(list.map(keyOf));
     if (on) {
-      const add = list.filter((x) => !monitored(x)).map((x) => ({ provider: x.provider, id: x.id }));
+      const add = list.filter((x) => !monitored(x)).map(watchOf);
       if (auto) void saveAuto({ ...auto, exclude: auto.exclude.filter((k) => !keys.has(k)) });
       setFound((f) => f && f.map((y) => (keys.has(keyOf(y)) ? { ...y, excluded: false } : y)));
       onWatched([...watched, ...add.filter((a) => !list.find((x) => keyOf(x) === keyOf(a))?.excluded)]);
@@ -134,9 +146,10 @@ export function AgentsPanel({ workspaces, watched, onWatched, onAutoChanged }: {
     if (!id) return;
     setErr(null);
     try {
-      const r = await post<{ found: boolean; title: string | null }>("/monitor/watched", { provider: manual.provider, id, label: manual.label.trim() || undefined });
-      onWatched([{ provider: manual.provider, id, ...(manual.label.trim() ? { label: manual.label.trim() } : {}) }, ...watched.filter((w) => keyOf(w) !== `${manual.provider}:${id}`)]);
-      if (!r.found) setErr(`Added, but no ${PROV_LABEL[manual.provider]} session ${id} was found on this machine (yet).`);
+      const w: Watch = { ...watchOf({ provider: manual.provider, id, machine: manual.machine || null }), ...(manual.label.trim() ? { label: manual.label.trim() } : {}) };
+      const r = await post<{ found: boolean; title: string | null }>("/monitor/watched", w);
+      onWatched([w, ...watched.filter((x) => keyOf(x) !== keyOf(w))]);
+      if (!r.found) setErr(`Added, but no ${PROV_LABEL[manual.provider]} session ${id} was found on ${manual.machine || "this machine"} (yet).`);
       setManual({ ...manual, id: "", label: "" });
     } catch (e) {
       setErr((e as ApiError).message);
@@ -156,7 +169,12 @@ export function AgentsPanel({ workspaces, watched, onWatched, onAutoChanged }: {
       <div className="local-head"><b>Agents</b><span className="spacer" />
         <button className="icon-btn small" title="Find sessions again" onClick={() => void discover()} disabled={busy}>↻</button></div>
       <div className="agents-section">
-        <div className="label">Folders <span className="spacer" /><button className="link-btn small" onClick={() => setPick(true)} data-testid="mon-add-folder">+ add folder</button></div>
+        <div className="label">Folders <span className="spacer" /><button className="link-btn small" onClick={() => setPick(true)} data-testid="mon-add-folder">+ add folder</button>
+          {machines.length > 0 && <select className="mon-add-remote small" value="" onChange={(e) => { if (e.target.value) setRemotePick(e.target.value); }}
+            title="Add a folder on a machine (Machines view): its sessions are read there over SSH" data-testid="mon-add-remote">
+            <option value="">+ on a machine…</option>
+            {machines.map((m) => <option key={m} value={m}>{m}</option>)}
+          </select>}</div>
         <div className="muted small">Sessions of the checked folders are monitored when active in the last{" "}
           <select value={auto?.days ?? 7} onChange={(e) => auto && void saveAuto({ ...auto, days: Number(e.target.value) })} data-testid="mon-days">
             {[1, 3, 7, 14, 30, 90].map((d) => <option key={d} value={d}>{d} day{d > 1 ? "s" : ""}</option>)}
@@ -164,11 +182,12 @@ export function AgentsPanel({ workspaces, watched, onWatched, onAutoChanged }: {
           </select>
         </div>
         {err && !showList && <div className="error-text small" data-testid="mon-err">{err}</div>}
+        {remoteErrs.map((e) => <div key={e.machine} className="error-text small" data-testid="mon-remote-err" title={e.error}>{e.machine}: {e.error}</div>)}
         {folders.map((f) => (
           <label key={f.path} className="agents-check small" title={f.path}>
             <input type="checkbox" checked={chosen.includes(f.path)} onChange={(e) => setSel(e.target.checked ? [...chosen, f.path] : chosen.filter((x) => x !== f.path))} data-testid="mon-folder" data-path={f.path} />
             <span className="agents-session-name">{f.name}</span>
-            <span className="muted">{f.wiki ? "wiki" : "local"}</span>
+            <span className={f.machine ? "chip mon-machine" : "muted"}>{f.wiki ? "wiki" : f.machine ? `@${f.machine}` : "local"}</span>
             {!f.wiki && <button className="icon-btn small" title="Remove this folder from the list" onClick={(e) => { e.preventDefault(); void removeFolder(f.path); }}>✕</button>}
           </label>
         ))}
@@ -182,6 +201,12 @@ export function AgentsPanel({ workspaces, watched, onWatched, onAutoChanged }: {
           <input value={manual.id} onChange={(e) => setManual({ ...manual, id: e.target.value })} placeholder={manual.provider === "opencode" ? "ses_…" : "session UUID"} className="mono"
             onKeyDown={(e) => { if (e.key === "Enter") void addManual(); }} data-testid="mon-manual-id" />
         </div>
+        {machines.length > 0 && <div className="row nowrap mon-manual">
+          <select value={manual.machine} onChange={(e) => setManual({ ...manual, machine: e.target.value })} title="Where the session is" data-testid="mon-manual-machine">
+            <option value="">on this server</option>
+            {machines.map((m) => <option key={m} value={m}>on {m}</option>)}
+          </select>
+        </div>}
         <div className="row nowrap mon-manual">
           <input value={manual.label} onChange={(e) => setManual({ ...manual, label: e.target.value })} placeholder="name to show (optional)" data-testid="mon-manual-label"
             onKeyDown={(e) => { if (e.key === "Enter") void addManual(); }} />
@@ -219,6 +244,9 @@ export function AgentsPanel({ workspaces, watched, onWatched, onAutoChanged }: {
       </div>
       {pick && <FolderPicker title="Add a folder" hint="Its OpenCode, Codex and Claude Code sessions can be monitored." confirmLabel="Add this folder"
         onClose={() => setPick(false)} onChoose={(p) => { setPick(false); void addFolder(p); }} />}
+      {remotePick && <FolderPicker title={`Add a folder on ${remotePick}`} machine={remotePick} confirmLabel="Add this folder"
+        hint="Its OpenCode, Codex and Claude Code sessions (made on that machine) are read there over SSH."
+        onClose={() => setRemotePick(null)} onChoose={(p) => { const m = remotePick; setRemotePick(null); void addFolder(`${m}:${p}`); }} />}
     </div>
   );
 }
@@ -235,6 +263,7 @@ export default function AgentMonitor({ watched, onWatched, visible, onAlarms, au
   const [checked, setChecked] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [remoteErrs, setRemoteErrs] = useState<RemoteError[]>([]);
   const [stage, setStage] = useState<string | null>(() => localStorage.getItem("waw.mon.stage"));
   const listPane = usePane("mon.list", 220, 140, 900);
   const [notify, setNotify] = useState(() => localStorage.getItem("waw.mon.notify") === "1");
@@ -245,8 +274,9 @@ export default function AgentMonitor({ watched, onWatched, visible, onAlarms, au
   const refresh = useCallback(async () => {
     setBusy(true);
     try {
-      const r = await get<{ items: MonItem[]; alarms: number; checked_at: string }>("/monitor/status");
+      const r = await get<{ items: MonItem[]; alarms: number; checked_at: string; remote_errors?: RemoteError[] }>("/monitor/status");
       setItems(r.items);
+      setRemoteErrs(r.remote_errors ?? []);
       setChecked(r.checked_at);
       onAlarms(r.alarms);
       setErr(null);
@@ -274,7 +304,7 @@ export default function AgentMonitor({ watched, onWatched, visible, onAlarms, au
     const name = window.prompt(`Name to show for this ${PROV_LABEL[i.provider]} session (empty: its own title):`, i.label ?? i.title ?? "");
     if (name === null) return;
     try {
-      await put(`/monitor/session/${i.provider}/${encodeURIComponent(i.id)}/label`, { label: name });
+      await put(`/monitor/session/${i.provider}/${encodeURIComponent(i.id)}/label${onMachine(i)}`, { label: name });
       await refresh();
     } catch (e) {
       setErr((e as ApiError).message);
@@ -290,7 +320,7 @@ export default function AgentMonitor({ watched, onWatched, visible, onAlarms, au
     });
     if (!ok) return;
     try {
-      const r = await post<{ deleted: string[]; failed: { id: string; error: string }[] }>("/monitor/delete", { sessions: list.map((i) => ({ provider: i.provider, id: i.id })) });
+      const r = await post<{ deleted: string[]; failed: { id: string; error: string }[] }>("/monitor/delete", { sessions: list.map(watchOf) });
       const gone = new Set(r.deleted);
       onWatched(watched.filter((w) => !gone.has(keyOf(w))));
       setPicked((p) => new Set([...p].filter((k) => !gone.has(k))));
@@ -339,6 +369,7 @@ export default function AgentMonitor({ watched, onWatched, visible, onAlarms, au
         <button className="btn small primary" disabled={busy} onClick={() => void refresh()} data-testid="mon-refresh">{busy ? "Checking…" : "Refresh all"}</button>
       </div>
       {err && <div className="banner warn small" role="alert">{err}</div>}
+      {remoteErrs.map((e) => <div key={e.machine} className="banner warn small" data-testid="mon-remote-banner">Sessions on {e.machine} could not be read: {e.error}</div>)}
       {items && items.length === 0 && <div className="muted dev-hint" data-testid="mon-empty">No session to monitor: check folders in the sidebar (their recent sessions are monitored), widen the time window, or add a session by its id.</div>}
       <div className="mon-body">
         {(!staged || !listPane.folded) && <div className={staged ? "mon-list" : "mon-groups"} style={staged ? { width: listPane.size } : undefined}>
@@ -379,13 +410,13 @@ function MonCard({ item: i, compact, active, onOpen }: { item: MonItem; compact:
   const name = i.label ?? i.title ?? i.id;
   return (
     <button className={`dash-card mon-card ${i.status.level} ${compact ? "compact" : ""} ${active ? "active" : ""}`} onClick={onOpen}
-      data-testid="mon-card" data-key={keyOf(i)} data-state={i.status.state} data-level={i.status.level} title={`${PROV_LABEL[i.provider]} · ${i.id}\n${i.directory ?? ""}`}>
+      data-testid="mon-card" data-key={keyOf(i)} data-state={i.status.state} data-level={i.status.level} title={`${PROV_LABEL[i.provider]} · ${i.id}${i.machine ? ` on ${i.machine}` : ""}\n${i.directory ?? ""}`}>
       <div className="dash-card-head">
         <span className={`dash-dot ${i.status.level}`} />
         <b className="dash-name">{name}</b>
         <span className={`chip mon-state ${i.status.state}`} data-testid="mon-state">{STATE_LABEL[i.status.state] ?? i.status.state}</span>
       </div>
-      <div className="muted small mon-meta"><span className={`mon-prov ${i.provider}`}>{PROV_LABEL[i.provider]}</span> {i.folder_name ?? i.directory ?? ""} · {ago(i.status.updated_at)}</div>
+      <div className="muted small mon-meta"><span className={`mon-prov ${i.provider}`}>{PROV_LABEL[i.provider]}</span>{i.machine && <span className="chip mon-machine" data-testid="mon-machine">@{i.machine}</span>} {i.folder_name ?? i.directory ?? ""} · {ago(i.status.updated_at)}</div>
       {!compact && <div className={`small mon-reason ${i.status.level}`}>{i.status.reason}</div>}
       {!compact && i.status.last_text && <div className="muted small mon-last">{i.status.last_text.slice(-240)}</div>}
     </button>
@@ -403,14 +434,15 @@ function SessionStage({ item, onClose, onUnwatch, onChanged, onRename, onDelete 
   const bottom = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const base = `/monitor/session/${item.provider}/${encodeURIComponent(item.id)}`;
+  const mq = onMachine(item);
   const load = useCallback(async () => {
     try {
-      setDetail(await get(`${base}?limit=${limit}`));
+      setDetail(await get(`${base}?limit=${limit}${onMachine(item, "&")}`));
       setErr(null);
     } catch (e) {
       setErr((e as ApiError).message);
     }
-  }, [base, limit]);
+  }, [base, limit, item.machine]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { void load(); }, [load]);
   const live = detail?.send?.state === "running" || detail?.status.state === "working";
   useEffect(() => {
@@ -425,7 +457,7 @@ function SessionStage({ item, onClose, onUnwatch, onChanged, onRename, onDelete 
     setErr(null);
     setNote(null);
     try {
-      const r = await post<{ busy_warning: boolean }>(`${base}/send`, { text: t });
+      const r = await post<{ busy_warning: boolean }>(`${base}/send${mq}`, { text: t });
       setText("");
       if (r.busy_warning) setNote("The session looked busy (maybe open in a terminal): your message was sent anyway.");
       stick.current = true;
@@ -437,8 +469,8 @@ function SessionStage({ item, onClose, onUnwatch, onChanged, onRename, onDelete 
   };
   const terminal = async () => {
     try {
-      await post(`${base}/terminal`);
-      setNote("A terminal tab with this session is open in the Terminal view.");
+      await post(`${base}/terminal${mq}`);
+      setNote(`A terminal tab with this session${item.machine ? ` (on ${item.machine})` : ""} is open in the Terminal view.`);
     } catch (e) {
       setErr((e as ApiError).message);
     }
@@ -461,7 +493,7 @@ function SessionStage({ item, onClose, onUnwatch, onChanged, onRename, onDelete 
         <button className="icon-btn" onClick={onClose} aria-label="Close" data-testid="mon-stage-close">×</button>
       </header>
       <div className="muted small mon-stage-meta">
-        <span className={`mon-prov ${d.provider}`}>{PROV_LABEL[d.provider]}</span>{" "}
+        <span className={`mon-prov ${d.provider}`}>{PROV_LABEL[d.provider]}</span>{d.machine && <> <span className="chip mon-machine">on {d.machine}</span></>}{" "}
         <button className="link-btn small mono" onClick={() => void writeClipboard(d.id)} title="Copy the session id">{d.id}</button>
         {d.directory && <> · <span className="mono">{d.directory}</span></>}{d.model && <> · {d.model}</>} · {d.total_messages} messages
       </div>

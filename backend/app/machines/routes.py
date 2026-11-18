@@ -5,6 +5,7 @@ terminal; open a terminal on a machine."""
 from __future__ import annotations
 
 import asyncio
+import shlex
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -415,8 +416,10 @@ async def machine_terminal(body: TerminalIn, name: str, ctx: AppContext = Depend
     return await open_terminal(ctx, name, body.cwd, body.label)
 
 
-async def open_terminal(ctx: AppContext, name: str, cwd: str | None, label: str | None) -> dict[str, Any]:
-    """A shell on the machine (an ssh login that starts in `cwd`), run by the app's tmux like every terminal."""
+async def open_terminal(ctx: AppContext, name: str, cwd: str | None, label: str | None,
+                        argv: list[str] | None = None) -> dict[str, Any]:
+    """A shell on the machine (an ssh login that starts in `cwd`), run by the app's tmux like every terminal; with
+    `argv`, that runs in it first."""
     assert ctx.terminals is not None
     if name == LOCAL:
         return await asyncio.to_thread(ctx.terminals.create, cwd or "~", label)
@@ -429,14 +432,16 @@ async def open_terminal(ctx: AppContext, name: str, cwd: str | None, label: str 
     except TargetError as exc:
         raise ApiError(502 if exc.code == "DEV_HOST_UNREACHABLE" else 400, exc.code, exc.message)
     if await asyncio.to_thread(ctx.terminals.remote_ready, name):  # in the machine's own tmux: survives disconnects
-        return await asyncio.to_thread(ctx.terminals.create_remote, name, path, label or name)
+        return await asyncio.to_thread(ctx.terminals.create_remote, name, path, label or name, argv)
     # no tmux there: the ssh login runs in this server's tmux (it ends with the connection)
     try:
         env_file = await envfwd.push(t)
     except TargetError as exc:
         raise ApiError(502 if exc.code == "DEV_HOST_UNREACHABLE" else 400, exc.code, exc.message)
-    argv, _, _ = t.spawn_argv(["sh", "-c", 'exec "${SHELL:-sh}" -l'], path, None, ssh_opts=["-tt"], env_file=env_file)
-    return await asyncio.to_thread(ctx.terminals.create, str(Path.home()), label or name, argv)
+    shell = ["sh", "-c", 'exec "${SHELL:-sh}" -l'] if not argv else \
+        ["sh", "-c", 'exec "${SHELL:-sh}" -l -c "$0"', shlex.join(argv) + '; exec "${SHELL:-sh}" -l']
+    ssh, _, _ = t.spawn_argv(shell, path, None, ssh_opts=["-tt"], env_file=env_file)
+    return await asyncio.to_thread(ctx.terminals.create, str(Path.home()), label or name, ssh)
 
 
 @router.get("/ssh-keys")

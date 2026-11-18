@@ -96,13 +96,16 @@ def file_text(h: DevHost, f: Forwarded) -> str:
     return "\n".join(lines) + "\n"
 
 
-def login_shell(h: DevHost, env_file: str | None) -> str:
+def login_shell(h: DevHost, env_file: str | None, argv: list[str] | None = None) -> str:
     """The command of a terminal on the machine: its login shell with <work_dir>/bin first on PATH and the forwarded
-    variables loaded."""
+    variables loaded. With `argv`: that runs first (in the login shell), then the shell."""
     from ..development.targets import path_prefix
 
-    return shlex.join(["sh", "-c", path_prefix(h.work_dir) + (source_snippet(env_file) if env_file else "")
-                       + 'exec "${SHELL:-sh}" -l'])
+    pre = path_prefix(h.work_dir) + (source_snippet(env_file) if env_file else "")
+    if argv:
+        run = path_prefix(h.work_dir) + shlex.join(argv) + '; exec "${SHELL:-sh}" -l'
+        return shlex.join(["sh", "-c", pre + 'exec "${SHELL:-sh}" -l -c "$0"', run])
+    return shlex.join(["sh", "-c", pre + 'exec "${SHELL:-sh}" -l'])
 
 
 def source_snippet(path: str) -> str:

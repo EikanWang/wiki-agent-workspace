@@ -213,3 +213,85 @@ async def test_opencode_listing_shares_runs_keeps_last_good_and_never_blocks_on_
     assert await monitor._oc_folder("oc", d) == a and asyncio.get_running_loop().time() - t0 < 0.3
     await asyncio.sleep(0.7)
     assert len(calls) == 2 and monitor._oc_dir[d][1] == a  # failed: the last good listing is kept
+
+
+async def test_sessions_of_a_folder_on_a_machine(running_app, settings, homes, tmp_path, fake_env, workspace, monkeypatch):
+    """A folder on a machine (`box:/path`): its sessions are listed and read there over ssh (the fake ssh runs the
+    commands here, so the machine's transcripts are this test's), keyed with the machine everywhere."""
+    from backend.app import monitor_remote
+    from backend.app.config import DevHost, DevSettings
+    from backend.app.development import targets
+
+    (tmp_path / "home").mkdir()
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    targets._HOMES.clear()
+    monitor_remote.forget()
+    settings.development = DevSettings(ssh=str(FAKES / "fake-ssh"), worktrees_dir=tmp_path / "worktrees", hosts=[
+        DevHost(name="box", ssh="me@box", work_dir=str(tmp_path / "remote"), opencode=str(FAKES / "fake-opencode"), codex=str(FAKES / "fake-codex")),
+        DevHost(name="down", ssh="unreachable.example", work_dir="/tmp/x")])
+    h = await running_app(settings)
+    api = h.api
+    proj = tmp_path / "rproj"
+    proj.mkdir()
+    write_codex(homes["codex"], "cx-r", str(proj), [ev("task_started"), ev("exec_approval_request", call_id="c1")])
+    write_claude(homes["claude"], "cl-r", str(proj), [{"type": "user", "message": {"role": "user", "content": "plan it"}},
+                                                    {"type": "assistant", "message": {"role": "assistant", "stop_reason": "end_turn", "content": [{"type": "text", "text": "Done."}]}}])
+    import subprocess
+
+    subprocess.run([str(FAKES / "fake-opencode"), "run", "--", "hello"], cwd=proj, env={**os.environ, "PWD": str(proj)}, check=True, capture_output=True)
+    oc_id = json.loads((fake_env / "opencode_sessions.json").read_text())[-1]["id"]
+
+    # added: checked on the machine; a missing folder there is refused
+    r = await api.put("/api/v1/monitor/folders", json={"folders": [f"box:{proj}"]})
+    assert r.status_code == 200, r.text
+    f = r.json()["folders"][0]
+    assert f["path"] == f"box:{proj}" and f["machine"] == "box" and f["name"] == "rproj @box"
+    assert (await api.put("/api/v1/monitor/folders", json={"folders": [f"box:{proj}/nope"]})).status_code == 404
+    assert (await api.put("/api/v1/monitor/folders", json={"folders": [f"nobox:{proj}"]})).status_code == 400
+
+    found = (await api.get("/api/v1/monitor/discover", params={"folders": f"box:{proj}\ndown:/srv"})).json()
+    keys = {(x["provider"], x["id"], x["machine"]) for x in found["sessions"]}
+    assert {("codex", "cx-r", "box"), ("claude", "cl-r", "box"), ("opencode", oc_id, "box")} <= keys
+    assert all(x["folder"] == f"box:{proj}" for x in found["sessions"])
+    assert [e["machine"] for e in found["remote_errors"]] == ["down"]
+
+    sessions = [{"provider": p, "id": i, "machine": "box"} for p, i in (("codex", "cx-r"), ("claude", "cl-r"), ("opencode", oc_id))]
+    await api.put("/api/v1/monitor/watched", json={"sessions": [*sessions, {"provider": "claude", "id": "cl-x", "machine": "down"}]})
+    st = (await api.get("/api/v1/monitor/status")).json()
+    by = {(i["provider"], i["id"], i["machine"]): i for i in st["items"]}
+    assert by[("codex", "cx-r", "box")]["status"]["state"] == "needs_input"
+    assert by[("claude", "cl-r", "box")]["status"]["state"] == "idle"
+    assert by[("opencode", oc_id, "box")]["status"]["state"] == "idle" and by[("opencode", oc_id, "box")]["folder"] == f"box:{proj}"
+    down = by[("claude", "cl-x", "down")]["status"]
+    assert down["state"] == "missing" and "ssh" in down["reason"]
+
+    # the conversation and continuing it, there
+    d = (await api.get(f"/api/v1/monitor/session/opencode/{oc_id}", params={"machine": "box"})).json()
+    assert d["machine"] == "box" and d["messages"][-1]["text"] == "echo: hello"
+    r = await api.post(f"/api/v1/monitor/session/opencode/{oc_id}/send", params={"machine": "box"}, json={"text": "more please"})
+    assert r.status_code == 202, r.text
+    for _ in range(200):
+        d = (await api.get(f"/api/v1/monitor/session/opencode/{oc_id}", params={"machine": "box"})).json()
+        if d["send"] and d["send"]["state"] != "running":
+            break
+        await asyncio.sleep(0.05)
+    assert d["send"]["state"] == "done", d
+    assert d["messages"][-1]["text"] == "echo: more please"
+    calls = (fake_env / "ssh_calls.log").read_text()
+    assert "me@box" in calls
+
+    # its own UI in a terminal on the machine, in the session's folder
+    if __import__("shutil").which("tmux"):
+        r = await api.post("/api/v1/monitor/session/claude/cl-r/terminal", params={"machine": "box"})
+        assert r.status_code == 201, r.text
+        t = r.json()
+        assert t["machine"] == "box" and t["cwd"] == str(proj) and t["label"].endswith("@box")
+        await api.delete(f"/api/v1/terminals/{t['id']}")
+
+    # renamed and deleted with the machine in the key
+    assert (await api.put("/api/v1/monitor/session/claude/cl-r/label", params={"machine": "box"}, json={"label": "remote one"})).status_code == 200
+    st = (await api.get("/api/v1/monitor/status")).json()
+    assert next(i for i in st["items"] if i["id"] == "cl-r")["label"] == "remote one"
+    r = (await api.post("/api/v1/monitor/delete", json={"sessions": [{"provider": "claude", "id": "cl-r", "machine": "box"}]})).json()
+    assert r["deleted"] == ["claude:cl-r@box"], r
+    assert not list(homes["claude"].glob("projects/*/cl-r.jsonl"))

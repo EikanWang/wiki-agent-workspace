@@ -410,11 +410,14 @@ def main() -> None:
         {"title": "[xpu] Fix the lazy Level Zero stub", "url": "https://github.com/pytorch/pytorch/pull/101", "xpu_relevance_score": 80,
          "xpu_relevance_justification": "XPU runtime", "body": "Fixes the stub.", "submitter": "alice", "state": "open"}]))
     # PR Development: the fake editor and a small C++/Python source checkout to branch from
-    from backend.app.config import DevSettings
+    from backend.app.config import DevHost, DevSettings
 
     settings.development = DevSettings(code_server=str(ROOT / "tests" / "fakes" / "fake-code-server"), worktrees_dir=tmp / "worktrees",
                                        ssh=str(ROOT / "tests" / "fakes" / "fake-ssh"), ssh_keyscan=str(ROOT / "tests" / "fakes" / "fake-ssh-keyscan"),
-                                       ssh_copy_id=str(ROOT / "tests" / "fakes" / "fake-ssh-copy-id"))
+                                       ssh_copy_id=str(ROOT / "tests" / "fakes" / "fake-ssh-copy-id"),
+                                       # Agents: a folder on a machine (the fake ssh runs it here)
+                                       hosts=[DevHost(name="e2e-remote", ssh="e2e-remote.internal", work_dir=str(tmp / "e2e-remote-work"),
+                                                      opencode=str(ROOT / "tests" / "fakes" / "fake-opencode"))])
     src = tmp / "devsrc"
     src.mkdir()
     for args in (["init", "-q", "-b", "main"], ["config", "user.email", "e2e@example.com"], ["config", "user.name", "E2E"]):

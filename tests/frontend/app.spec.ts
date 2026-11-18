@@ -4129,6 +4129,45 @@ test("Agents: rename a session, select all of a folder, delete selected after co
   await page.getByTestId("activity-files").click();
 });
 
+test("Agents: a folder on a machine — its sessions are read there over SSH, shown with the machine, continued there", async ({ page }) => {
+  await login(page);
+  await openGuide(page);
+  await selectText(page, "forms a graph");
+  await page.getByTestId("ask-current-selection").click();
+  await page.getByTestId("selection-question").fill("remote monitor question");
+  await page.getByTestId("selection-send").click();
+  await expect(page.locator('[data-testid="message-agent"][data-status="completed"]').last()).toContainText("remote monitor question", { timeout: 20000 });
+  await page.getByTestId("activity-agents").click();
+  // the wiki folder, as seen on the machine e2e-remote (the fake ssh runs there = here)
+  await page.getByTestId("mon-add-remote").selectOption("e2e-remote");
+  const picker = page.getByTestId("folder-picker");
+  await expect(picker).toContainText("the file system of e2e-remote");
+  await page.getByTestId("folder-picker-path").fill(workspaceDir());
+  await page.getByTestId("folder-picker-path").press("Enter");
+  await expect(page.getByTestId("folder-picker-selected")).toContainText(workspaceDir().split("/").pop()!);
+  await page.getByTestId("folder-picker-choose").click();
+  const remoteFolder = page.locator(`[data-testid="mon-folder"][data-path="e2e-remote:${workspaceDir()}"]`);
+  await expect(remoteFolder).toBeChecked();
+  await expect(page.locator(".agents-check", { has: remoteFolder })).toContainText("@e2e-remote");
+  // its recent sessions are monitored, with the machine shown
+  const card = page.locator('[data-testid="mon-card"][data-key$="@e2e-remote"]').first();
+  await expect(card).toBeVisible({ timeout: 20000 });
+  await expect(card.getByTestId("mon-machine")).toHaveText("@e2e-remote");
+  // on stage: read and continued on the machine
+  await card.click();
+  const stage = page.getByTestId("mon-stage");
+  await expect(stage).toContainText("on e2e-remote");
+  await expect(page.getByTestId("mon-msg").first()).toBeVisible({ timeout: 15000 });
+  await page.getByTestId("mon-input").fill("follow-up on the machine");
+  await page.getByTestId("mon-send").click();
+  await expect(page.getByTestId("mon-transcript")).toContainText("echo: follow-up on the machine", { timeout: 30000 });
+  await page.getByTestId("mon-stage-close").click();
+  // removing the folder stops monitoring its sessions
+  await page.locator(".agents-check", { has: remoteFolder }).getByTitle("Remove this folder from the list").click();
+  await expect(remoteFolder).toHaveCount(0);
+  await expect(page.locator('[data-testid="mon-card"][data-key$="@e2e-remote"]')).toHaveCount(0, { timeout: 20000 });
+});
+
 test("Reviews: select several PRs (a row, a range, a repository) and start the agent review of all of them at once", async ({ page }) => {
   await ensureGithubSignIn(page);
   await page.goto("/");

@@ -1170,6 +1170,8 @@ body.resizing-v iframe { pointer-events: none; }
 .mon-last { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; white-space: pre-wrap; }
 .mon-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mon-prov { font-size: 10px; font-weight: 700; padding: 0 4px; border-radius: 3px; background: var(--accent); color: var(--fg); }
+.mon-machine { font-size: 10px; padding: 0 5px; margin-left: 4px; border-radius: 8px; background: rgba(127,127,127,.18); color: var(--fg); }
+.mon-add-remote { margin-left: 6px; font-size: 11px; max-width: 9em; }
 .mon-prov.opencode { background: light-dark(#e6f0ff, #1f3a5f); } .mon-prov.codex { background: light-dark(#e8f7ee, #1b3a26); } .mon-prov.claude { background: light-dark(#fbeee6, #4a2f1f); }
 .mon-stage { display: flex; flex-direction: column; min-height: 0; min-width: 0; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); overflow: hidden; }
 .mon-stage-head { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--border); }
