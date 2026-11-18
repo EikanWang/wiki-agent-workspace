@@ -3,6 +3,7 @@ import type { PDFDocumentProxy, PDFPageProxy } from "pdfjs-dist";
 import { Thread } from "../api";
 import { MinusIcon, PlusIcon } from "./Icons";
 import { linkHighlightMs, whenSettled } from "../linkHighlight";
+import { ViewPos, findPart, squash } from "../viewSync";
 
 /** What the user points at in a laid-out document (sent with the question). */
 export interface PageTarget {
@@ -47,8 +48,12 @@ function scaledCopy(src: HTMLCanvasElement, sx: number, sy: number, sw: number, 
  * viewer, its text can be selected and asked about, and each page/slide (or an area of it) can be sent to the
  * agent as an image.
  */
-export default function PdfView({ url, unit, threads, activeThreadId, onAsk, onOpenThread, testId = "pdfjs-view", goToPage = null }: {
+export default function PdfView({ url, unit, threads, activeThreadId, onAsk, onOpenThread, testId = "pdfjs-view", goToPage = null, goToText = null, posRef }: {
   url: string;
+  /** the Text view switched to this one: show the place it was at (its text, else as far down) */
+  goToText?: (ViewPos & { at: number }) | null;
+  /** set to a function telling where this view is (for the switch to the Text view) */
+  posRef?: React.MutableRefObject<(() => ViewPos | null) | null>;
   /** a link to a page (#page=N) was followed: scroll there once the pages are laid out */
   goToPage?: { page: number; at: number } | null;
   unit: "page" | "slide";
@@ -140,6 +145,80 @@ export default function PdfView({ url, unit, threads, activeThreadId, onAsk, onO
       window.setTimeout(() => el.classList.remove("link-flash"), ms);
     });
   }, [goToPage, sizes.length]);
+
+  // the document's text (letters and digits) with where each run is: page and height on it (0 top – 1 bottom)
+  const textIndex = useRef<Promise<{ text: string; runs: { at: number; page: number; y: number }[] }> | null>(null);
+  useEffect(() => { textIndex.current = null; }, [pdf]);
+  const indexOf = (d: PDFDocumentProxy) => textIndex.current ??= (async () => {
+    let text = "";
+    const runs: { at: number; page: number; y: number }[] = [];
+    for (let i = 1; i <= d.numPages; i++) {
+      const page = await d.getPage(i);
+      const vp = page.getViewport({ scale: 1 });
+      for (const it of (await page.getTextContent()).items) {
+        if (!("str" in it)) continue;
+        const sq = squash(it.str);
+        if (!sq) continue;
+        const [, y] = vp.convertToViewportPoint(it.transform[4], it.transform[5]);
+        runs.push({ at: text.length, page: i, y: Math.max(0, Math.min(1, (y - (it.height || 0)) / vp.height)) });
+        text += sq;
+      }
+    }
+    return { text, runs };
+  })();
+
+  useEffect(() => {
+    if (!goToText || !pdf || !sizes.length) return;
+    let alive = true;
+    const n = sizes.length;
+    void indexOf(pdf).catch(() => null).then((ix) => {
+      const b = box.current;
+      if (!alive || !b) return;
+      let page = Math.min(n, Math.floor(goToText.frac * n) + 1);
+      let y = Math.min(1, goToText.frac * n - (page - 1));
+      const at = ix ? findPart(ix.text, squash(goToText.text), goToText.frac * ix.text.length) : -1;
+      if (ix && at >= 0) {
+        let lo = 0, hi = ix.runs.length - 1;
+        while (lo < hi) { // the last run starting at or before the match
+          const mid = (lo + hi + 1) >> 1;
+          if (ix.runs[mid].at <= at) lo = mid;
+          else hi = mid - 1;
+        }
+        ({ page, y } = ix.runs[lo]);
+      }
+      requestAnimationFrame(() => {
+        const body = b.querySelector<HTMLElement>(`[data-page="${page}"] .pdfjs-page-body`);
+        if (!body) return;
+        b.scrollTop += body.getBoundingClientRect().top - b.getBoundingClientRect().top + y * body.clientHeight - 24;
+      });
+    });
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [goToText, pdf, sizes.length]);
+
+  useEffect(() => {
+    if (!posRef) return;
+    posRef.current = () => {
+      const b = box.current;
+      if (!b || !sizes.length) return null;
+      const top = b.getBoundingClientRect().top;
+      const pages = Array.from(b.querySelectorAll<HTMLElement>(".pdfjs-page"));
+      const i = pages.findIndex((p) => p.getBoundingClientRect().bottom > top + 4);
+      if (i < 0) return null;
+      const br = pages[i].querySelector<HTMLElement>(".pdfjs-page-body")!.getBoundingClientRect();
+      const frac = Math.min(1, (i + Math.max(0, Math.min(1, (top - br.top) / (br.height || 1)))) / sizes.length);
+      let text = "";
+      for (const p of pages.slice(i, i + 2)) {
+        for (const sp of Array.from(p.querySelectorAll<HTMLElement>(".textLayer span"))) {
+          if (sp.childElementCount || (!text && sp.getBoundingClientRect().bottom < top + 2)) continue;
+          text += `${sp.textContent ?? ""} `;
+          if (text.length > 300) return { text, frac };
+        }
+      }
+      return { text, frac };
+    };
+    return () => { posRef.current = null; };
+  });
 
   // text selected in a page's text layer → "Ask" chip
   const onMouseUp = useCallback((e: React.MouseEvent) => {

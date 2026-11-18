@@ -15,6 +15,7 @@ export function hideReviewBlock(text: string): string {
 import ModelPicker from "./ModelPicker";
 import { utc8 } from "../time";
 import { PlusIcon } from "./Icons";
+import SelectionAsk, { quotedQuestion } from "./SelectionAsk";
 
 export interface LiveJob {
   jobId: string;
@@ -159,6 +160,7 @@ export default function DiscussionPanel({
   const [busy, setBusy] = useState(false);
   const [diff, setDiff] = useState<{ unified: string; identical: boolean; from: string } | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const messagesRef = useRef<HTMLElement>(null);
   const sessionsById = useMemo(() => Object.fromEntries(sessions.map((s) => [s.id, s])), [sessions]);
 
   useEffect(() => {
@@ -320,12 +322,14 @@ export default function DiscussionPanel({
           {differs && <span className="chip warn">differs from the document session</span>}
           {lastSess && onSessionChanged && <ModelPicker session={lastSess} onChanged={onSessionChanged} compact />}
         </section>
-        <section className="messages">
+        <section className="messages" ref={messagesRef}>
           {thread.messages.map((m) => (
             <MessageView key={m.id} m={m} session={m.session_id ? sessionsById[m.session_id] : undefined} live={m.id === liveMessageId ? liveJob : null} onRetry={(sid) => onRetry(thread.id, m.id, sid)} onCancel={onCancel} onPermission={onPermission} sessions={sessions} />
           ))}
           <div ref={bottomRef} />
         </section>
+        <SelectionAsk container={messagesRef} hint="Added to this discussion" testId="thread-sel-ask"
+          onAsk={(p, q) => onReply(thread.id, quotedQuestion(p.quote, q), sessionChoice === "__last__" ? null : sessionChoice)} />
         {diff && (
           <section className="diff-box">
             <div className="label">
@@ -402,14 +406,14 @@ export function MessageView({ m, session, live, onRetry, onCancel, onPermission,
   const isAgent = m.role === "agent";
   const failed = status === "failed" || status === "cancelled" || status === "interrupted";
   return (
-    <div className={`msg ${m.role} ${status}`} data-testid={`message-${m.role}`} data-status={status}>
+    <div className={`msg ${m.role} ${status}`} data-testid={`message-${m.role}`} data-status={status} data-message-id={m.id}>
       <div className="msg-head">
         <span className="who">{m.role === "user" ? "You" : "Agent"}</span>
         <span className="muted small msg-time" title={m.role === "user" ? "Asked" : "Answer started"} data-testid="msg-time">{utc8(m.created_at)}</span>
         {session && <span className="muted small">{session.provider} #{session.short_id ?? statusLabel(session.status)}</span>}
         {isAgent && status !== "completed" && <span className={`chip status ${status}`}>{jobStatusLabel(status)}</span>}
       </div>
-      {content && (isAgent ? <MarkdownView text={content} className="msg-body" /> : <div className="msg-body">{content}</div>)}
+      {content && (isAgent ? <MarkdownView text={content} className="msg-body" /> : <UserText text={content} />)}
       {isAgent && content && status === "completed" && <RefsMenu text={content} />}
       {isAgent && live && live.activity.length > 0 && status !== "completed" && (
         <ul className="activity">
@@ -459,6 +463,18 @@ export function MessageView({ m, session, live, onRetry, onCancel, onPermission,
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/** A user's message; a question about a selected part of an answer starts with that part quoted ("> …"). */
+function UserText({ text }: { text: string }) {
+  const m = /^((?:> .*(?:\n|$))+)\n?/.exec(text);
+  if (!m) return <div className="msg-body">{text}</div>;
+  return (
+    <div className="msg-body">
+      <blockquote className="msg-quote" data-testid="msg-quote">{m[1].replace(/^> /gm, "").trimEnd()}</blockquote>
+      {text.slice(m[0].length)}
     </div>
   );
 }
@@ -520,6 +536,7 @@ function FlatPanel({ threads, sessions, sessionsById, defaultSessionId, liveJob,
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const streamRef = useRef<HTMLDivElement>(null);
   const totalMessages = threads.reduce((n, t) => n + t.messages.length, 0);
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ block: "end" });
@@ -553,14 +570,14 @@ function FlatPanel({ threads, sessions, sessionsById, defaultSessionId, liveJob,
         {onCollapse && <button className="icon-btn" onClick={onCollapse} title="Hide discussions panel" data-testid="panel-collapse">›</button>}
       </div>
       {askBox}
-      <div className="thread-body flat-stream" data-testid="flat-stream">
+      <div className="thread-body flat-stream" data-testid="flat-stream" ref={streamRef}>
         {ordered.length === 0 && <div className="muted pad">Ask above about the whole document, or select text in it to ask about a passage. In flat mode all discussions of this document appear here as one stream.</div>}
         {ordered.map((t, i) => {
           const live = liveJob && liveJob.threadId === t.id ? liveJob : null;
           const liveMessageId = t.messages.find((m) => m.job_id === live?.jobId)?.id;
           const differs = t.last_session_id && defaultSessionId && t.last_session_id !== defaultSessionId;
           return (
-            <section key={t.id} className={`flat-group ${t.id === targetId ? "target" : ""}`} data-testid="flat-group">
+            <section key={t.id} className={`flat-group ${t.id === targetId ? "target" : ""}`} data-testid="flat-group" data-thread-id={t.id}>
               <header className="flat-group-head">
                 <button className="flat-quote" onClick={() => { setTargetId(t.id); onSelectThread(t.id); }} title="Reply to this discussion and scroll the document to its passage">
                   <span className="flat-index">#{i + 1}</span>
@@ -577,6 +594,8 @@ function FlatPanel({ threads, sessions, sessionsById, defaultSessionId, liveJob,
         })}
         <div ref={bottomRef} />
       </div>
+      <SelectionAsk container={streamRef} hint="Added to that discussion" testId="thread-sel-ask"
+        onAsk={async (p, q) => { if (p.threadId) await onReply(p.threadId, quotedQuestion(p.quote, q), null); }} />
       <div className="composer">
         {target ? (
           <div className="muted small flat-target" data-testid="flat-target">

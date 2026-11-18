@@ -418,7 +418,8 @@ export interface Thread {
   anchor: Anchor;
   anchor_state: "attached" | "moved" | "ambiguous" | "orphaned" | "document" | "page";
   /** page / slide / area / picture of a laid-out document, with stored images */
-  target?: { kind: "text" | "page" | "area" | "image"; page: number | null; unit: "page" | "slide"; rect?: number[] | null; label?: string | null; attachments?: string[] } | null;
+  /** (folder chats) kind "side": a side question about a part of an answer of the chat's conversation `of` */
+  target?: { kind: "text" | "page" | "area" | "image" | "side"; page: number | null; unit: "page" | "slide"; rect?: number[] | null; label?: string | null; attachments?: string[]; of?: string; message_id?: string | null } | null;
   diff?: { base: string; target: string; side: string; line_no: number | null; line_end?: number | null; line_text: string; anchored: boolean } | null;
   current_start: number | null;
   current_end: number | null;

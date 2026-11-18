@@ -29,6 +29,7 @@ export default function ChatsPage({ workspaces, target, onTarget, sessions, onRe
   const [doc, setDoc] = useState<OpenDocument | null>(null);
   const [threads, setThreads] = useState<Thread[]>([]);
   const [jobId, setJobId] = useState<string | null>(null);
+  const [sideJobId, setSideJobId] = useState<string | null>(null); // a side question's turn, streamed next to the chat's
   const [first, setFirst] = usePersistentState(`chat.new.${ws ?? ""}`, "");
   const [busy, setBusy] = useState(false);
   const [firstModel, setFirstModel] = useState<ModelChoiceValue | null>(null);
@@ -72,6 +73,9 @@ export default function ChatsPage({ workspaces, target, onTarget, sessions, onRe
       void loadThreads(doc, ws);
       void loadList(ws);
     }
+  });
+  const sideLive = useJobStream(sideJobId, () => {
+    if (doc && ws) void loadThreads(doc, ws);
   });
 
   const startNew = async () => {
@@ -173,6 +177,19 @@ export default function ChatsPage({ workspaces, target, onTarget, sessions, onRe
               void loadList(ws);
             }}
             onWatchJob={(j) => setJobId(j)}
+            sideLive={sideLive}
+            onSideAsk={async (mainId, messageId, quote, question) => {
+              const r = await post<{ job_id: string }>(`/documents/${doc.document_id}/threads`, { ...wholeDocument(), version_sha256: doc.sha256, quote, question,
+                side_of: mainId, side_message_id: messageId ?? undefined }, { idempotencyKey: newIdempotencyKey(), workspace: ws });
+              await loadThreads(doc, ws);
+              setSideJobId(r.job_id);
+            }}
+            onSideReply={async (tid, text) => {
+              const r = await post<{ job_id: string }>(`/threads/${tid}/messages`, { text }, { idempotencyKey: newIdempotencyKey() });
+              await loadThreads(doc, ws);
+              setSideJobId(r.job_id);
+            }}
+            onWatchSideJob={(j) => setSideJobId(j)}
             workspaceId={ws}
           />
         )}

@@ -17,7 +17,7 @@ from .deps import AppContext, require_auth, require_auth_mutating
 from .errors import ApiError, bad_request, conflict, not_found, DOCUMENT_VERSION_CONFLICT, INVALID_ANCHOR
 from .models import AgentSession, AnchorHistory, Document, Job, Message, Thread
 from .sessions import ModelChoiceIn, SessionService
-from .chats import action_message, build_chat_prompt, check_action, is_chat_path
+from .chats import action_message, build_chat_prompt, build_side_prompt, check_action, is_chat_path
 from .development import is_dev_path
 from .documents import is_pr_path
 from .textmodel import NO_TEXT_FORMATS, TextModel, build_text_model_from_html
@@ -331,6 +331,21 @@ class ThreadService:
             body.whole_document = True
             body.quote = body.quote[:20000] if body.target.kind == "text" else ""
             body.prefix, body.suffix, body.start, body.end, body.heading = "", "", 0, 0, None
+        elif body.side_of:
+            # a side question about a part of a chat's answer: its own discussion (and session) next to the chat
+            if not is_chat_path(doc.path):
+                raise bad_request("side questions are for folder chats", "INVALID_SIDE_QUESTION")
+            if not body.quote.strip():
+                raise bad_request("select the part of the answer to ask about", "QUOTE_REQUIRED")
+            with self.ctx.db.read() as s:
+                main = s.get(Thread, body.side_of)
+                if main is None or main.document_id != doc_id:
+                    raise not_found("chat not found", "THREAD_NOT_FOUND")
+            target = {"kind": "side", "of": body.side_of, "message_id": body.side_message_id, "label": "side question"}
+            body.whole_document = True
+            body.prefix, body.suffix, body.start, body.end, body.heading = "", "", 0, 0, None
+            if not body.session_id and body.model_choice is None:
+                body.session_id = "new"  # keeps the chat's own session free (and its context clean)
         elif body.whole_document:
             # a question about the document as a whole: no passage, nothing to validate or re-anchor later
             body.quote, body.prefix, body.suffix, body.start, body.end, body.heading = "", "", "", 0, 0, None
@@ -372,7 +387,7 @@ class ThreadService:
                 orig_start=body.start, orig_end=body.end, orig_heading=heading,
                 cur_version_sha256=sha, cur_quote=body.quote, cur_prefix=body.prefix, cur_suffix=body.suffix,
                 cur_start=body.start, cur_end=body.end, cur_heading=heading,
-                anchor_state="page" if target else ("document" if body.whole_document else "attached"),
+                anchor_state="page" if target and target["kind"] != "side" else ("document" if body.whole_document else "attached"),
                 last_session_id=sess.id,
             )
             s.add(t)
@@ -396,6 +411,9 @@ class ThreadService:
         lessons_used: list[dict[str, str]] = []
         if is_dev_path(doc.path):
             prompt, dev_extra = await self._dev_prompt(doc, body.question, body.dev_kind, body.dev_context, None)
+        elif is_chat_path(doc.path) and target is not None and target["kind"] == "side":
+            prompt = build_side_prompt(question=body.question, quote=body.quote, wiki_root=str(self.docs.root), main=self._messages(target["of"]), prior=None,
+                                       extra=self._extra(doc.path), locked=self._locked(), links=self._links(None))
         elif is_chat_path(doc.path):
             prompt = build_chat_prompt(question=body.question, wiki_root=str(self.docs.root), prior=None, extra=self._extra(doc.path), about=self._chat_about(doc),
                                        locked=self._locked(), brief=body.chat_brief, links=self._links(None))
@@ -453,8 +471,10 @@ class ThreadService:
             sha = t.cur_version_sha256
         target = None
         shown = body.text
+        anchor = json.loads(t.target_json) if t.target_json else None
+        side = anchor if isinstance(anchor, dict) and anchor.get("kind") == "side" else None
         if body.chat_action is not None:
-            if not is_chat_path(doc.path):
+            if not is_chat_path(doc.path) or side is not None:
                 raise ApiError(400, "INVALID_ACTION", "distill / update are for folder chats")
             target = check_action(self.ctx, body.chat_action, body.target_path)
             shown = action_message(body.chat_action, target, body.text if body.text.strip() != "-" else "")
@@ -484,9 +504,13 @@ class ThreadService:
                 else:
                     dctx["whole_file"] = True
             prompt, dev_extra = await self._dev_prompt(doc, body.text, body.dev_kind, dctx, prior)
+        elif is_chat_path(doc.path) and side is not None:
+            prompt = build_side_prompt(question=shown, quote=t.cur_quote, wiki_root=str(self.docs.root), main=self._messages(str(side.get("of") or "")), prior=prior,
+                                       extra=self._extra(doc.path), locked=self._locked(), links=self._links(None))
         elif is_chat_path(doc.path):
             prompt = build_chat_prompt(question=shown, wiki_root=str(self.docs.root), prior=prior, extra=self._extra(doc.path), about=self._chat_about(doc),
-                                       locked=self._locked(), action=body.chat_action, target=target, links=self._links(None))
+                                       locked=self._locked(), action=body.chat_action, target=target, links=self._links(None),
+                                       side=self._side_questions(doc.id, thread_id) if body.chat_action else None)
         elif is_pr_path(doc.path):
             text, cpath = _pr_copy(self.docs, doc.path)
             prompt = build_pr_prompt(question=body.text, quote=t.cur_quote, copy_text=text, copy_path=cpath, wiki_root=str(self.docs.root),
@@ -518,6 +542,21 @@ class ThreadService:
         if row is None:
             raise not_found("development workspace not found", "DEV_WORKSPACE_NOT_FOUND")
         return await dev_turn(self.ctx, row, question=question, kind=kind or "ask", context=context, prior=prior)
+
+    def _messages(self, thread_id: str) -> list[dict[str, str]]:
+        with self.ctx.db.read() as s:
+            return [{"role": m.role, "content": m.content} for m in s.query(Message).filter_by(thread_id=thread_id).order_by(Message.created_at).all()
+                    if m.status == "completed"]
+
+    def _side_questions(self, doc_id: str, main_id: str) -> list[dict[str, Any]]:
+        """The side questions asked about parts of a chat (each: the selected part and its Q&A), oldest first."""
+        out: list[dict[str, Any]] = []
+        with self.ctx.db.read() as s:
+            for t in s.query(Thread).filter_by(document_id=doc_id).order_by(Thread.created_at).all():
+                a = json.loads(t.target_json) if t.target_json else None
+                if isinstance(a, dict) and a.get("kind") == "side" and a.get("of") == main_id:
+                    out.append({"quote": t.cur_quote, "messages": self._messages(t.id)})
+        return [x for x in out if x["messages"]]
 
     def _chat_about(self, doc: Document) -> dict[str, str] | None:
         from .chats import chat_about
@@ -691,6 +730,9 @@ class ThreadCreateIn(BaseModel):
     # PR Development: what kind of task (ask/explain/fix/tests/implement/review/ci/verify) and the editor's context
     dev_kind: str | None = Field(None, max_length=20)
     dev_context: dict[str, Any] | None = None
+    # folder chats: a side question about a part (quote) of an answer in the chat's conversation (thread side_of)
+    side_of: str | None = Field(None, max_length=64)
+    side_message_id: str | None = Field(None, max_length=64)
 
 
 class MessageIn(BaseModel):

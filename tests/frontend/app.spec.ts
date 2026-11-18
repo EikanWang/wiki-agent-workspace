@@ -4351,3 +4351,148 @@ test("Benchmarks: define one, run it twice, compare with the baseline, explain, 
   await page.locator(`[data-testid="machines-item"][data-name="${where === "this server" ? "local" : where}"]`).click();
   await expect(page.getByTestId("machine-bench").getByTestId("bench-run")).toHaveCount(2, { timeout: 10000 });
 });
+
+/** Select the text `needle` inside `el` (an element of the page) and release the mouse there, as a user would. */
+async function selectInside(el: import("@playwright/test").Locator, needle: string) {
+  await el.evaluate((root, needle) => {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (let n = walker.nextNode() as Text | null; n; n = walker.nextNode() as Text | null) {
+      const i = n.data.indexOf(needle);
+      if (i < 0) continue;
+      const r = document.createRange();
+      r.setStart(n, i);
+      r.setEnd(n, i + needle.length);
+      const sel = window.getSelection()!;
+      sel.removeAllRanges();
+      sel.addRange(r);
+      n.parentElement!.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+      return;
+    }
+    throw new Error("text not found: " + needle);
+  }, needle);
+}
+
+test("chat: a side question about a selected part of an answer is answered on the side, and goes into the distill", async ({ page }) => {
+  const errs: string[] = [];
+  page.on("pageerror", (e) => errs.push(String(e)));
+  await login(page);
+  const out = path.join(workspaceDir(), "side-notes", "guards.md");
+  try {
+    const root = page.getByTestId("tree-root").first();
+    await root.locator(".tree-root").hover();
+    await page.getByTestId("tree-chats-root").click();
+    await page.getByTestId("chat-first").fill("Side chat: what does a guard check?");
+    await page.keyboard.press("Enter");
+    const chat = page.getByTestId("chat-view");
+    const main = chat.locator(".chat-messages");
+    await expect(main.locator('[data-testid="message-agent"][data-status="completed"]')).toContainText("what does a guard check?", { timeout: 20000 });
+    // select a part of the answer → ask about it: answered in the side panel, the chat itself goes on unchanged
+    await selectInside(main.locator('[data-testid="message-agent"] .msg-body').first(), "a guard check");
+    await page.getByTestId("chat-sel-ask-open").click();
+    await expect(page.getByTestId("chat-sel-ask-quote")).toHaveText("a guard check");
+    await page.getByTestId("chat-sel-ask-input").fill("Explain guards more");
+    await page.keyboard.press("Enter");
+    const side = page.getByTestId("chat-side");
+    await expect(side.getByTestId("chat-side-quote")).toHaveText("a guard check");
+    await expect(side.locator('[data-testid="message-agent"][data-status="completed"]')).toHaveText(/echo: Explain guards more/, { timeout: 20000 });
+    await expect(page.getByTestId("chat-sel-ask")).toHaveCount(0);
+    await expect(main.locator('[data-testid="message-agent"]')).toHaveCount(1);
+    await side.getByTestId("chat-side-input").fill("And when do they fail?");
+    await side.getByTestId("chat-side-input").press("Enter");
+    await expect(side.locator('[data-testid="message-agent"][data-status="completed"]')).toHaveCount(2, { timeout: 20000 });
+    // the panel folds away and back (it survives a reload)
+    await page.getByTestId("chat-side-collapse").click();
+    await expect(side).toHaveCount(0);
+    await page.getByTestId("chat-side-expand").click();
+    await page.reload();
+    await expect(page.getByTestId("chat-side").getByTestId("chat-side-item")).toHaveCount(1, { timeout: 15000 });
+    // the distill includes the side questions
+    await page.getByTestId("chat-action-distill").check();
+    await page.getByTestId("chat-target").fill("side-notes/guards.md");
+    await page.getByTestId("chat-action-run").click();
+    await expect(main.locator('[data-testid="message-agent"][data-status="completed"]')).toHaveCount(2, { timeout: 20000 });
+    const page_ = fs.readFileSync(out, "utf-8");
+    expect(page_).toContain("- Side chat: what does a guard check?");
+    expect(page_).toContain("- Explain guards more");
+    expect(page_).toContain("- And when do they fail?");
+    await page.getByTestId("chat-archive").click();
+    await page.getByTestId("confirm-ok").click();
+    expect(errs).toEqual([]);
+  } finally {
+    fs.rmSync(path.join(workspaceDir(), "side-notes"), { recursive: true, force: true });
+  }
+});
+
+test("discussion: a question about a selected part of an answer is added to that discussion, with the part quoted", async ({ page }) => {
+  await login(page);
+  await openGuide(page);
+  await page.getByTestId("mode-individual").click();
+  await page.getByTestId("ask-whole-document").click();
+  await page.getByTestId("selection-question").fill("Side e2e: how are graphs lowered?");
+  await page.getByTestId("selection-send").click();
+  const panel = page.getByTestId("discussion-panel");
+  await expect(panel.locator('[data-testid="message-agent"][data-status="completed"]')).toContainText("how are graphs lowered?", { timeout: 20000 });
+  await selectInside(panel.locator('[data-testid="message-agent"] .msg-body').last(), "graphs lowered");
+  await page.getByTestId("thread-sel-ask-open").click();
+  await page.getByTestId("thread-sel-ask-input").fill("What does lowered mean here?");
+  await page.getByTestId("thread-sel-ask-send").click();
+  await expect(panel.locator('[data-testid="message-user"]')).toHaveCount(2);
+  const asked = panel.locator('[data-testid="message-user"]').last();
+  await expect(asked.getByTestId("msg-quote")).toHaveText("graphs lowered");
+  await expect(asked).toContainText("What does lowered mean here?");
+  await expect(panel.locator('[data-testid="message-agent"][data-status="completed"]')).toHaveCount(2, { timeout: 20000 });
+  await expect(panel.locator('[data-testid="message-agent"]').last()).toContainText("What does lowered mean here?");
+});
+
+test("Office: switching between Layout and Text keeps the place in the document", async ({ page }) => {
+  test.skip(!hasSoffice(), "LibreOffice not installed");
+  const ws = workspaceDir();
+  const file = path.join(ws, "docs", "e2e-sync.docx");
+  const cp = require("child_process") as typeof import("child_process");
+  cp.execFileSync(path.resolve(__dirname, "../../.venv/bin/python"), ["-c", `
+import sys; sys.path.insert(0, ${JSON.stringify(path.resolve(__dirname, "../backend"))})
+from pathlib import Path
+from test_locks_formats import _minimal_docx
+Path(${JSON.stringify(file)}).write_bytes(_minimal_docx(["Sync paragraph number %d of the test." % i for i in range(1, 161)]))
+`]);
+  try {
+    await login(page);
+    await page.getByTestId("tree-refresh").click();
+    const dir = page.getByTestId("tree-root").first().locator(".tree-row.dir", { hasText: "docs" }).first();
+    if ((await page.getByTestId("tree-file-docs/e2e-sync.docx").count()) === 0) await dir.locator(".chev").click();
+    await page.getByTestId("tree-file-docs/e2e-sync.docx").locator("button.tree-main").click();
+    if ((await page.getByTestId("office-view-text").getAttribute("aria-selected")) !== "true") await page.getByTestId("office-view-text").click();
+    const body = page.getByTestId("markdown-body");
+    await expect(body).toContainText("Sync paragraph number 120 of the test.");
+    // Text → Layout: the page with the paragraph at the top of the text view comes into view
+    await body.locator("p", { hasText: /^Sync paragraph number 120 of/ }).evaluate((p) => {
+      const sc = p.closest(".reader-body")!;
+      sc.scrollTop += p.getBoundingClientRect().top - sc.getBoundingClientRect().top;
+    });
+    await page.getByTestId("office-view-layout").click();
+    await expect(page.getByTestId("office-view")).toHaveAttribute("data-state", "ready", { timeout: 60000 });
+    const pages = page.getByTestId("office-pdf").locator(".pdfjs-pages");
+    const inView = (needle: string) => pages.evaluate((b, needle) => {
+      const sp = Array.from(b.querySelectorAll<HTMLElement>(".textLayer span")).find((s) => (s.textContent ?? "").includes(needle));
+      if (!sp) return null;
+      return Math.round(sp.getBoundingClientRect().top - b.getBoundingClientRect().top);
+    }, needle);
+    await expect.poll(() => inView("number 120 of"), { timeout: 30000 }).not.toBeNull();
+    const y = (await inView("number 120 of"))!;
+    expect(y).toBeGreaterThanOrEqual(0);
+    expect(y).toBeLessThan(120);
+    // Layout → Text: the paragraph at the top of the layout view is at the top of the text view
+    await expect.poll(() => inView("number 132 of"), { timeout: 15000 }).not.toBeNull();
+    await pages.evaluate((b) => {
+      const sp = Array.from(b.querySelectorAll<HTMLElement>(".textLayer span")).find((s) => (s.textContent ?? "").includes("number 132 of"))!;
+      b.scrollTop += sp.getBoundingClientRect().top - b.getBoundingClientRect().top - 2;
+    });
+    await page.getByTestId("office-view-text").click();
+    const top = () => body.locator("p", { hasText: /^Sync paragraph number 132 of/ }).evaluate((p) =>
+      Math.round(p.getBoundingClientRect().top - p.closest(".reader-body")!.getBoundingClientRect().top));
+    await expect.poll(top, { timeout: 5000 }).toBeGreaterThanOrEqual(-10);
+    expect(await top()).toBeLessThan(60);
+  } finally {
+    fs.rmSync(file, { force: true });
+  }
+});

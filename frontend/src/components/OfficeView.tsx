@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ApiError, Thread, get, getWorkspace } from "../api";
 import PdfView, { PageAsk } from "./PdfView";
+import { ViewPos } from "../viewSync";
 
 interface RenderState {
   state: "ready" | "pending" | "failed" | "unavailable";
@@ -22,8 +23,10 @@ const qs = (path: string, extra: Record<string, string> = {}) => {
  * Layout view of an Office file: the server renders it to PDF with LibreOffice (cached per content), the browser's
  * PDF viewer shows it, so pages, slides and diagrams look as their authors made them (zoom, page navigation, search).
  */
-export default function OfficeView({ path, sha256, onShowText, unit, threads, activeThreadId, onAsk, onOpenThread, goToPage = null }: {
+export default function OfficeView({ path, sha256, onShowText, unit, threads, activeThreadId, onAsk, onOpenThread, goToPage = null, goToText = null, posRef }: {
   path: string;
+  goToText?: (ViewPos & { at: number }) | null;
+  posRef?: React.MutableRefObject<(() => ViewPos | null) | null>;
   goToPage?: { page: number; at: number } | null;
   sha256: string;
   onShowText: (() => void) | null;
@@ -70,7 +73,7 @@ export default function OfficeView({ path, sha256, onShowText, unit, threads, ac
         <div className="muted small office-note">
           Original layout (rendered by LibreOffice) · <a href={download} download={name}>Download the original</a>
         </div>
-        <PdfView url={`/api/v1/office/pdf?${qs(path, { k: st.key ?? "" })}`} unit={unit} threads={threads} activeThreadId={activeThreadId} onAsk={onAsk} onOpenThread={onOpenThread} testId="office-pdf" goToPage={goToPage} />
+        <PdfView url={`/api/v1/office/pdf?${qs(path, { k: st.key ?? "" })}`} unit={unit} threads={threads} activeThreadId={activeThreadId} onAsk={onAsk} onOpenThread={onOpenThread} testId="office-pdf" goToPage={goToPage} goToText={goToText} posRef={posRef} />
       </div>
     );
   }

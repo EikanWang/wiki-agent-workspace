@@ -168,7 +168,8 @@ def check_action(ctx: AppContext, action: str | None, target: str | None) -> str
 
 def build_chat_prompt(*, question: str, wiki_root: str, prior: list[dict[str, str]] | None, extra: str | None,
                       locked: list[str], action: str | None = None, target: str | None = None, brief: str | None = None,
-                      about: dict[str, str] | None = None, links: str | None = None) -> str:
+                      about: dict[str, str] | None = None, links: str | None = None,
+                      side: list[dict[str, Any]] | None = None) -> str:
     parts = [
         f"You are chatting with the user about their wiki: the folder that is your working directory ({wiki_root}). "
         + (f"This conversation is about the {about['kind']} `{about['path']}` (relative to the working directory): focus on "
@@ -187,6 +188,12 @@ def build_chat_prompt(*, question: str, wiki_root: str, prior: list[dict[str, st
     if prior:
         parts.append("The conversation so far:")
         parts.extend(f"[{m['role']}] {m['content'][:6000]}" for m in prior[-40:])
+    if side:
+        parts.append("Side questions the user asked about parts of the conversation (they belong to it: include what they "
+                     "established, the explanations and clarifications, where they fit):")
+        for i, q in enumerate(side, 1):
+            parts.append(f"Side question {i}, about this part of an answer:\n" + _quoted(q["quote"][:4000]))
+            parts.extend(f"[{m['role']}] {m['content'][:6000]}" for m in q["messages"][-20:])
     parts += ["User message:", question]
     if action == "distill":
         parts.append(
@@ -209,6 +216,37 @@ def build_chat_prompt(*, question: str, wiki_root: str, prior: list[dict[str, st
                      "confirmation beyond your own configured permission rules.")
         if links:
             parts.append(links)
+    return "\n\n".join(parts)
+
+
+def _quoted(text: str) -> str:
+    return "\n".join(f"> {line}" for line in text.splitlines() or [""])
+
+
+def build_side_prompt(*, question: str, quote: str, wiki_root: str, main: list[dict[str, str]], prior: list[dict[str, str]] | None,
+                      extra: str | None, locked: list[str], links: str | None = None) -> str:
+    """A side question about a part of an answer in a folder chat: answered on the side, the chat itself goes on."""
+    parts = [
+        f"The user is chatting with you about their wiki: the folder that is your working directory ({wiki_root}). While reading "
+        "one of the answers they selected a part of it and ask a side question about it, to understand it better. Answer that "
+        "side question: explain clearly and to the point (search and read the wiki's pages when it helps and cite them"
+        + (" as links, see the end" if links else " with relative paths") + "). Do not continue the main conversation.",
+    ]
+    if extra:
+        parts.append(extra)
+    if locked:
+        parts.append("These paths are LOCKED by the user and must NOT be modified: " + ", ".join(locked))
+    if main:
+        parts.append("The main conversation (context):")
+        parts.extend(f"[{m['role']}] {m['content'][:6000]}" for m in main[-30:])
+    parts += ["The part of the answer the user selected:", _quoted(quote[:20000])]
+    if prior:
+        parts.append("The side discussion so far:")
+        parts.extend(f"[{m['role']}] {m['content'][:6000]}" for m in prior[-30:])
+    parts += ["User's side question:", question,
+              "Instructions: answer the side question. Do not modify files unless this message explicitly asks for a change."]
+    if links:
+        parts.append(links)
     return "\n\n".join(parts)
 
 

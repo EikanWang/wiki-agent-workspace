@@ -80,3 +80,45 @@ async def test_chat_distill_into_a_page_and_update_source_pages(running_app, wor
     r = await api.post(f"/api/v1/documents/{doc['document_id']}/threads", json={"whole_document": True, "version_sha256": doc["sha256"], "question": "q"})
     await api.wait_job(r.json()["job_id"])
     assert (await api.post(f"/api/v1/threads/{r.json()['thread_id']}/messages", json={"text": "-", "chat_action": "update"})).json()["error"]["code"] == "INVALID_ACTION"
+
+
+async def test_side_questions_about_a_part_of_an_answer_have_their_own_session_and_go_into_a_distill(running_app, workspace):
+    h = await running_app()
+    api = h.api
+    _, d = await start_chat(api)
+    r = await api.post(f"/api/v1/documents/{d['document_id']}/threads", json={"whole_document": True, "version_sha256": d["sha256"],
+                       "question": "What does AOTAutograd do?"})
+    await api.wait_job(r.json()["job_id"])
+    main, main_session = r.json()["thread_id"], r.json()["session_id"]
+    side_body = {"version_sha256": d["sha256"], "question": "What is a joint graph?", "quote": "traces forward and backward", "side_of": main}
+    # a part of an answer is needed, and the thread must be this chat's
+    assert (await api.post(f"/api/v1/documents/{d['document_id']}/threads", json={**side_body, "quote": " "})).json()["error"]["code"] == "QUOTE_REQUIRED"
+    assert (await api.post(f"/api/v1/documents/{d['document_id']}/threads", json={**side_body, "side_of": "nope"})).status_code == 404
+    r = await api.post(f"/api/v1/documents/{d['document_id']}/threads", json=side_body)
+    assert r.status_code == 201, r.text
+    await api.wait_job(r.json()["job_id"])
+    side = r.json()["thread_id"]
+    assert r.json()["session_id"] != main_session  # the chat's session stays free and its context clean
+    r = await api.post(f"/api/v1/threads/{side}/messages", json={"text": "And why both at once?"})
+    await api.wait_job(r.json()["job_id"])
+    with h.ctx.db.read() as s:
+        prompts = [j.prompt for j in s.query(Job).order_by(Job.created_at).all()]
+    assert "side question" in prompts[1] and "[user] What does AOTAutograd do?" in prompts[1] and "> traces forward and backward" in prompts[1]
+    assert "User's side question:\n\nWhat is a joint graph?" in prompts[1]
+    assert "> traces forward and backward" in prompts[2] and "[user] What is a joint graph?" in prompts[2]
+    threads = (await api.get(f"/api/v1/documents/{d['document_id']}/threads")).json()["threads"]
+    assert [t["id"] for t in threads] == [main, side]
+    assert threads[1]["target"]["kind"] == "side" and threads[1]["target"]["of"] == main and threads[1]["anchor"]["quote"] == "traces forward and backward"
+    assert threads[1]["anchor_state"] == "document"
+    # no actions on a side question; a distill of the chat includes them
+    assert (await api.post(f"/api/v1/threads/{side}/messages", json={"text": "-", "chat_action": "update"})).json()["error"]["code"] == "INVALID_ACTION"
+    r = await api.post(f"/api/v1/threads/{main}/messages", json={"text": "-", "chat_action": "distill", "target_path": "notes/aot.md"})
+    await api.wait_job(r.json()["job_id"])
+    with h.ctx.db.read() as s:
+        prompt = s.query(Job).order_by(Job.created_at.desc()).first().prompt
+    assert "Side questions the user asked" in prompt and "> traces forward and backward" in prompt
+    assert "[user] What is a joint graph?" in prompt and "[user] And why both at once?" in prompt
+    # side questions are only for chats
+    doc = (await api.get("/api/v1/documents/open?path=docs/guide.md")).json()
+    r = await api.post(f"/api/v1/documents/{doc['document_id']}/threads", json={**side_body, "version_sha256": doc["sha256"]})
+    assert r.json()["error"]["code"] == "INVALID_SIDE_QUESTION"

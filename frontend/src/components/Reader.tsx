@@ -7,8 +7,9 @@ import OfficeView from "./OfficeView";
 import PdfView, { PageAsk } from "./PdfView";
 import { AgentSession, ApiError, OpenDocument, ReviewMark, Thread, getWorkspace, put } from "../api";
 import { renderMarkdown, sanitizeHtml, slugify } from "../markdown";
-import { SelectionAnchor, TextModel, anchorFromSelection, buildTextModel, makeAnchor, rangeFromOffsets, resolveAnchor, wholeDocument } from "../textmodel";
+import { SelectionAnchor, TextModel, anchorFromSelection, buildTextModel, makeAnchor, offsetToDom, rangeFromOffsets, resolveAnchor, wholeDocument } from "../textmodel";
 import { flashRect, sectionOf } from "../linkHighlight";
+import { ViewPos, findPart, squash, squashMap } from "../viewSync";
 
 export interface ReaderProps {
   doc: OpenDocument;
@@ -85,10 +86,66 @@ export default function Reader(props: ReaderProps) {
   const [localView, setLocalView] = useState(officeView);
   useEffect(() => setLocalView(officeView), [officeView]);
   const layout = isOffice && (!hasText || localView === "layout");
+  // switching views keeps the place: the text at the top of one is looked up in the other
+  const layoutPos = useRef<(() => ViewPos | null) | null>(null);
+  const textPosPending = useRef<ViewPos | null>(null);
+  const [goToText, setGoToText] = useState<(ViewPos & { at: number }) | null>(null);
+  useEffect(() => setGoToText(null), [doc.document_id]);
   const setView = (v: "layout" | "text") => {
+    if (v === "layout" && !layout) {
+      const p = textPos();
+      if (p) setGoToText({ ...p, at: Date.now() });
+    } else if (v === "text" && layout) {
+      textPosPending.current = layoutPos.current?.() ?? null;
+    }
     setLocalView(v);
     onOfficeViewChange?.(v);
   };
+  /** Where the Text view is: the text from the first line at its top. */
+  const textPos = (): ViewPos | null => {
+    const sc = scrollRef.current;
+    const model = modelRef.current;
+    if (!sc || !model?.spans.length) return null;
+    const top = sc.getBoundingClientRect().top + 2;
+    const frac = sc.scrollHeight > sc.clientHeight ? sc.scrollTop / (sc.scrollHeight - sc.clientHeight) : 0;
+    const r = document.createRange();
+    const s = model.spans.find((x) => {
+      r.selectNodeContents(x.node);
+      const b = r.getBoundingClientRect();
+      return b.height > 0 && b.bottom >= top;
+    });
+    if (!s) return { text: "", frac };
+    let lo = 0, hi = Math.max(0, s.node.length - 1);
+    while (lo < hi) { // the first character of the span on a line at or below the top
+      const mid = (lo + hi) >> 1;
+      r.setStart(s.node, mid);
+      r.setEnd(s.node, mid + 1);
+      if (r.getBoundingClientRect().bottom >= top) hi = mid;
+      else lo = mid + 1;
+    }
+    return { text: (s.node.data.slice(lo) + model.text.slice(s.end, s.end + 300)).slice(0, 300), frac };
+  };
+  useEffect(() => {
+    const p = textPosPending.current;
+    if (layout || !p) return;
+    textPosPending.current = null;
+    requestAnimationFrame(() => {
+      const sc = scrollRef.current;
+      const model = modelRef.current;
+      if (!sc || !model) return;
+      const m = squashMap(model.text);
+      const i = p.text ? findPart(m.text, squash(p.text), p.frac * m.text.length) : -1;
+      const dom = i >= 0 ? offsetToDom(model, m.at[i]) : null;
+      if (dom) {
+        const r = document.createRange();
+        r.setStart(dom.node, dom.offset);
+        r.setEnd(dom.node, Math.min(dom.node.length, dom.offset + 1));
+        sc.scrollTop += r.getBoundingClientRect().top - sc.getBoundingClientRect().top - 12;
+      } else {
+        sc.scrollTop = p.frac * (sc.scrollHeight - sc.clientHeight);
+      }
+    });
+  }, [layout]);
   // opening a discussion from the panel shows its passage, which lives in the text view
   const threadDoc = useRef(doc.document_id);
   useEffect(() => {
@@ -731,7 +788,8 @@ export default function Reader(props: ReaderProps) {
         )}
         {isOffice && layout && (
           <OfficeView path={doc.path} sha256={doc.sha256} onShowText={hasText ? () => setView("text") : null}
-            unit={slideDeck ? "slide" : "page"} threads={threads} activeThreadId={activeThreadId} onAsk={askPage} onOpenThread={onOpenThread} goToPage={goToPage} />
+            unit={slideDeck ? "slide" : "page"} threads={threads} activeThreadId={activeThreadId} onAsk={askPage} onOpenThread={onOpenThread} goToPage={goToPage}
+            goToText={goToText} posRef={layoutPos} />
         )}
         {doc.format === "image" ? (
           <div className={`image-view ${imgZoom ? "zoomed" : ""}`} data-testid="image-view">

@@ -73,6 +73,7 @@ export function buildTextModel(root: HTMLElement): TextModel {
     if (node.nodeType !== Node.ELEMENT_NODE) return;
     const el = node as HTMLElement;
     const tag = el.tagName;
+    if (el.classList.contains("waw-thread-pin")) return; // a discussion's marker, not the document's text
     if (tag === "BR") {
       flushBr();
       pendingBr = true;
