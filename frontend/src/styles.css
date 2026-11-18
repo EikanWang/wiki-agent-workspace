@@ -85,6 +85,8 @@ a { color: var(--primary); }
 
 .layout { flex: 1; display: grid; grid-template-columns: var(--sidebar-width, 260px) 1fr var(--panel-width, 380px); min-height: 0; }
 .layout.view-terminal { grid-template-columns: var(--sidebar-width, 260px) 1fr; }
+/* nothing to discuss (a pull request without its discussion page yet, no document open): no empty panel column */
+.layout.no-panel { grid-template-columns: var(--sidebar-width, 260px) 1fr; }
 .sidebar-collapsed .sidebar { visibility: hidden; overflow: hidden; border-right: none; }
 .sidebar { position: relative; border-right: 1px solid var(--border); overflow: hidden; background: var(--card); min-width: 0; display: flex; flex-direction: column; }
 .resizer { position: absolute; top: 0; bottom: 0; width: 8px; cursor: col-resize; z-index: 5; touch-action: none; }

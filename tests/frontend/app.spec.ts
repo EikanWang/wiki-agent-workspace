@@ -2302,6 +2302,13 @@ test("GitHub PR tab: overview, files, choose the wiki once, ask about the PR and
   await expect(tab).toContainText("#101");
   await expect(page.getByTestId("pr-title")).toContainText("[xpu] Fix the lazy Level Zero stub");
   await expect(page.getByTestId("pr-description")).toContainText("This PR fixes the lazy stub.");
+  // no discussion page yet: no empty discussions column, the PR takes the width up to the right edge
+  if ((await page.getByTestId("discussion-panel").count()) === 0) {
+    await expect(page.getByTestId("layout")).toHaveClass(/no-panel/);
+    const vw = page.viewportSize()!.width;
+    const right = await page.getByTestId("pr-title").evaluate((el) => el.closest(".center")!.getBoundingClientRect().right);
+    expect(Math.abs(right - vw)).toBeLessThan(2);
+  }
   // Repo Insights: a highlight opens its PR here, in PR Review (Ctrl/⌘-click or ↗: on GitHub)
   await page.getByTestId("activity-insights").click();
   await page.locator('[data-testid="insights-repo"][data-repo="pytorch/pytorch"]').click();
