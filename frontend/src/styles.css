@@ -1447,6 +1447,7 @@ body.resizing-h iframe { pointer-events: none; }
 .learning-lesson.proposed { border-color: var(--primary); }
 .learning-lesson.off, .learning-lesson.rejected { opacity: 0.7; }
 .learning-text { font-size: 13px; white-space: pre-wrap; }
+.modal textarea.skill-text { min-height: 50vh; resize: vertical; font-size: 12.5px; line-height: 1.45; tab-size: 2; }
 .learning-actions { flex-wrap: wrap; gap: 6px; }
 .learning-cases { display: flex; flex-direction: column; gap: 4px; border-top: 1px solid var(--border); padding-top: 4px; }
 .learning-case div { white-space: pre-wrap; overflow-wrap: anywhere; }

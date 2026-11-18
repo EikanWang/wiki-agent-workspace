@@ -307,6 +307,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from . import review_learning
 
     api.include_router(review_learning.router)
+    from . import review_skills
+
+    api.include_router(review_skills.router)
     api.include_router(documents.router)
     api.include_router(chats.router)
     api.include_router(annotations.router)

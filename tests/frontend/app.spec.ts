@@ -2739,6 +2739,55 @@ test("review learning: severity, edits and discard reasons are learned; you acce
   await signOut(page);
 });
 
+test("review skills: listed per repository, edited in a dialog (checked against the disk), the list shows what the next review gets", async ({ page }) => {
+  const dir = path.join(workspaceDir(), ".claude/skills/e2e-pr-review");
+  const file = path.join(dir, "SKILL.md");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(file, "---\nname: e2e-pr-review\ndescription: Review PRs for naming\n---\n\n# Steps\n");
+  const other = path.join(workspaceDir(), ".claude/skills/e2e-slides/SKILL.md");
+  fs.mkdirSync(path.dirname(other), { recursive: true });
+  fs.writeFileSync(other, "---\nname: e2e-slides\ndescription: Convert slides\n---\n");
+  try {
+    await ensureGithubSignIn(page);
+    await page.goto("/");
+    await page.getByTestId("login-github").click();
+    await expect(page.getByTestId("view-document")).toBeVisible({ timeout: 15000 });
+    await page.getByTestId("activity-reviews").click();
+    await page.getByTestId("reviews-settings").click();
+    await page.getByTestId("reviews-settings-skills").click();
+    const item = page.locator('[data-testid="review-skill"][data-name="e2e-pr-review"]');
+    await expect(item).toContainText("Review PRs for naming");
+    await expect(page.locator('[data-testid="review-skill"][data-name="e2e-slides"]')).toHaveCount(0); // not about reviews
+    await page.getByTestId("review-skills-all").check();
+    await expect(page.locator('[data-testid="review-skill"][data-name="e2e-slides"]')).toHaveCount(1);
+    // edit and save: the list is read again
+    await item.getByTestId("review-skill-edit").click();
+    const text = page.getByTestId("review-skill-text");
+    await expect(text).toHaveValue(/Review PRs for naming/);
+    await text.fill("---\nname: e2e-pr-review\ndescription: Review PRs for XeCore naming\n---\n\n# Steps\n");
+    await page.getByTestId("review-skill-save").click();
+    await expect(page.getByTestId("review-skills-note")).toContainText("The next review gets “e2e-pr-review”: Review PRs for XeCore naming");
+    await expect(item).toContainText("Review PRs for XeCore naming");
+    expect(fs.readFileSync(file, "utf-8")).toContain("XeCore");
+    // changed on disk meanwhile: the save is refused, Reload from disk reads it
+    fs.writeFileSync(file, "---\nname: e2e-pr-review\ndescription: Edited elsewhere\n---\n");
+    await text.fill("---\nname: e2e-pr-review\ndescription: Mine\n---\n");
+    await page.getByTestId("review-skill-save").click();
+    await expect(page.getByTestId("review-skill-error")).toContainText("changed on disk");
+    page.once("dialog", (d) => void d.accept());
+    await page.getByTestId("review-skill-reload").click();
+    await expect(text).toHaveValue(/Edited elsewhere/);
+    await page.getByTestId("review-skill-editor").getByRole("button", { name: "Close" }).click();
+    await expect(page.getByTestId("review-skill-editor")).toHaveCount(0);
+    await page.getByTestId("review-skills-refresh").click();
+    await expect(item).toContainText("Edited elsewhere");
+    await signOut(page);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(path.dirname(other), { recursive: true, force: true });
+  }
+});
+
 test("diff line numbers are those of the files (Markdown '---' rules, no final newline) in the wiki diff", async ({ page }) => {
   await login(page);
   const ws = workspaceDir();

@@ -8,6 +8,7 @@ import GhUser from "./GhUser";
 import { useRestoredScroll } from "../persist";
 import { GhRefreshSelect } from "../ghRefresh";
 import { LearningSettings, useLearningSummary } from "./ReviewLearning";
+import { ReviewSkills } from "./ReviewSkills";
 import { AgentStatus, CATEGORY_HINT, CacheSettings, Category, LevelMenu, PriorityAgent, PriorityLevel, PriorityRule, PrioritySettings } from "./ReviewPriority";
 
 export interface ReviewPR {
@@ -630,7 +631,7 @@ function ReviewsSettings({ prefs, busy, change, problems, status, maintainers, c
 }) {
   const [repo, setRepo] = useState("");
   const [cm, setCm] = useState((prefs.core_maintainers ?? []).join(", "));
-  const [tab, setTab] = useState<"priority" | "repos" | "cache" | "learning">(() => { const t = localStorage.getItem("waw.reviews.settingsTab"); return t === "repos" || t === "cache" || t === "learning" ? t : "priority"; });
+  const [tab, setTab] = useState<"priority" | "repos" | "cache" | "learning" | "skills">(() => { const t = localStorage.getItem("waw.reviews.settingsTab"); return t === "repos" || t === "cache" || t === "learning" || t === "skills" ? t : "priority"; });
   const learning = useLearningSummary(true);
   useEffect(() => localStorage.setItem("waw.reviews.settingsTab", tab), [tab]);
   const valid = /^[\w.-]+\/[\w.-]+$/.test(repo.trim());
@@ -647,8 +648,11 @@ function ReviewsSettings({ prefs, busy, change, problems, status, maintainers, c
         <button role="tab" aria-selected={tab === "cache"} className={tab === "cache" ? "active" : ""} onClick={() => setTab("cache")} data-testid="reviews-settings-cache">Cache</button>
         <button role="tab" aria-selected={tab === "learning"} className={tab === "learning" ? "active" : ""} onClick={() => setTab("learning")} title="What the agent learned from your reviews"
           data-testid="reviews-settings-learning">Agent learning{learning.proposed + learning.flagged ? ` (${learning.proposed + learning.flagged})` : ""}</button>
+        <button role="tab" aria-selected={tab === "skills"} className={tab === "skills" ? "active" : ""} onClick={() => setTab("skills")} title="The skills agent reviews get; edit them here"
+          data-testid="reviews-settings-skills">Skills</button>
       </span>
       {tab === "learning" && <LearningSettings />}
+      {tab === "skills" && <ReviewSkills />}
       {tab === "priority" && <PrioritySettings key="priority" prefs={prefs} status={status} save={async (c) => {
         await savePrefs(c as Partial<HubPrefs>);
       }} />}

@@ -95,6 +95,10 @@ backend/app/
                    and the track record per severity (from min_cases on) into the agent review's prompt
                    (<<<REVIEW_LEARNING>>>); the run records the lessons it used. Teach: a lesson from one comment, active at once
                    (WAW-REVIEW-TEACH words it). Settings in kv review_learning, last run in review_learning_state
+  review_skills.py  the skills an agent PR review of a repository gets (jobs.skill_folders of its wiki root and
+                   connected checkout; GET /github/review-skills, review-related flagged, git-tracked noted) and
+                   editing one (GET/PUT /github/review-skills/file: only SKILL.md files some review gets, a PUT
+                   names the sha256 it replaces and keeps the frontmatter; answers with the list again)
   chats.py         folder chats: the hidden read-only document .waw-chat/<slug>-<id>.md of a folder (stub in
                    snapshots/chats/<folder id>/, never in the wiki) reusing threads, sessions and streaming;
                    /chats list/create/archive (documents.hidden); build_chat_prompt (the conversation so far, locks,

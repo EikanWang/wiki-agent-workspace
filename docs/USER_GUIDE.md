@@ -356,6 +356,15 @@ kept while the server runs: after a restart, PRs that had not started yet are no
     always works (reject it again, or delete it to allow it once more). Settings: use the lessons or not, learn after each
     review or only with *Learn now*, learn from other reviewers, and the model: the app's agent (default) or the
     Repo Insights model endpoint (your comments are then sent there).
+  - **Review skills.** Every agent review also gets the skills (`<skill>/SKILL.md`) of the repository's connected
+    local checkout, its wiki and the other open and connected folders: its prompt lists each name and description,
+    and the agent reads the SKILL.md that matches. **⚙ → Skills** lists them for a repository — those about reviews
+    first, *Show all* for the rest — and **Edit** opens one: **Save** (Ctrl+S) is refused if the file changed on
+    disk since it was read (**Reload from disk** reads it again), and keeps the `---` header with `name:` and
+    `description:`, by which the agent chooses. Skills are read anew for every review, so the next one uses the
+    saved text; the list shows what it will get (a name defined twice: the first wins). A skill of the local
+    checkout is tracked by that repository's git: editing it makes the checkout dirty (the app then stops
+    fast-forwarding it), so copy it into the wiki's `.claude/skills` under another name instead.
   - **Finish review (n)** (n = your pending comments plus applied suggestions): an optional summary and *Comment* / *Approve* / *Request changes*, then **Submit**
     publishes everything to GitHub as one review, as the server's `gh` account (shown in the box). If GitHub
     refuses (e.g. the PR changed and a line no longer exists), nothing is left half-published on GitHub and the
