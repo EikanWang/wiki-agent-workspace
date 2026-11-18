@@ -98,6 +98,15 @@ def _in(ts: str | None, a: str, b: str) -> bool:
     return bool(ts) and a <= ts <= b
 
 
+def now() -> dt.datetime:
+    """GitHub's time: this host's clock corrected by GitHub's last Date header (a day is over when GitHub says so,
+    even when this clock is off)."""
+    from .. import gh_limits
+
+    lim = gh_limits.LIMITER
+    return dt.datetime.fromtimestamp(lim.clock() + lim.skew, dt.timezone.utc)
+
+
 def window(day: str) -> tuple[str, str]:
     return f"{day}T00:00:00Z", f"{day}T23:59:59Z"
 
@@ -198,7 +207,7 @@ async def fetch_range(ctx: Any, repo: str, since: str, until: str, extra: str = 
     for it in found.values():
         _write(d / f"{it['number']}.json", it)
     if not extra:
-        today = dt.datetime.now(dt.timezone.utc).date()
+        today = now().date()
         day = dt.date.fromisoformat(since)
         while day <= dt.date.fromisoformat(until):
             if day < today:  # over: what was active then is final

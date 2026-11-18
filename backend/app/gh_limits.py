@@ -204,6 +204,7 @@ class Limiter:
         self.buckets: dict[str, Bucket] = {}            # "identity|resource"
         self.blocked: dict[str, tuple[float, str]] = {}  # secondary limits: key -> (until, why)
         self.skew = 0.0                                  # GitHub's clock - ours
+        self.skew_at = 0.0                               # when (our clock) GitHub's Date was last seen
         self.identity = "gh"
         self.last_bg: dict[str, float] = {}
         self.last_mutation = 0.0
@@ -233,7 +234,7 @@ class Limiter:
             with contextlib.suppress(TypeError, ValueError):
                 gh_now = email.utils.parsedate_to_datetime(h["date"]).timestamp()
                 if abs(gh_now - now) < 86400:
-                    self.skew = gh_now - now
+                    self.skew, self.skew_at = gh_now - now, now
         res = h.get("x-ratelimit-resource") or resource
         if not res or "x-ratelimit-remaining" not in h:
             return res
@@ -664,7 +665,7 @@ def configure(state_dir: Path | None, overrides: dict[str, float] | None = None)
     fresh = Limiter(LIMITER.cfg)  # (a new app: start clean, then take what the other processes know)
     for k in ("buckets", "blocked", "metrics", "inflight", "waiting", "last_bg", "bg"):
         setattr(LIMITER, k, getattr(fresh, k))
-    LIMITER.failed, LIMITER.checked, LIMITER.skew, LIMITER.last_mutation = None, 0.0, 0.0, 0.0
+    LIMITER.failed, LIMITER.checked, LIMITER.skew, LIMITER.skew_at, LIMITER.last_mutation = None, 0.0, 0.0, 0.0, 0.0
     LIMITER.shared = Path(state_dir) / "github-rate.json" if state_dir else None
     LIMITER.refresher = _rate_limit_free
     with LIMITER.lock:

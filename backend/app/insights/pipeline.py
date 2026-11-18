@@ -28,7 +28,7 @@ WEEK_BLOCKS_AFTER = 14  # longer periods are rolled up week by week
 
 
 def today() -> dt.date:
-    return dt.datetime.now(dt.timezone.utc).date()
+    return gh.now().date()
 
 
 def days_of(since: str, until: str) -> list[str]:

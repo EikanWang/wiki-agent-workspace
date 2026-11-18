@@ -15,6 +15,7 @@ import logging
 from typing import Any
 
 from ..kv import kv_get, kv_put
+from . import github as gh
 from . import pipeline as pl
 from . import settings as st
 
@@ -82,7 +83,7 @@ async def tick(ctx: Any, now: dt.datetime | None = None) -> list[str]:
     """Start what is due, at a pace GitHub allows: one repository at a time (in the order of their times), and only
     with enough quota left; each run is background work (≤ 40% of each hourly quota, evenly paced). Returns the
     repository started (or [])."""
-    now = now or dt.datetime.now(dt.timezone.utc)
+    now = now or gh.now()
     cfg = st.load(ctx)
     local = now + dt.timedelta(hours=int(cfg.get("timezone_offset", 8)))
     runs = kv_get(ctx, RUNS_KEY, {}) or {}
@@ -149,10 +150,24 @@ def _start_report(ctx: Any, r: dict[str, Any], period: str, value: str) -> list[
     return [f"{r['repo']} {period}"]
 
 
+async def _github_now() -> dt.datetime | None:
+    """GitHub's time (checked at least hourly; `gh api rate_limit` is free), or None while GitHub is not reachable."""
+    from .. import gh_limits
+
+    lim = gh_limits.LIMITER
+    if lim.clock() - lim.skew_at > 3600 and lim.refresher is not None:
+        await asyncio.to_thread(lim.refresher)
+    return gh.now() if lim.skew_at else None
+
+
 async def _loop(ctx: Any) -> None:
     while True:
         try:
-            await tick(ctx)
+            now = await _github_now()
+            if now is None:
+                plan["deferred"] = "waiting for GitHub's time (this host's clock decides no day by itself)"
+            else:
+                await tick(ctx, now)
         except Exception:  # noqa: BLE001 - the loop keeps going
             log.exception("insights scheduler")
         await asyncio.sleep(60)

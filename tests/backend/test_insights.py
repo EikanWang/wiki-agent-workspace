@@ -251,6 +251,22 @@ async def test_scheduler_runs_the_last_complete_day_once(running_app, tmp_path):
     assert await scheduler.tick(h.ctx, late + dt.timedelta(days=1)) == []  # off
 
 
+async def test_days_end_by_githubs_clock(monkeypatch):
+    from backend.app import gh_limits
+
+    lim = gh_limits.LIMITER
+    monkeypatch.setattr(lim, "skew", 0.0)
+    monkeypatch.setattr(lim, "skew_at", 0.0)
+    monkeypatch.setattr(lim, "refresher", None)
+    assert await scheduler._github_now() is None  # GitHub's time unknown: no day is decided
+    host = dt.datetime(2026, 11, 18, 0, 30, tzinfo=dt.timezone.utc).timestamp()  # this host: 8 h fast
+    monkeypatch.setattr(lim, "clock", lambda: host)
+    lim.observe({"date": "Tue, 17 Nov 2026 16:30:00 GMT"})
+    assert lim.skew == -8 * 3600
+    assert pl.today() == dt.date(2026, 11, 17)  # the 17th is not over yet
+    assert (await scheduler._github_now()).hour == 16
+
+
 def test_last_finished_periods():
     lf = scheduler.last_finished
     assert lf("week", dt.date(2026, 11, 15)) == "2026-11-15"  # a Sunday: that week has ended
