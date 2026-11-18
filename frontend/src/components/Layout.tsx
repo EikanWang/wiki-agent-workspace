@@ -64,6 +64,9 @@ export interface Prefs {
   readerMode: "read" | "discuss";
   /** Word / PowerPoint / Visio: the original layout (LibreOffice) or the text view (anchored discussions) */
   officeView: "layout" | "text";
+  /** the rectangle around the place a link led to: its color, and how long it shows (ms; 0 = none) */
+  linkHighlightColor: string;
+  linkHighlightMs: number;
 }
 
 export const DEFAULT_PREFS: Prefs = {
@@ -81,6 +84,8 @@ export const DEFAULT_PREFS: Prefs = {
   panelMode: "individual",
   readerMode: "discuss",
   officeView: "layout",
+  linkHighlightColor: "#f5a623",
+  linkHighlightMs: 1000,
 };
 
 const KEY = "waw.prefs";
@@ -152,8 +157,16 @@ export function FontSettings({ prefs, onChange, onClose }: { prefs: Prefs; onCha
           <button className="btn small" onClick={() => onChange({ terminalSize: Math.min(24, prefs.terminalSize + 1) })} aria-label="Larger">+</button>
         </span>
       </label>
+      <label className="pref-row" title="When a link opens a document, a rectangle shows the place it points at for a moment">
+        <span>Link highlight</span>
+        <span className="stepper">
+          <input type="color" value={prefs.linkHighlightColor} onChange={(e) => onChange({ linkHighlightColor: e.target.value })} aria-label="Highlight color" data-testid="pref-link-hl-color" />
+          <input type="number" min={0} max={10} step={0.5} value={prefs.linkHighlightMs / 1000} onChange={(e) => onChange({ linkHighlightMs: Math.round(Math.min(10, Math.max(0, Number(e.target.value) || 0)) * 1000) })} aria-label="Highlight time (seconds, 0: off)" data-testid="pref-link-hl-time" />
+          <span className="muted small">s</span>
+        </span>
+      </label>
       <div className="row">
-        <button className="btn small" onClick={() => onChange({ readerFont: DEFAULT_PREFS.readerFont, readerSize: DEFAULT_PREFS.readerSize, readerWidth: DEFAULT_PREFS.readerWidth, terminalSize: DEFAULT_PREFS.terminalSize })}>Reset</button>
+        <button className="btn small" onClick={() => onChange({ readerFont: DEFAULT_PREFS.readerFont, readerSize: DEFAULT_PREFS.readerSize, readerWidth: DEFAULT_PREFS.readerWidth, terminalSize: DEFAULT_PREFS.terminalSize, linkHighlightColor: DEFAULT_PREFS.linkHighlightColor, linkHighlightMs: DEFAULT_PREFS.linkHighlightMs })}>Reset</button>
       </div>
     </div>
   );

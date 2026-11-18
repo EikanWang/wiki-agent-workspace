@@ -8,6 +8,7 @@ import PdfView, { PageAsk } from "./PdfView";
 import { AgentSession, ApiError, OpenDocument, ReviewMark, Thread, getWorkspace, put } from "../api";
 import { renderMarkdown, sanitizeHtml, slugify } from "../markdown";
 import { SelectionAnchor, TextModel, anchorFromSelection, buildTextModel, makeAnchor, rangeFromOffsets, resolveAnchor, wholeDocument } from "../textmodel";
+import { flashRect, sectionOf } from "../linkHighlight";
 
 export interface ReaderProps {
   doc: OpenDocument;
@@ -342,6 +343,7 @@ export default function Reader(props: ReaderProps) {
       hit[0].scrollIntoView({ block: "center", behavior: "smooth" });
       hit.forEach((s) => s.classList.add("waw-target"));
       window.setTimeout(() => hit.forEach((s) => s.classList.remove("waw-target")), 1600);
+      if (scrollRef.current) flashRect(scrollRef.current, hit);
       setFragmentMissing(null);
       return true;
     }
@@ -378,6 +380,7 @@ export default function Reader(props: ReaderProps) {
     }
     target.classList.add("waw-target");
     window.setTimeout(() => target?.classList.remove("waw-target"), 1600);
+    if (scroller) flashRect(scroller, sectionOf(target));
     setFragmentMissing(null);
     return true;
   }, []);

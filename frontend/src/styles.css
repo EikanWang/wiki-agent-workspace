@@ -102,6 +102,7 @@ body.resizing { cursor: col-resize; user-select: none; }
 .pref-row select { max-width: 180px; }
 .stepper { display: inline-flex; align-items: center; gap: 6px; }
 .stepper input[type="number"] { width: 56px; border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; background: var(--bg); }
+.stepper input[type="color"] { width: 32px; height: 24px; padding: 0 2px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); cursor: pointer; }
 .toc-toggle { border: none; background: transparent; text-align: left; padding: 2px 6px; color: var(--muted); cursor: pointer; border-radius: 4px; font-size: 12px; font-weight: 600; }
 .toc-toggle:hover { background: var(--accent); color: var(--fg); }
 .toc.collapsed { width: 28px; }
@@ -163,8 +164,11 @@ body.resizing { cursor: col-resize; user-select: none; }
 .markdown-body table { border-collapse: collapse; }
 .markdown-body td, .markdown-body th { border: 1px solid var(--border); padding: 4px 10px; }
 .markdown-body img { max-width: 100%; }
-.markdown-body .waw-target { animation: waw-target-flash 1.6s ease-out; }
-@keyframes waw-target-flash { 0%, 60% { background: var(--hl-active); } 100% { background: transparent; } }
+/* where a link led: a rectangle for a moment (Appearance: color, time) */
+.waw-link-rect { position: absolute; z-index: 15; pointer-events: none; border: 3px solid var(--link-hl-color, #f5a623); border-radius: 6px; animation: waw-link-rect 1s ease-in forwards; }
+@keyframes waw-link-rect { 0%, 75% { opacity: 1; } 100% { opacity: 0; } }
+.pdfjs-page.link-flash .pdfjs-page-body { outline: 3px solid var(--link-hl-color, #f5a623); animation: waw-link-outline var(--link-hl-dur, 1s) ease-in forwards; }
+@keyframes waw-link-outline { 0%, 75% { outline-color: var(--link-hl-color, #f5a623); } 100% { outline-color: transparent; } }
 mark.waw-hl { background: var(--hl); color: inherit; border-radius: 2px; cursor: pointer; }
 mark.waw-hl.active { background: var(--hl-active); }
 mark.waw-hl.pending { background: var(--hl-active); cursor: text; }
@@ -1536,6 +1540,5 @@ body.resizing-h iframe { pointer-events: none; }
 .refs-list .muted { overflow-wrap: anywhere; }
 a.ref-path { text-decoration: none; }
 a.ref-path code { text-decoration: underline dotted; }
-pre > code > .ln.waw-target { animation: waw-target-flash 1.6s ease-out; }
 .nav-arrows { display: inline-flex; gap: 2px; margin-left: 4px; }
 .nav-arrows .icon-btn:disabled { opacity: 0.35; cursor: default; }

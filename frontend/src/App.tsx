@@ -888,6 +888,8 @@ export default function App() {
         ["--reader-font" as string]: FONT_STACKS[prefs.readerFont],
         ["--reader-size" as string]: `${prefs.readerSize}px`,
         ["--reader-width" as string]: prefs.readerWidth ? `${prefs.readerWidth}px` : "none",
+        ["--link-hl-color" as string]: prefs.linkHighlightColor,
+        ["--link-hl-ms" as string]: String(prefs.linkHighlightMs),
         // the activity bar (Files · PR Review · PR Development) comes on top of the tree's own width
         ["--sidebar-width" as string]: sidebarOpen ? `${(listOpen ? prefs.sidebarWidth : 0) + ACTIVITY_BAR_PX}px` : "0px",
         ["--panel-width" as string]: panelOpen ? `${prefs.panelWidth}px` : "36px",

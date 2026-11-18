@@ -2801,8 +2801,19 @@ test("back / forward after following a link in an answer return to the document 
     const answer = page.locator('[data-testid="message-agent"][data-status="completed"]').last();
     await expect(answer).toContainText("the target", { timeout: 20000 });
     const guideTitle = await page.getByTestId("markdown-body").locator("h1").first().textContent();
+    // the link highlight's color and time are set in Appearance
+    await page.getByTestId("font-button").click();
+    await page.getByTestId("pref-link-hl-color").fill("#ff0000");
+    await page.getByTestId("pref-link-hl-time").fill("2");
+    await page.getByTestId("font-button").click();
     await answer.getByRole("link", { name: "the target" }).click();
     await expect(page.getByTestId("markdown-body").locator("h1")).toHaveText("Nav Target");
+    // a rectangle shows the section the link pointed at, then goes away
+    const rect = page.getByTestId("link-highlight");
+    await expect(rect).toBeVisible();
+    expect(await rect.evaluate((e) => getComputedStyle(e).borderTopColor)).toBe("rgb(255, 0, 0)");
+    expect(await rect.evaluate((e) => (e as HTMLElement).style.animationDuration)).toBe("2000ms");
+    await expect(rect).toHaveCount(0, { timeout: 4000 });
     await expect(page.getByTestId("nav-forward")).toBeDisabled();
     await page.getByTestId("nav-back").click();
     await expect(page.getByTestId("markdown-body").locator("h1").first()).toHaveText(guideTitle ?? "");
