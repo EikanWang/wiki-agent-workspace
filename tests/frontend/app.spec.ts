@@ -2104,6 +2104,55 @@ test("GitHub review hub: only the owner's GitHub sign-in sees it; queue grouped 
   await signOut(page);
 });
 
+test("GitHub review sources: requests, mentions, overlap and persistence", async ({ page }) => {
+  await ensureGithubSignIn(page);
+  await page.route("**/api/v1/github/reviews*", async (route) => {
+    const response = await route.fetch();
+    const queue = await response.json();
+    queue.items = queue.items.slice(0, 3).map((pr: Record<string, unknown>, index: number) => ({
+      ...pr, title: `source-filter-${index}`, draft: false, my_activity: "todo",
+      review_requested: index !== 1, mentioned: index !== 0,
+      requested: index === 1 ? null : "you",
+    }));
+    queue.watched = [];
+    queue.deferred = [];
+    await route.fulfill({ response, json: queue });
+  });
+  await page.goto("/");
+  await page.getByTestId("login-github").click();
+  await page.getByTestId("activity-reviews").click();
+  const rows = page.getByTestId("review-pr");
+  const source = page.getByTestId("reviews-source");
+  await expect(rows).toHaveCount(3);
+  await expect(page.getByTestId("review-requested")).toHaveCount(2);
+  await expect(page.getByTestId("review-mentioned")).toHaveCount(2);
+  await source.selectOption("requested");
+  await expect(rows).toHaveCount(2);
+  await expect(rows.filter({ hasText: "source-filter-1" })).toHaveCount(0);
+  await source.selectOption("mentioned");
+  await expect(rows).toHaveCount(2);
+  await page.getByTestId("reviews-filter").fill("source-filter-1");
+  await expect(rows).toHaveCount(1);
+  await page.getByTestId("reviews-filter").fill("");
+  await source.selectOption("both");
+  await expect(rows).toHaveCount(1);
+  await expect(rows).toContainText("source-filter-2");
+  await page.reload();
+  await expect(source).toHaveValue("both");
+  await expect(rows).toHaveCount(1);
+  await page.screenshot({ path: test.info().outputPath("review-sources-desktop.png") });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: "Wiki", exact: true }).click();
+  await expect(source).toBeVisible();
+  const fits = await source.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    const parent = element.closest(".reviews-controls")!.getBoundingClientRect();
+    return bounds.left >= parent.left && bounds.right <= parent.right;
+  });
+  expect(fits).toBeTruthy();
+  await page.screenshot({ path: test.info().outputPath("review-sources-mobile.png") });
+});
+
 test("GitHub review hub: priority requests, hide a repository, watch a repository", async ({ page }) => {
   await ensureGithubSignIn(page);
   await page.goto("/");

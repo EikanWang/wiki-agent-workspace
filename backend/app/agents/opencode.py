@@ -252,17 +252,15 @@ class OpenCodeCliAdapter(AgentAdapter):
             if ctx.variant:
                 args += ["--variant", ctx.variant]
         args += list(self.cfg.extra_args)
-        # --file takes several values and swallows every following argument, even in the "--file=PATH" form
-        # (the prompt then becomes a "file": "File not found: <prompt>"). "--" ends the options, so the prompt
-        # is always the message — also when it starts with "-".
         args += [f"--file={p}" for p in ctx.attachments]
-        args += ["--", ctx.prompt]
+        args += ["--"]
         env = None
         if ctx.skill_roots and ctx.remote is None:
             from ..skills import opencode_env
 
             env = opencode_env(ctx.skill_roots)
-        return OpenCodeCliTurn(args, cwd=ctx.cwd or ctx.workspace, env=env, remote=ctx.remote, provider="opencode")
+        return OpenCodeCliTurn(args, cwd=ctx.cwd or ctx.workspace, stdin_data=ctx.prompt.encode("utf-8"),
+                       env=env, remote=ctx.remote, provider="opencode")
 
     async def list_models(self) -> list[dict[str, Any]]:
         if not self.exe:

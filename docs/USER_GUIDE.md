@@ -143,7 +143,7 @@ owner), the sidebar gets an **activity bar**: **Files** (the file tree) and **Re
 the number of PRs waiting for you, drafts not counted). Token logins and other GitHub accounts never see it — the
 queue can include private repositories.
 
-**Reviews** lists the open pull requests that request your review, across every repository your GitHub account
+**Reviews** lists open pull requests that request your review or mention you, across every repository your GitHub account
 can see, grouped by repository (most PRs first). Inside each repository the PRs are in three sections by where you
 stand (their order and names are yours to change, ⚙ → Priority → Categories); inside each section the **most urgent
 priority level first**, then your sort:
@@ -238,6 +238,12 @@ kept while the server runs: after a restart, PRs that had not started yet are no
 - **filter** by repository, title, author, requester or label; **drafts** shows or hides draft PRs; sort by
   *recently updated*, *waiting longest* or *smallest first*; click a repository to fold it; closed or merged PRs
   are dropped even while GitHub's search still lists them;
+- **Review source** filters by **Review requested**, **Mentioned**, or **Requested and mentioned**; **All sources**
+  also includes watched and code-owned PRs. The choice is kept per browser. Badges show each PR's source; a PR
+  matching multiple searches appears once. Mentions combine GitHub's `mentions:@me` search with an explicit
+  `"@username" in:comments` search, including the PR description and discussion, not just formal review requests.
+  Existing draft, approved and deferred settings
+  still apply. GitHub's search indexing may delay newly added mentions.
 - **PRs you approved with nothing new since are left out**: no commits after the commit you approved, no review
   or comment from a person since (bots such as pytorchmergebot, pytorch-bot, facebook-github-bot, EasyCLA and
   GitHub Actions do not count, nor do your own comments), and your review was not requested again. A note says how

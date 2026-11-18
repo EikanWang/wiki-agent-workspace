@@ -31,6 +31,8 @@ export interface ReviewPR {
   /** null: not requested — shown because its repository is watched; codeowner: not requested, but it touches
    *  files you own in CODEOWNERS (e.g. a draft: GitHub requests code owners only once a PR is ready) */
   requested: "you" | "team" | "codeowner" | null;
+  review_requested?: boolean;
+  mentioned?: boolean;
   /** the files of this PR you own in CODEOWNERS (up to 20) and how many there are */
   owned_paths?: string[];
   owned_count?: number;
@@ -193,6 +195,13 @@ const ago = (iso: string) => {
 const CI_LABEL: Record<string, string> = { SUCCESS: "checks passed", FAILURE: "checks failing", ERROR: "checks errored", PENDING: "checks running", EXPECTED: "checks expected" };
 
 type Sort = "updated" | "waiting" | "size";
+type ReviewSource = "all" | "requested" | "mentioned" | "both";
+
+const reviewRequested = (p: ReviewPR) => p.review_requested ?? (p.requested === "you" || p.requested === "team");
+const matchesSource = (p: ReviewPR, source: ReviewSource) => source === "all"
+  || (source === "requested" && reviewRequested(p))
+  || (source === "mentioned" && !!p.mentioned)
+  || (source === "both" && reviewRequested(p) && !!p.mentioned);
 
 /** Sidebar view: the pull requests waiting for your review, grouped by repository. */
 export default function ReviewsPanel({ onOpen, onOpenPr }: { onOpen: (pr: ReviewPR) => void; onOpenPr: (repo: string, number: number, title: string) => void }) {
@@ -202,6 +211,11 @@ export default function ReviewsPanel({ onOpen, onOpenPr }: { onOpen: (pr: Review
   const [monUnseen, setMonUnseen] = useState(0);
   const { queue, error, loading } = useReviews();
   const [filter, setFilter] = useState("");
+  const [source, setSource] = useState<ReviewSource>(() => {
+    const saved = localStorage.getItem("waw.reviews.source");
+    return ["requested", "mentioned", "both"].includes(saved ?? "") ? saved as ReviewSource : "all";
+  });
+  useEffect(() => localStorage.setItem("waw.reviews.source", source), [source]);
   const [showDrafts, setShowDrafts] = useState(() => localStorage.getItem("waw.reviews.drafts") === "1");
   const [agentOnly, setAgentOnly] = usePersistedFlag("reviews.agentOnly");
   const [maxRank, setMaxRank] = useState<number>(() => Number(localStorage.getItem("waw.reviews.maxRank") ?? "99"));
@@ -316,6 +330,7 @@ export default function ReviewsPanel({ onOpen, onOpenPr }: { onOpen: (pr: Review
   const { groups, watchedGroups } = useMemo(() => {
     const f = filter.trim().toLowerCase();
     const keep = (p: ReviewPR) => (agentOnly ? p.agent_review?.state === "waiting" : showDrafts || !p.draft) && (p.level_rank ?? 0) <= maxRank
+      && matchesSource(p, source)
       && !hiddenCats.has(categoryOf(p))
       && (!f || `${p.repo} #${p.number} ${p.title} ${p.author ?? ""} ${p.requested_by ?? ""} ${p.level ?? ""} ${p.labels.map((l) => l.name).join(" ")}`.toLowerCase().includes(f));
     const key = (p: ReviewPR) => (sort === "updated" ? -new Date(p.updated_at).getTime() : sort === "waiting" ? new Date(p.created_at).getTime() : p.additions + p.deletions);
@@ -327,8 +342,9 @@ export default function ReviewsPanel({ onOpen, onOpenPr }: { onOpen: (pr: Review
       return [...by.entries()].map(([repo, prs]) => ({ repo, prs: prs.sort(cmp) })).sort((a, b) => b.prs.length - a.prs.length || a.repo.localeCompare(b.repo));
     };
     return { groups: group((queue?.items ?? []).filter(keep)), watchedGroups: group((queue?.watched ?? []).filter(keep)) };
-  }, [queue, filter, showDrafts, sort, agentOnly, maxRank, hiddenCats]);
+  }, [queue, filter, source, showDrafts, sort, agentOnly, maxRank, hiddenCats]);
   const drafts = queue?.items.filter((p) => p.draft).length ?? 0;
+  const deferred = (queue?.deferred ?? []).filter((p) => matchesSource(p, source));
   // per category: the PRs in it (drafts only when shown), for the category choice
   const catCount = (k: string) => [...(queue?.items ?? []), ...(queue?.watched ?? [])].filter((p) => categoryOf(p) === k && (showDrafts || agentOnly || !p.draft)).length;
   const owned = queue?.items.filter((p) => p.requested === "codeowner").length ?? 0;
@@ -376,6 +392,8 @@ export default function ReviewsPanel({ onOpen, onOpenPr }: { onOpen: (pr: Review
         </span>
         <span className="review-pr-meta muted small">
           {showRepo ? `${p.repo}` : ""}#{p.number} · <GhUser login={p.author} bold={false} inButton /> · {ago(p.updated_at)} · <span className="add">+{p.additions}</span> <span className="del">−{p.deletions}</span>
+          {reviewRequested(p) && <span className="git-badge" title="GitHub formally requests your review" data-testid="review-requested"> review requested</span>}
+          {p.mentioned && <span className="git-badge" title="GitHub's mention search includes you in this PR's description or discussion" data-testid="review-mentioned"> @mentioned</span>}
           {p.requested === "codeowner" && (
             <span className="git-badge" title={`Not requested from you: it touches ${p.owned_count ?? 0} file(s) you own in CODEOWNERS${p.draft ? " (a draft: GitHub requests code owners only once it is ready for review)" : ""}`} data-testid="review-codeowner"> code owner</span>
           )}
@@ -537,6 +555,15 @@ export default function ReviewsPanel({ onOpen, onOpenPr }: { onOpen: (pr: Review
       </div>
       <div className="reviews-controls">
         <input className="reviews-filter" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter: repo, title, author, label…" data-testid="reviews-filter" />
+        <div className="reviews-row">
+          <label className="small" htmlFor="reviews-source">Review source</label>
+          <select id="reviews-source" className="reviews-sort" value={source} onChange={(e) => setSource(e.target.value as ReviewSource)} data-testid="reviews-source">
+            <option value="all">All sources</option>
+            <option value="requested">Review requested</option>
+            <option value="mentioned">Mentioned</option>
+            <option value="both">Requested and mentioned</option>
+          </select>
+        </div>
         <div className="reviews-cats" role="group" aria-label="Show categories" data-testid="reviews-categories">
           {categories.map((c) => {
             const on = !hiddenCats.has(c.key);
@@ -598,15 +625,15 @@ export default function ReviewsPanel({ onOpen, onOpenPr }: { onOpen: (pr: Review
         </div>
       )}
       <div className="tree-body" data-testid="reviews-list" ref={listScroll}>
-        {!queue && loading && <div className="tree-loading">Loading your review requests from GitHub… (the first load can take ~30 s)</div>}
+        {!queue && loading && <div className="tree-loading">Loading review requests and mentions from GitHub… (the first load can take ~30 s)</div>}
         {error && <div className="tree-error" role="alert" data-testid="reviews-error">{error}</div>}
         {queue?.refresh_error && <div className="tree-error stale">Could not refresh ({queue.refresh_error.message}); showing the earlier list.</div>}
         {queue?.note && <div className="reviews-note small" data-testid="reviews-note">{queue.note}</div>}
         {queue && (
           <div className="muted small reviews-meta">
-            Requested from you: {queue.items.length - owned}{queue.truncated ? `+ (of ${queue.total})` : ""}
+            Requests and mentions: {queue.items.length - owned}{queue.truncated ? `+ (of ${queue.total})` : ""}
             {owned > 0 && <span title="Not requested from you, but they touch files you own in CODEOWNERS" data-testid="reviews-codeowned-count"> · touching your files: {owned}</span>} · showing {shown}
-            {(queue.deferred?.length ?? 0) > 0 && <span data-testid="reviews-deferred-count"> · {queue.deferred!.length} deferred</span>}
+            {deferred.length > 0 && <span data-testid="reviews-deferred-count"> · {deferred.length} deferred</span>}
             {!showDrafts && !agentOnly && drafts > 0 && <span title="Tick “drafts” to show them"> · {drafts} draft{drafts > 1 ? "s" : ""} hidden</span>}
             {filter.trim() && <span> · filtered</span>}
             {categories.some((c) => hiddenCats.has(c.key)) && <span data-testid="reviews-categories-hidden"> · hidden: {categories.filter((c) => hiddenCats.has(c.key)).map((c) => c.title).join(", ")}</span>}
@@ -623,17 +650,17 @@ export default function ReviewsPanel({ onOpen, onOpenPr }: { onOpen: (pr: Review
         {groups.map(({ repo, prs }) => groupBox(repo, prs, false))}
         {watchedGroups.length > 0 && <div className="muted small reviews-meta" data-testid="reviews-watched-head">Watched repositories (all open PRs)</div>}
         {watchedGroups.map(({ repo, prs }) => groupBox(repo, prs, true))}
-        {(queue?.deferred?.length ?? 0) > 0 && (
+        {deferred.length > 0 && (
           <div className="review-group" data-testid="reviews-deferred">
             <div className="review-group-head-row">
               <button className="review-group-head" onClick={() => toggle("deferred:open")} aria-expanded={collapsed.has("deferred:open")} title="Reviews you deferred: back by themselves at their time, or when someone does something on the PR (if you chose that)">
                 <span className="chev">{collapsed.has("deferred:open") ? "⌄" : "›"}</span>
                 <span className="review-repo">⏰ Deferred</span>
                 <span className="spacer" />
-                <span className="git-badge clean">{queue!.deferred!.length}</span>
+                <span className="git-badge clean">{deferred.length}</span>
               </button>
             </div>
-            {collapsed.has("deferred:open") && [...queue!.deferred!].sort((a, b) => (a.deferred?.until ?? "9").localeCompare(b.deferred?.until ?? "9")).map((p) => prRow(p, true))}
+            {collapsed.has("deferred:open") && [...deferred].sort((a, b) => (a.deferred?.until ?? "9").localeCompare(b.deferred?.until ?? "9")).map((p) => prRow(p, true))}
           </div>
         )}
         {(queue?.approved_hidden ?? 0) > 0 && <div className="muted small reviews-meta" data-testid="reviews-approved-hidden">{queue!.approved_hidden} PR(s) you approved with nothing new since are not listed (tick “approved” to show them).</div>}
