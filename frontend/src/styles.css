@@ -1449,6 +1449,9 @@ body.resizing-h iframe { pointer-events: none; }
 .insights-items .list-item { display: flex; gap: 6px; align-items: center; text-align: left; }
 .insights-item-main { display: flex; flex-direction: column; min-width: 0; }
 .insights-main { flex: 1; min-width: 0; min-height: 0; overflow: auto; border: 1px solid var(--border); border-radius: 8px; }
+.insights-main.trend-chat-main { display: flex; flex-direction: column; overflow: hidden; }
+.trend-chat-period { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.trend-chat-period input[type="date"] { border: 1px solid var(--border); border-radius: 6px; padding: 2px 6px; background: var(--bg); color: inherit; }
 .insights-report { padding: 10px 14px; display: flex; flex-direction: column; gap: 6px; }
 .insights-md { font-size: 14px; }
 .insights-progress pre { margin: 0; white-space: pre-wrap; }

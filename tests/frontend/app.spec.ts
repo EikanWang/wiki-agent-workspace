@@ -3902,6 +3902,43 @@ test("GitHub quota: the chip shows when GitHub requests are slowed down or waiti
   await page.getByTestId("activity-files").click();
 });
 
+test("Repo Insights: a Trend chat per repository — the agent reads its data; a period helper; follow-ups; kept out of Chats", async ({ page }) => {
+  await login(page);
+  await page.getByTestId("activity-insights").click();
+  await page.locator('[data-testid="insights-repo"][data-repo="pytorch/pytorch"]').click();
+  await page.getByTestId("insights-tab-chat").click();
+  await expect(page.getByTestId("trend-chat-new-page")).toContainText("Chat about pytorch/pytorch");
+  await expect(page.getByTestId("insights-period-custom")).toHaveCount(0); // no report form on this tab
+  await page.getByTestId("trend-chat-since").fill("2026-11-01");
+  await page.getByTestId("trend-chat-until").fill("2026-11-10");
+  await page.getByTestId("trend-chat-period-ask").click();
+  await expect(page.getByTestId("trend-chat-first")).toHaveValue(/from 2026-11-01 to 2026-11-10/);
+  await page.getByTestId("trend-chat-send").click();
+  const done = page.locator('[data-testid="message-agent"][data-status="completed"]');
+  await expect(done).toContainText("echo: Summarize all the reports and daily summaries of pytorch/pytorch from 2026-11-01", { timeout: 20000 });
+  await expect(page.getByTestId("trend-chat")).toHaveCount(1);
+  await expect(page.getByTestId("chat-actions")).toHaveCount(0); // nothing to distill into the wiki
+  await expect(page.getByTestId("chat-review-changes")).toHaveCount(0);
+  await page.getByTestId("chat-input").fill("And the RFCs?");
+  await page.getByTestId("chat-send").click();
+  await expect(done.last()).toContainText("echo: And the RFCs?", { timeout: 20000 });
+  await expect(page.getByTestId("trend-chat")).toContainText("4 messages");
+  // only in this repository's Trend page
+  const listed = await (await page.request.get("/api/v1/chats")).json();
+  expect(listed.chats.map((c: { title: string }) => c.title).filter((t: string) => t.startsWith("Summarize all the reports"))).toEqual([]);
+  await page.locator('[data-testid="insights-repo"][data-repo="vllm-project/vllm"]').click();
+  await expect(page.getByTestId("trend-chat-new-page")).toBeVisible();
+  await expect(page.getByTestId("trend-chat")).toHaveCount(0);
+  await page.locator('[data-testid="insights-repo"][data-repo="pytorch/pytorch"]').click();
+  await page.getByTestId("trend-chat").click();
+  await page.getByTestId("chat-archive").click();
+  await page.getByTestId("confirm-ok").click();
+  await expect(page.getByTestId("trend-chat-new-page")).toBeVisible();
+  await expect(page.getByTestId("trend-chat")).toHaveCount(0);
+  await page.getByTestId("insights-tab-reports").click();
+  await page.getByTestId("activity-files").click();
+});
+
 test("Repo Insights: the history in the folder, a week's report (daily summaries made, commits, highlights), chat, settings", async ({ page }) => {
   await login(page);
   await page.getByTestId("activity-insights").click();

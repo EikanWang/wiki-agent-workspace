@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ApiError, del, get, post, put } from "../api";
+import { AgentSession, ApiError, del, get, post, put } from "../api";
+import TrendChat from "./TrendChat";
 import MarkdownView from "./MarkdownView";
 import GithubRate from "./GithubRate";
 import ModelChoice, { ModelChoiceValue } from "./ModelChoice";
@@ -108,15 +109,17 @@ export function InsightsPanel({ active, onOpen }: { active: string | null; onOpe
 /** Main page: a repository (reports, daily summaries, highlights) or the settings. */
 type OpenPr = (repo: string, number: number, title?: string) => void;
 
-export default function InsightsView({ repo, onOpenChat, onOpenPrReview }: { repo: string | null; onOpenChat: (ws: string, path: string) => void; onOpenPrReview?: OpenPr }) {
+export default function InsightsView({ repo, onOpenChat, onOpenPrReview, sessions = [] }: { repo: string | null; onOpenChat: (ws: string, path: string) => void; onOpenPrReview?: OpenPr; sessions?: AgentSession[] }) {
   if (!repo) return <InsightsSettings />;
-  return <RepoPage key={repo} repo={repo} onOpenChat={onOpenChat} onOpenPrReview={onOpenPrReview} />;
+  return <RepoPage key={repo} repo={repo} onOpenChat={onOpenChat} onOpenPrReview={onOpenPrReview} sessions={sessions} />;
 }
 
-function RepoPage({ repo, onOpenChat, onOpenPrReview }: { repo: string; onOpenChat: (ws: string, path: string) => void; onOpenPrReview?: OpenPr }) {
+type Tab = "reports" | "daily" | "highlights" | "chat";
+
+function RepoPage({ repo, onOpenChat, onOpenPrReview, sessions }: { repo: string; onOpenChat: (ws: string, path: string) => void; onOpenPrReview?: OpenPr; sessions: AgentSession[] }) {
   const [ov, setOv] = useState<Overview | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [tab, setTab] = useState<"reports" | "daily" | "highlights">(() => (localStorage.getItem("waw.insights.tab") as "reports") || "reports");
+  const [tab, setTab] = useState<Tab>(() => (localStorage.getItem("waw.insights.tab") as Tab) || "reports");
   useEffect(() => localStorage.setItem("waw.insights.tab", tab), [tab]);
   const [open, setOpen] = useState<{ kind: "report"; id: string } | { kind: "file"; path: string } | null>(null);
   const load = useCallback(async () => {
@@ -138,9 +141,9 @@ function RepoPage({ repo, onOpenChat, onOpenPrReview }: { repo: string; onOpenCh
   // Reports · Daily · XPU highlights: across the whole width of the list
   const tabs = (
     <span className="mode-switch insights-tabs" role="tablist">
-      {(["reports", "daily", "highlights"] as const).map((t) => (
+      {(["reports", "daily", "highlights", "chat"] as const).map((t) => (
         <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? "active" : ""} onClick={() => setTab(t)} data-testid={`insights-tab-${t}`}>
-          {t === "reports" ? `Reports (${ov.reports.length})` : t === "daily" ? `Daily (${ov.daily_count})` : "XPU highlights"}
+          {t === "reports" ? `Reports (${ov.reports.length})` : t === "daily" ? `Daily (${ov.daily_count})` : t === "highlights" ? "XPU highlights" : "Chat"}
         </button>
       ))}
     </span>
@@ -158,9 +161,9 @@ function RepoPage({ repo, onOpenChat, onOpenPrReview }: { repo: string; onOpenCh
         <a className="btn small" href={`https://github.com/${repo}`} target="_blank" rel="noreferrer">GitHub</a>
       </div>
       {err && <div className="banner warn small">{err}</div>}
-      <NewReport repo={repo} cfg={ov.config} onCreated={(id) => { setTab("reports"); setOpen({ kind: "report", id }); void load(); }} />
+      {tab !== "chat" && <NewReport repo={repo} cfg={ov.config} onCreated={(id) => { setTab("reports"); setOpen({ kind: "report", id }); void load(); }} />}
       <div className="insights-body">
-        {tab === "highlights" ? <Highlights repo={repo} tabs={tabs} onRan={load} enabled={ov.config.highlights} onOpenPr={onOpenPrReview} /> : (
+        {tab === "chat" ? <TrendChat repo={repo} tabs={tabs} sessions={sessions} /> : tab === "highlights" ? <Highlights repo={repo} tabs={tabs} onRan={load} enabled={ov.config.highlights} onOpenPr={onOpenPrReview} /> : (
           <>
             <div className="insights-list">
               {tabs}

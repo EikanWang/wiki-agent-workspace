@@ -1221,7 +1221,7 @@ export default function App() {
 
         {view === "insights" && authed && (
           <section className="center insights-center">
-            <InsightsView repo={insightsRepo} onOpenChat={(ws, p) => openChats({ ws, path: p })}
+            <InsightsView repo={insightsRepo} sessions={sessions} onOpenChat={(ws, p) => openChats({ ws, path: p })}
               onOpenPrReview={hub?.available ? (r, n, t) => { updatePrefs({ sidebarView: "reviews", listOpen: true }); setView("document"); openPr(r, n, t ? `#${n} ${t}` : undefined); } : undefined} />
           </section>
         )}

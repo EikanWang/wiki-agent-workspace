@@ -455,8 +455,16 @@ class ThreadService:
                     tt.target_json = json.dumps(target, ensure_ascii=False)
         dev_extra: dict[str, Any] = {}
         lessons_used: list[dict[str, str]] = []
+        trend = self._trend(doc)
         if is_dev_path(doc.path):
             prompt, dev_extra = await self._dev_prompt(doc, body.question, body.dev_kind, body.dev_context, None)
+        elif trend:
+            from .insights.chat import build_trend_prompt
+
+            side_of = target is not None and target["kind"] == "side"
+            prompt = build_trend_prompt(self.ctx, repo=trend, question=body.question, prior=None, brief=body.chat_brief,
+                                        quote=body.quote if side_of else None, main=self._messages(target["of"]) if side_of and target else None)
+            dev_extra = self._trend_ctx()
         elif is_chat_path(doc.path) and target is not None and target["kind"] == "side":
             prompt = build_side_prompt(question=body.question, quote=body.quote, wiki_root=str(self.docs.root), main=self._messages(target["of"]), prior=None,
                                        extra=self._extra(doc.path), locked=self._locked(), links=self._links(None))
@@ -520,8 +528,9 @@ class ThreadService:
         shown = body.text
         anchor = json.loads(t.target_json) if t.target_json else None
         side = anchor if isinstance(anchor, dict) and anchor.get("kind") == "side" else None
+        trend = self._trend(doc)
         if body.chat_action is not None:
-            if not is_chat_path(doc.path) or side is not None:
+            if not is_chat_path(doc.path) or side is not None or trend:
                 raise ApiError(400, "INVALID_ACTION", "distill / update are for folder chats")
             target = check_action(self.ctx, body.chat_action, body.target_path)
             shown = action_message(body.chat_action, target, body.text if body.text.strip() != "-" else "")
@@ -551,6 +560,12 @@ class ThreadService:
                 else:
                     dctx["whole_file"] = True
             prompt, dev_extra = await self._dev_prompt(doc, body.text, body.dev_kind, dctx, prior)
+        elif trend:
+            from .insights.chat import build_trend_prompt
+
+            prompt = build_trend_prompt(self.ctx, repo=trend, question=shown, prior=prior, quote=t.cur_quote if side is not None else None,
+                                        main=self._messages(str(side.get("of") or "")) if side is not None else None)
+            dev_extra = self._trend_ctx()
         elif is_chat_path(doc.path) and side is not None:
             prompt = build_side_prompt(question=shown, quote=t.cur_quote, wiki_root=str(self.docs.root), main=self._messages(str(side.get("of") or "")), prior=prior,
                                        extra=self._extra(doc.path), locked=self._locked(), links=self._links(None))
@@ -589,6 +604,19 @@ class ThreadService:
         if row is None:
             raise not_found("development workspace not found", "DEV_WORKSPACE_NOT_FOUND")
         return await dev_turn(self.ctx, row, question=question, kind=kind or "ask", context=context, prior=prior)
+
+    def _trend(self, doc: Document) -> str | None:
+        """The repository of a trend chat (an agent on the Repo Insights data), else None."""
+        if not is_chat_path(doc.path):
+            return None
+        from .insights.chat import trend_of
+
+        return trend_of(self.ctx, self.docs.workspace_id, doc.path)
+
+    def _trend_ctx(self) -> dict[str, Any]:
+        from .insights import settings as insights_settings
+
+        return {"_cwd": str(insights_settings.data_dir(self.ctx))}
 
     def _messages(self, thread_id: str) -> list[dict[str, str]]:
         with self.ctx.db.read() as s:
