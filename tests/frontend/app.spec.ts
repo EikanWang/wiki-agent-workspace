@@ -2323,7 +2323,7 @@ test("GitHub PR tab: overview, files, choose the wiki once, ask about the PR and
   await page.getByTestId("login-github").click();
   await expect(page.getByTestId("view-document")).toBeVisible({ timeout: 15000 });
   await page.getByTestId("activity-reviews").click();
-  await page.locator('[data-testid="review-pr"][data-number="101"]').click();
+  await page.locator('[data-testid="review-pr"][data-number="101"] .review-pr-title').click();
   // the PR opens as a tab next to documents
   const tab = page.locator('[data-testid="doc-tab"][data-ws="github"]');
   await expect(tab).toHaveAttribute("aria-selected", "true");
@@ -2456,6 +2456,34 @@ test("GitHub PR tab: overview, files, choose the wiki once, ask about the PR and
   await expect(page.locator('[data-testid="message-agent"][data-status="completed"]').last()).toContainText("Is bob right about ok?", { timeout: 20000 });
   await expect(page.getByTestId("thread-target").last()).toContainText("comment by bob on c10/xpu/stub.cpp:11");
   await expect(page.getByTestId("thread-quote").last()).toContainText("Only without a driver."); // the reply goes with it
+  const overviewResolution = lineComment.getByTestId("pr-conv-resolution");
+  await expect(overviewResolution).toHaveAttribute("data-resolved", "0");
+  const resolveResponse = page.waitForResponse((response) => /\/threads\/[^/]+\/resolve$/.test(response.url()) && response.request().method() === "POST");
+  await lineComment.getByTestId("pr-conv-resolve").click();
+  const resolvedResponse = await resolveResponse;
+  expect(resolvedResponse.ok()).toBe(true);
+  expect(resolvedResponse.request().postDataJSON()).toEqual({ resolved: true });
+  await expect(overviewResolution).toHaveAttribute("data-resolved", "1");
+  await expect(overviewResolution).toContainText("Resolved by e2e-user");
+  await expect(lineComment.getByTestId("pr-conv-resolve")).toHaveText("Unresolve");
+  await lineComment.getByTestId("pr-conv-resolve").scrollIntoViewIfNeeded();
+  await page.screenshot({ path: test.info().outputPath("overview-resolve-desktop.png") });
+  const desktopViewport = page.viewportSize()!;
+  await page.setViewportSize({ width: 390, height: 844 });
+  await lineComment.getByTestId("pr-conv-resolve").scrollIntoViewIfNeeded();
+  await expect(lineComment.getByTestId("pr-conv-resolve")).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath("overview-resolve-mobile.png") });
+  await page.setViewportSize(desktopViewport);
+  await page.getByTestId("pr-tab-files").click();
+  const resolvedThread = page.locator('[data-testid="pr-file"][data-file="c10/xpu/stub.cpp"]').getByTestId("gh-thread");
+  await expect(resolvedThread).toHaveAttribute("data-resolved", "1");
+  await page.getByTestId("pr-tab-overview").click();
+  const unresolveResponse = page.waitForResponse((response) => /\/threads\/[^/]+\/resolve$/.test(response.url()) && response.request().method() === "POST");
+  await page.getByTestId("pr-conv-line").first().getByTestId("pr-conv-resolve").click();
+  const unresolvedResponse = await unresolveResponse;
+  expect(unresolvedResponse.ok()).toBe(true);
+  expect(unresolvedResponse.request().postDataJSON()).toEqual({ resolved: false });
+  await expect(page.getByTestId("pr-conv-resolution").first()).toHaveAttribute("data-resolved", "0");
   // files: GitHub-style diff with the existing thread at its line
   await page.getByTestId("pr-tab-files").click();
   await expect(page.getByTestId("pr-file")).toHaveCount(2);
@@ -2561,7 +2589,7 @@ test("GitHub PR tab: overview, files, choose the wiki once, ask about the PR and
   await expect(page.getByTestId("pr-draft")).toHaveCount(0);
   const posted = await (await page.request.get("/fake-github/posted")).json();
   const muts = posted.filter((x: any) => x.mutation && x.mutation !== "ToDraft").map((x: any) => x.mutation); // (ToDraft: an earlier test)
-  expect(muts).toEqual(["MarkViewed", "MarkUnviewed", "Resolve", "AddReview", "AddThread", "AddThread", "Submit"]);
+  expect(muts).toEqual(["Resolve", "Unresolve", "MarkViewed", "MarkUnviewed", "Resolve", "AddReview", "AddThread", "AddThread", "Submit"]);
   const threads = posted.filter((x: any) => x.mutation === "AddThread").map((x: any) => x.variables);
   expect(threads).toContainEqual({ review: "PRR_e2e", path: "docs/xpu.md", body: "Please add a license header.", subject: "FILE" });
   expect(threads).toContainEqual({ review: "PRR_e2e", path: "c10/xpu/stub.cpp", body: "Keep the unconditional call for the stub?", line: 11, side: "LEFT", subject: "LINE" });
