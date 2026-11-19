@@ -552,16 +552,18 @@ export default function App() {
     [switchWorkspace, openDocument, openPr],
   );
 
-  const closeDocTab = useCallback(
-    (t: DocTab) => {
+  /** Close `closing` (one tab, or several from the tab menu); when the active one goes, show `keep` or its neighbour. */
+  const closeDocTabs = useCallback(
+    (closing: DocTab[], keep: DocTab | null = null) => {
       const activeTab = prTab ? { ws: PR_TABS, path: `${prTab.repo}#${prTab.number}` } : doc ? { ws: activeWs ?? "", path: doc.path } : null;
-      const isActive = sameTab(t, activeTab);
+      const isActive = closing.some((t) => sameTab(t, activeTab));
       if (isActive && !confirmLeaveEditor()) return;
-      const idx = docTabs.findIndex((x) => sameTab(x, t));
-      const rest = docTabs.filter((x) => !sameTab(x, t));
+      const skip = (x: DocTab) => closing.some((t) => sameTab(x, t)) || isChatPath(x.path);
+      const rest = docTabs.filter((x) => !closing.some((t) => sameTab(x, t)));
       setDocTabs(rest);
       // don't reopen a closed document at the next start
-      if (localStorage.getItem(`waw.lastPath.${t.ws}`) === t.path) {
+      for (const t of closing) {
+        if (localStorage.getItem(`waw.lastPath.${t.ws}`) !== t.path) continue;
         const other = rest.find((x) => x.ws === t.ws);
         if (other) localStorage.setItem(`waw.lastPath.${t.ws}`, other.path);
         else localStorage.removeItem(`waw.lastPath.${t.ws}`);
@@ -570,7 +572,8 @@ export default function App() {
       editorDirty.current = false;
       lastTab.current = null;
       setPrTab(null);
-      const next = rest[idx] ?? rest[idx - 1];
+      const idx = docTabs.findIndex((x) => sameTab(x, activeTab));
+      const next = (keep && rest.find((x) => sameTab(x, keep))) ?? docTabs.slice(idx + 1).find((x) => !skip(x)) ?? docTabs.slice(0, Math.max(idx, 0)).reverse().find((x) => !skip(x));
       if (next) activateDocTab(next);
       else {
         setDoc(null);
@@ -583,6 +586,7 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [doc, activeWs, docTabs, activateDocTab, prTab],
   );
+  const closeDocTab = useCallback((t: DocTab) => closeDocTabs([t]), [closeDocTabs]);
 
   useEffect(() => {
     const pr = savedUi.current?.pr;
@@ -1080,6 +1084,7 @@ export default function App() {
             workspaces={workspaces}
             onActivate={activateDocTab}
             onClose={closeDocTab}
+            onCloseMany={closeDocTabs}
             onReorder={(moved, target) =>
               setDocTabs((tabs) => {
                 const from = tabs.findIndex((x) => sameTab(x, moved));

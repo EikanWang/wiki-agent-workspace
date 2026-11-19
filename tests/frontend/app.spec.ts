@@ -1387,6 +1387,34 @@ test("document tabs: open several, switch, close (× / middle-click), unsaved-ed
     await expect(tabs).toHaveCount(2);
     await expect(tab("docs/guide.md")).toHaveAttribute("aria-selected", "true");
     await expect(h1).toHaveText(/^Guide/);
+    // the tab menu (right-click), like VS Code's
+    const menu = page.getByTestId("doc-tab-menu");
+    await open("README.md");
+    await expect.poll(() => tabs.evaluateAll((els) => els.map((e) => e.getAttribute("data-path")))).toEqual(["docs/guide.md", "README.md", "other/guide.md"]);
+    await tab("README.md").click({ button: "right" });
+    await expect(menu.getByTestId("doc-tab-close-left")).toBeEnabled();
+    await menu.getByTestId("doc-tab-close-right").click();
+    await expect(menu).toHaveCount(0);
+    await expect.poll(() => tabs.evaluateAll((els) => els.map((e) => e.getAttribute("data-path")))).toEqual(["docs/guide.md", "README.md"]);
+    await expect(h1).toHaveText("Repo");
+    await tab("docs/guide.md").click({ button: "right" });
+    await expect(menu.getByTestId("doc-tab-close-left")).toBeDisabled();
+    await menu.getByTestId("doc-tab-close-others").click(); // the active one goes: the right-clicked tab is shown
+    await expect(tabs).toHaveCount(1);
+    await expect(tab("docs/guide.md")).toHaveAttribute("aria-selected", "true");
+    await expect(h1).toHaveText(/^Guide/);
+    await tab("docs/guide.md").click({ button: "right" });
+    await expect(menu.getByTestId("doc-tab-close-others")).toBeDisabled();
+    await page.keyboard.press("Escape");
+    await expect(menu).toHaveCount(0);
+    await open("README.md");
+    await tab("README.md").click({ button: "right" });
+    await menu.getByTestId("doc-tab-close-all").click();
+    await expect(tabs).toHaveCount(0);
+    await expect(page.getByText("Open a Markdown file")).toBeVisible();
+    await open("docs/guide.md");
+    await open("other/guide.md");
+    await expect(tabs).toHaveCount(2);
     // closing the last tab shows the start page, and it stays closed after a reload
     await tab("other/guide.md").click({ button: "middle" });
     await tab("docs/guide.md").getByTestId("doc-tab-close").click();
