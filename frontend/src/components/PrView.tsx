@@ -244,6 +244,7 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
   }, [agentMark]);
   const body = useMemo(() => (data ? renderGithubMarkdown(data.pr.body || "_No description._", repo) : ""), [data, repo]);
   const conv = useMemo(() => groupConversation(review.conversation), [review.conversation]);
+  const threadsByComment = new Map(review.threads.flatMap((thread) => thread.comments.map((comment) => [comment.id, thread] as const)));
 
   const threadsFor = (path: string) => review.threads.filter((t) => t.path === path);
   const setViewed = async (path: string, viewed: boolean) => {
@@ -444,6 +445,7 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
                         ))}
                         <AskComment canAsk={docReady} label={`comment by ${lc.author ?? c.author ?? "?"} on ${lc.path}${lc.line ? `:${lc.line}` : ""}`} onAsk={askAbout}
                           quote={`${lc.hunk ? lc.hunk + "\n\n" : ""}${lc.author ?? c.author ?? "?"}: ${lc.body}${(conv.threads.get(lc.id) ?? []).map((r) => `\n\n${r.author}: ${r.body}`).join("")}`} />
+                        {threadsByComment.has(lc.id) && <ResolveConversation thread={threadsByComment.get(lc.id)!} apiBase={apiBase} onChanged={loadComments} onError={setError} />}
                       </div>
                     ))}
                     {c.kind === "review" && (c.line_comments ?? 0) > (c.loaded ?? 0) && <div className="muted small">… {(c.line_comments ?? 0) - (c.loaded ?? 0)} more in Files</div>}
@@ -606,6 +608,31 @@ function Contributors({ apiBase, tick = 0 }: { apiBase: string; tick?: number })
       </ul>
       {data && data.commits_total > data.commits_listed && <div className="muted small">From the first {data.commits_listed} of {data.commits_total} commits.</div>}
     </section>
+  );
+}
+
+function ResolveConversation({ thread, apiBase, onChanged, onError }: {
+  thread: GhThread; apiBase: string; onChanged: () => Promise<void>; onError: (message: string) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const resolve = async () => {
+    setBusy(true);
+    try {
+      await post(`${apiBase}/threads/${thread.id}/resolve`, { resolved: !thread.resolved });
+      await onChanged();
+    } catch (e) {
+      onError((e as ApiError).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="row gh-thread-actions" data-testid="pr-conv-resolution" data-resolved={thread.resolved ? "1" : "0"}>
+      {thread.resolved && <span className="muted small">Resolved{thread.resolved_by ? ` by ${thread.resolved_by}` : ""}</span>}
+      <button className="btn small" disabled={busy} onClick={() => void resolve()} title="Update this conversation on GitHub immediately" data-testid="pr-conv-resolve">
+        {thread.resolved ? "Unresolve" : "Resolve conversation"}
+      </button>
+    </div>
   );
 }
 
