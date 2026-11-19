@@ -3154,6 +3154,46 @@ test("folder chat: talk with a project directly on the Chats page, then distill 
   }
 });
 
+test("Chats: opt-in Control Center persists its scope and keeps Wiki actions separate", async ({ page }) => {
+  await login(page);
+  await page.getByTestId("view-chats").click();
+  await expect(page.getByTestId("chat-scope-wiki")).toHaveAttribute("aria-pressed", "true");
+  await page.getByTestId("chat-scope-control").click();
+  await page.getByTestId("chat-source-insights").uncheck();
+  const creation = page.waitForResponse((response) => response.url().endsWith("/api/v1/chats") && response.request().method() === "POST");
+  await page.getByTestId("chat-first").fill("Control Center: what needs attention?");
+  await page.getByTestId("chat-first-send").click();
+  const createdResponse = await creation;
+  const created = await createdResponse.json();
+  expect(createdResponse.request().postDataJSON()).toMatchObject({ scope: "control_center", sources: ["reviews", "agents"] });
+  await expect(page.getByTestId("chat-scope-label")).toHaveText("Control Center · Read-only");
+  await expect(page.getByTestId("chat-enabled-sources")).toHaveText("Reviews · Agent jobs");
+  await expect(page.getByTestId("chat-view").locator('[data-testid="message-agent"][data-status="completed"]')).toHaveCount(1, { timeout: 20000 });
+  await expect(page.getByTestId("chat-actions")).toHaveCount(0);
+  await expect(page.getByTestId("chat-review-changes")).toHaveCount(0);
+  const context = await (await page.request.get(`/api/v1/chats/context?path=${encodeURIComponent(created.path)}`,
+    { headers: { "X-Workspace": await page.getByTestId("chat-project").inputValue() } })).json();
+  expect(context.sources.map((source: any) => source.id)).toEqual(["reviews", "agents"]);
+  expect(context.sources[0].status).toBe("forbidden");
+  await page.reload();
+  await expect(page.getByTestId("chat-scope-label")).toHaveText("Control Center · Read-only", { timeout: 15000 });
+  await expect(page.getByTestId("chat-scope-choice")).toHaveCount(0);
+  await page.screenshot({ path: test.info().outputPath("control-center-desktop.png") });
+  const desktopViewport = page.viewportSize()!;
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.getByTestId("chat-scope-label")).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath("control-center-mobile.png") });
+  await page.setViewportSize(desktopViewport);
+  await page.getByTestId("chats-new").click();
+  await expect(page.getByTestId("chat-scope-wiki")).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByTestId("chat-sources")).toHaveCount(0);
+  await page.getByTestId("chat-history").selectOption(created.path);
+  await expect(page.getByTestId("chat-scope-label")).toHaveText("Control Center · Read-only");
+  await page.getByTestId("chat-archive").click();
+  await page.getByTestId("confirm-ok").click();
+  await expect(page.getByTestId("chat-scope-wiki")).toHaveAttribute("aria-pressed", "true");
+});
+
 test("a reload (or closing the browser) brings back what was shown: view, PR tab and its sub-tab, unsent text", async ({ page }) => {
   await login(page);
   await page.getByTestId("tree-root").first().waitFor();

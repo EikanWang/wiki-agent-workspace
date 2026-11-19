@@ -508,6 +508,16 @@ def _start_refresh(graphql: Callable[[str, dict], dict], owner: str, watched: li
     return t
 
 
+def review_queue_data(ctx: AppContext, raw: dict[str, Any], prefs: dict[str, Any]) -> dict[str, Any]:
+    from . import maintainers
+    from . import review_priority as rp
+
+    extra = prefs.get("core_maintainers") or []
+    annotated = {**raw, "items": [with_mine(p) for p in maintainers.annotate(ctx, raw.get("items") or [], extra)],
+                 "watched": [with_mine(p) for p in maintainers.annotate(ctx, raw.get("watched") or [], extra)]}
+    return apply_prefs(annotated, prefs, rp.results(ctx))
+
+
 @router.get("/github/hub")
 async def github_hub(request: Request, ctx: AppContext = Depends(require_auth)):
     """For the UI: is the Reviews area available to this browser? For the owner it also warms the queue."""
@@ -538,13 +548,9 @@ async def review_queue(refresh: bool = Query(False), auth: tuple[AppContext, str
     if (refresh and age >= 10) or age >= CACHE_SECONDS:  # < 10 s: rapid ↻ clicks do not burn the search quota
         _start_refresh(graphql, owner, prefs["watched_repos"], ctx)
         running = True
-    from . import maintainers
     from . import review_priority as rp
 
-    extra = prefs.get("core_maintainers") or []
-    raw = {**hit[1], "items": [with_mine(p) for p in maintainers.annotate(ctx, hit[1].get("items") or [], extra)],
-           "watched": [with_mine(p) for p in maintainers.annotate(ctx, hit[1].get("watched") or [], extra)]}
-    data = apply_prefs(raw, prefs, rp.results(ctx))
+    data = review_queue_data(ctx, hit[1], prefs)
     rp.schedule(ctx, data["items"] + data["watched"], prefs)  # the agent decides levels of new / changed PRs, in the background
     from . import github_cache as gc
 
@@ -552,7 +558,7 @@ async def review_queue(refresh: bool = Query(False), auth: tuple[AppContext, str
     agent = agent_review_states(ctx)
     for key in ("items", "watched"):
         data[key] = [{**p, "agent_review": agent.get(f"{p['repo']}#{p['number']}".lower())} for p in data.get(key) or []]
-    from . import codeowned
+    from . import codeowned, maintainers
 
     owned = owned_repos(ctx, owner, hit[1], prefs)
     # PRs touching your files: checked in the background; when that finds new ones the list refreshes by itself

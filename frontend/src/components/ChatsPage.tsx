@@ -8,7 +8,7 @@ import { COMPOSER_HINT, composerKeyDown } from "./keys";
 import { usePersistentState } from "../persist";
 import { PASTE_HINT, PictureStrip, picturesOnly, usePictures } from "./Pictures";
 
-interface ChatItem { path: string; title: string; messages: number; updated_at: string | null; about?: { path: string; kind: string } | null }
+interface ChatItem { path: string; title: string; messages: number; updated_at: string | null; about?: { path: string; kind: string } | null; scope?: "wiki" | "control_center" }
 /** path null: a new chat (nothing sent yet); about: a sub-folder or file of the project the new chat is about */
 export interface ChatTarget { ws: string; path: string | null; about?: string | null }
 
@@ -36,6 +36,14 @@ export default function ChatsPage({ workspaces, target, onTarget, sessions, onRe
   const [busy, setBusy] = useState(false);
   const [firstModel, setFirstModel] = useState<ModelChoiceValue | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [scope, setScope] = useState<"wiki" | "control_center">("wiki");
+  const [sources, setSources] = useState<string[]>(["reviews", "insights", "agents"]);
+  useEffect(() => {
+    if (!target?.path) {
+      setScope("wiki");
+      setSources(["reviews", "insights", "agents"]);
+    }
+  }, [ws, target?.path, target?.about]);
 
   const loadList = useCallback(async (id: string) => {
     try {
@@ -88,7 +96,8 @@ export default function ChatsPage({ workspaces, target, onTarget, sessions, onRe
     setErr(null);
     try {
       const title = q.replace(/\s+/g, " ").slice(0, 60) + (q.length > 60 ? "…" : "");
-      const c = await post<{ path: string }>("/chats", { title, about: target?.about || undefined }, { workspace: ws });
+      const c = await post<{ path: string }>("/chats", { title, scope, about: target?.about || undefined,
+        ...(scope === "control_center" ? { sources } : {}) }, { workspace: ws });
       const d = await getIn<OpenDocument>(ws, `/documents/open?path=${encodeURIComponent(c.path)}`);
       const r = await post<{ job_id: string }>(`/documents/${d.document_id}/threads`, { ...wholeDocument(), version_sha256: d.sha256, question: q, model_choice: mc ?? undefined, images: firstPics.urls },
         { idempotencyKey: newIdempotencyKey(), workspace: ws });
@@ -118,10 +127,17 @@ export default function ChatsPage({ workspaces, target, onTarget, sessions, onRe
             {projects.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
           </select>
         </label>
+        {!target?.path && (
+          <div className="mode-switch" role="group" aria-label="Chat scope" data-testid="chat-scope-choice">
+            <button type="button" className={scope === "wiki" ? "active" : ""} aria-pressed={scope === "wiki"} onClick={() => setScope("wiki")} data-testid="chat-scope-wiki">Wiki</button>
+            <button type="button" className={scope === "control_center" ? "active" : ""} aria-pressed={scope === "control_center"} disabled={!!target?.about}
+              onClick={() => setScope("control_center")} data-testid="chat-scope-control">Control Center</button>
+          </div>
+        )}
         <label className="small">Chat{" "}
           <select value={target?.path ?? ""} onChange={(e) => ws && onTarget({ ws, path: e.target.value || null })} data-testid="chat-history">
             <option value="">＋ New chat</option>
-            {(ws ? lists[ws] ?? [] : []).map((c) => <option key={c.path} value={c.path}>{c.about ? `[${c.about.path}] ` : ""}{c.title} ({c.messages})</option>)}
+            {(ws ? lists[ws] ?? [] : []).map((c) => <option key={c.path} value={c.path}>{c.scope === "control_center" ? "[Control Center] " : ""}{c.about ? `[${c.about.path}] ` : ""}{c.title} ({c.messages})</option>)}
           </select>
         </label>
         {target?.path && <button className="btn small" onClick={() => ws && onTarget({ ws, path: null })} data-testid="chats-new">＋ New chat</button>}
@@ -131,20 +147,28 @@ export default function ChatsPage({ workspaces, target, onTarget, sessions, onRe
         {err && <div className="banner warn small" role="alert">{err}</div>}
         {ws && !target?.path && (
           <div className="chat-new" data-testid="chat-new-page">
-            <h2>Chat with {project?.name ?? "a project"}{target?.about ? <> · <span className="mono" data-testid="chat-about">{target.about}</span></> : null}</h2>
+            <h2>{scope === "control_center" ? "Control Center" : <>Chat with {project?.name ?? "a project"}{target?.about ? <> · <span className="mono" data-testid="chat-about">{target.about}</span></> : null}</>}</h2>
+            {scope === "control_center" && <fieldset className="chat-sources small" data-testid="chat-sources">
+              <legend>Sources</legend>
+              {[["reviews", "Reviews"], ["insights", "Insights"], ["agents", "Agent jobs"]].map(([id, label]) => (
+                <label key={id}><input type="checkbox" checked={sources.includes(id)} data-testid={`chat-source-${id}`}
+                  onChange={(e) => setSources((current) => e.target.checked ? [...current, id] : current.filter((source) => source !== id))} />{label}</label>
+              ))}
+              <span className="muted">Read-only</span>
+            </fieldset>}
             {target?.about && <div className="row"><span className="chip">about {target.about}</span><button className="link-btn small" onClick={() => ws && onTarget({ ws, path: null })} data-testid="chat-about-clear">chat about the whole project instead</button></div>}
-            <div className="muted small">
+            {scope === "wiki" && <div className="muted small">
               An open conversation with the agent about {target?.about ? <><b>{target.about}</b> (and the project around it)</> : "the whole project"} — it searches and reads the files to answer and cites them.
               When the conversation is worth keeping, distill it into a page or fold it back into the pages it came from.
-            </div>
+            </div>}
             <div className="chat-composer">
               <PictureStrip pics={firstPics} />
-              <textarea autoFocus rows={4} value={first} onChange={(e) => setFirst(e.target.value)} placeholder={`Ask anything about ${project?.name ?? "the project"} (${COMPOSER_HINT}; ${PASTE_HINT})`}
+              <textarea autoFocus rows={4} value={first} onChange={(e) => setFirst(e.target.value)} placeholder={scope === "control_center" ? "What needs attention?" : `Ask anything about ${project?.name ?? "the project"} (${COMPOSER_HINT}; ${PASTE_HINT})`}
                 {...firstPics.handlers} onKeyDown={(e) => composerKeyDown(e, () => void startNew(), setFirst)} data-testid="chat-first" />
               <div className="chat-composer-bar">
                 <ModelChoice value={firstModel} onChange={setFirstModel} />
                 <span className="spacer" />
-                <button className="btn primary" disabled={busy || (!first.trim() && !firstPics.pictures.length)} onClick={() => void startNew()} data-testid="chat-first-send">{busy ? "Starting…" : "Send"}</button>
+                <button className="btn primary" disabled={busy || (!first.trim() && !firstPics.pictures.length) || (scope === "control_center" && !sources.length)} onClick={() => void startNew()} data-testid="chat-first-send">{busy ? "Starting…" : "Send"}</button>
               </div>
             </div>
           </div>

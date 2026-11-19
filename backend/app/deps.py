@@ -41,6 +41,7 @@ class AppContext:
     workspace_root: Path | None = None
     workspaces: "WorkspaceRegistry | None" = None
     extra: dict[str, Any] = field(default_factory=dict)
+    identity: str | None = None
 
 
 def get_ctx(request: Request) -> AppContext:
@@ -95,10 +96,18 @@ def _guard_pull_requests(ctx: AppContext, request: Request) -> None:
 def require_auth(request: Request, response: Response, ctx: AppContext = Depends(get_ctx)) -> AppContext:
     ctx.auth.authenticate_request(request, response, mutating=False)
     _guard_pull_requests(ctx, request)
-    return scoped(ctx, request)
+    from .chats import guard_chat_request
+
+    current = replace(scoped(ctx, request), identity=ctx.auth.identity_for_request(request))
+    guard_chat_request(current, request)
+    return current
 
 
 def require_auth_mutating(request: Request, response: Response, ctx: AppContext = Depends(get_ctx)) -> AppContext:
     ctx.auth.authenticate_request(request, response, mutating=True)
     _guard_pull_requests(ctx, request)
-    return scoped(ctx, request)
+    from .chats import guard_chat_request
+
+    current = replace(scoped(ctx, request), identity=ctx.auth.identity_for_request(request))
+    guard_chat_request(current, request)
+    return current

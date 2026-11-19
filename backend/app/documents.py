@@ -956,7 +956,13 @@ def office_pdf(path: str = Query(...), ctx: AppContext = Depends(require_auth)):
 
 @router.get("/documents/open")
 def open_document(path: str = Query(...), ctx: AppContext = Depends(require_auth)):
-    return _svc(ctx).open_document(path)
+    out = _svc(ctx).open_document(path)
+    from .chats import chat_scope, control_settings, is_chat_path
+
+    if is_chat_path(out["path"]):
+        out["chat_scope"] = chat_scope(ctx, ctx.workspace_id, out["path"])
+        out["chat_sources"] = control_settings(ctx, ctx.workspace_id, out["path"]).get("sources", [])
+    return out
 
 
 @router.get("/documents/{doc_id}/versions")
@@ -1025,10 +1031,12 @@ def recent_work(request: Request, limit: int = Query(50, ge=1, le=500), include_
     """Recent work of the current folder, or of every folder of the window with `all=true` (each item tagged).
     Pull requests (review hub) are listed only for the hub's owner."""
     from .deps import is_hub_owner
+    from .chats import can_read_chat
 
     owner = is_hub_owner(ctx, request)
     if not all_workspaces or ctx.workspaces is None:
-        items = [it for it in _svc(ctx).recent(limit, include_hidden) if owner or not is_pr_path(it["path"])]
+        items = [it for it in _svc(ctx).recent(limit, include_hidden)
+             if (owner or not is_pr_path(it["path"])) and can_read_chat(ctx, ctx.workspace_id, it["path"])]
         for it in items:
             it["workspace_id"] = ctx.workspace_id
         return {"items": items}
@@ -1037,6 +1045,8 @@ def recent_work(request: Request, limit: int = Query(50, ge=1, le=500), include_
     for wid in ctx.workspaces.order:
         for it in ctx.workspaces.runtimes[wid].docs.recent(limit, include_hidden):
             if not owner and is_pr_path(it["path"]):
+                continue
+            if not can_read_chat(ctx, wid, it["path"]):
                 continue
             it["workspace_id"] = wid
             it["workspace_name"] = names.get(wid)

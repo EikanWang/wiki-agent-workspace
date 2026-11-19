@@ -422,6 +422,7 @@ class ThreadService:
                     d.default_session_id = sess.id
         else:
             sess = await self._session_for_new_thread(doc, body.session_id)
+        self._check_chat_session(doc, sess)
         heading = None if body.whole_document else (body.heading or model.heading_for(body.start))
         user_msg_id = new_id()
         agent_msg_id = new_id()
@@ -459,10 +460,10 @@ class ThreadService:
             prompt, dev_extra = await self._dev_prompt(doc, body.question, body.dev_kind, body.dev_context, None)
         elif is_chat_path(doc.path) and target is not None and target["kind"] == "side":
             prompt = build_side_prompt(question=body.question, quote=body.quote, wiki_root=str(self.docs.root), main=self._messages(target["of"]), prior=None,
-                                       extra=self._extra(doc.path), locked=self._locked(), links=self._links(None))
+                                       extra=self._extra(doc.path), locked=self._locked(), links=self._links(None), control_context=await self._control_context(doc))
         elif is_chat_path(doc.path):
             prompt = build_chat_prompt(question=body.question, wiki_root=str(self.docs.root), prior=None, extra=self._extra(doc.path), about=self._chat_about(doc),
-                                       locked=self._locked(), brief=body.chat_brief, links=self._links(None))
+                                       locked=self._locked(), brief=body.chat_brief, links=self._links(None), control_context=await self._control_context(doc))
         elif is_pr_path(doc.path):
             text, cpath = _pr_copy(self.docs, doc.path)
             learning = None
@@ -512,6 +513,7 @@ class ThreadService:
             sess = await self._session_for_new_thread(doc, None)
         if body.model_choice is not None:
             sess = await self.sessions.session_for_model(sess, body.model_choice, self._session_title(doc))
+        self._check_chat_session(doc, sess)
         try:
             _, _, sha = self.docs.current_content(doc)
         except ApiError:
@@ -523,6 +525,10 @@ class ThreadService:
         if body.chat_action is not None:
             if not is_chat_path(doc.path) or side is not None:
                 raise ApiError(400, "INVALID_ACTION", "distill / update are for folder chats")
+            from .chats import chat_scope
+
+            if chat_scope(self.ctx, self.docs.workspace_id, doc.path) != "wiki":
+                raise ApiError(400, "INVALID_ACTION", "Control Center chats are read-only; use a Wiki chat to edit pages")
             target = check_action(self.ctx, body.chat_action, body.target_path)
             shown = action_message(body.chat_action, target, body.text if body.text.strip() != "-" else "")
         user_msg_id = new_id()
@@ -553,11 +559,12 @@ class ThreadService:
             prompt, dev_extra = await self._dev_prompt(doc, body.text, body.dev_kind, dctx, prior)
         elif is_chat_path(doc.path) and side is not None:
             prompt = build_side_prompt(question=shown, quote=t.cur_quote, wiki_root=str(self.docs.root), main=self._messages(str(side.get("of") or "")), prior=prior,
-                                       extra=self._extra(doc.path), locked=self._locked(), links=self._links(None))
+                                       extra=self._extra(doc.path), locked=self._locked(), links=self._links(None), control_context=await self._control_context(doc))
         elif is_chat_path(doc.path):
             prompt = build_chat_prompt(question=shown, wiki_root=str(self.docs.root), prior=prior, extra=self._extra(doc.path), about=self._chat_about(doc),
                                        locked=self._locked(), action=body.chat_action, target=target, links=self._links(None),
-                                       side=self._side_questions(doc.id, thread_id) if body.chat_action else None)
+                                       side=self._side_questions(doc.id, thread_id) if body.chat_action else None,
+                                       control_context=await self._control_context(doc))
         elif is_pr_path(doc.path):
             text, cpath = _pr_copy(self.docs, doc.path)
             prompt = build_pr_prompt(question=body.text, quote=t.cur_quote, copy_text=text, copy_path=cpath, wiki_root=str(self.docs.root),
@@ -604,6 +611,26 @@ class ThreadService:
                 if isinstance(a, dict) and a.get("kind") == "side" and a.get("of") == main_id:
                     out.append({"quote": t.cur_quote, "messages": self._messages(t.id)})
         return [x for x in out if x["messages"]]
+
+    def _check_chat_session(self, doc: Document, agent: AgentSession) -> None:
+        from .chats import chat_scope
+
+        control = is_chat_path(doc.path) and chat_scope(self.ctx, doc.workspace_id, doc.path) == "control_center"
+        if control and agent.origin != "app":
+            raise bad_request("Control Center requires its own app-created agent session", "INVALID_CHAT_SESSION")
+        with self.ctx.db.read() as session:
+            others = session.query(Document).join(Thread, Thread.document_id == Document.id).join(Job, Job.thread_id == Thread.id).filter(
+                Job.session_id == agent.id, Document.id != doc.id).distinct().all()
+        if any(control or (is_chat_path(other.path) and chat_scope(self.ctx, other.workspace_id, other.path) == "control_center") for other in others):
+            raise bad_request("Control Center agent sessions cannot be shared with other conversations", "INVALID_CHAT_SESSION")
+
+    async def _control_context(self, doc: Document) -> dict[str, Any] | None:
+        from .chats import chat_scope
+        from .control_center import snapshot
+
+        if chat_scope(self.ctx, self.docs.workspace_id, doc.path) != "control_center":
+            return None
+        return await snapshot(self.ctx, doc.path)
 
     def _chat_about(self, doc: Document) -> dict[str, str] | None:
         from .chats import chat_about

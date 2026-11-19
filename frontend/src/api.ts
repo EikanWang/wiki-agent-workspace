@@ -387,6 +387,8 @@ export interface OpenDocument {
   reading_state: ReadingState | null;
   default_session_id: string | null;
   missing: boolean;
+  chat_scope?: "wiki" | "control_center";
+  chat_sources?: string[];
 }
 
 export interface Anchor {
