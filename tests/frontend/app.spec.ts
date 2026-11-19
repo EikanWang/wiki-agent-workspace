@@ -4901,3 +4901,77 @@ test("Reviews → Monitors: per-repository GitHub search rules list PRs and issu
   await expect(page.getByTestId("monitor-rule")).toHaveCount(0);
   await page.getByTestId("reviews-tab-queue").click();
 });
+
+test("a link to another folder's document: a slow open does not land in the folder you went back to", async ({ page }) => {
+  const errs: string[] = [];
+  page.on("pageerror", (e) => errs.push(String(e)));
+  await login(page);
+  const showTree = async () => { // the folder tree (an earlier test may leave another list open, or the list closed)
+    if (!(await page.getByTestId("tree-root").first().isVisible())) await page.getByTestId("activity-files").click();
+    if (!(await page.getByTestId("tree-root").first().isVisible())) await page.getByTestId("activity-files").click();
+    await expect(page.getByTestId("tree-root").first()).toBeVisible();
+  };
+  await showTree();
+  const ws = workspaceDir();
+  const second = path.join(path.dirname(ws), "e2e-slow-second");
+  const cp = require("child_process") as typeof import("child_process");
+  fs.rmSync(second, { recursive: true, force: true });
+  fs.mkdirSync(path.join(second, "Xe3p", "EU"), { recursive: true });
+  cp.execSync("git init -q", { cwd: second });
+  const file = path.join(second, "Xe3p", "EU", "e2e-slow-spec.docx");
+  cp.execFileSync(path.resolve(__dirname, "../../.venv/bin/python"), ["-c", `
+import sys; sys.path.insert(0, ${JSON.stringify(path.resolve(__dirname, "../backend"))})
+from pathlib import Path
+from test_locks_formats import _minimal_docx
+Path(${JSON.stringify(file)}).write_bytes(_minimal_docx(["Slow spec paragraph %d." % i for i in range(20)]))
+`]);
+  await page.getByTestId("tree-add-folder").click();
+  await page.getByTestId("add-folder-path").fill(second);
+  await page.getByTestId("add-folder-path").press("Enter");
+  await expect(page.getByTestId("add-folder-selected")).toContainText(second);
+  await page.getByTestId("add-folder-name").fill("SlowSecond");
+  await page.getByTestId("add-folder-submit").click();
+  await expect(page.getByTestId("tree-root")).toHaveCount(2);
+  const added = { id: (await page.getByTestId("workspace-switch").locator("option", { hasText: "SlowSecond" }).getAttribute("value"))! };
+  try {
+    const firstId = await page.getByTestId("workspace-switch").locator("option").filter({ hasNotText: "SlowSecond" }).first().getAttribute("value");
+    await page.getByTestId("workspace-switch").selectOption(firstId!);
+    await openGuide(page);
+    await page.getByTestId("ask-whole-document").click();
+    await page.getByTestId("selection-question").fill(`Slow e2e: see [the slow spec](${file})`);
+    await page.getByTestId("selection-send").click();
+    const answer = page.locator('[data-testid="message-agent"][data-status="completed"]').last();
+    await expect(answer).toContainText("the slow spec", { timeout: 20000 });
+    // the other folder's document takes a while to open; meanwhile you go back to the guide
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((r) => { release = r; });
+    await page.route(/documents\/open\?path=Xe3p/, async (route) => { await held; await route.continue(); });
+    await answer.getByRole("link", { name: "the slow spec" }).click();
+    await expect(page.getByTestId("workspace-switch")).toHaveValue(added.id);
+    await page.locator(`[data-testid="doc-tab"][data-ws="${firstId}"][data-path="docs/guide.md"]`).click();
+    await expect(page.getByTestId("markdown-body").locator("h1")).toContainText("Guide");
+    release();
+    await page.waitForTimeout(1500);
+    // the late answer is dropped: the guide stays, no tab of the spec under this folder, no error
+    await expect(page.getByTestId("workspace-switch")).toHaveValue(firstId!);
+    await expect(page.getByTestId("markdown-body").locator("h1")).toContainText("Guide");
+    await expect(page.locator(`[data-testid="doc-tab"][data-ws="${firstId}"][data-path="Xe3p/EU/e2e-slow-spec.docx"]`)).toHaveCount(0);
+    await expect(page.locator(".banner.warn", { hasText: "FILE_NOT_FOUND" })).toHaveCount(0);
+    await page.unroute(/documents\/open\?path=Xe3p/);
+    // the link again: it opens in its own folder, its tab is that folder's
+    await page.locator('[data-testid="message-agent"][data-status="completed"]').last().getByRole("link", { name: "the slow spec" }).click();
+    await expect(page.getByTestId("workspace-switch")).toHaveValue(added.id);
+    const tab = page.locator(`[data-testid="doc-tab"][data-ws="${added.id}"][data-path="Xe3p/EU/e2e-slow-spec.docx"]`);
+    await expect(tab).toHaveCount(1);
+    await expect(page.locator(".banner.warn", { hasText: "FILE_NOT_FOUND" })).toHaveCount(0);
+    await tab.getByTestId("doc-tab-close").click();
+    expect(errs).toEqual([]);
+  } finally {
+    await showTree();
+    await page.getByTestId("tree-root").filter({ has: page.getByTestId("tree-remove-SlowSecond") }).locator(".tree-root button").first().focus(); // its actions show while it has focus
+    await page.getByTestId("tree-remove-SlowSecond").click();
+    await page.getByTestId("confirm-ok").click();
+    await expect(page.getByTestId("tree-root")).toHaveCount(1);
+    fs.rmSync(second, { recursive: true, force: true });
+  }
+});

@@ -788,14 +788,14 @@ export default function Reader(props: ReaderProps) {
           </div>
         )}
         {isOffice && layout && (
-          <OfficeView path={doc.path} sha256={doc.sha256} onShowText={hasText ? () => setView("text") : null}
+          <OfficeView path={doc.path} workspace={doc.workspace_id} sha256={doc.sha256} onShowText={hasText ? () => setView("text") : null}
             unit={slideDeck ? "slide" : "page"} threads={threads} activeThreadId={activeThreadId} onAsk={askPage} onOpenThread={onOpenThread} goToPage={goToPage}
             goToText={goToText} posRef={layoutPos} />
         )}
         {doc.format === "image" ? (
           <div className={`image-view ${imgZoom ? "zoomed" : ""}`} data-testid="image-view">
             <img
-              src={`/api/v1/raw?path=${encodeURIComponent(doc.path)}${getWorkspace() ? `&workspace=${encodeURIComponent(getWorkspace()!)}` : ""}&v=${doc.sha256.slice(0, 12)}`}
+              src={`/api/v1/raw?path=${encodeURIComponent(doc.path)}${(doc.workspace_id || getWorkspace()) ? `&workspace=${encodeURIComponent((doc.workspace_id || getWorkspace())!)}` : ""}&v=${doc.sha256.slice(0, 12)}`}
               alt={doc.path}
               onClick={() => setImgZoom((z) => !z)}
               title={imgZoom ? "Click to fit the window" : "Click for the actual size"}
@@ -805,7 +805,7 @@ export default function Reader(props: ReaderProps) {
         ) : doc.format === "pdf" ? (
           <div className="pdf-view" data-testid="pdf-view">
             <PdfView
-              url={`/api/v1/raw?path=${encodeURIComponent(doc.path)}${getWorkspace() ? `&workspace=${encodeURIComponent(getWorkspace()!)}` : ""}&v=${doc.sha256.slice(0, 12)}`}
+              url={`/api/v1/raw?path=${encodeURIComponent(doc.path)}${(doc.workspace_id || getWorkspace()) ? `&workspace=${encodeURIComponent((doc.workspace_id || getWorkspace())!)}` : ""}&v=${doc.sha256.slice(0, 12)}`}
               unit="page"
               threads={threads}
               activeThreadId={activeThreadId}

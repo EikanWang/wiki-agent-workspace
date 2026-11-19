@@ -12,6 +12,7 @@ import {
   Thread,
   WorkspaceInfo,
   get,
+  getIn,
   getWorkspace,
   setWorkspace,
   newIdempotencyKey,
@@ -288,8 +289,10 @@ export default function App() {
     [],
   );
 
+  const openSeq = useRef(0); // the latest openDocument call: only its document is shown
   const openDocument = useCallback(
     async (path: string, keepThread = false, quiet = false): Promise<boolean> => {
+      const seq = ++openSeq.current;
       if (isChatPath(path)) {
         openChats({ ws: getWorkspace() ?? "", path });
         return true;
@@ -297,9 +300,13 @@ export default function App() {
       if (!keepThread && !confirmLeaveEditor()) return false;
       if (!keepThread) editorDirty.current = false;
       setDocError(null);
+      const ws = getWorkspace() ?? "";
       try {
-        const d = await get<OpenDocument>(`/documents/open?path=${encodeURIComponent(path)}`);
-        const tab = { ws: getWorkspace() ?? "", path: d.path };
+        const opened = await getIn<OpenDocument>(ws, `/documents/open?path=${encodeURIComponent(path)}`);
+        // something else was opened (or another folder chosen) while this one loaded: it is not shown in its place
+        if (seq !== openSeq.current || (getWorkspace() ?? "") !== ws) return false;
+        const d: OpenDocument = { ...opened, workspace_id: ws };
+        const tab = { ws, path: d.path };
         const isPr = d.path.startsWith(".waw-github/");
         const prev = lastTab.current;
         // relinked (same document, new path): the tab follows; otherwise a new tab opens after the current one
@@ -317,14 +324,14 @@ export default function App() {
           restoreThreadRef.current = null;
           setActiveThread(wanted);
         }
-        localStorage.setItem(`waw.lastPath.${getWorkspace() ?? ""}`, path);
+        localStorage.setItem(`waw.lastPath.${ws}`, path);
         await refreshThreads(d.document_id);
         setView("document");
         setMobilePane("doc");
         return true;
       } catch (e) {
         const ae = e as ApiError;
-        if (!quiet) setDocError(`${ae.code}: ${ae.message}`);
+        if (!quiet && seq === openSeq.current) setDocError(`${ae.code}: ${ae.message}`);
         return false;
       }
     },
@@ -345,7 +352,9 @@ export default function App() {
         if (!p || tried.has(p)) continue;
         tried.add(p);
         if (getWorkspace() !== ws) return; // the user switched folders meanwhile
+        const seq = openSeq.current;
         if (await openDocument(p, false, true)) return;
+        if (getWorkspace() !== ws || openSeq.current !== seq + 1) return; // something else was opened meanwhile
         // gone (deleted, renamed, or never in this folder): forget it
         if (localStorage.getItem(`waw.lastPath.${ws}`) === p) localStorage.removeItem(`waw.lastPath.${ws}`);
         setDocTabs((tabs) => tabs.filter((t) => !(t.ws === ws && t.path === p)));
