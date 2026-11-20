@@ -409,7 +409,8 @@ def main() -> None:
     ins = settings.state_dir / "insights"
     (ins / "summary" / "pytorch" / "pytorch").mkdir(parents=True, exist_ok=True)
     (ins / "summary" / "pytorch" / "pytorch" / "summary_pytorch_pytorch_0D_2026-11-10_05-35-01.md").write_text(
-        "Summary of pytorch/pytorch from 2026-11-10 00-00-00 to 2026-11-10 23-59-59:\n\n# Old day\n\n- [PR #1](https://github.com/pytorch/pytorch/pull/1) did a thing.\n")
+        "Summary of pytorch/pytorch from 2026-11-10 00-00-00 to 2026-11-10 23-59-59:\n\n# Old day\n\n## 🆕 What's new\n\n- 🆕 **Ring buffer API** (new feature): a new API.\n\n"
+        "## Other\n\n- [PR #1](https://github.com/pytorch/pytorch/pull/1) did a thing.\n- 🆕 **Device mesh** (new concept) appears.\n- ➕ **Mesh slicing** *(extends Device mesh)* grows.\n")
     (ins / "highlight" / "pytorch" / "pytorch").mkdir(parents=True, exist_ok=True)
     import json as _json
 

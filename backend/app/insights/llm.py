@@ -1,5 +1,6 @@
 """Model requests: an OpenAI-compatible chat endpoint (default: DeepSeek) or the app's agents (OpenCode / Codex),
-chosen per task. Long material is split into parts of ≤ max_chars and each part answered (the caller combines).
+chosen per task. Long material is split into parts of ≤ max_chars (agent_max_chars for a task on the agent) and each
+part answered (the caller combines).
 Tests replace the whole thing with ctx.extra["insights_llm"] = callable(task, prompt, json) -> str."""
 
 from __future__ import annotations
@@ -83,9 +84,16 @@ def pack(texts: list[str], instruction: str, max_chars: int, sep: str = "\n") ->
     return parts
 
 
+def request_chars(ctx: Any, task: str) -> int:
+    """The characters one request of the task may have: the agent's limit when the task runs on the agent."""
+    s = st.load(ctx)
+    agent = (s["llm"].get(task) or {}).get("mode") == "agent"
+    return int(s["agent_max_chars"]) if agent else int(s["max_chars"])
+
+
 async def summarize(ctx: Any, task: str, texts: list[str], instruction: str, combine: str | None = None) -> str:
     """One answer for the material: each part summarized, then (more than one part) combined."""
-    max_chars = int(st.load(ctx)["max_chars"])
+    max_chars = request_chars(ctx, task)
     parts = pack(texts, instruction, max_chars)
     if not parts:
         return ""

@@ -4,6 +4,7 @@ import { Thread } from "../api";
 import { MinusIcon, PlusIcon } from "./Icons";
 import { linkHighlightMs, whenSettled } from "../linkHighlight";
 import { ViewPos, findPart, squash } from "../viewSync";
+import { FindEngine, Match, findRegex, indexText, matchesIn, pickMatch, rangeOf, revealRange, setFindHighlights, clearFindHighlights } from "../findText";
 
 /** What the user points at in a laid-out document (sent with the question). */
 export interface PageTarget {
@@ -48,8 +49,10 @@ function scaledCopy(src: HTMLCanvasElement, sx: number, sy: number, sw: number, 
  * viewer, its text can be selected and asked about, and each page/slide (or an area of it) can be sent to the
  * agent as an image.
  */
-export default function PdfView({ url, unit, threads, activeThreadId, onAsk, onOpenThread, testId = "pdfjs-view", goToPage = null, goToText = null, posRef }: {
+export default function PdfView({ url, unit, threads, activeThreadId, onAsk, onOpenThread, testId = "pdfjs-view", goToPage = null, goToText = null, posRef, onFindEngine }: {
   url: string;
+  /** the find bar's engine for this view (null when it goes) */
+  onFindEngine?: (e: FindEngine | null) => void;
   /** the Text view switched to this one: show the place it was at (its text, else as far down) */
   goToText?: (ViewPos & { at: number }) | null;
   /** set to a function telling where this view is (for the switch to the Text view) */
@@ -75,9 +78,14 @@ export default function PdfView({ url, unit, threads, activeThreadId, onAsk, onO
   const U = unit === "slide" ? "Slide" : "Page";
 
   // load the document
+  const find = useRef<{ texts: string[]; starts: number[]; matches: (Match & { page: number })[]; cur: number; reveal: boolean }>({ texts: [], starts: [], matches: [], cur: -1, reveal: false });
+  const ready = useRef<{ p: Promise<PDFDocumentProxy>; done: (d: PDFDocumentProxy) => void } | null>(null);
   useEffect(() => {
     let alive = true;
     let doc: PDFDocumentProxy | null = null;
+    let done: (d: PDFDocumentProxy) => void = () => undefined;
+    find.current = { texts: [], starts: [], matches: [], cur: -1, reveal: false };
+    ready.current = { p: new Promise<PDFDocumentProxy>((res) => { done = res; }), done: (d) => done(d) };
     setPdf(null);
     setSizes([]);
     setError(null);
@@ -93,6 +101,7 @@ export default function PdfView({ url, unit, threads, activeThreadId, onAsk, onO
         if (alive) {
           setPdf(d);
           setSizes(s);
+          ready.current?.done(d);
         }
       })
       .catch((e) => alive && setError(String((e as Error).message || e)));
@@ -220,6 +229,92 @@ export default function PdfView({ url, unit, threads, activeThreadId, onAsk, onO
     return () => { posRef.current = null; };
   });
 
+  // find: the text of each page (as its text layer has it), matches highlighted in the pages laid out
+  const paintFind = useCallback(() => {
+    const b = box.current;
+    const f = find.current;
+    if (!b) return;
+    if (!f.matches.length) return clearFindHighlights();
+    const all: Range[] = [];
+    let current: Range | null = null;
+    for (const el of Array.from(b.querySelectorAll<HTMLElement>(".pdfjs-page[data-rendered='true']"))) {
+      const page = Number(el.dataset.page);
+      const tl = el.querySelector(".textLayer");
+      const mine = f.matches.map((m, i) => ({ m, i })).filter(({ m }) => m.page === page);
+      if (!tl || !mine.length) continue;
+      const ix = indexText(tl, "script, style");
+      for (const { m, i } of mine) {
+        const off = f.starts[page - 1];
+        const r = rangeOf(ix, { s: m.s - off, e: m.e - off });
+        if (!r) continue;
+        all.push(r);
+        if (i === f.cur) current = r;
+      }
+    }
+    setFindHighlights(all, current);
+    if (f.reveal && f.cur >= 0) {
+      if (current) {
+        f.reveal = false;
+        revealRange(b, current);
+      } else {
+        b.querySelector<HTMLElement>(`[data-page="${f.matches[f.cur].page}"]`)?.scrollIntoView({ block: "start" });
+      }
+    }
+  }, []);
+  useEffect(() => {
+    if (!onFindEngine) return;
+    let text = "";
+    const engine: FindEngine = {
+      async search(q, opts) {
+        const d = await ready.current?.p;
+        if (!d) return 0;
+        const f = find.current;
+        if (!f.texts.length) {
+          for (let i = 1; i <= d.numPages; i++) {
+            const tc = await (await d.getPage(i)).getTextContent();
+            f.texts.push(tc.items.map((it) => ("str" in it ? it.str : "")).join(""));
+          }
+          text = "";
+          f.starts = f.texts.map((t) => { const at = text.length; text += `${t}\f`; return at; });
+        }
+        let page = 0;
+        f.matches = matchesIn(text, findRegex(q, opts)).map((m) => {
+          while (page + 1 < f.starts.length && f.starts[page + 1] <= m.s) page++;
+          return { ...m, page: page + 1 };
+        });
+        f.cur = -1;
+        return f.matches.length;
+      },
+      show(i, scroll) {
+        find.current.cur = i;
+        find.current.reveal = scroll;
+        paintFind();
+      },
+      pick(req) {
+        const f = find.current;
+        const on = req.page ? f.matches.filter((m) => m.page === req.page) : [];
+        if (on.length) {
+          const k = pickMatch(text, on, { n: 0, ctx: req.ctx });
+          return f.matches.indexOf(on[Math.max(0, k)]);
+        }
+        return pickMatch(text, f.matches, req);
+      },
+      clear() {
+        find.current.matches = [];
+        find.current.cur = -1;
+        clearFindHighlights();
+      },
+    };
+    onFindEngine(engine);
+    return () => {
+      onFindEngine(null);
+      clearFindHighlights();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [url]);
+  // zoom re-lays the pages out: paint again as they come
+  useEffect(() => { paintFind(); }, [zoom, width, paintFind]);
+
   // text selected in a page's text layer → "Ask" chip
   const onMouseUp = useCallback((e: React.MouseEvent) => {
     window.setTimeout(() => {
@@ -268,6 +363,7 @@ export default function PdfView({ url, unit, threads, activeThreadId, onAsk, onO
               onOpenThread={onOpenThread}
               onAskPage={() => askPage(i + 1)}
               areaMode={areaPage === i + 1}
+              onRendered={paintFind}
               onAreaMode={(on) => setAreaPage(on ? i + 1 : null)}
               onArea={(rect) => {
                 setAreaPage(null);
@@ -298,7 +394,8 @@ export default function PdfView({ url, unit, threads, activeThreadId, onAsk, onO
   );
 }
 
-function PdfPage({ pdf, n, size, scale, unit, discussions, onOpenThread, onAskPage, areaMode, onAreaMode, onArea }: {
+function PdfPage({ pdf, n, size, scale, unit, discussions, onOpenThread, onAskPage, areaMode, onAreaMode, onArea, onRendered }: {
+  onRendered?: () => void;
   pdf: PDFDocumentProxy;
   n: number;
   size: { w: number; h: number };
@@ -312,6 +409,12 @@ function PdfPage({ pdf, n, size, scale, unit, discussions, onOpenThread, onAskPa
   onArea: (rect: [number, number, number, number]) => void;
 }) {
   const host = useRef<HTMLDivElement>(null);
+  const onRenderedRef = useRef(onRendered);
+  onRenderedRef.current = onRendered;
+  const [renders, setRenders] = useState(0);
+  useEffect(() => {
+    if (renders) onRenderedRef.current?.(); // once data-rendered is set and the text layer is in
+  }, [renders]);
   const canvas = useRef<HTMLCanvasElement>(null);
   const textDiv = useRef<HTMLDivElement>(null);
   const [visible, setVisible] = useState(false);
@@ -350,7 +453,10 @@ function PdfPage({ pdf, n, size, scale, unit, discussions, onOpenThread, onAskPa
       tl.replaceChildren();
       tl.style.setProperty("--total-scale-factor", String(scale));
       await new lib.TextLayer({ textContentSource: page.streamTextContent(), container: tl, viewport: vp }).render();
-      if (!cancelled) setRendered(true);
+      if (!cancelled) {
+        setRendered(true);
+        setRenders((k) => k + 1);
+      }
     })().catch(() => undefined);
     return () => {
       cancelled = true;

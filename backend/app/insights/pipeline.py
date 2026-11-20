@@ -17,7 +17,7 @@ from ..db import new_id
 from ..errors import ApiError
 from . import commits as cm
 from . import github as gh
-from . import llm, prompts, store
+from . import llm, prompts, registry, store
 from . import settings as st
 
 log = logging.getLogger("waw.insights")
@@ -90,6 +90,171 @@ def calendar_period(period: str, value: str | None, since: str | None = None, un
         b = t
         label += " (so far)"
     return a.isoformat(), b.isoformat(), label, KINDS[period]
+
+
+def _shift(d: dt.date, months: int) -> dt.date:
+    m = d.year * 12 + d.month - 1 - months
+    y, mo = divmod(m, 12)
+    last = ((dt.date(y + (mo == 11), 1 if mo == 11 else mo + 2, 1)) - dt.timedelta(days=1)).day
+    return dt.date(y, mo + 1, min(d.day, last))
+
+
+def baseline_window(b: dict[str, Any], since: str, until: str, kind: str = "dates") -> tuple[str, str, str] | None:
+    """(first day, last day, label) of what a period's new things are compared with; None when it is empty."""
+    a = dt.date.fromisoformat(since)
+    mode = b.get("mode") or "previous"
+    hi = a - dt.timedelta(days=1)
+    if mode == "previous":  # day to day, month to month …: the period against everything before it
+        return "0001-01-01", hi.isoformat(), f"everything before the period (up to {hi.isoformat()})"
+    if mode in ("day", "week"):
+        lo = a - dt.timedelta(days=1 if mode == "day" else 7)
+        word = "day" if mode == "day" else "week"
+    elif mode in ("month", "quarter", "year"):
+        lo = _shift(a, {"month": 1, "quarter": 3, "year": 12}[mode])
+        word = mode
+    elif mode == "before":
+        d = dt.date.fromisoformat(b["date"])
+        cut = d - dt.timedelta(days=1)
+        if hi.year <= 1 or cut.year <= 1:
+            return None
+        return "0001-01-01", min(hi, cut).isoformat(), f"everything before {min(d, a).isoformat()}"
+    elif mode == "after":
+        lo = dt.date.fromisoformat(b["date"])
+        if lo > hi:
+            return None
+        return lo.isoformat(), hi.isoformat(), f"from {lo.isoformat()} until the period ({lo.isoformat()} … {hi.isoformat()})"
+    else:
+        return None
+    return lo.isoformat(), hi.isoformat(), f"the {word} before ({lo.isoformat()}{'' if lo == hi else ' … ' + hi.isoformat()})"
+
+
+def _day_cache(ctx: Any, repo: str, row: dict[str, Any]) -> dict[str, Any] | None:
+    """What `day_terms` kept for this summary, if it is unchanged since ({"terms": names, "entries": described terms};
+    a list made before the descriptions has names only)."""
+    text = store.body(row["path"])
+    if not text or text.startswith("No notable activity"):
+        return {"terms": [], "entries": []}
+    try:
+        hit = json.loads((st.data_dir(ctx) / "terms" / repo / f"{row['since']}.json").read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(hit, dict) or not isinstance(hit.get("terms"), list):
+        return None
+    if hit.get("hash") == _hash(prompts.describe(repo), text):
+        return hit
+    if hit.get("hash") == _hash(prompts.TERMS, text):
+        return {"terms": hit["terms"], "entries": registry.entries_of(hit["terms"])}
+    return None
+
+
+def cached_terms(ctx: Any, repo: str, row: dict[str, Any]) -> list[str] | None:
+    """The terms `day_terms` listed for this summary before, if it is unchanged since."""
+    hit = _day_cache(ctx, repo, row)
+    return hit["terms"] if hit else None
+
+
+async def day_terms(ctx: Any, repo: str, row: dict[str, Any]) -> list[str]:
+    """What one daily summary is about (features, APIs, terms, concepts …, each with what it is), kept per file content."""
+    hit = _day_cache(ctx, repo, row)
+    if hit is not None:
+        return hit["terms"]
+    text = store.body(row["path"])
+    folder = st.data_dir(ctx) / "terms" / repo
+    p = folder / f"{row['since']}.json"
+    raw = await llm.complete(ctx, "terms", prompts.describe(repo) + text[:200_000], as_json=True)
+    try:
+        got = json.loads(raw[raw.index("{"):raw.rindex("}") + 1]).get("terms") or []
+    except (ValueError, AttributeError):
+        got = []
+    entries = registry.entries_of(got)
+    terms = list(dict.fromkeys(store.new_names(text) + [n for e in entries for n in (e["name"], *e["aliases"])]))
+    folder.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_name(f".{p.name}.tmp")
+    tmp.write_text(json.dumps({"hash": _hash(prompts.describe(repo), text), "terms": terms, "entries": entries}), encoding="utf-8")
+    os.replace(tmp, p)
+    return terms
+
+
+def _baseline_rows(ctx: Any, repo: str, lo: str, hi: str) -> list[dict[str, Any]]:
+    """The newest full daily summary of each day from `lo` to `hi`, oldest first."""
+    by_day: dict[str, dict[str, Any]] = {}
+    for r in store.index(ctx, repo):
+        if r["daily"] and not r["partial"] and lo <= r["since"] <= hi and (r["since"] not in by_day or r["mtime"] > by_day[r["since"]]["mtime"]):
+            by_day[r["since"]] = r
+    return [by_day[d] for d in sorted(by_day)]
+
+
+def registry_of(ctx: Any, repo: str, lo: str, hi: str) -> list[dict[str, Any]]:
+    """The term registry of the daily summaries from `lo` to `hi` (as `day_terms` described them; with the names
+    each summary marked new)."""
+    days = []
+    for r in _baseline_rows(ctx, repo, lo, hi):
+        hit = _day_cache(ctx, repo, r) or {"entries": []}
+        try:
+            flagged = store.new_names(Path(r["path"]).read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            flagged = []
+        days.append((r["since"], (hit.get("entries") or []) + registry.entries_of(flagged)))
+    return registry.build(days)
+
+
+async def check_new(ctx: Any, repo: str, text: str, lo: str, hi: str, what: str, baseline: str) -> tuple[str, dict[str, Any]]:
+    """The model check of the text's new things against the registry of `lo` … `hi` (no check when it fails)."""
+    reg = registry_of(ctx, repo, lo, hi)
+    try:
+        return await registry.check(ctx, repo, text, reg, what, baseline, int(st.load(ctx)["concurrency"]))
+    except ApiError as e:
+        log.warning("new-things check of %s failed: %s", repo, e)
+        return text, {}
+
+
+KNOWN_CHARS = 30_000  # the known names a prompt lists (the rest is checked in code: `store.unmark`)
+
+
+async def baseline_terms(ctx: Any, repo: str, lo: str, hi: str, j: dict[str, Any] | None = None, cached_only: bool = False,
+                         ) -> tuple[list[str], int, set[str]]:
+    """What the daily summaries from `lo` to `hi` are about: the names for a prompt (the most mentioned first, the most
+    recent first among equals, at most KNOWN_CHARS), how many days had a summary, and every name's key (with the names
+    the summaries flagged new). Days without a summary are not made for this; `cached_only` lists no day anew."""
+    rows = _baseline_rows(ctx, repo, lo, hi)
+    sem = asyncio.Semaphore(max(1, int(st.load(ctx)["concurrency"])))
+    done = 0
+
+    async def one(r: dict[str, Any]) -> list[str]:
+        nonlocal done
+        if cached_only:
+            return cached_terms(ctx, repo, r) or []
+        async with sem:
+            out = await day_terms(ctx, repo, r)
+            done += 1
+            if len(rows) > 3 and done % 10 == 0:
+                step(j, f"baseline: {done} of {len(rows)} daily summaries read")
+            return out
+    if rows:
+        step(j, f"baseline: reading what the {len(rows)} daily summaries of {'the history up to ' + hi if lo.startswith('0001') else lo + ' … ' + hi} are about")
+    counts: dict[str, list[Any]] = {}
+    keys: set[str] = set()
+    for i, (r, terms) in enumerate(zip(rows, await asyncio.gather(*(one(r) for r in rows)), strict=True)):
+        try:
+            flagged = store.new_names(Path(r["path"]).read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            flagged = []
+        for t in dict.fromkeys(terms + flagged):
+            k = store.new_key(t)
+            keys.add(store.match_key(t))
+            if k in counts:
+                counts[k][1] += 1
+                counts[k][2] = i
+            else:
+                counts[k] = [t, 1, i]
+    ranked = sorted(counts.values(), key=lambda x: (-x[1], -x[2]))
+    out, size = [], 0
+    for t, _, _ in ranked:
+        size += len(t) + 2
+        if size > KNOWN_CHARS:
+            break
+        out.append(t)
+    return out, len(rows), keys
 
 
 def _hash(*parts: str) -> str:
@@ -241,7 +406,21 @@ async def daily_summary(ctx: Any, repo: str, day: str, j: dict[str, Any] | None 
             text = f"No notable activity in issues and pull requests on {day}."
         else:
             step(j, f"issues and PRs of {day}: summarizing {len(items)} item(s)")
-            text = await llm.summarize(ctx, "daily", [gh.text_of(it, a, b) for it in items], prompts.DAILY, prompts.COMBINE)
+            # day to day: new is what no day before had (the day before is listed now; older days as listed before)
+            prev, row, _ = store.previous_day_known(ctx, repo, day)
+            try:
+                if row:
+                    await day_terms(ctx, repo, row)
+            except ApiError:
+                pass
+            names, ndays, keys = await baseline_terms(ctx, repo, "0001-01-01", prev, cached_only=True)
+            ins = prompts.daily(names, f"everything before {day}", ndays)
+            text = await llm.summarize(ctx, "daily", [gh.text_of(it, a, b) for it in items], ins, prompts.COMBINE)
+            text, _ = store.unmark(text, keys)
+            if prev:
+                text, chk = await check_new(ctx, repo, text, "0001-01-01", prev, f"the daily summary of {day}", f"everything before {day}")
+                if chk:
+                    store.write_check(ctx, repo, day, chk)
         partial = dt.date.fromisoformat(day) >= today()
         if partial:
             for old in store.index(ctx, repo):
@@ -345,12 +524,14 @@ async def issue_material(ctx: Any, repo: str, since: str, until: str, j: dict[st
             if not texts:
                 continue
 
-            async def make(w=w, texts=texts, k=k) -> str:
+            ins = prompts.rollup(len(texts), "daily", repo, w[0], w[-1], len(w))
+
+            async def make(w=w, texts=texts, k=k, ins=ins) -> str:
                 step(j, f"week {k} of {total_weeks} ({w[0]} … {w[-1]}): condensing its {len(texts)} daily summaries into one "
                         f"week summary (the report is then written from the week summaries of the whole {since} … {until})")
-                return await llm.summarize(ctx, "rollup", texts, prompts.rollup(len(texts), "daily", repo, w[0], w[-1], len(w)), prompts.COMBINE)
+                return await llm.summarize(ctx, "rollup", texts, ins, prompts.COMBINE)
             done = dt.date.fromisoformat(w[-1]) < today()
-            text = await (_cached_block(ctx, repo, f"week_{w[0]}_{w[-1]}_{_hash(*texts)}", make) if done else make())
+            text = await (_cached_block(ctx, repo, f"week_{w[0]}_{w[-1]}_{_hash(ins, prompts.COMBINE, *texts)}", make) if done else make())
             week_texts.append((w, text))
         if len(groups) == 1:
             parts += [f"--- Week {w[0]} … {w[-1]} ---\n{t}" for w, t in week_texts]
@@ -359,11 +540,13 @@ async def issue_material(ctx: Any, repo: str, since: str, until: str, j: dict[st
             continue
         texts = [f"--- Week {w[0]} … {w[-1]} ---\n{t}" for w, t in week_texts]
 
-        async def make_m(g=g, texts=texts, gi=gi) -> str:
+        ins_m = prompts.rollup(len(texts), "weekly", repo, g[0], g[-1], len(g))
+
+        async def make_m(g=g, texts=texts, gi=gi, ins_m=ins_m) -> str:
             step(j, f"month {gi + 1} of {len(groups)} ({g[0][:7]}): condensing its {len(texts)} week summaries into one month summary")
-            return await llm.summarize(ctx, "rollup", texts, prompts.rollup(len(texts), "weekly", repo, g[0], g[-1], len(g)), prompts.COMBINE)
+            return await llm.summarize(ctx, "rollup", texts, ins_m, prompts.COMBINE)
         done = dt.date.fromisoformat(g[-1]) < today()
-        text = await (_cached_block(ctx, repo, f"month_{g[0]}_{g[-1]}_{_hash(*texts)}", make_m) if done else make_m())
+        text = await (_cached_block(ctx, repo, f"month_{g[0]}_{g[-1]}_{_hash(ins_m, prompts.COMBINE, *texts)}", make_m) if done else make_m())
         parts.append(f"--- Month {g[0][:7]} ({g[0]} … {g[-1]}) ---\n{text}")
     return "\n\n".join(parts), len(dailies)
 
@@ -388,7 +571,7 @@ async def commit_material(ctx: Any, repo: str, since: str, until: str, j: dict[s
         async def make(w=w, sub=sub, i=i) -> str:
             step(j, f"commits, week {i + 1} of {len(ws)} ({w[0]} … {w[-1]}): summarizing its {len(sub['commits'])} commits")
             return await llm.complete(ctx, "commits", prompts.COMMITS.format(repo=repo, since=w[0], until=w[-1]) + cm.text_of(repo, sub))
-        key = f"commits_{w[0]}_{w[-1]}_{_hash(*(c[0] for c in rows))}"
+        key = f"commits_{w[0]}_{w[-1]}_{_hash(prompts.COMMITS, *(c[0] for c in rows))}"
         text = await (_cached_block(ctx, repo, key, make) if dt.date.fromisoformat(w[-1]) < today() else make())
         parts.append(f"--- Commits of {w[0]} … {w[-1]} ({len(rows)}) ---\n{text}")
     areas = "\n".join(f"{n:6d}  {a}" for n, a in data["areas"])
@@ -425,6 +608,16 @@ def reports(ctx: Any, repo: str | None = None) -> list[dict[str, Any]]:
         elif m.get("status") == "running" and not live:
             m = {**m, "status": "interrupted"}
         out.append(m)
+    if repo:
+        read = store.read_new(ctx, repo)
+        for m in out:
+            if m.get("new") and "new_names" not in m:  # reports made before the read marks
+                try:
+                    m["new_names"] = [store.new_key(n) for n in store.new_names((root / repo / f"{m['id']}.md").read_text(encoding="utf-8"))]
+                except OSError:
+                    m["new_names"] = []
+            m["unread"] = store.unread(m.get("new_names") or [], read.get(f"r:{m['id']}"))
+            m.pop("new_names", None)
     return sorted(out, key=lambda m: m.get("created_at") or "", reverse=True)
 
 
@@ -438,12 +631,14 @@ def report(ctx: Any, repo: str, rid: str) -> dict[str, Any]:
     if live:
         m.update(step=live["step"], log=live["log"], status=live["status"] if m["status"] == "running" else m["status"],
                  state=live.get("state"), gh_wait=live.get("gh_wait"))
-    return {**m, "text": md.read_text(encoding="utf-8") if md.is_file() else None}
+    return {**m, "text": md.read_text(encoding="utf-8") if md.is_file() else None, "read_new": store.read_new(ctx, repo).get(f"r:{rid}", [])}
 
 
 def delete_report(ctx: Any, repo: str, rid: str) -> None:
     for ext in (".json", ".md"):
         (_reports_dir(ctx, repo) / f"{rid}{ext}").unlink(missing_ok=True)
+    if store.read_new(ctx, repo).get(f"r:{rid}"):
+        store.mark_read(ctx, repo, f"r:{rid}", store.read_new(ctx, repo)[f"r:{rid}"], False)
 
 
 async def make_report(ctx: Any, meta: dict[str, Any], j: dict[str, Any]) -> dict[str, Any]:
@@ -491,23 +686,43 @@ async def make_report(ctx: Any, meta: dict[str, Any], j: dict[str, Any]) -> dict
     if not sections:
         text = "No activity found for this period."
     else:
+        b = meta.get("baseline") or {"mode": "previous", "date": None}
+        win = baseline_window(b, since, until, meta.get("kind") or "dates")
+        if win:
+            names, ndays, keys = await baseline_terms(ctx, repo, win[0], win[1], j)
+            note = prompts.known(names, win[2], ndays)
+            facts.append(f"New compared with: {win[2]} — {ndays} day(s) with a summary, {len(names)} known names")
+            meta["baseline"] = {**b, "label": win[2], "days": ndays}
+        else:
+            note, keys = prompts.known(store.flagged_new(ctx, repo, since)), set()
+            meta["baseline"] = {**b, "label": "nothing before the period", "days": 0}
         step(j, "writing the report")
-        ins = prompts.report(repo, since, until, len(days_of(since, until)), focus, has)
+        ins = prompts.report(repo, since, until, len(days_of(since, until)), focus, has, note)
         material = ["### Facts\n" + "\n".join(f"- {f}" for f in facts), *sections]
         text = await llm.summarize(ctx, "report", material, ins, combine=ins + "\n(These are partial reports of the same period: merge them into one.)\n")
+        text, dropped = store.unmark(text, keys)
+        if dropped:
+            facts.append(f"Marks of new things removed (already in the baseline): {len(dropped)} — {'; '.join(dropped[:30])}")
+        if win:
+            step(j, "checking what the report marks as new against the term registry")
+            text, chk = await check_new(ctx, repo, text, win[0], win[1], f"a report ({since} … {until})", win[2])
+            if chk:
+                meta["check"] = chk
+                facts.append(registry.summary(chk))
     md = _reports_dir(ctx, repo) / f"{meta['id']}.md"
     md.write_text(f"Report of {repo} from {since} to {until}:\n\n{text.strip()}\n", encoding="utf-8")
-    meta.update(status="done", finished_at=time.time(), facts=facts)
+    names = store.new_names(text)
+    meta.update(status="done", finished_at=time.time(), facts=facts, new=len(names), new_names=[store.new_key(n) for n in names])
     _meta_write(ctx, meta)
     return {"report": meta["id"]}
 
 
 def new_report(ctx: Any, repo: str, since: str, until: str, sources: dict[str, bool], focus: str, label: str, preset: str | None,
-               kind: str = "dates", scheduled: bool = False) -> dict[str, Any]:
+               kind: str = "dates", scheduled: bool = False, baseline: dict[str, Any] | None = None) -> dict[str, Any]:
     j = new_job("report", repo, since=since, until=until, scheduled=scheduled)
     meta = {"id": j["id"], "job_id": j["id"], "repo": repo, "since": since, "until": until, "label": label, "kind": kind, "sources": sources,
             "focus": focus, "preset": preset, "status": "running", "created_at": dt.datetime.now(dt.timezone.utc).isoformat(),
-            "scheduled": scheduled}
+            "scheduled": scheduled, "baseline": st.baseline_of(baseline or st.repo_cfg(ctx, repo)["new_baseline"])}
     _meta_write(ctx, meta)
     j["on_done"] = _report_done(ctx, meta)
     start(ctx, j, make_report(ctx, meta, j), durable=("insights.report", {"repo": repo}))

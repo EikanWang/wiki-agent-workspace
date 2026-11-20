@@ -4066,8 +4066,37 @@ test("Repo Insights: the history in the folder, a week's report (daily summaries
   await expect(page.getByTestId("insights-view")).toContainText("daily summaries 2026-11-10 … 2026-11-10 (1)");
   // a day of the history
   await page.getByTestId("insights-tab-daily").click();
+  await expect(page.locator('[data-testid="insights-day"][data-day="2026-11-10"]').getByTestId("insights-new-count")).toHaveText("🆕 2");
   await page.locator('[data-testid="insights-day"][data-day="2026-11-10"]').click();
   await expect(page.getByTestId("insights-file-view")).toContainText("Old day");
+  // what is new is highlighted: the "What's new" section boxed, the marks as NEW badges, the new things' bullets tinted
+  const dayView = page.getByTestId("insights-file-view");
+  await expect(dayView.locator("section.waw-new-section h2.waw-new-head")).toHaveText("NEWWhat's new");
+  await expect(dayView.locator("section.waw-new-section li")).toHaveCount(1);
+  await expect(dayView.locator("section.waw-new-section")).not.toContainText("did a thing"); // the section ends at the next heading
+  await expect(dayView.locator(".waw-new-badge")).toHaveCount(3);
+  await expect(dayView.locator("li.waw-new")).toHaveCount(2);
+  await expect(dayView.locator("li.waw-new .waw-new-name")).toHaveText(["Ring buffer API", "Device mesh"]);
+  // an extension of something known: its own badge, not counted as new
+  await expect(dayView.locator("li.waw-ext .waw-ext-badge")).toHaveText("EXTENDS");
+  await expect(dayView.locator("li.waw-ext .waw-ext-name")).toHaveText("Mesh slicing");
+  await expect(dayView.locator("li.waw-ext")).toContainText("(extends Device mesh)");
+  await expect(dayView.locator(".insights-md")).not.toContainText("🆕");
+  // each new thing can be marked read: the list counts the unread ones, none when all are read
+  await expect(dayView.getByTestId("insights-new-unread")).toHaveText("🆕 2 of 2 unread");
+  const dayRow = page.locator('[data-testid="insights-day"][data-day="2026-11-10"]');
+  await dayView.locator('.waw-new-badge[data-new-name="device mesh"]').click();
+  await expect(dayView.locator('.waw-new-badge[data-new-name="device mesh"]')).toHaveText("READ");
+  await expect(dayView.locator("li.waw-new-read")).toHaveText(/Device mesh/);
+  await expect(dayView.getByTestId("insights-new-unread")).toHaveText("🆕 1 of 2 unread");
+  await expect(dayRow.getByTestId("insights-new-count")).toHaveText("🆕 1");
+  await dayView.getByTestId("insights-new-all-read").click();
+  await expect(dayView.getByTestId("insights-new-unread")).toHaveText("🆕 0 of 2 unread");
+  await expect(dayRow.getByTestId("insights-new-count")).toHaveCount(0);
+  await dayView.locator('.waw-new-badge[data-new-name="ring buffer api"]').first().click(); // unread again
+  await expect(dayRow.getByTestId("insights-new-count")).toHaveText("🆕 1");
+  await dayView.getByTestId("insights-new-all-unread").click();
+  await expect(dayRow.getByTestId("insights-new-count")).toHaveText("🆕 2");
   // XPU highlights of the history
   await page.getByTestId("insights-tab-highlights").click();
   await page.getByTestId("insights-hl-view-day").click();
@@ -4110,10 +4139,16 @@ test("Repo Insights: the history in the folder, a week's report (daily summaries
   await page.getByTestId("insights-since").fill("2026-11-08");
   await page.getByTestId("insights-until").fill("2026-11-12");
   await page.getByTestId("insights-preset").selectOption("xpu");
+  // what is new is compared with a baseline: by default the period before; here from a picked date
+  await expect(page.getByTestId("insights-baseline-mode")).toHaveValue("previous");
+  await expect(page.getByTestId("insights-baseline-date")).toHaveCount(0);
+  await page.getByTestId("insights-baseline-mode").selectOption("after");
+  await page.getByTestId("insights-baseline-date").fill("2026-11-01");
   await page.getByTestId("insights-create").click();
   const view = page.getByTestId("insights-report-view");
   await expect(view).toHaveAttribute("data-status", "done", { timeout: 30000 });
   await expect(view).toContainText("Fake report");
+  await expect(view.getByTestId("insights-report-baseline")).toHaveText("🆕 new vs from 2026-11-01 until the period (2026-11-01 … 2026-11-07)");
   await expect(view.locator("a", { hasText: "issue #777" })).toHaveAttribute("href", "https://github.com/pytorch/pytorch/issues/777");
   await view.locator("summary", { hasText: "Material" }).click();
   await expect(view).toContainText("Days with a summary of issues and PRs: 5");
@@ -4135,15 +4170,36 @@ test("Repo Insights: the history in the folder, a week's report (daily summaries
   // the week list: calendar weeks of the year
   await page.getByTestId("insights-period-week").click();
   await expect(page.getByTestId("insights-week").locator("option").first()).toContainText(/^Week \d+ · /);
+  // reports can be selected: several in one chat, or deleted together
+  const monthRow = page.locator('[data-testid="insights-group"][data-kind="monthly"]').getByTestId("insights-report");
+  const datesRow = page.locator('[data-testid="insights-group"][data-kind="dates"]').getByTestId("insights-report");
+  await monthRow.getByTestId("insights-report-pick").check();
+  await datesRow.getByTestId("insights-report-pick").check();
+  await expect(page.getByTestId("insights-picked")).toContainText("2 selected");
+  await page.getByTestId("insights-picked-clear").click();
+  await expect(page.getByTestId("insights-picked")).toHaveCount(0);
+  await monthRow.getByTestId("insights-report-pick").check();
+  await page.getByTestId("insights-picked-delete").click();
+  await page.getByTestId("confirm-ok").click();
+  await expect(page.getByTestId("insights-group")).toHaveCount(1);
+  await expect(page.getByTestId("insights-picked")).toHaveCount(0);
+  await datesRow.getByTestId("insights-report-pick").check();
+  await expect(page.getByTestId("insights-picked-chat")).toBeEnabled();
+  await page.getByTestId("insights-picked-clear").click();
   // continue in a chat
-  await page.locator('[data-testid="insights-group"][data-kind="dates"]').getByTestId("insights-report").first().click();
+  await datesRow.first().getByTestId("insights-report-open").click();
   await page.getByTestId("insights-chat").click();
   await expect(page.getByTestId("chats-page")).toBeVisible({ timeout: 15000 });
   // settings
   await page.getByTestId("activity-insights").click(); // (the chat opened the wiki side)
   await page.getByTestId("insights-settings-open").click();
   await expect(page.getByTestId("insights-settings")).toBeVisible();
-  await expect(page.getByTestId("insights-task")).toHaveCount(5);
+  await expect(page.getByTestId("insights-task")).toHaveCount(7);
+  // the size of one request: the API's and the (smaller) agent's
+  await expect(page.getByTestId("insights-agent-max-chars")).toHaveValue("400000");
+  await page.getByTestId("insights-agent-max-chars").fill("300000");
+  await page.getByTestId("insights-agent-max-chars").blur();
+  await expect.poll(async () => (await (await page.request.get("/api/v1/insights/settings")).json()).agent_max_chars).toBe(300000);
   // the agent for two tasks, one right after the other: both stay chosen (on the page and on the server)
   const task = (t: string) => page.locator(`[data-testid="insights-task"][data-task="${t}"]`);
   await task("report").getByTestId("insights-task-mode").selectOption("agent");
@@ -4159,12 +4215,16 @@ test("Repo Insights: the history in the folder, a week's report (daily summaries
   await vllm.getByTestId("insights-schedule").check();
   await vllm.getByTestId("insights-report-week").check(); // reports made by the scheduler when a period ends
   await vllm.getByTestId("insights-report-month").check();
+  await vllm.getByTestId("insights-repo-baseline-mode").selectOption("before"); // what its reports compare new things with
+  await vllm.getByTestId("insights-repo-baseline-date").fill("2026-06-01");
   await page.getByTestId("insights-repos-save").click();
   await expect(page.getByTestId("insights-note")).toContainText("Saved");
   const s = await (await page.request.get("/api/v1/insights/settings")).json();
   const saved = s.repos.find((r: any) => r.repo === "vllm-project/vllm");
   expect(saved.schedule.enabled).toBe(true);
   expect(saved.reports).toEqual({ week: true, month: true, quarter: false, year: false });
+  expect(saved.new_baseline).toEqual({ mode: "before", date: "2026-06-01" });
+  await vllm.getByTestId("insights-repo-baseline-mode").selectOption("previous");
   await vllm.getByTestId("insights-report-week").uncheck();
   await vllm.getByTestId("insights-report-month").uncheck();
   await vllm.getByTestId("insights-schedule").uncheck();
@@ -5090,5 +5150,184 @@ Path(${JSON.stringify(file)}).write_bytes(_minimal_docx(["Slow spec paragraph %d
     await page.getByTestId("confirm-ok").click();
     await expect(page.getByTestId("tree-root")).toHaveCount(1);
     fs.rmSync(second, { recursive: true, force: true });
+  }
+});
+
+async function showTree(page: Page) {
+  if (!(await page.getByTestId("tree-root").first().isVisible())) await page.getByTestId("activity-files").click();
+  await expect(page.getByTestId("search-input")).toBeVisible();
+}
+
+/** The text of the find bar's current highlight (CSS Custom Highlight API), and whether it is in view. */
+async function currentFind(page: Page): Promise<{ text: string; all: number; inView: boolean } | null> {
+  return page.evaluate(() => {
+    const reg = (CSS as unknown as { highlights?: Map<string, Set<Range>> }).highlights;
+    const cur = reg?.get("waw-find-current");
+    if (!cur || !cur.size) return null;
+    const r = [...cur][0];
+    const rect = r.getBoundingClientRect();
+    return { text: r.toString(), all: (reg!.get("waw-find")?.size ?? 0) + 1, inView: rect.top >= 0 && rect.bottom <= window.innerHeight && rect.height > 0 };
+  });
+}
+
+test("folder search: names find files and folders (a folder narrows it); a folder found is shown in the tree", async ({ page }) => {
+  const ws = workspaceDir();
+  fs.mkdirSync(path.join(ws, "docs", "e2e-names", "deep"), { recursive: true });
+  fs.writeFileSync(path.join(ws, "docs", "e2e-names", "deep", "zebra-notes.md"), "# Zebra notes\n");
+  fs.writeFileSync(path.join(ws, "zebra-top.md"), "# Zebra top\n");
+  try {
+    await login(page);
+    await showTree(page);
+    await page.getByTestId("search-mode-names").click();
+    await page.getByTestId("search-input").fill("zebra");
+    await expect(page.getByTestId("search-name-zebra-top.md")).toBeVisible();
+    await expect(page.getByTestId("search-name-docs/e2e-names/deep/zebra-notes.md")).toBeVisible();
+    await expect(page.getByTestId("tree-root").first()).toBeHidden(); // the results take the tree's place
+    await page.getByTestId("search-name-docs/e2e-names/deep/zebra-notes.md").click();
+    await expect(page.getByTestId("markdown-body").locator("h1")).toHaveText("Zebra notes");
+    // a folder by name: shown in the tree, its parents unfolded
+    await page.getByTestId("search-input").fill("e2e-names");
+    await page.getByTestId("search-name-docs/e2e-names").click();
+    await expect(page.getByTestId("search-input")).toHaveValue("");
+    await expect(page.locator('.file-tree .tree-row.dir[data-path="docs/e2e-names"]')).toBeVisible();
+    // search in a folder (its hover action)
+    await page.locator('.file-tree .tree-row.dir[data-path="docs/e2e-names"]').hover();
+    await page.getByTestId("tree-search-docs/e2e-names").click();
+    await expect(page.getByTestId("search-scope")).toContainText("e2e-names");
+    await page.getByTestId("search-input").fill("zebra");
+    await expect(page.getByTestId("search-name-docs/e2e-names/deep/zebra-notes.md")).toBeVisible();
+    await expect(page.getByTestId("search-name-zebra-top.md")).toHaveCount(0);
+    await page.getByTestId("search-scope-clear").click();
+    await expect(page.getByTestId("search-name-zebra-top.md")).toBeVisible();
+    await page.getByTestId("search-input").press("Escape");
+    await expect(page.getByTestId("tree-root").first()).toBeVisible();
+  } finally {
+    fs.rmSync(path.join(ws, "docs", "e2e-names"), { recursive: true, force: true });
+    fs.rmSync(path.join(ws, "zebra-top.md"), { force: true });
+  }
+});
+
+test("folder search: contents — a match opens its document with the find bar at that match", async ({ page }) => {
+  const ws = workspaceDir();
+  const file = path.join(ws, "docs", "e2e-find.md");
+  const filler = Array.from({ length: 120 }, (_, i) => `Filler paragraph number ${i}.`).join("\n\n");
+  fs.writeFileSync(file, `# Find test\n\nThe quartzite engine starts here.\n\n${filler}\n\nLater the *quartzite engine* stops.\n`);
+  try {
+    await login(page);
+    await showTree(page);
+    await page.keyboard.press("Control+Shift+F"); // the search of the texts, focused
+    await expect(page.getByTestId("search-input")).toBeFocused();
+    await expect(page.getByTestId("search-mode-content")).toHaveAttribute("aria-selected", "true");
+    await page.keyboard.type("quartzite engine");
+    const f = page.getByTestId("search-file-docs/e2e-find.md");
+    await expect(f.getByTestId("search-hit")).toHaveCount(2);
+    await expect(f.getByTestId("search-hit").nth(1)).toContainText("Later the *quartzite engine* stops."); // the file's own text
+    await expect(f.locator(".search-count")).toHaveText("2");
+    await expect(page.getByTestId("search-summary")).toContainText("2 matches in 1 file");
+    // the second match: the document opens there, the find bar shows it as the current one
+    await f.getByTestId("search-hit").nth(1).click();
+    await expect(page.getByTestId("markdown-body").locator("h1")).toHaveText("Find test");
+    await expect(page.getByTestId("find-bar")).toBeVisible();
+    await expect(page.getByTestId("find-input")).toHaveValue("quartzite engine");
+    await expect(page.getByTestId("find-count")).toHaveText("2 of 2");
+    await expect.poll(() => currentFind(page)).toMatchObject({ text: "quartzite engine", all: 2, inView: true });
+    // case / whole words
+    await expect(page.getByTestId("search-file-docs/e2e-find.md")).toBeVisible();
+    await page.getByTestId("search-input").fill("QUARTZITE");
+    await expect(page.getByTestId("search-file-docs/e2e-find.md")).toBeVisible();
+    await page.getByTestId("search-case").click();
+    await expect(page.getByTestId("search-summary")).toContainText("No matches");
+    await page.getByTestId("search-case").click();
+    await page.getByTestId("search-input").fill("quartz");
+    await expect(page.getByTestId("search-file-docs/e2e-find.md")).toBeVisible();
+    await page.getByTestId("search-word").click();
+    await expect(page.getByTestId("search-summary")).toContainText("No matches");
+  } finally {
+    fs.rmSync(file, { force: true });
+  }
+});
+
+test("find in the document: Ctrl+F opens the find bar; Enter / Shift+Enter step through the matches; Esc closes", async ({ page }) => {
+  await login(page);
+  await openGuide(page);
+  const n = await page.getByTestId("markdown-body").evaluate((el) => (el.textContent ?? "").toLowerCase().split("graph").length - 1);
+  expect(n).toBeGreaterThan(1);
+  await page.getByTestId("markdown-body").click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press("Control+f");
+  await expect(page.getByTestId("find-input")).toBeFocused();
+  await page.keyboard.type("graph");
+  await expect(page.getByTestId("find-count")).toHaveText(`1 of ${n}`);
+  await expect.poll(async () => (await currentFind(page))?.text.toLowerCase()).toBe("graph");
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("find-count")).toHaveText(`2 of ${n}`);
+  await page.keyboard.press("Shift+Enter");
+  await page.keyboard.press("Shift+Enter");
+  await expect(page.getByTestId("find-count")).toHaveText(`${n} of ${n}`);
+  await page.getByTestId("find-case").click();
+  await page.getByTestId("find-input").fill("GRAPH");
+  await expect(page.getByTestId("find-count")).toHaveText("No results");
+  await page.getByTestId("find-input").press("Escape");
+  await expect(page.getByTestId("find-bar")).toHaveCount(0);
+  expect(await currentFind(page)).toBeNull();
+});
+
+test("find in a PDF: a content match on page 2 opens the PDF with the find bar at it", async ({ page }) => {
+  const ws = workspaceDir();
+  const cp = require("child_process") as typeof import("child_process");
+  const pdf = path.join(ws, "docs", "e2e-find.pdf");
+  cp.execFileSync(path.resolve(__dirname, "../../.venv/bin/python"), [path.resolve(__dirname, "../fixtures/make_pdf.py"), pdf, "First page of the lanthanum report", "Second page: lanthanum cache sizes"]);
+  try {
+    await login(page);
+    await showTree(page);
+    await page.getByTestId("search-mode-content").click();
+    await page.getByTestId("search-input").fill("lanthanum cache");
+    const f = page.getByTestId("search-file-docs/e2e-find.pdf");
+    await expect(f.getByTestId("search-hit")).toHaveCount(1, { timeout: 20000 }); // the PDF's text is read first
+    await expect(f.locator(".search-at")).toHaveText("p2");
+    await f.getByTestId("search-hit").click();
+    await expect(page.getByTestId("pdfjs-view")).toHaveAttribute("data-pages", "2", { timeout: 20000 });
+    await expect(page.getByTestId("find-count")).toHaveText("1 of 1");
+    await expect.poll(() => currentFind(page), { timeout: 15000 }).toMatchObject({ text: "lanthanum cache", inView: true });
+    const onPage = await page.evaluate(() => {
+      const r = [...(CSS as unknown as { highlights: Map<string, Set<Range>> }).highlights.get("waw-find-current")!][0];
+      return (r.startContainer.parentElement?.closest("[data-page]") as HTMLElement | null)?.dataset.page;
+    });
+    expect(onPage).toBe("2");
+    // Ctrl+F in the PDF: the other word
+    await page.getByTestId("find-input").fill("lanthanum");
+    await expect(page.getByTestId("find-count")).toHaveText("1 of 2");
+  } finally {
+    fs.rmSync(pdf, { force: true });
+  }
+});
+
+test("find in a Word document's layout view: a content match opens the layout with the find bar at it", async ({ page }) => {
+  test.skip(!hasSoffice(), "LibreOffice is not installed");
+  const ws = workspaceDir();
+  const file = path.join(ws, "docs", "e2e-find.docx");
+  const cp = require("child_process") as typeof import("child_process");
+  cp.execFileSync(path.resolve(__dirname, "../../.venv/bin/python"), ["-c", `
+import sys; sys.path.insert(0, ${JSON.stringify(path.resolve(__dirname, "../backend"))})
+from pathlib import Path
+from test_locks_formats import _minimal_docx
+Path(${JSON.stringify(file)}).write_bytes(_minimal_docx(["Intro of the spec.", "The vanadium unit maps addresses.", "Filler.", "Another vanadium mention."]))
+`]);
+  try {
+    await login(page);
+    await showTree(page);
+    await page.getByTestId("search-mode-content").click();
+    await page.getByTestId("search-input").fill("vanadium");
+    const f = page.getByTestId("search-file-docs/e2e-find.docx");
+    await expect(f.getByTestId("search-hit")).toHaveCount(2, { timeout: 20000 });
+    await f.getByTestId("search-hit").nth(1).click();
+    if ((await page.getByTestId("office-view-text").getAttribute("aria-selected")) === "true") await page.getByTestId("office-view-layout").click();
+    await expect(page.getByTestId("office-pdf")).toBeVisible({ timeout: 60000 });
+    await expect(page.getByTestId("find-count")).toHaveText("2 of 2", { timeout: 20000 });
+    await expect.poll(() => currentFind(page), { timeout: 15000 }).toMatchObject({ text: "vanadium" });
+    // the Text view: the same text found there
+    await page.getByTestId("office-view-text").click();
+    await expect(page.getByTestId("find-count")).toHaveText(/of 2$/);
+  } finally {
+    fs.rmSync(file, { force: true });
   }
 });

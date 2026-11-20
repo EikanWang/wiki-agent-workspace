@@ -11,6 +11,9 @@ import { SelectionAnchor, TextModel, anchorFromSelection, buildTextModel, makeAn
 import { flashRect, sectionOf } from "../linkHighlight";
 import { ViewPos, findPart, squash, squashMap } from "../viewSync";
 import { PictureStrip, picturesOnly, usePictures } from "./Pictures";
+import FindBar from "./FindBar";
+import { FindEngine, domFindEngine } from "../findText";
+import { FindRequest, parseFindFragment } from "../search";
 
 export interface ReaderProps {
   doc: OpenDocument;
@@ -443,8 +446,40 @@ export default function Reader(props: ReaderProps) {
     return true;
   }, []);
 
+  // find in the document (Ctrl/⌘+F, or a match opened from the folder search)
+  const [findOpen, setFindOpen] = useState(false);
+  const [findReq, setFindReq] = useState<(FindRequest & { at: number }) | null>(null);
+  const [findFocus, setFindFocus] = useState(0);
+  const [pdfEngine, setPdfEngine] = useState<FindEngine | null>(null);
+  const domEngine = useMemo(() => domFindEngine(() => containerRef.current, () => scrollRef.current), []);
+  const findEngine = useCallback(() => (doc.format === "image" ? null : doc.format === "pdf" || layout ? pdfEngine : domEngine), [doc.format, layout, pdfEngine, domEngine]);
+  const findKey = `${doc.document_id}:${doc.sha256}:${layout}:${editing}:${html.length}:${threads.length}:${pdfEngine ? 1 : 0}`;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || e.key.toLowerCase() !== "f") return;
+      const sc = scrollRef.current;
+      if (!sc || !sc.offsetParent || editing || doc.format === "image") return;
+      const t = e.target instanceof Element ? e.target : null;
+      if (t?.closest("[data-testid='find-input']")) return; // a second Ctrl+F: the browser's own find
+      if (t?.closest("input, textarea, select, [contenteditable=''], [contenteditable='true'], .xterm, .monaco-editor")) return;
+      e.preventDefault();
+      setFindOpen(true);
+      setFindFocus((k) => k + 1);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [editing, doc.format]);
+
   useEffect(() => {
     if (!initialFragment) return;
+    const fr = parseFindFragment(initialFragment);
+    if (fr) {
+      setFindReq({ ...fr, at: Date.now() });
+      setFindOpen(true);
+      setFragmentMissing(null);
+      onFragmentConsumed?.();
+      return;
+    }
     if (layout && hasText && !/^#?(?:page|slide)=\d+$|^waw-top=/i.test(initialFragment)) {
       setLocalView("text"); // a section lives in the text view of an Office document: show it, then scroll
       return;
@@ -739,6 +774,10 @@ export default function Reader(props: ReaderProps) {
           <button className="icon-btn" onClick={() => setFragmentMissing(null)} aria-label="Dismiss">×</button>
         </div>
       )}
+      {findOpen && !editing && doc.format !== "image" && (
+        <FindBar engine={findEngine} engineKey={findKey} request={findReq} focusKey={findFocus}
+          onClose={() => { setFindOpen(false); setFindReq(null); }} />
+      )}
       <div className={`reader-body ${(layout || doc.format === "pdf") && !editing ? "fill" : ""}`} ref={scrollRef} onMouseOver={onBodyMouseOver} onMouseLeave={() => setHoverHit(null)}>
         {hoverHit && (
           <button
@@ -790,7 +829,7 @@ export default function Reader(props: ReaderProps) {
         {isOffice && layout && (
           <OfficeView path={doc.path} workspace={doc.workspace_id} sha256={doc.sha256} onShowText={hasText ? () => setView("text") : null}
             unit={slideDeck ? "slide" : "page"} threads={threads} activeThreadId={activeThreadId} onAsk={askPage} onOpenThread={onOpenThread} goToPage={goToPage}
-            goToText={goToText} posRef={layoutPos} />
+            goToText={goToText} posRef={layoutPos} onFindEngine={setPdfEngine} />
         )}
         {doc.format === "image" ? (
           <div className={`image-view ${imgZoom ? "zoomed" : ""}`} data-testid="image-view">
@@ -812,6 +851,7 @@ export default function Reader(props: ReaderProps) {
               onAsk={askPage}
               onOpenThread={onOpenThread}
               goToPage={goToPage}
+              onFindEngine={setPdfEngine}
             />
           </div>
         ) : (

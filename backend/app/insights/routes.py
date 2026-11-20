@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import re
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +38,7 @@ class SettingsIn(BaseModel):
     highlight: dict[str, Any] | None = None
     presets: list[dict[str, Any]] | None = None
     max_chars: int | None = Field(None, ge=20_000, le=20_000_000)
+    agent_max_chars: int | None = Field(None, ge=20_000, le=20_000_000)
     concurrency: int | None = Field(None, ge=1, le=16)
     timezone_offset: int | None = Field(None, ge=-12, le=14)
     endpoint: dict[str, Any] | None = None  # {base_url, model, api_key} (the key is never sent back)
@@ -59,7 +61,10 @@ def repo_overview(owner: str, name: str, ctx: AppContext = Depends(require_auth)
     daily = sorted((r for r in rows if r["daily"]), key=lambda r: r["since"], reverse=True)
     longer = sorted((r for r in rows if not r["daily"]), key=lambda r: r["mtime"], reverse=True)
     hls = sorted(store.index(ctx, repo, "highlight"), key=lambda r: r["mtime"], reverse=True)
-    return {"repo": repo, "config": st.repo_cfg(ctx, repo), "daily": daily[:400], "daily_count": len(daily),
+    read = store.read_new(ctx, repo)
+    daily = [{**{k: v for k, v in r.items() if k != "new_names"}, "unread": store.unread(r["new_names"], read.get(f"f:{r['name']}"))} for r in daily[:400]]
+    longer = [{k: v for k, v in r.items() if k != "new_names"} for r in longer]
+    return {"repo": repo, "config": st.repo_cfg(ctx, repo), "daily": daily, "daily_count": len(daily),
             "first_day": daily[-1]["since"] if daily else None, "last_day": daily[0]["since"] if daily else None,
             "longer": longer[:200], "highlight_files": hls[:200], "reports": pl.reports(ctx, repo),
             "jobs": [_public(j) for j in pl.jobs(repo)][-20:]}
@@ -84,7 +89,31 @@ def read_file(path: str = Query(..., max_length=4096), ctx: AppContext = Depends
         import json
 
         return {"path": str(p), "name": p.name, "json": json.loads(p.read_text())}
-    return {"path": str(p), "name": p.name, "text": p.read_text(encoding="utf-8", errors="replace")}
+    text = p.read_text(encoding="utf-8", errors="replace")
+    m = store.HEADER.search(text[:400])
+    read = store.read_new(ctx, m["repo"]).get(f"f:{p.name}", []) if m else []
+    return {"path": str(p), "name": p.name, "text": text, "repo": m["repo"] if m else None, "read_new": read}
+
+
+READ_KEY = re.compile(r"^(r:[A-Za-z0-9-]{1,64}|f:[A-Za-z0-9_.-]{1,200})$")
+
+
+class ReadIn(BaseModel):
+    repo: str = Field(..., max_length=200)
+    key: str = Field(..., max_length=210)  # a report ("r:<id>") or a summary file ("f:<name>")
+    names: list[str] = Field(..., max_length=2000)
+    read: bool = True
+
+
+@router.put("/insights/read")
+def mark_read(body: ReadIn, ctx: AppContext = Depends(require_auth_mutating)):
+    """Marks new things read (or unread again) in a report or a summary: the lists count only the unread ones."""
+    repo = body.repo.strip()
+    if not st.REPO.match(repo):
+        raise ApiError(400, "INVALID_REPO", "use owner/name")
+    if not READ_KEY.match(body.key):
+        raise ApiError(400, "INVALID_KEY", "r:<report id> or f:<summary file name>")
+    return {"key": body.key, "read_new": store.mark_read(ctx, repo, body.key, [n[:200] for n in body.names], body.read)}
 
 
 @router.get("/insights/repos/{owner}/{name}/highlights")
@@ -115,6 +144,7 @@ class ReportIn(BaseModel):
     sources: dict[str, bool] | None = None
     focus: str = Field("", max_length=20000)
     preset: str | None = Field(None, max_length=40)
+    baseline: dict[str, str | None] | None = None  # {mode, date}: what new things are compared with (default: the repository's)
 
 
 @router.post("/insights/reports", status_code=201)
@@ -132,7 +162,8 @@ async def create_report(body: ReportIn, ctx: AppContext = Depends(require_auth_m
         p = next((x for x in st.load(ctx)["presets"] if x["id"] == body.preset), None)
         if p:
             focus = (p["text"] + ("\n" + focus if focus else "")).strip()
-    return pl.new_report(ctx, repo, since, until, {k: bool(v) for k, v in src.items()}, focus, label, body.preset, kind)
+    baseline = st.baseline_of(body.baseline) if body.baseline is not None else None
+    return pl.new_report(ctx, repo, since, until, {k: bool(v) for k, v in src.items()}, focus, label, body.preset, kind, baseline=baseline)
 
 
 @router.get("/insights/reports/{owner}/{name}/{rid}")
@@ -153,26 +184,47 @@ class ChatIn(BaseModel):
 @router.post("/insights/reports/{owner}/{name}/{rid}/chat", status_code=201)
 async def report_chat(owner: str, name: str, rid: str, body: ChatIn, ctx: AppContext = Depends(require_auth_mutating)):
     """Continue with the agent: a chat in a wiki folder with the report as its material."""
+    return await _chat_on(ctx, _repo(owner, name), [rid], body.workspace_id)
+
+
+class ChatManyIn(ChatIn):
+    ids: list[str] = Field(..., min_length=1, max_length=40)
+
+
+@router.post("/insights/reports/{owner}/{name}/chat", status_code=201)
+async def reports_chat(owner: str, name: str, body: ChatManyIn, ctx: AppContext = Depends(require_auth_mutating)):
+    """A chat with several reports as its material (e.g. to compare months)."""
+    return await _chat_on(ctx, _repo(owner, name), list(dict.fromkeys(body.ids)), body.workspace_id)
+
+
+async def _chat_on(ctx: AppContext, repo: str, ids: list[str], workspace_id: str | None):
     from dataclasses import replace
 
     from ..annotations import ThreadCreateIn, ThreadService
     from ..chats import new_chat
 
-    repo = _repo(owner, name)
-    r = pl.report(ctx, repo, rid)
-    if not r.get("text"):
+    reps = [pl.report(ctx, repo, rid) for rid in ids]
+    if any(not r.get("text") for r in reps):
         raise ApiError(409, "REPORT_NOT_READY", "the report is not ready")
+    reps.sort(key=lambda r: (r["since"], r["until"]))
     if ctx.workspaces is None:
         raise ApiError(409, "NO_WIKI", "no wiki folder is open")
-    rt = ctx.workspaces.runtimes.get(body.workspace_id) if body.workspace_id else ctx.workspaces.primary
+    rt = ctx.workspaces.runtimes.get(workspace_id) if workspace_id else ctx.workspaces.primary
     if rt is None:
         raise ApiError(404, "WORKSPACE_NOT_FOUND", "that wiki folder is not open")
-    chat = new_chat(rt.docs, f"{repo} · {r.get('label') or r['since'] + ' – ' + r['until']}")
+    label = lambda r: r.get("label") or f"{r['since']} – {r['until']}"  # noqa: E731
+    chat = new_chat(rt.docs, f"{repo} · {', '.join(label(r) for r in reps)}"[:160])
     sctx = replace(ctx, documents=rt.docs, locks=rt.locks, watcher=rt.watcher, workspace_id=rt.id, workspace_root=rt.root)
     opened = rt.docs.open_document(chat["path"])
-    brief = (f"Material: the Repo Insights report of {repo} from {r['since']} to {r['until']} (made from GitHub issues, pull "
-             f"requests, RFCs and the git history):\n<<<REPORT\n{r['text']}\nREPORT>>>")
-    q = f"Here is the report of {repo} for {r.get('label')}. Give me the three things I should look at first, with their links."
+    room = 380_000 // len(reps)
+    parts = [f"<<<REPORT {label(r)} ({r['since']} to {r['until']})\n{r['text'][:room]}\nREPORT>>>" for r in reps]
+    brief = (f"Material: {'the Repo Insights report' if len(reps) == 1 else f'{len(reps)} Repo Insights reports'} of {repo} (made "
+             "from GitHub issues, pull requests, RFCs and the git history; 🆕 marks what is new in each):\n" + "\n".join(parts))
+    if len(reps) == 1:
+        q = f"Here is the report of {repo} for {label(reps[0])}. Give me the three things I should look at first, with their links."
+    else:
+        q = (f"Here are the reports of {repo} for {', '.join(label(r) for r in reps)}. Compare them: what changed between them, "
+             "what is new in each, and the three things I should look at first, with their links.")
     t = await ThreadService(sctx).create_thread(chat["document_id"], ThreadCreateIn(version_sha256=opened["sha256"], question=q,
                                                                                    whole_document=True, chat_brief=brief))
     return {**chat, "workspace_id": rt.id, "thread_id": t["thread_id"], "job_id": t["job_id"]}

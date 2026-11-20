@@ -150,7 +150,109 @@ export function renderMarkdown(src: string, docPath: string, opts: { imageUrl?: 
     img.setAttribute("src", `/api/v1/raw?path=${encodeURIComponent(resolveRelative(dir, src))}${ws ? `&workspace=${encodeURIComponent(ws)}` : ""}`);
     img.setAttribute("loading", "lazy");
   });
+  markNew(tpl.content);
   return tpl.innerHTML;
+}
+
+export const NEW_MARK = "🆕";
+
+/** A new thing's name as the server keeps its read marks (spaces collapsed, lower case). */
+export function newKey(name: string): string {
+  return name.replace(/`/g, "").split(/\s+/).join(" ").replace(/^[ :]+|[ :]+$/g, "").toLowerCase();
+}
+
+/**
+ * What the text marks as new ("🆕", as the Repo Insights summaries and reports do) is highlighted: the mark becomes a
+ * "NEW" badge, its bullet or paragraph is tinted and the bold name after it stands out; a heading with the mark
+ * ("🆕 What's new") and its section, up to the next heading of the same level or higher, become one highlighted box.
+ */
+export function markNew(root: DocumentFragment | HTMLElement): void {
+  markExt(root);
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const texts: Text[] = [];
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    const t = n as Text;
+    if (t.data.includes(NEW_MARK) && !t.parentElement?.closest("code, pre, .waw-new-badge")) texts.push(t);
+  }
+  if (!texts.length) return;
+  const heads = new Set<HTMLElement>();
+  for (const t of texts) {
+    const parent = t.parentElement;
+    const frag = document.createDocumentFragment();
+    t.data.split(NEW_MARK).forEach((part, i) => {
+      if (i) {
+        const b = document.createElement("span");
+        b.className = "waw-new-badge";
+        b.title = "New to the project";
+        b.textContent = "NEW";
+        frag.append(b);
+      }
+      if (i && part.startsWith(" ")) part = part.slice(1);
+      if (part) frag.append(part);
+    });
+    t.replaceWith(frag);
+    const head = parent?.closest("h1, h2, h3, h4, h5, h6") as HTMLElement | null;
+    if (head) {
+      heads.add(head);
+      continue;
+    }
+    parent?.closest("li, p, td")?.classList.add("waw-new");
+  }
+  root.querySelectorAll(".waw-new-badge").forEach((b) => {
+    const next = b.nextSibling;
+    if (next instanceof HTMLElement && /^(STRONG|B)$/.test(next.tagName)) {
+      next.classList.add("waw-new-name");
+      (b as HTMLElement).dataset.newName = newKey(next.textContent ?? "");
+    }
+  });
+  for (const h of heads) {
+    h.classList.add("waw-new-head");
+    if (!/^H[2-6]$/.test(h.tagName) || !h.parentNode) continue;
+    const level = Number(h.tagName[1]);
+    const box = document.createElement("section");
+    box.className = "waw-new-section";
+    h.parentNode.insertBefore(box, h);
+    for (let n: ChildNode | null = h; n; ) {
+      const next: ChildNode | null = n.nextSibling;
+      if (n !== h && n instanceof HTMLElement && /^H[1-6]$/.test(n.tagName) && Number(n.tagName[1]) <= level) break;
+      box.append(n);
+      n = next;
+    }
+  }
+}
+
+export const EXT_MARK = "➕";
+
+/** An extension of something known ("➕ **name** *(extends …)*", from the new-things check): an "EXTENDS" badge, not counted as new. */
+function markExt(root: DocumentFragment | HTMLElement): void {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const texts: Text[] = [];
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    const t = n as Text;
+    if (t.data.includes(EXT_MARK) && !t.parentElement?.closest("code, pre, h1, h2, h3, h4, h5, h6")) texts.push(t);
+  }
+  for (const t of texts) {
+    const parent = t.parentElement;
+    const frag = document.createDocumentFragment();
+    t.data.split(EXT_MARK).forEach((part, i) => {
+      if (i) {
+        const b = document.createElement("span");
+        b.className = "waw-ext-badge";
+        b.title = "A new aspect of something seen before (not counted as new)";
+        b.textContent = "EXTENDS";
+        frag.append(b);
+      }
+      if (i && part.startsWith(" ")) part = part.slice(1);
+      if (part) frag.append(part);
+    });
+    t.replaceWith(frag);
+    const box = parent?.closest("li, p, td");
+    if (box && !box.textContent?.includes(NEW_MARK)) box.classList.add("waw-ext");
+  }
+  root.querySelectorAll(".waw-ext-badge").forEach((b) => {
+    const next = b.nextSibling;
+    if (next instanceof HTMLElement && /^(STRONG|B)$/.test(next.tagName)) next.classList.add("waw-ext-name");
+  });
 }
 
 function safeDecode(s: string): string {

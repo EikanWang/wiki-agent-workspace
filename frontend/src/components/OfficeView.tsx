@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { ApiError, Thread, get, getWorkspace } from "../api";
 import PdfView, { PageAsk } from "./PdfView";
 import { ViewPos } from "../viewSync";
+import { FindEngine } from "../findText";
 
 interface RenderState {
   state: "ready" | "pending" | "failed" | "unavailable";
@@ -23,8 +24,9 @@ const qs = (path: string, extra: Record<string, string> = {}, workspace?: string
  * Layout view of an Office file: the server renders it to PDF with LibreOffice (cached per content), the browser's
  * PDF viewer shows it, so pages, slides and diagrams look as their authors made them (zoom, page navigation, search).
  */
-export default function OfficeView({ path, workspace, sha256, onShowText, unit, threads, activeThreadId, onAsk, onOpenThread, goToPage = null, goToText = null, posRef }: {
+export default function OfficeView({ path, workspace, sha256, onShowText, unit, threads, activeThreadId, onAsk, onOpenThread, goToPage = null, goToText = null, posRef, onFindEngine }: {
   path: string;
+  onFindEngine?: (e: FindEngine | null) => void;
   /** the document's folder (else the window's current one) */
   workspace?: string;
   goToText?: (ViewPos & { at: number }) | null;
@@ -75,7 +77,7 @@ export default function OfficeView({ path, workspace, sha256, onShowText, unit, 
         <div className="muted small office-note">
           Original layout (rendered by LibreOffice) · <a href={download} download={name}>Download the original</a>
         </div>
-        <PdfView url={`/api/v1/office/pdf?${qs(path, { k: st.key ?? "" }, workspace)}`} unit={unit} threads={threads} activeThreadId={activeThreadId} onAsk={onAsk} onOpenThread={onOpenThread} testId="office-pdf" goToPage={goToPage} goToText={goToText} posRef={posRef} />
+        <PdfView url={`/api/v1/office/pdf?${qs(path, { k: st.key ?? "" }, workspace)}`} unit={unit} threads={threads} activeThreadId={activeThreadId} onAsk={onAsk} onOpenThread={onOpenThread} testId="office-pdf" goToPage={goToPage} goToText={goToText} posRef={posRef} onFindEngine={onFindEngine} />
       </div>
     );
   }
