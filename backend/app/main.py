@@ -13,7 +13,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
-from . import annotations, chats, commits, diffs, documents, locks, previews, reviews, sessions, workspaces
+from . import annotations, chats, commits, diffs, documents, locks, previews, reviews, search, sessions, workspaces
 from .agents.jobs import JobManager
 from .agents.registry import ProviderRegistry
 from .auth import AuthManager
@@ -265,9 +265,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         from .insights import scheduler as insights_scheduler
 
         insights_scheduler.start(ctx)  # the daily runs (off for each repository until turned on)
+        search.start(ctx)  # the text of Word / PowerPoint / PDF files for the folder search
         try:
             yield
         finally:
+            await search.stop(ctx)
             await insights_scheduler.stop()
             await reg.stop_all()
             await ctx.extra["dev_editor"].shutdown()
@@ -348,6 +350,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from . import refs
 
     api.include_router(refs.router)
+    api.include_router(search.router)
     from . import dashboard
 
     api.include_router(dashboard.router)

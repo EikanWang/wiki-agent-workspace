@@ -5,7 +5,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, FileItem, GitSummary, WorkspaceInfo, getIn, post } from "../api";
 import { ChatIcon } from "./Icons";
 import { FileIcon, KIND_LABEL, formatSize } from "./FileIcon";
-import { NewFileIcon, NewFolderIcon, PlusIcon } from "./Icons";
+import { NewFileIcon, NewFolderIcon, PlusIcon, SearchIcon } from "./Icons";
+import FolderSearch, { SearchMode, SearchScope } from "./FolderSearch";
 
 interface DirState {
   items: FileItem[];
@@ -59,7 +60,13 @@ export default function FileTree({
   onOpenChats,
   onCreated,
   refreshKey,
+  onOpenMatch,
+  searchFocus = 0,
 }: {
+  /** open a document at a match of the folder search (`fragment`: what the find bar shows) */
+  onOpenMatch?: (workspace: string, path: string, fragment: string) => void;
+  /** bumped (Ctrl+Shift+F): focus the search of the texts in the files */
+  searchFocus?: number;
   workspaces: WorkspaceInfo[];
   activeWorkspace: string | null;
   selectedPath: string | null;
@@ -95,6 +102,23 @@ export default function FileTree({
   const workspacesRef = useRef(workspaces);
   workspacesRef.current = workspaces;
   const multi = workspaces.length > 1;
+  const [searchQ, setSearchQ] = useState("");
+  const [searchMode, setSearchMode] = useState<SearchMode>(() => (localStorage.getItem("waw.searchMode") === "content" ? "content" : "names"));
+  const [searchScope, setSearchScope] = useState<SearchScope | null>(null);
+  const [searchFocusKey, setSearchFocusKey] = useState(0);
+  const pickMode = (m: SearchMode) => {
+    setSearchMode(m);
+    localStorage.setItem("waw.searchMode", m);
+  };
+  useEffect(() => {
+    if (!searchFocus) return;
+    pickMode("content");
+    setSearchFocusKey((k) => k + 1);
+  }, [searchFocus]);
+  const searchIn = (ws: string, path: string) => {
+    setSearchScope({ ws, path });
+    setSearchFocusKey((k) => k + 1);
+  };
 
   const putDir = (k: string, st: DirState | null) => {
     const next = { ...dirsRef.current };
@@ -404,6 +428,28 @@ export default function FileTree({
     if (opening && dirsRef.current[k]) void refreshFolder(ws, path);
   };
 
+  /** Show a folder in the tree (a folder found by the search): its parents unfolded, scrolled to. */
+  const reveal = (ws: string, path: string) => {
+    setExpanded((s) => {
+      const n = new Set(s);
+      n.add(key(ws, ""));
+      const parts = path.split("/");
+      for (let i = 1; i <= parts.length; i++) n.add(key(ws, parts.slice(0, i).join("/")));
+      return n;
+    });
+    setSearchQ("");
+    let tries = 0;
+    const find = () => {
+      const el = document.querySelector<HTMLElement>(`.file-tree .tree-row.dir[data-ws="${CSS.escape(ws)}"][data-path="${CSS.escape(path)}"]`);
+      if (el) {
+        el.scrollIntoView({ block: "center" });
+        el.classList.add("flash");
+        window.setTimeout(() => el.classList.remove("flash"), 1200);
+      } else if (tries++ < 20) window.setTimeout(find, 150);
+    };
+    window.setTimeout(find, 50);
+  };
+
   /** A click on a row's empty space or badges acts like a click on its name; its buttons keep their own action. */
   const onRowClick = (e: React.MouseEvent, act: () => void) => {
     if ((e.target as Element).closest("button")) return;
@@ -435,7 +481,7 @@ export default function FileTree({
         const isOpen = expanded.has(key(ws.id, it.path));
         return (
           <div key={it.path}>
-            <div className={`tree-row dir ${it.escapes ? "escapes" : ""}`} style={{ paddingLeft: depth * 14 + 8 }} title={tip} data-ws={ws.id} onClick={(e) => onRowClick(e, () => toggle(ws.id, it.path))}>
+            <div className={`tree-row dir ${it.escapes ? "escapes" : ""}`} style={{ paddingLeft: depth * 14 + 8 }} title={tip} data-ws={ws.id} data-path={it.path} onClick={(e) => onRowClick(e, () => toggle(ws.id, it.path))}>
               <button className="tree-main" onClick={() => toggle(ws.id, it.path)}>
                 <span className="chev">{isOpen ? "⌄" : "›"}</span>
                 <FileIcon item={it} open={isOpen} />
@@ -445,6 +491,7 @@ export default function FileTree({
               {it.git_status && it.git_status !== "clean" && <span className={`git-badge ${it.git_status}`}>{gitLabel(it.git_status)}</span>}
               <span className="tree-actions">
                 {newButtons(ws.id, it.path, first ? `-${it.path}` : undefined)}
+                <button className="tree-action" onClick={() => searchIn(ws.id, it.path)} title={`Search in ${it.path}`} aria-label={`Search in ${it.name}`} data-testid={first ? `tree-search-${it.path}` : undefined}><SearchIcon size={13} /></button>
                 {onOpenChats && <button className="tree-action" onClick={() => onOpenChats(ws.id, it.path)} title={`Chat with the agent about the folder ${it.path}`} data-testid={first ? `tree-chat-${it.path}` : undefined}>💬</button>}
                 <RefreshButton className="tree-action" onRefresh={() => refreshFolder(ws.id, it.path)} title={`Refresh ${it.name}`} testId={first ? `tree-refresh-${it.path}` : undefined} />
                 {onOpenDiff && it.git_status && it.git_status !== "clean" && (
@@ -493,7 +540,10 @@ export default function FileTree({
         {onAddFolder && <button className="icon-btn" onClick={onAddFolder} title="Add a folder (another wiki) to this window" data-testid="tree-add-folder"><PlusIcon size={15} /></button>}
         <RefreshButton onRefresh={refreshNow} title="Refresh file tree" testId="tree-refresh" />
       </div>
-      <div className="tree-body" ref={treeScroll}>
+      <FolderSearch workspaces={workspaces} scope={searchScope && workspaces.some((w) => w.id === searchScope.ws) ? searchScope : null} onScope={setSearchScope}
+        query={searchQ} onQuery={setSearchQ} mode={searchMode} onMode={pickMode} focusKey={searchFocusKey}
+        onOpen={onOpen} onOpenMatch={(w, p, f) => (onOpenMatch ? onOpenMatch(w, p, f) : onOpen(w, p))} onReveal={reveal} />
+      <div className="tree-body" ref={treeScroll} style={searchQ.trim() ? { display: "none" } : undefined}>
         {workspaces.map((ws, i) => {
           const open = expanded.has(key(ws.id, ""));
           const active = ws.id === activeWorkspace;
@@ -513,6 +563,9 @@ export default function FileTree({
                   )}
                   {ws.available && (
                     <span className="hover-only-group">{newButtons(ws.id, "", i === 0 ? "-root" : `-root-${ws.name}`)}</span>
+                  )}
+                  {ws.available && (
+                    <button className="tree-action hover-only" onClick={() => searchIn(ws.id, "")} title={`Search in ${ws.name}`} aria-label={`Search in ${ws.name}`} data-testid={i === 0 ? "tree-search-root" : `tree-search-root-${ws.name}`}><SearchIcon size={13} /></button>
                   )}
                   {ws.available && (
                     <RefreshButton className="tree-action hover-only" onRefresh={() => refreshFolder(ws.id, "")} title={`Refresh ${ws.name}`} testId={i === 0 ? "tree-refresh-root" : `tree-refresh-root-${ws.name}`} />

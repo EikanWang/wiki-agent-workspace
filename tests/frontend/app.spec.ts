@@ -5003,3 +5003,182 @@ Path(${JSON.stringify(file)}).write_bytes(_minimal_docx(["Slow spec paragraph %d
     fs.rmSync(second, { recursive: true, force: true });
   }
 });
+
+async function showTree(page: Page) {
+  if (!(await page.getByTestId("tree-root").first().isVisible())) await page.getByTestId("activity-files").click();
+  await expect(page.getByTestId("search-input")).toBeVisible();
+}
+
+/** The text of the find bar's current highlight (CSS Custom Highlight API), and whether it is in view. */
+async function currentFind(page: Page): Promise<{ text: string; all: number; inView: boolean } | null> {
+  return page.evaluate(() => {
+    const reg = (CSS as unknown as { highlights?: Map<string, Set<Range>> }).highlights;
+    const cur = reg?.get("waw-find-current");
+    if (!cur || !cur.size) return null;
+    const r = [...cur][0];
+    const rect = r.getBoundingClientRect();
+    return { text: r.toString(), all: (reg!.get("waw-find")?.size ?? 0) + 1, inView: rect.top >= 0 && rect.bottom <= window.innerHeight && rect.height > 0 };
+  });
+}
+
+test("folder search: names find files and folders (a folder narrows it); a folder found is shown in the tree", async ({ page }) => {
+  const ws = workspaceDir();
+  fs.mkdirSync(path.join(ws, "docs", "e2e-names", "deep"), { recursive: true });
+  fs.writeFileSync(path.join(ws, "docs", "e2e-names", "deep", "zebra-notes.md"), "# Zebra notes\n");
+  fs.writeFileSync(path.join(ws, "zebra-top.md"), "# Zebra top\n");
+  try {
+    await login(page);
+    await showTree(page);
+    await page.getByTestId("search-mode-names").click();
+    await page.getByTestId("search-input").fill("zebra");
+    await expect(page.getByTestId("search-name-zebra-top.md")).toBeVisible();
+    await expect(page.getByTestId("search-name-docs/e2e-names/deep/zebra-notes.md")).toBeVisible();
+    await expect(page.getByTestId("tree-root").first()).toBeHidden(); // the results take the tree's place
+    await page.getByTestId("search-name-docs/e2e-names/deep/zebra-notes.md").click();
+    await expect(page.getByTestId("markdown-body").locator("h1")).toHaveText("Zebra notes");
+    // a folder by name: shown in the tree, its parents unfolded
+    await page.getByTestId("search-input").fill("e2e-names");
+    await page.getByTestId("search-name-docs/e2e-names").click();
+    await expect(page.getByTestId("search-input")).toHaveValue("");
+    await expect(page.locator('.file-tree .tree-row.dir[data-path="docs/e2e-names"]')).toBeVisible();
+    // search in a folder (its hover action)
+    await page.locator('.file-tree .tree-row.dir[data-path="docs/e2e-names"]').hover();
+    await page.getByTestId("tree-search-docs/e2e-names").click();
+    await expect(page.getByTestId("search-scope")).toContainText("e2e-names");
+    await page.getByTestId("search-input").fill("zebra");
+    await expect(page.getByTestId("search-name-docs/e2e-names/deep/zebra-notes.md")).toBeVisible();
+    await expect(page.getByTestId("search-name-zebra-top.md")).toHaveCount(0);
+    await page.getByTestId("search-scope-clear").click();
+    await expect(page.getByTestId("search-name-zebra-top.md")).toBeVisible();
+    await page.getByTestId("search-input").press("Escape");
+    await expect(page.getByTestId("tree-root").first()).toBeVisible();
+  } finally {
+    fs.rmSync(path.join(ws, "docs", "e2e-names"), { recursive: true, force: true });
+    fs.rmSync(path.join(ws, "zebra-top.md"), { force: true });
+  }
+});
+
+test("folder search: contents — a match opens its document with the find bar at that match", async ({ page }) => {
+  const ws = workspaceDir();
+  const file = path.join(ws, "docs", "e2e-find.md");
+  const filler = Array.from({ length: 120 }, (_, i) => `Filler paragraph number ${i}.`).join("\n\n");
+  fs.writeFileSync(file, `# Find test\n\nThe quartzite engine starts here.\n\n${filler}\n\nLater the *quartzite engine* stops.\n`);
+  try {
+    await login(page);
+    await showTree(page);
+    await page.keyboard.press("Control+Shift+F"); // the search of the texts, focused
+    await expect(page.getByTestId("search-input")).toBeFocused();
+    await expect(page.getByTestId("search-mode-content")).toHaveAttribute("aria-selected", "true");
+    await page.keyboard.type("quartzite engine");
+    const f = page.getByTestId("search-file-docs/e2e-find.md");
+    await expect(f.getByTestId("search-hit")).toHaveCount(2);
+    await expect(f.getByTestId("search-hit").nth(1)).toContainText("Later the *quartzite engine* stops."); // the file's own text
+    await expect(f.locator(".search-count")).toHaveText("2");
+    await expect(page.getByTestId("search-summary")).toContainText("2 matches in 1 file");
+    // the second match: the document opens there, the find bar shows it as the current one
+    await f.getByTestId("search-hit").nth(1).click();
+    await expect(page.getByTestId("markdown-body").locator("h1")).toHaveText("Find test");
+    await expect(page.getByTestId("find-bar")).toBeVisible();
+    await expect(page.getByTestId("find-input")).toHaveValue("quartzite engine");
+    await expect(page.getByTestId("find-count")).toHaveText("2 of 2");
+    await expect.poll(() => currentFind(page)).toMatchObject({ text: "quartzite engine", all: 2, inView: true });
+    // case / whole words
+    await expect(page.getByTestId("search-file-docs/e2e-find.md")).toBeVisible();
+    await page.getByTestId("search-input").fill("QUARTZITE");
+    await expect(page.getByTestId("search-file-docs/e2e-find.md")).toBeVisible();
+    await page.getByTestId("search-case").click();
+    await expect(page.getByTestId("search-summary")).toContainText("No matches");
+    await page.getByTestId("search-case").click();
+    await page.getByTestId("search-input").fill("quartz");
+    await expect(page.getByTestId("search-file-docs/e2e-find.md")).toBeVisible();
+    await page.getByTestId("search-word").click();
+    await expect(page.getByTestId("search-summary")).toContainText("No matches");
+  } finally {
+    fs.rmSync(file, { force: true });
+  }
+});
+
+test("find in the document: Ctrl+F opens the find bar; Enter / Shift+Enter step through the matches; Esc closes", async ({ page }) => {
+  await login(page);
+  await openGuide(page);
+  const n = await page.getByTestId("markdown-body").evaluate((el) => (el.textContent ?? "").toLowerCase().split("graph").length - 1);
+  expect(n).toBeGreaterThan(1);
+  await page.getByTestId("markdown-body").click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press("Control+f");
+  await expect(page.getByTestId("find-input")).toBeFocused();
+  await page.keyboard.type("graph");
+  await expect(page.getByTestId("find-count")).toHaveText(`1 of ${n}`);
+  await expect.poll(async () => (await currentFind(page))?.text.toLowerCase()).toBe("graph");
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("find-count")).toHaveText(`2 of ${n}`);
+  await page.keyboard.press("Shift+Enter");
+  await page.keyboard.press("Shift+Enter");
+  await expect(page.getByTestId("find-count")).toHaveText(`${n} of ${n}`);
+  await page.getByTestId("find-case").click();
+  await page.getByTestId("find-input").fill("GRAPH");
+  await expect(page.getByTestId("find-count")).toHaveText("No results");
+  await page.getByTestId("find-input").press("Escape");
+  await expect(page.getByTestId("find-bar")).toHaveCount(0);
+  expect(await currentFind(page)).toBeNull();
+});
+
+test("find in a PDF: a content match on page 2 opens the PDF with the find bar at it", async ({ page }) => {
+  const ws = workspaceDir();
+  const cp = require("child_process") as typeof import("child_process");
+  const pdf = path.join(ws, "docs", "e2e-find.pdf");
+  cp.execFileSync(path.resolve(__dirname, "../../.venv/bin/python"), [path.resolve(__dirname, "../fixtures/make_pdf.py"), pdf, "First page of the lanthanum report", "Second page: lanthanum cache sizes"]);
+  try {
+    await login(page);
+    await showTree(page);
+    await page.getByTestId("search-mode-content").click();
+    await page.getByTestId("search-input").fill("lanthanum cache");
+    const f = page.getByTestId("search-file-docs/e2e-find.pdf");
+    await expect(f.getByTestId("search-hit")).toHaveCount(1, { timeout: 20000 }); // the PDF's text is read first
+    await expect(f.locator(".search-at")).toHaveText("p2");
+    await f.getByTestId("search-hit").click();
+    await expect(page.getByTestId("pdfjs-view")).toHaveAttribute("data-pages", "2", { timeout: 20000 });
+    await expect(page.getByTestId("find-count")).toHaveText("1 of 1");
+    await expect.poll(() => currentFind(page), { timeout: 15000 }).toMatchObject({ text: "lanthanum cache", inView: true });
+    const onPage = await page.evaluate(() => {
+      const r = [...(CSS as unknown as { highlights: Map<string, Set<Range>> }).highlights.get("waw-find-current")!][0];
+      return (r.startContainer.parentElement?.closest("[data-page]") as HTMLElement | null)?.dataset.page;
+    });
+    expect(onPage).toBe("2");
+    // Ctrl+F in the PDF: the other word
+    await page.getByTestId("find-input").fill("lanthanum");
+    await expect(page.getByTestId("find-count")).toHaveText("1 of 2");
+  } finally {
+    fs.rmSync(pdf, { force: true });
+  }
+});
+
+test("find in a Word document's layout view: a content match opens the layout with the find bar at it", async ({ page }) => {
+  test.skip(!hasSoffice(), "LibreOffice is not installed");
+  const ws = workspaceDir();
+  const file = path.join(ws, "docs", "e2e-find.docx");
+  const cp = require("child_process") as typeof import("child_process");
+  cp.execFileSync(path.resolve(__dirname, "../../.venv/bin/python"), ["-c", `
+import sys; sys.path.insert(0, ${JSON.stringify(path.resolve(__dirname, "../backend"))})
+from pathlib import Path
+from test_locks_formats import _minimal_docx
+Path(${JSON.stringify(file)}).write_bytes(_minimal_docx(["Intro of the spec.", "The vanadium unit maps addresses.", "Filler.", "Another vanadium mention."]))
+`]);
+  try {
+    await login(page);
+    await showTree(page);
+    await page.getByTestId("search-mode-content").click();
+    await page.getByTestId("search-input").fill("vanadium");
+    const f = page.getByTestId("search-file-docs/e2e-find.docx");
+    await expect(f.getByTestId("search-hit")).toHaveCount(2, { timeout: 20000 });
+    await f.getByTestId("search-hit").nth(1).click();
+    if ((await page.getByTestId("office-view-text").getAttribute("aria-selected")) === "true") await page.getByTestId("office-view-layout").click();
+    await expect(page.getByTestId("office-pdf")).toBeVisible({ timeout: 60000 });
+    await expect(page.getByTestId("find-count")).toHaveText("2 of 2", { timeout: 20000 });
+    await expect.poll(() => currentFind(page), { timeout: 15000 }).toMatchObject({ text: "vanadium" });
+    // the Text view: the same text found there
+    await page.getByTestId("office-view-text").click();
+    await expect(page.getByTestId("find-count")).toHaveText(/of 2$/);
+  } finally {
+    fs.rmSync(file, { force: true });
+  }
+});

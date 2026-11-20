@@ -470,6 +470,22 @@ export default function App() {
     setNavTick((n) => n + 1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openDocument, switchWorkspace]);
+  // Ctrl/⌘+Shift+F: search the text in the folders' files
+  const [searchFocus, setSearchFocus] = useState(0);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || !e.shiftKey || e.altKey || e.key.toLowerCase() !== "f") return;
+      const t = e.target as HTMLElement | null;
+      if (t?.closest(".xterm, .monaco-editor")) return;
+      e.preventDefault();
+      updatePrefs({ sidebarView: "files", listOpen: true });
+      setView((v) => (v === "development" || v === "local" || v === "agents" || v === "insights" || v === "machines" ? "document" : v));
+      setSearchFocus((k) => k + 1);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || (e.key !== "ArrowLeft" && e.key !== "ArrowRight")) return;
@@ -1042,6 +1058,18 @@ export default function App() {
                 void openDocument(p);
               }}
               refreshKey={treeKey}
+              searchFocus={searchFocus}
+              onOpenMatch={(ws, p, frag) => {
+                pushNav();
+                if (ws !== getWorkspace()) {
+                  switchWorkspace(ws, false);
+                  if (getWorkspace() !== ws) return; // stayed (unsaved edits)
+                }
+                setView("document");
+                setMobilePane("doc");
+                if (docPathRef.current === p && doc?.workspace_id === ws) return setPendingFragment(frag);
+                void openDocument(p).then((ok) => { if (ok) setPendingFragment(frag); });
+              }}
             />
           </div>
           {sidebarView === "reviews" && (
