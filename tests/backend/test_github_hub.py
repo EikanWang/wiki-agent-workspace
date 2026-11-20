@@ -54,7 +54,7 @@ async def test_review_queue_owner_only_paginated_and_cached(running_app):
     assert (await api.get("/api/v1/github/hub")).json()["available"] is True
     r = (await api.get("/api/v1/github/reviews")).json()
     assert r["total"] == 3 and len(r["items"]) == 3 and r["truncated"] is False and r["refreshing"] is False
-    assert len(calls) == 2 and calls[0]["q"].startswith("is:pr is:open")  # two pages (warmed by /github/hub)
+    assert len(calls) == 6 and calls[0]["q"].startswith("is:pr is:open")
     by = {i["number"]: i for i in r["items"]}
     assert by[1]["requested"] == "you" and by[1]["ci"] == "SUCCESS" and by[1]["labels"][0]["name"] == "xpu"
     assert by[2]["draft"] is True and by[2]["ci"] == "FAILURE"
@@ -62,7 +62,7 @@ async def test_review_queue_owner_only_paginated_and_cached(running_app):
     # cached: no new GitHub call; a refresh right after is also served from the cache (search quota)
     assert (await api.get("/api/v1/github/reviews")).json()["refreshing"] is False
     assert (await api.get("/api/v1/github/reviews?refresh=true")).json()["refreshing"] is False
-    assert len(calls) == 2
+    assert len(calls) == 6
     # an old result is returned at once while a fresh one loads in the background
     import asyncio
 
@@ -73,7 +73,29 @@ async def test_review_queue_owner_only_paginated_and_cached(running_app):
     assert r["refreshing"] is True and len(r["items"]) == 3 and r["age_seconds"] >= 1000
     await asyncio.wait_for(github_hub._tasks[owner], 5)
     r = (await api.get("/api/v1/github/reviews")).json()
-    assert r["refreshing"] is False and r["age_seconds"] < 5 and len(calls) == 4
+    assert r["refreshing"] is False and r["age_seconds"] < 5 and len(calls) == 12
+
+
+def test_review_queue_includes_mentions_and_deduplicates_requests():
+    calls = []
+
+    def graphql(query, variables):
+        calls.append(variables)
+        if "mentions:@me" in variables["q"] or "in:comments" in variables["q"]:
+            closed = {**pr(4, user=None), "state": "CLOSED"}
+            nodes = [pr(2), pr(3, user=None), closed]
+        else:
+            nodes = [pr(1), pr(2)]
+        return {"search": {"issueCount": len(nodes), "pageInfo": {"hasNextPage": False}, "nodes": nodes}}
+
+    data = github_hub.fetch_queue(graphql, "EikanWang")
+    items = {item["number"]: item for item in data["items"]}
+    assert set(items) == {1, 2, 3}
+    assert items[1]["review_requested"] and not items[1]["mentioned"]
+    assert items[2]["review_requested"] and items[2]["mentioned"]
+    assert not items[3]["review_requested"] and items[3]["mentioned"]
+    assert items[3]["requested"] is None
+    assert len(calls) == 3
 
 
 def test_saml_protected_prs_are_hidden_with_an_explanation():
@@ -82,7 +104,7 @@ def test_saml_protected_prs_are_hidden_with_an_explanation():
                 "_errors": [{"type": "FORBIDDEN", "message": "Resource protected by organization SAML enforcement."}]}
 
     d = github_hub.fetch_queue(graphql, "EikanWang")
-    assert len(d["items"]) == 1 and d["hidden"] == 1 and "SAML" in d["note"] and d["truncated"] is False
+    assert len(d["items"]) == 1 and d["hidden"] == 3 and "SAML" in d["note"] and d["truncated"] is False
 
 
 def test_busy_github_is_retried_with_smaller_pages():
@@ -95,7 +117,7 @@ def test_busy_github_is_retried_with_smaller_pages():
         return {"search": {"issueCount": 1, "pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": [pr(1)]}}
 
     d = github_hub.fetch_queue(graphql, "EikanWang")
-    assert len(d["items"]) == 1 and calls == [40, 20]
+    assert len(d["items"]) == 1 and calls == [40, 20, 40, 20, 40, 20]
 
 
 async def test_review_queue_errors_are_reported(running_app):

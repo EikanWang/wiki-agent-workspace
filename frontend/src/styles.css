@@ -834,8 +834,12 @@ mark.waw-hl.review.needs_review { border-bottom: 2px dashed var(--warn); }
 /* folder chats */
 .layout.view-chat { grid-template-columns: var(--sidebar-width, 260px) 1fr; }
 .chat-view { display: flex; flex-direction: column; min-height: 0; min-width: 0; flex: 1; padding: 8px 24px; box-sizing: border-box; }
-.chat-head { display: flex; align-items: flex-start; gap: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
-.chat-title { margin: 0; font-size: 18px; }
+.chat-head { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+.chat-head > div:first-child { flex: 1 1 200px; min-width: 0; }
+.chat-title { margin: 0; font-size: 18px; overflow-wrap: anywhere; }
+.chat-sources { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; border: 0; padding: 0; margin: 0; }
+.chat-sources legend { float: left; margin-right: 12px; }
+.chat-sources label { display: inline-flex; align-items: center; gap: 4px; }
 .chat-messages { flex: 1; overflow: auto; padding: 12px 0; display: flex; flex-direction: column; gap: 10px; }
 .chat-empty { padding: 24px 8px; max-width: 640px; }
 .chat-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 6px 0; border-top: 1px solid var(--border); }

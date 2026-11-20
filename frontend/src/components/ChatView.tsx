@@ -61,6 +61,7 @@ export default function ChatView({ doc, folderName, threads, sessions, liveJob, 
   const activeSide = sides.find((t) => t.id === activeSideId) ?? null;
   const messagesRef = useRef<HTMLElement>(null);
   const title = (doc.text.split("\n", 1)[0] || "Chat").replace(/^#\s*/, "");
+  const control = doc.chat_scope === "control_center";
   const [text, setText] = usePersistentState(`chat.${doc.document_id}`, ""); // an unsent message survives a reload
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -143,19 +144,22 @@ export default function ChatView({ doc, folderName, threads, sessions, liveJob, 
       <header className="chat-head">
         <div>
           <h2 className="chat-title" data-testid="chat-title">{title}</h2>
-          <div className="muted small">{trend
-            ? <>Chat with the agent about <b>{trend}</b> — it reads the daily summaries, reports and fetched issues / PRs to answer.</>
-            : <>Chat with the agent about <b>{folderName}</b> — it searches and reads the wiki to answer.</>}</div>
+          <div className="small" data-testid="chat-scope-label">{control ? "Control Center · Read-only" : "Wiki"}</div>
+          {control ? <div className="muted small" data-testid="chat-enabled-sources">{(doc.chat_sources ?? []).map((source) => ({ reviews: "Reviews", insights: "Insights", agents: "Agent jobs" }[source] ?? source)).join(" · ")}</div>
+            : trend
+            ? <div className="muted small">Chat with the agent about <b>{trend}</b> — it reads the daily summaries, reports and fetched issues / PRs to answer.</div>
+            : <div className="muted small">Chat with the agent about <b>{folderName}</b> — it searches and reads the wiki to answer.</div>}
         </div>
         <span className="spacer" />
-        <SkillsChip workspace={workspaceId ?? getWorkspace()} docId={doc.document_id} />
-        {!trend && <button className="btn small" onClick={onReviewChanges} title="Review the folder's uncommitted changes (what a distill / update wrote)" data-testid="chat-review-changes">Review changes</button>}
+        {!control && <SkillsChip workspace={workspaceId ?? getWorkspace()} docId={doc.document_id} />}
+        {!control && !trend && <button className="btn small" onClick={onReviewChanges} title="Review the folder's uncommitted changes (what a distill / update wrote)" data-testid="chat-review-changes">Review changes</button>}
         <button className="btn small" onClick={archive} disabled={busy} data-testid="chat-archive">Archive</button>
       </header>
       <div className="chat-main">
       <section className="chat-messages messages" ref={messagesRef}>
+        {!thread && control && <div className="chat-empty muted">No messages yet.</div>}
         {!thread && trend && <div className="chat-empty muted">Ask anything about {trend}'s activity — e.g. summarize a period from its daily summaries and reports.</div>}
-        {!thread && !trend && <div className="chat-empty muted">Ask anything about this wiki — questions across pages, comparisons, open issues. When the conversation is worth keeping, distill it into a page or fold it back into the pages it came from.</div>}
+        {!thread && !control && !trend && <div className="chat-empty muted">Ask anything about this wiki — questions across pages, comparisons, open issues. When the conversation is worth keeping, distill it into a page or fold it back into the pages it came from.</div>}
         {thread?.messages.map((m) => (
           <MessageView key={m.id} m={m} session={m.session_id ? sessionsById[m.session_id] : undefined} live={m.id === liveMessageId ? live : null}
             onRetry={(sid) => onRetry(thread.id, m.id, sid)} onCancel={onCancel} onPermission={onPermission} sessions={sessions} />
@@ -163,7 +167,7 @@ export default function ChatView({ doc, folderName, threads, sessions, liveJob, 
         <div ref={bottom} />
       </section>
       {thread && onSideAsk && (
-        <SelectionAsk container={messagesRef} hint={trend ? "Answered in the side questions panel" : "Answered in the side questions panel; included when you distill"} testId="chat-sel-ask"
+        <SelectionAsk container={messagesRef} hint={control ? "Ask a side question" : trend ? "Answered in the side questions panel" : "Answered in the side questions panel; included when you distill"} testId="chat-sel-ask"
           onAsk={async (p, q, images) => {
             const id = await onSideAsk(thread.id, p.messageId, p.quote, q, images);
             if (id) setActiveSideId(id);
@@ -176,7 +180,7 @@ export default function ChatView({ doc, folderName, threads, sessions, liveJob, 
           The agent changed the wiki: <button className="link-btn" onClick={onReviewChanges}>review the changes</button> (keep, edit or revert them; commit when happy).
         </div>
       )}
-      {thread && !trend && (
+      {thread && !control && !trend && (
         <div className="chat-actions" data-testid="chat-actions">
           <span className="small strong">Turn into wiki content:</span>
           <label className="small"><input type="radio" name="chat-action" checked={action === "distill"} onChange={() => setAction("distill")} data-testid="chat-action-distill" /> Distill into a new page</label>

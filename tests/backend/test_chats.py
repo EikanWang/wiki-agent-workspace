@@ -13,6 +13,197 @@ async def start_chat(api, title="Capture questions"):
     return c, d
 
 
+async def test_chat_scopes_are_explicit_and_wiki_by_default(running_app):
+    h = await running_app()
+    wiki, _ = await start_chat(h.api)
+    assert wiki["scope"] == "wiki"
+    response = await h.api.post("/api/v1/chats", json={"title": "Control Center", "scope": "control_center"})
+    assert response.status_code == 201
+    control = response.json()
+    assert control["scope"] == "control_center"
+    chats = (await h.api.get("/api/v1/chats")).json()["chats"]
+    assert {chat["path"]: chat["scope"] for chat in chats} == {wiki["path"]: "wiki", control["path"]: "control_center"}
+    assert (await h.api.post("/api/v1/chats", json={"scope": "all"})).status_code == 400
+    assert (await h.api.post("/api/v1/chats", json={"scope": "control_center", "about": "docs"})).status_code == 400
+    next_wiki, _ = await start_chat(h.api, "Another wiki chat")
+    assert next_wiki["scope"] == "wiki"
+
+
+async def test_control_context_is_opt_in_read_only_and_refreshed_per_turn(running_app, monkeypatch):
+    from backend.app import control_center
+
+    observations = []
+
+    def observe(ctx):
+        observations.append(ctx.identity)
+        return {"status": "observed", "marker": f"APP_ONLY_{len(observations)}"}
+
+    monkeypatch.setattr(control_center, "agents", observe)
+    h = await running_app()
+    created = (await h.api.post("/api/v1/chats", json={"title": "Control", "scope": "control_center", "sources": ["agents"]})).json()
+    doc = (await h.api.get("/api/v1/documents/open", params={"path": created["path"]})).json()
+    first = await h.api.post(f"/api/v1/documents/{doc['document_id']}/threads", json={"whole_document": True,
+                            "version_sha256": doc["sha256"], "question": "What needs attention?"})
+    assert first.status_code == 201, first.text
+    await h.api.wait_job(first.json()["job_id"])
+    thread = first.json()["thread_id"]
+    reply = await h.api.post(f"/api/v1/threads/{thread}/messages", json={"text": "What next?"})
+    await h.api.wait_job(reply.json()["job_id"])
+    with h.ctx.db.read() as session:
+        prompts = [job.prompt for job in session.query(Job).order_by(Job.created_at).all()]
+    assert "APP_ONLY_1" in prompts[0] and "APP_ONLY_2" in prompts[1]
+    assert all("opt-in Control Center" in prompt and "Do not use tools" in prompt for prompt in prompts)
+    assert len(observations) == 2
+    rejected = await h.api.post(f"/api/v1/threads/{thread}/messages", json={"text": "-", "chat_action": "update"})
+    assert rejected.status_code == 400 and rejected.json()["error"]["code"] == "INVALID_ACTION"
+    wiki, wiki_doc = await start_chat(h.api, "Wiki unchanged")
+    response = await h.api.post(f"/api/v1/documents/{wiki_doc['document_id']}/threads", json={"whole_document": True,
+                               "version_sha256": wiki_doc["sha256"], "question": "Only wiki"})
+    await h.api.wait_job(response.json()["job_id"])
+    with h.ctx.db.read() as session:
+        prompt = session.get(Job, response.json()["job_id"]).prompt
+    assert "APP_ONLY_" not in prompt and "APPLICATION_EVIDENCE" not in prompt
+    assert len(observations) == 2
+    mixed = await h.api.post(f"/api/v1/documents/{wiki_doc['document_id']}/threads", json={"whole_document": True,
+                            "version_sha256": wiki_doc["sha256"], "question": "Do not reuse Control history",
+                            "session_id": first.json()["session_id"]})
+    assert mixed.status_code == 400 and mixed.json()["error"]["code"] == "INVALID_CHAT_SESSION"
+    mixed = await h.api.post(f"/api/v1/threads/{thread}/messages", json={"text": "Do not reuse Wiki history",
+                            "session_id": response.json()["session_id"]})
+    assert mixed.status_code == 400 and mixed.json()["error"]["code"] == "INVALID_CHAT_SESSION"
+    assert (await h.api.get("/api/v1/chats/context", params={"path": wiki["path"]})).status_code == 400
+    assert (await h.api.post("/api/v1/chats", json={"sources": ["agents"]})).status_code == 400
+    side = await h.api.post(f"/api/v1/documents/{doc['document_id']}/threads", json={"version_sha256": doc["sha256"],
+                           "question": "Explain that status", "quote": "attention", "side_of": thread})
+    assert side.status_code == 201, side.text
+    await h.api.wait_job(side.json()["job_id"])
+    with h.ctx.db.read() as session:
+        prompt = session.get(Job, side.json()["job_id"]).prompt
+    assert "APP_ONLY_3" in prompt and "opt-in Control Center" in prompt and "read-only" in prompt
+
+
+async def test_control_center_history_and_jobs_are_private_to_the_creating_login(running_app):
+    from backend.app.models import LoginSession
+
+    h = await running_app()
+    created = (await h.api.post("/api/v1/chats", json={"scope": "control_center", "sources": []})).json()
+    doc = (await h.api.get("/api/v1/documents/open", params={"path": created["path"]})).json()
+    response = await h.api.post(f"/api/v1/documents/{doc['document_id']}/threads", json={"whole_document": True,
+                               "version_sha256": doc["sha256"], "question": "Private context"})
+    assert response.status_code == 201, response.text
+    await h.api.wait_job(response.json()["job_id"])
+    with h.ctx.db.write() as session:
+        for login in session.query(LoginSession).all():
+            login.identity = "github:another-user"
+    assert (await h.api.get("/api/v1/chats")).json()["chats"] == []
+    for endpoint in (f"/api/v1/documents/{doc['document_id']}/threads", f"/api/v1/jobs/{response.json()['job_id']}",
+                     f"/api/v1/jobs/{response.json()['job_id']}/events"):
+        assert (await h.api.get(endpoint)).status_code == 403
+    assert (await h.api.get("/api/v1/documents/open", params={"path": created["path"]})).status_code == 403
+    assert (await h.api.get("/api/v1/documents/open", params={"path": "./" + created["path"]})).status_code == 403
+    for query in ("", "?all=true"):
+        recent = (await h.api.get("/api/v1/recent" + query)).json()["items"]
+        assert all(item["path"] != created["path"] for item in recent)
+
+
+async def test_control_reviews_refresh_full_queue_and_respect_owner_and_hidden_repositories(running_app, monkeypatch):
+    import time
+
+    from backend.app import github_hub
+    from backend.app.kv import kv_put
+    from backend.app.models import LoginSession
+
+    h = await running_app()
+    h.ctx.extra["gh_owner"] = lambda: "control-owner"
+    row = github_hub.normalize({"number": 17, "title": "PRIVATE_REVIEW_EVIDENCE", "state": "OPEN",
+                               "reviewDecision": "APPROVED", "author": {"login": "alice"},
+                               "url": "https://github.com/private/repo/pull/17",
+                               "repository": {"nameWithOwner": "private/repo", "isPrivate": True}}, "control-owner")
+    hidden = {**row, "repo": "hidden/repo", "title": "HIDDEN_REVIEW_EVIDENCE"}
+    monkeypatch.setitem(github_hub._cache, "control-owner", (time.time() - 900, {"items": [row, hidden], "truncated": False}))
+    refreshed = []
+    truncated = False
+    kernel_repo = "example-org/kernel-xpu"
+
+    def fetch_queue(graphql, owner):
+        refreshed.append(owner)
+        return {"items": [{**row, "number": number, "url": f"https://github.com/private/repo/pull/{number}",
+                   "title": "CURRENT_REVIEW_EVIDENCE"} for number in range(1, 153)] +
+                 [{**row, "repo": kernel_repo, "number": 358, "url": f"https://github.com/{kernel_repo}/pull/358"}, hidden],
+            "total": 154, "truncated": truncated}
+
+    watched = [{**row, "repo": "example-org/inference", "number": number,
+                "url": f"https://github.com/example-org/inference/pull/{number}",
+                "author": "bob", "title": f"CURRENT_INFERENCE_{number}"} for number in (324, 323, 314)]
+    monkeypatch.setattr(github_hub, "fetch_queue", fetch_queue)
+    monkeypatch.setattr(github_hub, "_owned_found", lambda *args: {})
+    monkeypatch.setattr(github_hub, "fetch_watched", lambda *args: (watched, []))
+    kv_put(h.ctx, "github_hub_prefs", {"hidden_repos": ["hidden/repo"], "watched_repos": [watched[0]["repo"]]})
+    token_chat = (await h.api.post("/api/v1/chats", json={"scope": "control_center", "sources": ["reviews"]})).json()
+    token_context = (await h.api.get("/api/v1/chats/context", params={"path": token_chat["path"]})).json()
+    assert token_context["sources"][0]["status"] == "forbidden"
+    assert "PRIVATE_REVIEW_EVIDENCE" not in str(token_context)
+    assert refreshed == []
+    with h.ctx.db.write() as session:
+        for login in session.query(LoginSession).all():
+            login.identity = "github:control-owner"
+    owner_chat = (await h.api.post("/api/v1/chats", json={"scope": "control_center", "sources": ["reviews"]})).json()
+    owner_context = (await h.api.get("/api/v1/chats/context", params={"path": owner_chat["path"]})).json()
+    evidence = owner_context["sources"][0]
+    assert refreshed == ["control-owner"]
+    assert evidence["status"] == "live" and evidence["age_seconds"] < 10
+    assert evidence["total"] == len(evidence["items"]) == 156 and not evidence["truncated"]
+    assert evidence["items"][0]["author"] == "alice"
+    assert evidence["items"][0]["review_decision"] == "APPROVED"
+    assert evidence["items"][-4]["repo"] == kernel_repo and evidence["items"][-4]["number"] == 358
+    assert {(item["number"], item["author"], item["queue_group"]) for item in evidence["items"][-3:]} == {
+        (number, "bob", "watched") for number in (324, 323, 314)}
+    assert evidence["source_url"] == "/api/v1/github/reviews"
+    assert evidence["filters"]["hidden_repos"] == ["hidden/repo"]
+    assert "HIDDEN_REVIEW_EVIDENCE" not in str(owner_context)
+
+    github_hub._cache.pop("control-owner")
+    truncated = True
+    context = (await h.api.get("/api/v1/chats/context", params={"path": owner_chat["path"]})).json()
+    assert refreshed == ["control-owner", "control-owner"]
+    assert context["sources"][0]["status"] == "live" and context["sources"][0]["truncated"]
+    assert len(context["sources"][0]["items"]) == 156
+
+    def fail_refresh(graphql, owner):
+        raise RuntimeError("PRIVATE_REFRESH_FAILURE")
+
+    monkeypatch.setattr(github_hub, "fetch_queue", fail_refresh)
+    context = (await h.api.get("/api/v1/chats/context", params={"path": owner_chat["path"]})).json()
+    assert context["sources"][0]["status"] == "unavailable"
+    assert "CURRENT_REVIEW_EVIDENCE" not in str(context) and "PRIVATE_REFRESH_FAILURE" not in str(context)
+
+
+async def test_control_insights_are_bounded_and_source_failures_are_isolated(running_app, monkeypatch, tmp_path):
+    from backend.app import control_center
+    from backend.app.insights import pipeline, settings, store
+
+    h = await running_app()
+    settings.save(h.ctx, {"data_dir": str(tmp_path / "insights"), "repos": [{"repo": "example/project"}]})
+    store.write_summary(h.ctx, "example/project", "2026-11-18", "2026-11-18", "SUMMARY_EVIDENCE " + "x" * 4000)
+    monkeypatch.setattr(pipeline, "reports", lambda ctx: [{"id": "report-one", "repo": "example/project", "status": "done",
+                                                         "api_key": "SHOULD_NOT_APPEAR", "text": "z" * 10000}])
+    created = (await h.api.post("/api/v1/chats", json={"scope": "control_center", "sources": ["insights", "agents"]})).json()
+    context = (await h.api.get("/api/v1/chats/context", params={"path": created["path"]})).json()
+    summaries = context["sources"][0]["summaries"]
+    assert len(summaries) == 1 and "SUMMARY_EVIDENCE" in summaries[0]["excerpt"]
+    assert len(summaries[0]["excerpt"]) == 1800 and summaries[0]["excerpt_truncated"]
+    assert "SHOULD_NOT_APPEAR" not in str(context) and "api_key" not in str(context)
+    assert context["sources"][1]["status"] == "observed"
+
+    def broken(ctx):
+        raise RuntimeError("PRIVATE_EXCEPTION_DETAIL")
+
+    monkeypatch.setattr(control_center, "insights", broken)
+    context = (await h.api.get("/api/v1/chats/context", params={"path": created["path"]})).json()
+    assert [source["status"] for source in context["sources"]] == ["unavailable", "observed"]
+    assert "PRIVATE_EXCEPTION_DETAIL" not in str(context)
+
+
 async def test_chat_is_a_hidden_read_only_document_with_its_own_prompt(running_app, workspace):
     h = await running_app()
     api = h.api

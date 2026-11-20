@@ -2132,6 +2132,55 @@ test("GitHub review hub: only the owner's GitHub sign-in sees it; queue grouped 
   await signOut(page);
 });
 
+test("GitHub review sources: requests, mentions, overlap and persistence", async ({ page }) => {
+  await ensureGithubSignIn(page);
+  await page.route("**/api/v1/github/reviews*", async (route) => {
+    const response = await route.fetch();
+    const queue = await response.json();
+    queue.items = queue.items.slice(0, 3).map((pr: Record<string, unknown>, index: number) => ({
+      ...pr, title: `source-filter-${index}`, draft: false, my_activity: "todo",
+      review_requested: index !== 1, mentioned: index !== 0,
+      requested: index === 1 ? null : "you",
+    }));
+    queue.watched = [];
+    queue.deferred = [];
+    await route.fulfill({ response, json: queue });
+  });
+  await page.goto("/");
+  await page.getByTestId("login-github").click();
+  await page.getByTestId("activity-reviews").click();
+  const rows = page.getByTestId("review-pr");
+  const source = page.getByTestId("reviews-source");
+  await expect(rows).toHaveCount(3);
+  await expect(page.getByTestId("review-requested")).toHaveCount(2);
+  await expect(page.getByTestId("review-mentioned")).toHaveCount(2);
+  await source.selectOption("requested");
+  await expect(rows).toHaveCount(2);
+  await expect(rows.filter({ hasText: "source-filter-1" })).toHaveCount(0);
+  await source.selectOption("mentioned");
+  await expect(rows).toHaveCount(2);
+  await page.getByTestId("reviews-filter").fill("source-filter-1");
+  await expect(rows).toHaveCount(1);
+  await page.getByTestId("reviews-filter").fill("");
+  await source.selectOption("both");
+  await expect(rows).toHaveCount(1);
+  await expect(rows).toContainText("source-filter-2");
+  await page.reload();
+  await expect(source).toHaveValue("both");
+  await expect(rows).toHaveCount(1);
+  await page.screenshot({ path: test.info().outputPath("review-sources-desktop.png") });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: "Wiki", exact: true }).click();
+  await expect(source).toBeVisible();
+  const fits = await source.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    const parent = element.closest(".reviews-controls")!.getBoundingClientRect();
+    return bounds.left >= parent.left && bounds.right <= parent.right;
+  });
+  expect(fits).toBeTruthy();
+  await page.screenshot({ path: test.info().outputPath("review-sources-mobile.png") });
+});
+
 test("GitHub review hub: priority requests, hide a repository, watch a repository", async ({ page }) => {
   await ensureGithubSignIn(page);
   await page.goto("/");
@@ -3159,6 +3208,46 @@ test("folder chat: talk with a project directly on the Chats page, then distill 
   } finally {
     fs.rmSync(path.join(workspaceDir(), "chat-notes"), { recursive: true, force: true });
   }
+});
+
+test("Chats: opt-in Control Center persists its scope and keeps Wiki actions separate", async ({ page }) => {
+  await login(page);
+  await page.getByTestId("view-chats").click();
+  await expect(page.getByTestId("chat-scope-wiki")).toHaveAttribute("aria-pressed", "true");
+  await page.getByTestId("chat-scope-control").click();
+  await page.getByTestId("chat-source-insights").uncheck();
+  const creation = page.waitForResponse((response) => response.url().endsWith("/api/v1/chats") && response.request().method() === "POST");
+  await page.getByTestId("chat-first").fill("Control Center: what needs attention?");
+  await page.getByTestId("chat-first-send").click();
+  const createdResponse = await creation;
+  const created = await createdResponse.json();
+  expect(createdResponse.request().postDataJSON()).toMatchObject({ scope: "control_center", sources: ["reviews", "agents"] });
+  await expect(page.getByTestId("chat-scope-label")).toHaveText("Control Center · Read-only");
+  await expect(page.getByTestId("chat-enabled-sources")).toHaveText("Reviews · Agent jobs");
+  await expect(page.getByTestId("chat-view").locator('[data-testid="message-agent"][data-status="completed"]')).toHaveCount(1, { timeout: 20000 });
+  await expect(page.getByTestId("chat-actions")).toHaveCount(0);
+  await expect(page.getByTestId("chat-review-changes")).toHaveCount(0);
+  const context = await (await page.request.get(`/api/v1/chats/context?path=${encodeURIComponent(created.path)}`,
+    { headers: { "X-Workspace": await page.getByTestId("chat-project").inputValue() } })).json();
+  expect(context.sources.map((source: any) => source.id)).toEqual(["reviews", "agents"]);
+  expect(context.sources[0].status).toBe("forbidden");
+  await page.reload();
+  await expect(page.getByTestId("chat-scope-label")).toHaveText("Control Center · Read-only", { timeout: 15000 });
+  await expect(page.getByTestId("chat-scope-choice")).toHaveCount(0);
+  await page.screenshot({ path: test.info().outputPath("control-center-desktop.png") });
+  const desktopViewport = page.viewportSize()!;
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.getByTestId("chat-scope-label")).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath("control-center-mobile.png") });
+  await page.setViewportSize(desktopViewport);
+  await page.getByTestId("chats-new").click();
+  await expect(page.getByTestId("chat-scope-wiki")).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByTestId("chat-sources")).toHaveCount(0);
+  await page.getByTestId("chat-history").selectOption(created.path);
+  await expect(page.getByTestId("chat-scope-label")).toHaveText("Control Center · Read-only");
+  await page.getByTestId("chat-archive").click();
+  await page.getByTestId("confirm-ok").click();
+  await expect(page.getByTestId("chat-scope-wiki")).toHaveAttribute("aria-pressed", "true");
 });
 
 test("a reload (or closing the browser) brings back what was shown: view, PR tab and its sub-tab, unsent text", async ({ page }) => {

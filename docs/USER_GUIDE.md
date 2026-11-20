@@ -119,6 +119,31 @@ before committing. **Archive** (confirmed) removes a chat from the list; its con
 stored by the app, never as files in the project; opening one from *Recent* goes to the Chats page, which also
 comes back after a reload. Change summaries of a GitHub repository (⎇ in a PR tab) open here too.
 
+#### Opt-in Control Center scope
+
+New chats default to **Wiki**, and existing chats keep their Wiki behavior. To start a separate application-wide
+conversation, choose **Control Center** before sending the first message and select **Reviews**, **Insights**,
+and/or **Agent jobs** as sources. The scope and source choices are fixed for that conversation and survive reloads;
+**New chat** returns to Wiki. Chats about a particular wiki file or sub-folder remain Wiki-only.
+
+Each turn with **Reviews** selected waits for a GitHub refresh of the real Reviews queue and includes every returned
+PR, including watched and deferred groups, with authors, CI/review status, labels, and priority fields. There is no
+25-PR chat cutoff. Saved repository/approval preferences match Reviews; browser-local display filters are not applied,
+so you can ask for authors or repositories directly in chat without opening the Reviews view. The existing queue limits
+(500 PRs per requested/mentioned search and 40 per watched repository), hidden records, and source problems remain
+explicit. A failed refresh reports Reviews unavailable instead of using stale results. Refreshing a large queue can
+take longer and uses GitHub API quota. Queue metadata alone does not prove a PR is functionally required or safe to merge.
+
+Insights summaries/report metadata and recent agent job status remain bounded saved/local evidence for the selected
+project. The integration does not run jobs, edit plans, or perform application write actions. Fetch times, missing sources,
+and truncation are included in the evidence; an empty or unavailable source is not proof that work is complete.
+Reviews still require the server owner's GitHub login. Saved Control Center chat history belongs to its creating
+login; Wiki histories retain their existing visibility. Control Center sessions cannot be reused by Wiki chats.
+
+Distill, Update, and Review changes remain available in Wiki chats only. Control Center is a read-only application
+integration, **not an operating-system sandbox**: the selected agent CLI still runs with its configured host
+permissions. No scheduler, milestone tracking, or confirmed write actions are enabled by this initial scope.
+
 ### Creating files and folders
 
 Hover a folder (or a root folder) in the tree: **＋🗎** creates a file, **＋🗀** a folder, with a name box right
@@ -143,7 +168,7 @@ owner), the sidebar gets an **activity bar**: **Files** (the file tree) and **Re
 the number of PRs waiting for you, drafts not counted). Token logins and other GitHub accounts never see it — the
 queue can include private repositories.
 
-**Reviews** lists the open pull requests that request your review, across every repository your GitHub account
+**Reviews** lists open pull requests that request your review or mention you, across every repository your GitHub account
 can see, grouped by repository (most PRs first). Inside each repository the PRs are in three sections by where you
 stand (their order and names are yours to change, ⚙ → Priority → Categories); inside each section the **most urgent
 priority level first**, then your sort:
@@ -238,6 +263,12 @@ kept while the server runs: after a restart, PRs that had not started yet are no
 - **filter** by repository, title, author, requester or label; **drafts** shows or hides draft PRs; sort by
   *recently updated*, *waiting longest* or *smallest first*; click a repository to fold it; closed or merged PRs
   are dropped even while GitHub's search still lists them;
+- **Review source** filters by **Review requested**, **Mentioned**, or **Requested and mentioned**; **All sources**
+  also includes watched and code-owned PRs. The choice is kept per browser. Badges show each PR's source; a PR
+  matching multiple searches appears once. Mentions combine GitHub's `mentions:@me` search with an explicit
+  `"@username" in:comments` search, including the PR description and discussion, not just formal review requests.
+  Existing draft, approved and deferred settings
+  still apply. GitHub's search indexing may delay newly added mentions.
 - **PRs you approved with nothing new since are left out**: no commits after the commit you approved, no review
   or comment from a person since (bots such as pytorchmergebot, pytorch-bot, facebook-github-bot, EasyCLA and
   GitHub Actions do not count, nor do your own comments), and your review was not requested again. A note says how

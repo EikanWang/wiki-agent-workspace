@@ -4,7 +4,7 @@ Data comes from GitHub through the server user's own `gh` CLI login (GraphQL), s
 Only the *owner* may see it: a browser signed in with "Continue with GitHub" as the account `gh` is logged in as.
 Everyone else (token logins, other GitHub accounts) gets 403 — the queue can include private repositories.
 
-The queue is fetched with a single paginated GraphQL search (with reviews, checks and size inline) and cached for
+The queue merges paginated review-request and mention searches (with reviews, checks and size inline) and is cached for
 CACHE_SECONDS, because GitHub's search API allows only 30 requests per minute.
 """
 
@@ -308,33 +308,57 @@ def _requester(pr: dict[str, Any], owner: str) -> dict[str, Any]:
 
 
 def fetch_queue(graphql: Callable[[str, dict], dict], owner: str) -> dict[str, Any]:
-    items: list[dict[str, Any]] = []
+    by_pr: dict[tuple[str, int], dict[str, Any]] = {}
     hidden = 0
     problems: list[dict[str, Any]] = []
-    after = None
     total = 0
     rate = None
-    size = PAGE_SIZE
-    while len(items) < MAX_PRS:
-        try:
-            d = graphql(REVIEW_QUERY, {"q": "is:pr is:open archived:false review-requested:@me", "after": after, "n": size, "me": owner})
-        except ApiError as exc:
-            if exc.code != "GH_BUSY" or size <= 10:
-                raise
-            size //= 2  # GitHub timed out building the page: ask for less
-            continue
-        s = d["search"]
-        total = s["issueCount"]
-        rate = d.get("rateLimit")
-        items += [x for x in (normalize(n, owner) for n in s["nodes"] if n and n.get("number"))
-                  if x["state"] == "OPEN"]  # the search index lags: drop PRs closed / merged meanwhile
-        hidden += sum(1 for n in s["nodes"] if not n or not n.get("number"))
-        for e in d.get("_errors") or []:
-            if e not in problems:
-                problems.append(e)
-        if not s["pageInfo"]["hasNextPage"]:
-            break
-        after = s["pageInfo"]["endCursor"]
+    truncated = False
+    for qualifier, source in (("review-requested:@me", "review_requested"), ("mentions:@me", "mentioned"),
+                              (f'"@{owner}" in:comments', "mentioned")):
+        after = None
+        size = PAGE_SIZE
+        fetched = 0
+        source_total = 0
+        while fetched < MAX_PRS:
+            try:
+                d = graphql(REVIEW_QUERY, {"q": f"is:pr is:open archived:false {qualifier}", "after": after, "n": size, "me": owner})
+            except ApiError as exc:
+                if exc.code != "GH_BUSY" or size <= 10:
+                    raise
+                size //= 2
+                continue
+            search = d["search"]
+            source_total = search["issueCount"]
+            rate = d.get("rateLimit")
+            fetched += len(search["nodes"])
+            for node in search["nodes"]:
+                if not node or not node.get("number"):
+                    hidden += 1
+                    continue
+                item = normalize(node, owner)
+                if item["state"] != "OPEN":
+                    continue
+                key = (item["repo"].lower(), item["number"])
+                if key in by_pr:
+                    by_pr[key][source] = True
+                    total -= 1
+                else:
+                    item.update(review_requested=source == "review_requested", mentioned=source == "mentioned")
+                    if source == "mentioned" and not any(
+                        (request.get("requestedReviewer") or {}).get("login", "").lower() == owner.lower()
+                        for request in (node.get("reviewRequests") or {}).get("nodes") or []
+                    ):
+                        item["requested"] = None
+                    by_pr[key] = item
+            for error in d.get("_errors") or []:
+                if error not in problems:
+                    problems.append(error)
+            if not search["pageInfo"]["hasNextPage"]:
+                break
+            after = search["pageInfo"]["endCursor"]
+        total += source_total
+        truncated |= fetched < source_total
     saml = any("SAML" in (e.get("message") or "") for e in problems)
     note = None
     if hidden:
@@ -342,8 +366,8 @@ def fetch_queue(graphql: Callable[[str, dict], dict], owner: str) -> dict[str, A
                 "Authorize it once: run `gh auth refresh -h github.com` in a terminal, or on github.com → Settings → "
                 "Applications → Authorized OAuth Apps → GitHub CLI → Grant for that organization."
                 if saml else f"{hidden} PR(s) could not be read: {problems[0]['message'] if problems else 'unknown reason'}")
-    return {"items": items, "total": total, "hidden": hidden, "note": note,
-            "truncated": len(items) + hidden < total, "rate_limit": rate}
+    return {"items": list(by_pr.values()), "total": total, "hidden": hidden, "note": note,
+            "truncated": truncated, "rate_limit": rate}
 
 
 _cache: dict[str, tuple[float, dict[str, Any]]] = {}
@@ -484,6 +508,16 @@ def _start_refresh(graphql: Callable[[str, dict], dict], owner: str, watched: li
     return t
 
 
+def review_queue_data(ctx: AppContext, raw: dict[str, Any], prefs: dict[str, Any]) -> dict[str, Any]:
+    from . import maintainers
+    from . import review_priority as rp
+
+    extra = prefs.get("core_maintainers") or []
+    annotated = {**raw, "items": [with_mine(p) for p in maintainers.annotate(ctx, raw.get("items") or [], extra)],
+                 "watched": [with_mine(p) for p in maintainers.annotate(ctx, raw.get("watched") or [], extra)]}
+    return apply_prefs(annotated, prefs, rp.results(ctx))
+
+
 @router.get("/github/hub")
 async def github_hub(request: Request, ctx: AppContext = Depends(require_auth)):
     """For the UI: is the Reviews area available to this browser? For the owner it also warms the queue."""
@@ -514,13 +548,9 @@ async def review_queue(refresh: bool = Query(False), auth: tuple[AppContext, str
     if (refresh and age >= 10) or age >= CACHE_SECONDS:  # < 10 s: rapid ↻ clicks do not burn the search quota
         _start_refresh(graphql, owner, prefs["watched_repos"], ctx)
         running = True
-    from . import maintainers
     from . import review_priority as rp
 
-    extra = prefs.get("core_maintainers") or []
-    raw = {**hit[1], "items": [with_mine(p) for p in maintainers.annotate(ctx, hit[1].get("items") or [], extra)],
-           "watched": [with_mine(p) for p in maintainers.annotate(ctx, hit[1].get("watched") or [], extra)]}
-    data = apply_prefs(raw, prefs, rp.results(ctx))
+    data = review_queue_data(ctx, hit[1], prefs)
     rp.schedule(ctx, data["items"] + data["watched"], prefs)  # the agent decides levels of new / changed PRs, in the background
     from . import github_cache as gc
 
@@ -528,7 +558,7 @@ async def review_queue(refresh: bool = Query(False), auth: tuple[AppContext, str
     agent = agent_review_states(ctx)
     for key in ("items", "watched"):
         data[key] = [{**p, "agent_review": agent.get(f"{p['repo']}#{p['number']}".lower())} for p in data.get(key) or []]
-    from . import codeowned
+    from . import codeowned, maintainers
 
     owned = owned_repos(ctx, owner, hit[1], prefs)
     # PRs touching your files: checked in the background; when that finds new ones the list refreshes by itself

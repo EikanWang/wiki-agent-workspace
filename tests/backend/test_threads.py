@@ -43,6 +43,20 @@ async def test_create_thread_streams_answer_and_persists(api: Api):
     assert [e["seq"] for e in tail] == [replay[-1]["seq"]]
 
 
+async def test_large_opencode_prompt_uses_stdin(settings, workspace: Path, fake_env: Path):
+    from backend.app.agents.base import TurnContext
+    from backend.app.agents.opencode import OpenCodeCliAdapter
+
+    prompt = "--large-context\n" + "context " * 20_000 + "\nUser message: Summarize\n\nInstructions: Reply briefly."
+    adapter = OpenCodeCliAdapter(settings.providers["opencode"])
+    turn = await adapter.resume_turn(TurnContext(prompt=prompt, workspace=workspace, native_session_id=None))
+    events = [event async for event in turn.events()]
+    assert events[-1].type == "completed", events[-1]
+    assert (fake_env / "opencode_last_prompt").read_text() == prompt
+    calls = [json.loads(line) for line in (fake_env / "opencode_calls.log").read_text().splitlines()]
+    assert all(len(argument.encode()) < 131_072 for call in calls for argument in call)
+
+
 async def test_cross_line_selection_anchor(api: Api):
     doc = await api.open_doc()
     quote = "forms a graph.\nAOTAutograd handles"
@@ -572,8 +586,8 @@ def test_codex_and_opencode_pass_attachments_without_swallowing_the_prompt(tmp_p
         if cls is CodexAdapter:
             assert args[-1] == "-" and args.index(f"--image={img}") < len(args) - 1
         else:
-            # the real opencode's --file swallows following arguments: the prompt must come after "--"
-            assert args[-2:] == ["--", "PROMPT"] and args.index(f"--file={img}") < args.index("--")
+            assert args[-1] == "--" and args.index(f"--file={img}") < args.index("--")
+            assert turn.stdin_data == b"PROMPT" and "PROMPT" not in args
     assert P(img).exists()
 
 

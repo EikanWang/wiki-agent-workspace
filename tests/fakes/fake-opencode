@@ -164,6 +164,10 @@ def main(argv):
         rest.append(a)
         i += 1
     prompt = " ".join(rest)
+    if not sys.stdin.isatty():
+        stdin_prompt = sys.stdin.read()
+        if stdin_prompt:
+            prompt = prompt + "\n" + stdin_prompt if prompt else stdin_prompt
     (STATE / "opencode_last_prompt").write_text(prompt)
     user_msg = prompt.split("User message:", 1)[1].split("\n\nInstructions:", 1)[0].strip() if "User message:" in prompt else prompt
     if "User's side question:" in prompt:  # a side question about a part of a chat's answer

@@ -254,9 +254,6 @@ class OpenCodeCliAdapter(AgentAdapter):
             if ctx.variant:
                 args += ["--variant", ctx.variant]
         args += list(self.cfg.extra_args)
-        # --file takes several values and swallows every following argument, even in the "--file=PATH" form
-        # (the prompt then becomes a "file": "File not found: <prompt>"). "--" ends the options, so the prompt
-        # is always the message — also when it starts with "-".
         args += [f"--file={p}" for p in ctx.attachments]
         # one argument is at most 128 KiB (Linux MAX_ARG_STRLEN: "Argument list too long"): a long prompt goes on
         # stdin, which `opencode run` reads as the message when none is given
