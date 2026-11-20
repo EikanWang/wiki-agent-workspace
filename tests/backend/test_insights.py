@@ -105,6 +105,18 @@ async def test_settings_defaults_validation_and_secrets(running_app, tmp_path):
     r = (await api.put("/api/v1/insights/settings", json={"endpoint": {"api_key": "sk-secret"}, "llm": {"highlight": {"mode": "agent", "provider": "opencode"}}})).json()
     assert r["endpoint"]["has_key"] is True and "sk-secret" not in json.dumps(r) and r["llm"]["highlight"]["mode"] == "agent"
     assert (h.ctx.settings.state_dir / "insights-secrets.json").stat().st_mode & 0o077 == 0
+    # a request's size: the agent's limit (smaller) for a task on the agent
+    from backend.app.insights import llm
+    assert s["max_chars"] == 1_500_000 and s["agent_max_chars"] == 400_000
+    assert llm.request_chars(h.ctx, "highlight") == 400_000 and llm.request_chars(h.ctx, "daily") == 1_500_000
+    r = (await api.put("/api/v1/insights/settings", json={"agent_max_chars": 250_000})).json()
+    assert r["agent_max_chars"] == 250_000 and llm.request_chars(h.ctx, "highlight") == 250_000
+    assert (await api.put("/api/v1/insights/settings", json={"agent_max_chars": 5})).status_code in (400, 422)
+    outs = []
+    h.ctx.extra["insights_llm"] = lambda task, prompt, as_json: outs.append(len(prompt)) or "part"
+    await llm.summarize(h.ctx, "highlight", ["x" * 100_000] * 6, "ins", "combine")  # 600k: split in parts for the agent
+    assert len(outs) == 4 and max(outs) <= 250_000 and outs[-1] < 100  # three parts, then their combination
+    h.ctx.extra.pop("insights_llm")
     for bad in ({"repos": [{"repo": "nope"}]}, {"repos": [{"repo": "a/b", "schedule": {"time": "25:00"}}]}, {"data_dir": "rel"}, {"llm": {"daily": {"mode": "x"}}}):
         assert (await api.put("/api/v1/insights/settings", json=bad)).status_code == 400, bad
 

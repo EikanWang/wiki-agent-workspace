@@ -40,7 +40,7 @@ function BaselinePick({ value, onChange, testid }: { value: Baseline; onChange: 
 interface TaskModel { mode: "api" | "agent"; provider: string | null; model: string | null; variant: string | null }
 interface Settings {
   data_dir: string; timezone_offset: number; repos: InsightsRepo[]; llm: Record<string, TaskModel>;
-  highlight: { threshold: number; number_of_ccer: number }; max_chars: number; concurrency: number;
+  highlight: { threshold: number; number_of_ccer: number }; max_chars: number; agent_max_chars: number; concurrency: number;
   presets: { id: string; name: string; text: string }[];
   endpoint: { base_url: string; model: string; has_key: boolean };
 }
@@ -723,6 +723,9 @@ function InsightsSettings() {
       ))}
       <div className="row nowrap small">XPU highlight threshold <input type="number" className="insights-num" defaultValue={s.highlight.threshold} onBlur={(e) => void save({ highlight: { ...s.highlight, threshold: Number(e.target.value) } })} />
         · model requests at once <input type="number" className="insights-num" defaultValue={s.concurrency} onBlur={(e) => void save({ concurrency: Number(e.target.value) })} /></div>
+      <div className="row nowrap small" title="Longer material is split in parts of at most this size, each answered, then combined">characters per request: API
+        <input type="number" className="insights-chars" data-testid="insights-max-chars" defaultValue={s.max_chars} onBlur={(e) => void save({ max_chars: Number(e.target.value) })} />
+        · agent <input type="number" className="insights-chars" data-testid="insights-agent-max-chars" defaultValue={s.agent_max_chars} onBlur={(e) => void save({ agent_max_chars: Number(e.target.value) })} /></div>
 
       <div className="small strong">Repositories <span className="muted">(daily times in UTC+{s.timezone_offset}; each summarizes the previous UTC day)</span></div>
       <ScheduleState />

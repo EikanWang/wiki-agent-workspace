@@ -4106,6 +4106,11 @@ test("Repo Insights: the history in the folder, a week's report (daily summaries
   await page.getByTestId("insights-settings-open").click();
   await expect(page.getByTestId("insights-settings")).toBeVisible();
   await expect(page.getByTestId("insights-task")).toHaveCount(7);
+  // the size of one request: the API's and the (smaller) agent's
+  await expect(page.getByTestId("insights-agent-max-chars")).toHaveValue("400000");
+  await page.getByTestId("insights-agent-max-chars").fill("300000");
+  await page.getByTestId("insights-agent-max-chars").blur();
+  await expect.poll(async () => (await (await page.request.get("/api/v1/insights/settings")).json()).agent_max_chars).toBe(300000);
   // the agent for two tasks, one right after the other: both stay chosen (on the page and on the server)
   const task = (t: string) => page.locator(`[data-testid="insights-task"][data-task="${t}"]`);
   await task("report").getByTestId("insights-task-mode").selectOption("agent");

@@ -38,6 +38,7 @@ class SettingsIn(BaseModel):
     highlight: dict[str, Any] | None = None
     presets: list[dict[str, Any]] | None = None
     max_chars: int | None = Field(None, ge=20_000, le=20_000_000)
+    agent_max_chars: int | None = Field(None, ge=20_000, le=20_000_000)
     concurrency: int | None = Field(None, ge=1, le=16)
     timezone_offset: int | None = Field(None, ge=-12, le=14)
     endpoint: dict[str, Any] | None = None  # {base_url, model, api_key} (the key is never sent back)

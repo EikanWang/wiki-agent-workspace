@@ -1486,6 +1486,7 @@ body.resizing-h iframe { pointer-events: none; }
 .insights-score.high { background: #d1600f; color: #fff; }
 .insights-score.crit { background: #cf222e; color: #fff; }
 .insights-num { width: 60px; }
+.insights-chars { width: 90px; }
 .insights-settings .row input:not([type=checkbox]) { flex: 1; }
 .insights-repo-cfg { border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; display: flex; flex-direction: column; gap: 4px; }
 .insights-preset { display: flex; gap: 6px; align-items: flex-start; }

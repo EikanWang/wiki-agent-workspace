@@ -75,6 +75,7 @@ def defaults(state_dir: Path) -> dict[str, Any]:
         "llm": {t: {"mode": "api", "provider": None, "model": None, "variant": None} for t in TASKS},
         "highlight": {"threshold": 70, "number_of_ccer": 5},
         "max_chars": 1_500_000,   # characters per model request (the text is split in parts beyond it)
+        "agent_max_chars": 400_000,  # the same for a task on the app's agent (its model holds less; beyond it the agent compacts and fails)
         "concurrency": 4,         # model requests at the same time (scoring)
         "presets": [{"id": "xpu", "name": "XPU (Intel GPU)", "text": XPU_FOCUS}],
     }
@@ -147,7 +148,7 @@ def save(ctx: Any, patch: dict[str, Any]) -> dict[str, Any]:
     if "presets" in patch:
         cur["presets"] = [{"id": str(p.get("id") or f"p{i}")[:40], "name": str(p.get("name") or "")[:80], "text": str(p.get("text") or "")[:20000]}
                           for i, p in enumerate(patch["presets"] or [])][:50]
-    for k in ("max_chars", "concurrency", "timezone_offset"):
+    for k in ("max_chars", "agent_max_chars", "concurrency", "timezone_offset"):
         if k in patch:
             cur[k] = int(patch[k])
     kv_put(ctx, KEY, cur)
