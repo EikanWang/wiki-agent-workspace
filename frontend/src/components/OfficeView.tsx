@@ -12,9 +12,9 @@ interface RenderState {
   message?: string;
 }
 
-const qs = (path: string, extra: Record<string, string> = {}) => {
+const qs = (path: string, extra: Record<string, string> = {}, workspace?: string) => {
   const p = new URLSearchParams({ path, ...extra });
-  const ws = getWorkspace();
+  const ws = workspace || getWorkspace();
   if (ws) p.set("workspace", ws);
   return p.toString();
 };
@@ -23,8 +23,10 @@ const qs = (path: string, extra: Record<string, string> = {}) => {
  * Layout view of an Office file: the server renders it to PDF with LibreOffice (cached per content), the browser's
  * PDF viewer shows it, so pages, slides and diagrams look as their authors made them (zoom, page navigation, search).
  */
-export default function OfficeView({ path, sha256, onShowText, unit, threads, activeThreadId, onAsk, onOpenThread, goToPage = null, goToText = null, posRef }: {
+export default function OfficeView({ path, workspace, sha256, onShowText, unit, threads, activeThreadId, onAsk, onOpenThread, goToPage = null, goToText = null, posRef }: {
   path: string;
+  /** the document's folder (else the window's current one) */
+  workspace?: string;
   goToText?: (ViewPos & { at: number }) | null;
   posRef?: React.MutableRefObject<(() => ViewPos | null) | null>;
   goToPage?: { page: number; at: number } | null;
@@ -45,7 +47,7 @@ export default function OfficeView({ path, sha256, onShowText, unit, threads, ac
   const poll = async (retry = false) => {
     window.clearTimeout(timer.current);
     try {
-      const r = await get<RenderState>(`/office/render?${qs(path, retry ? { retry: "true" } : {})}`);
+      const r = await get<RenderState>(`/office/render?${qs(path, retry ? { retry: "true" } : {}, workspace)}`);
       if (!alive.current) return;
       setSt(r);
       setError(null);
@@ -64,7 +66,7 @@ export default function OfficeView({ path, sha256, onShowText, unit, threads, ac
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path, sha256]);
 
-  const download = `/api/v1/raw?${qs(path)}`;
+  const download = `/api/v1/raw?${qs(path, {}, workspace)}`;
   const name = path.split("/").pop() ?? path;
 
   if (st?.state === "ready") {
@@ -73,7 +75,7 @@ export default function OfficeView({ path, sha256, onShowText, unit, threads, ac
         <div className="muted small office-note">
           Original layout (rendered by LibreOffice) · <a href={download} download={name}>Download the original</a>
         </div>
-        <PdfView url={`/api/v1/office/pdf?${qs(path, { k: st.key ?? "" })}`} unit={unit} threads={threads} activeThreadId={activeThreadId} onAsk={onAsk} onOpenThread={onOpenThread} testId="office-pdf" goToPage={goToPage} goToText={goToText} posRef={posRef} />
+        <PdfView url={`/api/v1/office/pdf?${qs(path, { k: st.key ?? "" }, workspace)}`} unit={unit} threads={threads} activeThreadId={activeThreadId} onAsk={onAsk} onOpenThread={onOpenThread} testId="office-pdf" goToPage={goToPage} goToText={goToText} posRef={posRef} />
       </div>
     );
   }

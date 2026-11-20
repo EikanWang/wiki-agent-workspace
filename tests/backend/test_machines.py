@@ -445,6 +445,7 @@ def test_remote_tmux_conf_follows_the_version():
     new = rtmux.conf_text("s", (3, 4), "tmux-256color", 5000)
     assert "window-size" not in old and "terminal-features" not in old and "focus-events" not in old
     assert "window-size latest" in new and "terminal-features" in new and 'default-terminal "tmux-256color"' in new
+    assert "allow-passthrough on" in new and "allow-passthrough" not in rtmux.conf_text("s", (3, 2), "screen", 5000)
     assert rtmux.parse_version("tmux 3.2a") == (3, 2) and rtmux.parse_version("tmux next-3.5") == (3, 5)
     assert rtmux.parse_version("") is None
 

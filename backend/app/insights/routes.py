@@ -178,6 +178,51 @@ async def report_chat(owner: str, name: str, rid: str, body: ChatIn, ctx: AppCon
     return {**chat, "workspace_id": rt.id, "thread_id": t["thread_id"], "job_id": t["job_id"]}
 
 
+class TrendChatIn(BaseModel):
+    title: str = Field("", max_length=200)
+
+
+@router.get("/insights/repos/{owner}/{name}/chats")
+def trend_chats(owner: str, name: str, ctx: AppContext = Depends(require_auth)):
+    """The repository's trend chats (an agent working on its insights data), newest activity first."""
+    from ..chats import chat_snapshot_path, chat_title
+    from ..models import Document, Message, Thread
+    from .chat import listed
+
+    repo = _repo(owner, name)
+    out: list[dict[str, Any]] = []
+    snaps = ctx.workspaces.primary.docs.snapshots_dir if ctx.workspaces else (ctx.documents.snapshots_dir if ctx.documents else None)
+    with ctx.db.read() as s:
+        for x in listed(ctx, repo):
+            d = s.query(Document).filter_by(workspace_id=x["workspace_id"], path=x["path"]).one_or_none()
+            p = chat_snapshot_path(snaps, x["workspace_id"], x["path"]) if snaps else None
+            if d is None or d.hidden or p is None or not p.is_file():
+                continue
+            threads = s.query(Thread).filter_by(document_id=d.id).all()
+            n = s.query(Message).filter(Message.thread_id.in_([t.id for t in threads])).count() if threads else 0
+            times = [t.updated_at for t in threads if t.updated_at] + ([d.created_at] if d.created_at else [])
+            last = max(times) if times else None
+            out.append({"path": d.path, "document_id": d.id, "workspace_id": x["workspace_id"], "title": chat_title(p.read_text(encoding="utf-8")),
+                        "messages": n, "updated_at": (last if last.tzinfo else last.replace(tzinfo=dt.timezone.utc)).isoformat() if last else None})
+    out.sort(key=lambda c: c["updated_at"] or "", reverse=True)
+    return {"chats": out}
+
+
+@router.post("/insights/repos/{owner}/{name}/chats", status_code=201)
+def new_trend_chat(owner: str, name: str, body: TrendChatIn, ctx: AppContext = Depends(require_auth_mutating)):
+    """A new, empty trend chat about the repository (its document lives in the primary wiki folder, out of Chats)."""
+    from ..chats import new_chat
+    from .chat import mark
+
+    repo = _repo(owner, name)
+    if ctx.workspaces is None:
+        raise ApiError(409, "NO_WIKI", "no wiki folder is open")
+    rt = ctx.workspaces.primary
+    chat = new_chat(rt.docs, body.title.strip() or f"{repo} · chat")
+    mark(ctx, repo, rt.id, chat["path"])
+    return {**chat, "workspace_id": rt.id, "repo": repo}
+
+
 class RunIn(BaseModel):
     repo: str = Field(max_length=200)
     kind: str = Field(pattern="^(daily|highlights)$")

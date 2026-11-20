@@ -1,5 +1,8 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import type React from "react";
+import { createPortal } from "react-dom";
 import { WorkspaceInfo } from "../api";
+import { writeClipboard } from "../clipboard";
 import { FileIcon } from "./FileIcon";
 import { PullRequestIcon } from "./Icons";
 
@@ -71,6 +74,7 @@ export default function DocTabs({
   workspaces,
   onActivate,
   onClose,
+  onCloseMany,
   onReorder,
 }: {
   tabs: DocTab[];
@@ -78,6 +82,8 @@ export default function DocTabs({
   workspaces: WorkspaceInfo[];
   onActivate: (t: DocTab) => void;
   onClose: (t: DocTab) => void;
+  /** close several tabs at once (the tab menu: others, to the left / right, all); `keep`: the tab to show next */
+  onCloseMany: (closing: DocTab[], keep: DocTab | null) => void;
   /** move `moved` to where `target` is */
   onReorder: (moved: DocTab, target: DocTab) => void;
 }) {
@@ -85,6 +91,17 @@ export default function DocTabs({
   const dragFrom = useRef<number | null>(null);
   const multi = workspaces.filter((w) => w.available).length > 1;
   const wsName = (id: string) => workspaces.find((w) => w.id === id)?.name ?? "";
+  const [menu, setMenu] = useState<{ i: number; x: number; y: number } | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!menu) return;
+    const close = (e: Event) => { if (!(e.target instanceof Node && menuRef.current?.contains(e.target))) setMenu(null); };
+    const key = (e: KeyboardEvent) => { if (e.key === "Escape") setMenu(null); };
+    window.addEventListener("mousedown", close, true);
+    window.addEventListener("keydown", key, true);
+    window.addEventListener("blur", close);
+    return () => { window.removeEventListener("mousedown", close, true); window.removeEventListener("keydown", key, true); window.removeEventListener("blur", close); };
+  }, [menu]);
 
   // keep the active tab in view when the strip overflows
   useEffect(() => {
@@ -115,7 +132,7 @@ export default function DocTabs({
             role="tab"
             aria-selected={isActive}
             tabIndex={0}
-            title={`${isPr ? `Pull request ${t.path}${t.title ? `\n${t.title}` : ""}` : `${multi ? `${wsName(t.ws)} › ` : ""}${t.path}`}\nMiddle-click or × to close · drag to reorder`}
+            title={`${isPr ? `Pull request ${t.path}${t.title ? `\n${t.title}` : ""}` : `${multi ? `${wsName(t.ws)} › ` : ""}${t.path}`}\nMiddle-click or × to close · right-click for more · drag to reorder`}
             data-testid="doc-tab"
             data-path={t.path}
             data-ws={t.ws}
@@ -135,6 +152,10 @@ export default function DocTabs({
             }}
             onMouseDown={(e) => {
               if (e.button === 1) e.preventDefault(); // no autoscroll cursor on middle-click
+            }}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              setMenu({ i, x: e.clientX, y: e.clientY });
             }}
             onDragStart={(e) => {
               dragFrom.current = i;
@@ -171,6 +192,42 @@ export default function DocTabs({
           </div>
         );
       })}
+      {menu && tabs[menu.i] && createPortal(
+        <TabMenu boxRef={menuRef} tabs={tabs} i={menu.i} x={menu.x} y={menu.y} active={active}
+          onClose={onClose} onCloseMany={onCloseMany} done={() => setMenu(null)} />,
+        document.body,
+      )}
+    </div>
+  );
+}
+
+/** The right-click menu of a tab, like VS Code's: close it, the others, those to its left / right, or all. */
+function TabMenu({ boxRef, tabs, i, x, y, active, onClose, onCloseMany, done }: {
+  boxRef: React.Ref<HTMLDivElement>; tabs: DocTab[]; i: number; x: number; y: number; active: DocTab | null;
+  onClose: (t: DocTab) => void; onCloseMany: (closing: DocTab[], keep: DocTab | null) => void; done: () => void;
+}) {
+  const t = tabs[i];
+  const isPr = t.ws === PR_TABS;
+  // the tab shown afterwards: the active one when it stays open, else the tab right-clicked
+  const keep = (closing: DocTab[]) => (closing.some((c) => sameTab(c, active)) ? (closing.some((c) => sameTab(c, t)) ? null : t) : active);
+  const many = (closing: DocTab[]) => { done(); if (closing.length) onCloseMany(closing, keep(closing)); };
+  const others = tabs.filter((_, k) => k !== i);
+  const items: [string, string, boolean, () => void][] = [
+    ["Close", "close", true, () => { done(); onClose(t); }],
+    ["Close Others", "close-others", others.length > 0, () => many(others)],
+    ["Close to the Left", "close-left", i > 0, () => many(tabs.slice(0, i))],
+    ["Close to the Right", "close-right", i < tabs.length - 1, () => many(tabs.slice(i + 1))],
+    ["Close All", "close-all", true, () => many(tabs)],
+  ];
+  return (
+    <div ref={boxRef} className="activity-menu" style={{ left: Math.min(x, window.innerWidth - 220), top: Math.min(y, window.innerHeight - 230) }}
+      role="menu" data-testid="doc-tab-menu">
+      {items.map(([label, id, enabled, run]) => (
+        <button key={id} role="menuitem" disabled={!enabled} onClick={run} data-testid={`doc-tab-${id}`}>{label}</button>
+      ))}
+      <div className="ws-menu-sep" />
+      <button role="menuitem" onClick={() => { done(); void writeClipboard(isPr ? `https://github.com/${t.path.replace("#", "/pull/")}` : t.path); }}
+        data-testid="doc-tab-copy-path">{isPr ? "Copy Link" : "Copy Path"}</button>
     </div>
   );
 }

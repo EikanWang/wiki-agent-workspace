@@ -83,6 +83,8 @@ def conf_text(socket: str, version: tuple[int, int], term: str, history_limit: i
         lines.append("set -g window-size latest")
     if version >= (3, 2):
         lines.append('set -as terminal-features ",xterm-256color:clipboard"')
+    if version >= (3, 3):
+        lines.append("set -g allow-passthrough on")  # OSC 52 that programs wrap for tmux (see terminal.tmux)
     return "\n".join(lines) + "\n"
 
 

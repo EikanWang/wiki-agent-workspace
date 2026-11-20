@@ -373,6 +373,8 @@ export interface LockInfo {
 export interface OpenDocument {
   document_id: string;
   path: string;
+  /** the folder it was opened from (set by the window, not the server) */
+  workspace_id?: string;
   /** markdown | text | docx | pdf */
   /** visio = .vsdx (text view + layout); office = layout-only (.doc, .ppt, .vsd, OpenDocument, RTF) */
   format: "markdown" | "text" | "docx" | "pptx" | "visio" | "office" | "pdf" | "image";

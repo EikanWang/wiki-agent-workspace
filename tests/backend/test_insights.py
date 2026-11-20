@@ -219,6 +219,43 @@ async def test_reports_of_any_period_with_blocks_commits_rfcs_highlights(running
         assert (await api.post("/api/v1/insights/reports", json=bad)).status_code in (400, 422), bad
 
 
+async def test_trend_chat_works_in_the_data_folder(running_app, tmp_path):
+    from backend.app.models import Job
+
+    h, _, _model = await make(running_app, tmp_path, proj_nodes())
+    api = h.api
+    await pl.daily_summary(h.ctx, "acme/proj", DAY, None)
+    c = await api.post("/api/v1/insights/repos/acme/proj/chats", json={"title": "Last two weeks"})
+    assert c.status_code == 201, c.text
+    c = c.json()
+    assert c["repo"] == "acme/proj" and c["path"].startswith(".waw-chat/")
+    d = (await api.get(f"/api/v1/documents/open?path={c['path']}")).json()
+    r = await api.post(f"/api/v1/documents/{d['document_id']}/threads", json={"whole_document": True, "version_sha256": d["sha256"],
+                       "question": "Summarize Nov 1 to Nov 3"})
+    assert r.status_code == 201, r.text
+    await api.wait_job(r.json()["job_id"])
+    tid = r.json()["thread_id"]
+    r2 = await api.post(f"/api/v1/threads/{tid}/messages", json={"text": "And the RFCs?"})
+    await api.wait_job(r2.json()["job_id"])
+    with h.ctx.db.read() as s:
+        jobs = s.query(Job).filter(Job.id.in_([r.json()["job_id"], r2.json()["job_id"]])).order_by(Job.created_at).all()
+        prompts, ctxs = [j.prompt for j in jobs], [json.loads(j.context_json) for j in jobs]
+    data = str(tmp_path / "insights")
+    assert all(x["_cwd"] == data for x in ctxs)  # the agent works in the insights data folder
+    assert "repository acme/proj" in prompts[0] and data in prompts[0] and f"Daily summaries: {DAY} … {DAY} (1 days)" in prompts[0]
+    assert "chatting with the user about their wiki" not in prompts[0]
+    assert "[user] Summarize Nov 1 to Nov 3" in prompts[1] and "User message:\n\nAnd the RFCs?" in prompts[1]
+    # listed in the repository's Trend page, not in Chats; no distill / update into the wiki
+    chats = (await api.get("/api/v1/insights/repos/acme/proj/chats")).json()["chats"]
+    assert [(x["title"], x["messages"]) for x in chats] == [("Last two weeks", 4)]
+    assert (await api.get("/api/v1/insights/repos/acme/other/chats")).json()["chats"] == []
+    assert c["path"] not in [x["path"] for x in (await api.get("/api/v1/chats")).json()["chats"]]
+    bad = await api.post(f"/api/v1/threads/{tid}/messages", json={"text": "-", "chat_action": "update"})
+    assert bad.status_code == 400
+    assert (await api.delete(f"/api/v1/chats?path={c['path']}")).status_code == 200  # archived
+    assert (await api.get("/api/v1/insights/repos/acme/proj/chats")).json()["chats"] == []
+
+
 async def test_xpu_highlights_scored_and_written(running_app, tmp_path):
     h, _, model = await make(running_app, tmp_path, proj_nodes())
     res = await pl.highlights(h.ctx, "acme/proj", DAY, DAY)

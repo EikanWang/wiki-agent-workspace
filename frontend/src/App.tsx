@@ -12,6 +12,7 @@ import {
   Thread,
   WorkspaceInfo,
   get,
+  getIn,
   getWorkspace,
   setWorkspace,
   newIdempotencyKey,
@@ -288,8 +289,10 @@ export default function App() {
     [],
   );
 
+  const openSeq = useRef(0); // the latest openDocument call: only its document is shown
   const openDocument = useCallback(
     async (path: string, keepThread = false, quiet = false): Promise<boolean> => {
+      const seq = ++openSeq.current;
       if (isChatPath(path)) {
         openChats({ ws: getWorkspace() ?? "", path });
         return true;
@@ -297,9 +300,13 @@ export default function App() {
       if (!keepThread && !confirmLeaveEditor()) return false;
       if (!keepThread) editorDirty.current = false;
       setDocError(null);
+      const ws = getWorkspace() ?? "";
       try {
-        const d = await get<OpenDocument>(`/documents/open?path=${encodeURIComponent(path)}`);
-        const tab = { ws: getWorkspace() ?? "", path: d.path };
+        const opened = await getIn<OpenDocument>(ws, `/documents/open?path=${encodeURIComponent(path)}`);
+        // something else was opened (or another folder chosen) while this one loaded: it is not shown in its place
+        if (seq !== openSeq.current || (getWorkspace() ?? "") !== ws) return false;
+        const d: OpenDocument = { ...opened, workspace_id: ws };
+        const tab = { ws, path: d.path };
         const isPr = d.path.startsWith(".waw-github/");
         const prev = lastTab.current;
         // relinked (same document, new path): the tab follows; otherwise a new tab opens after the current one
@@ -317,14 +324,14 @@ export default function App() {
           restoreThreadRef.current = null;
           setActiveThread(wanted);
         }
-        localStorage.setItem(`waw.lastPath.${getWorkspace() ?? ""}`, path);
+        localStorage.setItem(`waw.lastPath.${ws}`, path);
         await refreshThreads(d.document_id);
         setView("document");
         setMobilePane("doc");
         return true;
       } catch (e) {
         const ae = e as ApiError;
-        if (!quiet) setDocError(`${ae.code}: ${ae.message}`);
+        if (!quiet && seq === openSeq.current) setDocError(`${ae.code}: ${ae.message}`);
         return false;
       }
     },
@@ -345,7 +352,9 @@ export default function App() {
         if (!p || tried.has(p)) continue;
         tried.add(p);
         if (getWorkspace() !== ws) return; // the user switched folders meanwhile
+        const seq = openSeq.current;
         if (await openDocument(p, false, true)) return;
+        if (getWorkspace() !== ws || openSeq.current !== seq + 1) return; // something else was opened meanwhile
         // gone (deleted, renamed, or never in this folder): forget it
         if (localStorage.getItem(`waw.lastPath.${ws}`) === p) localStorage.removeItem(`waw.lastPath.${ws}`);
         setDocTabs((tabs) => tabs.filter((t) => !(t.ws === ws && t.path === p)));
@@ -552,16 +561,18 @@ export default function App() {
     [switchWorkspace, openDocument, openPr],
   );
 
-  const closeDocTab = useCallback(
-    (t: DocTab) => {
+  /** Close `closing` (one tab, or several from the tab menu); when the active one goes, show `keep` or its neighbour. */
+  const closeDocTabs = useCallback(
+    (closing: DocTab[], keep: DocTab | null = null) => {
       const activeTab = prTab ? { ws: PR_TABS, path: `${prTab.repo}#${prTab.number}` } : doc ? { ws: activeWs ?? "", path: doc.path } : null;
-      const isActive = sameTab(t, activeTab);
+      const isActive = closing.some((t) => sameTab(t, activeTab));
       if (isActive && !confirmLeaveEditor()) return;
-      const idx = docTabs.findIndex((x) => sameTab(x, t));
-      const rest = docTabs.filter((x) => !sameTab(x, t));
+      const skip = (x: DocTab) => closing.some((t) => sameTab(x, t)) || isChatPath(x.path);
+      const rest = docTabs.filter((x) => !closing.some((t) => sameTab(x, t)));
       setDocTabs(rest);
       // don't reopen a closed document at the next start
-      if (localStorage.getItem(`waw.lastPath.${t.ws}`) === t.path) {
+      for (const t of closing) {
+        if (localStorage.getItem(`waw.lastPath.${t.ws}`) !== t.path) continue;
         const other = rest.find((x) => x.ws === t.ws);
         if (other) localStorage.setItem(`waw.lastPath.${t.ws}`, other.path);
         else localStorage.removeItem(`waw.lastPath.${t.ws}`);
@@ -570,7 +581,8 @@ export default function App() {
       editorDirty.current = false;
       lastTab.current = null;
       setPrTab(null);
-      const next = rest[idx] ?? rest[idx - 1];
+      const idx = docTabs.findIndex((x) => sameTab(x, activeTab));
+      const next = (keep && rest.find((x) => sameTab(x, keep))) ?? docTabs.slice(idx + 1).find((x) => !skip(x)) ?? docTabs.slice(0, Math.max(idx, 0)).reverse().find((x) => !skip(x));
       if (next) activateDocTab(next);
       else {
         setDoc(null);
@@ -583,6 +595,7 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [doc, activeWs, docTabs, activateDocTab, prTab],
   );
+  const closeDocTab = useCallback((t: DocTab) => closeDocTabs([t]), [closeDocTabs]);
 
   useEffect(() => {
     const pr = savedUi.current?.pr;
@@ -1080,6 +1093,7 @@ export default function App() {
             workspaces={workspaces}
             onActivate={activateDocTab}
             onClose={closeDocTab}
+            onCloseMany={closeDocTabs}
             onReorder={(moved, target) =>
               setDocTabs((tabs) => {
                 const from = tabs.findIndex((x) => sameTab(x, moved));
@@ -1216,7 +1230,7 @@ export default function App() {
 
         {view === "insights" && authed && (
           <section className="center insights-center">
-            <InsightsView repo={insightsRepo} onOpenChat={(ws, p) => openChats({ ws, path: p })}
+            <InsightsView repo={insightsRepo} sessions={sessions} onOpenChat={(ws, p) => openChats({ ws, path: p })}
               onOpenPrReview={hub?.available ? (r, n, t) => { updatePrefs({ sidebarView: "reviews", listOpen: true }); setView("document"); openPr(r, n, t ? `#${n} ${t}` : undefined); } : undefined} />
           </section>
         )}

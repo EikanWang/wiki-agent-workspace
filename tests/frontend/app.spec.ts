@@ -1387,6 +1387,34 @@ test("document tabs: open several, switch, close (× / middle-click), unsaved-ed
     await expect(tabs).toHaveCount(2);
     await expect(tab("docs/guide.md")).toHaveAttribute("aria-selected", "true");
     await expect(h1).toHaveText(/^Guide/);
+    // the tab menu (right-click), like VS Code's
+    const menu = page.getByTestId("doc-tab-menu");
+    await open("README.md");
+    await expect.poll(() => tabs.evaluateAll((els) => els.map((e) => e.getAttribute("data-path")))).toEqual(["docs/guide.md", "README.md", "other/guide.md"]);
+    await tab("README.md").click({ button: "right" });
+    await expect(menu.getByTestId("doc-tab-close-left")).toBeEnabled();
+    await menu.getByTestId("doc-tab-close-right").click();
+    await expect(menu).toHaveCount(0);
+    await expect.poll(() => tabs.evaluateAll((els) => els.map((e) => e.getAttribute("data-path")))).toEqual(["docs/guide.md", "README.md"]);
+    await expect(h1).toHaveText("Repo");
+    await tab("docs/guide.md").click({ button: "right" });
+    await expect(menu.getByTestId("doc-tab-close-left")).toBeDisabled();
+    await menu.getByTestId("doc-tab-close-others").click(); // the active one goes: the right-clicked tab is shown
+    await expect(tabs).toHaveCount(1);
+    await expect(tab("docs/guide.md")).toHaveAttribute("aria-selected", "true");
+    await expect(h1).toHaveText(/^Guide/);
+    await tab("docs/guide.md").click({ button: "right" });
+    await expect(menu.getByTestId("doc-tab-close-others")).toBeDisabled();
+    await page.keyboard.press("Escape");
+    await expect(menu).toHaveCount(0);
+    await open("README.md");
+    await tab("README.md").click({ button: "right" });
+    await menu.getByTestId("doc-tab-close-all").click();
+    await expect(tabs).toHaveCount(0);
+    await expect(page.getByText("Open a Markdown file")).toBeVisible();
+    await open("docs/guide.md");
+    await open("other/guide.md");
+    await expect(tabs).toHaveCount(2);
     // closing the last tab shows the start page, and it stays closed after a reload
     await tab("other/guide.md").click({ button: "middle" });
     await tab("docs/guide.md").getByTestId("doc-tab-close").click();
@@ -2344,7 +2372,7 @@ test("GitHub PR tab: overview, files, choose the wiki once, ask about the PR and
   await page.getByTestId("login-github").click();
   await expect(page.getByTestId("view-document")).toBeVisible({ timeout: 15000 });
   await page.getByTestId("activity-reviews").click();
-  await page.locator('[data-testid="review-pr"][data-number="101"]').click();
+  await page.locator('[data-testid="review-pr"][data-number="101"] .review-pr-title').click();
   // the PR opens as a tab next to documents
   const tab = page.locator('[data-testid="doc-tab"][data-ws="github"]');
   await expect(tab).toHaveAttribute("aria-selected", "true");
@@ -2477,6 +2505,34 @@ test("GitHub PR tab: overview, files, choose the wiki once, ask about the PR and
   await expect(page.locator('[data-testid="message-agent"][data-status="completed"]').last()).toContainText("Is bob right about ok?", { timeout: 20000 });
   await expect(page.getByTestId("thread-target").last()).toContainText("comment by bob on c10/xpu/stub.cpp:11");
   await expect(page.getByTestId("thread-quote").last()).toContainText("Only without a driver."); // the reply goes with it
+  const overviewResolution = lineComment.getByTestId("pr-conv-resolution");
+  await expect(overviewResolution).toHaveAttribute("data-resolved", "0");
+  const resolveResponse = page.waitForResponse((response) => /\/threads\/[^/]+\/resolve$/.test(response.url()) && response.request().method() === "POST");
+  await lineComment.getByTestId("pr-conv-resolve").click();
+  const resolvedResponse = await resolveResponse;
+  expect(resolvedResponse.ok()).toBe(true);
+  expect(resolvedResponse.request().postDataJSON()).toEqual({ resolved: true });
+  await expect(overviewResolution).toHaveAttribute("data-resolved", "1");
+  await expect(overviewResolution).toContainText("Resolved by e2e-user");
+  await expect(lineComment.getByTestId("pr-conv-resolve")).toHaveText("Unresolve");
+  await lineComment.getByTestId("pr-conv-resolve").scrollIntoViewIfNeeded();
+  await page.screenshot({ path: test.info().outputPath("overview-resolve-desktop.png") });
+  const desktopViewport = page.viewportSize()!;
+  await page.setViewportSize({ width: 390, height: 844 });
+  await lineComment.getByTestId("pr-conv-resolve").scrollIntoViewIfNeeded();
+  await expect(lineComment.getByTestId("pr-conv-resolve")).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath("overview-resolve-mobile.png") });
+  await page.setViewportSize(desktopViewport);
+  await page.getByTestId("pr-tab-files").click();
+  const resolvedThread = page.locator('[data-testid="pr-file"][data-file="c10/xpu/stub.cpp"]').getByTestId("gh-thread");
+  await expect(resolvedThread).toHaveAttribute("data-resolved", "1");
+  await page.getByTestId("pr-tab-overview").click();
+  const unresolveResponse = page.waitForResponse((response) => /\/threads\/[^/]+\/resolve$/.test(response.url()) && response.request().method() === "POST");
+  await page.getByTestId("pr-conv-line").first().getByTestId("pr-conv-resolve").click();
+  const unresolvedResponse = await unresolveResponse;
+  expect(unresolvedResponse.ok()).toBe(true);
+  expect(unresolvedResponse.request().postDataJSON()).toEqual({ resolved: false });
+  await expect(page.getByTestId("pr-conv-resolution").first()).toHaveAttribute("data-resolved", "0");
   // files: GitHub-style diff with the existing thread at its line
   await page.getByTestId("pr-tab-files").click();
   await expect(page.getByTestId("pr-file")).toHaveCount(2);
@@ -2582,7 +2638,7 @@ test("GitHub PR tab: overview, files, choose the wiki once, ask about the PR and
   await expect(page.getByTestId("pr-draft")).toHaveCount(0);
   const posted = await (await page.request.get("/fake-github/posted")).json();
   const muts = posted.filter((x: any) => x.mutation && x.mutation !== "ToDraft").map((x: any) => x.mutation); // (ToDraft: an earlier test)
-  expect(muts).toEqual(["MarkViewed", "MarkUnviewed", "Resolve", "AddReview", "AddThread", "AddThread", "Submit"]);
+  expect(muts).toEqual(["Resolve", "Unresolve", "MarkViewed", "MarkUnviewed", "Resolve", "AddReview", "AddThread", "AddThread", "Submit"]);
   const threads = posted.filter((x: any) => x.mutation === "AddThread").map((x: any) => x.variables);
   expect(threads).toContainEqual({ review: "PRR_e2e", path: "docs/xpu.md", body: "Please add a license header.", subject: "FILE" });
   expect(threads).toContainEqual({ review: "PRR_e2e", path: "c10/xpu/stub.cpp", body: "Keep the unconditional call for the stub?", line: 11, side: "LEFT", subject: "LINE" });
@@ -3963,6 +4019,43 @@ test("GitHub quota: the chip shows when GitHub requests are slowed down or waiti
   await page.getByTestId("activity-files").click();
 });
 
+test("Repo Insights: a Trend chat per repository — the agent reads its data; a period helper; follow-ups; kept out of Chats", async ({ page }) => {
+  await login(page);
+  await page.getByTestId("activity-insights").click();
+  await page.locator('[data-testid="insights-repo"][data-repo="pytorch/pytorch"]').click();
+  await page.getByTestId("insights-tab-chat").click();
+  await expect(page.getByTestId("trend-chat-new-page")).toContainText("Chat about pytorch/pytorch");
+  await expect(page.getByTestId("insights-period-custom")).toHaveCount(0); // no report form on this tab
+  await page.getByTestId("trend-chat-since").fill("2026-11-01");
+  await page.getByTestId("trend-chat-until").fill("2026-11-10");
+  await page.getByTestId("trend-chat-period-ask").click();
+  await expect(page.getByTestId("trend-chat-first")).toHaveValue(/from 2026-11-01 to 2026-11-10/);
+  await page.getByTestId("trend-chat-send").click();
+  const done = page.locator('[data-testid="message-agent"][data-status="completed"]');
+  await expect(done).toContainText("echo: Summarize all the reports and daily summaries of pytorch/pytorch from 2026-11-01", { timeout: 20000 });
+  await expect(page.getByTestId("trend-chat")).toHaveCount(1);
+  await expect(page.getByTestId("chat-actions")).toHaveCount(0); // nothing to distill into the wiki
+  await expect(page.getByTestId("chat-review-changes")).toHaveCount(0);
+  await page.getByTestId("chat-input").fill("And the RFCs?");
+  await page.getByTestId("chat-send").click();
+  await expect(done.last()).toContainText("echo: And the RFCs?", { timeout: 20000 });
+  await expect(page.getByTestId("trend-chat")).toContainText("4 messages");
+  // only in this repository's Trend page
+  const listed = await (await page.request.get("/api/v1/chats")).json();
+  expect(listed.chats.map((c: { title: string }) => c.title).filter((t: string) => t.startsWith("Summarize all the reports"))).toEqual([]);
+  await page.locator('[data-testid="insights-repo"][data-repo="vllm-project/vllm"]').click();
+  await expect(page.getByTestId("trend-chat-new-page")).toBeVisible();
+  await expect(page.getByTestId("trend-chat")).toHaveCount(0);
+  await page.locator('[data-testid="insights-repo"][data-repo="pytorch/pytorch"]').click();
+  await page.getByTestId("trend-chat").click();
+  await page.getByTestId("chat-archive").click();
+  await page.getByTestId("confirm-ok").click();
+  await expect(page.getByTestId("trend-chat-new-page")).toBeVisible();
+  await expect(page.getByTestId("trend-chat")).toHaveCount(0);
+  await page.getByTestId("insights-tab-reports").click();
+  await page.getByTestId("activity-files").click();
+});
+
 test("Repo Insights: the history in the folder, a week's report (daily summaries made, commits, highlights), chat, settings", async ({ page }) => {
   await login(page);
   await page.getByTestId("activity-insights").click();
@@ -4924,4 +5017,78 @@ test("Reviews → Monitors: per-repository GitHub search rules list PRs and issu
   await page.getByTestId("confirm-ok").click();
   await expect(page.getByTestId("monitor-rule")).toHaveCount(0);
   await page.getByTestId("reviews-tab-queue").click();
+});
+
+test("a link to another folder's document: a slow open does not land in the folder you went back to", async ({ page }) => {
+  const errs: string[] = [];
+  page.on("pageerror", (e) => errs.push(String(e)));
+  await login(page);
+  const showTree = async () => { // the folder tree (an earlier test may leave another list open, or the list closed)
+    if (!(await page.getByTestId("tree-root").first().isVisible())) await page.getByTestId("activity-files").click();
+    if (!(await page.getByTestId("tree-root").first().isVisible())) await page.getByTestId("activity-files").click();
+    await expect(page.getByTestId("tree-root").first()).toBeVisible();
+  };
+  await showTree();
+  const ws = workspaceDir();
+  const second = path.join(path.dirname(ws), "e2e-slow-second");
+  const cp = require("child_process") as typeof import("child_process");
+  fs.rmSync(second, { recursive: true, force: true });
+  fs.mkdirSync(path.join(second, "Xe3p", "EU"), { recursive: true });
+  cp.execSync("git init -q", { cwd: second });
+  const file = path.join(second, "Xe3p", "EU", "e2e-slow-spec.docx");
+  cp.execFileSync(path.resolve(__dirname, "../../.venv/bin/python"), ["-c", `
+import sys; sys.path.insert(0, ${JSON.stringify(path.resolve(__dirname, "../backend"))})
+from pathlib import Path
+from test_locks_formats import _minimal_docx
+Path(${JSON.stringify(file)}).write_bytes(_minimal_docx(["Slow spec paragraph %d." % i for i in range(20)]))
+`]);
+  await page.getByTestId("tree-add-folder").click();
+  await page.getByTestId("add-folder-path").fill(second);
+  await page.getByTestId("add-folder-path").press("Enter");
+  await expect(page.getByTestId("add-folder-selected")).toContainText(second);
+  await page.getByTestId("add-folder-name").fill("SlowSecond");
+  await page.getByTestId("add-folder-submit").click();
+  await expect(page.getByTestId("tree-root")).toHaveCount(2);
+  const added = { id: (await page.getByTestId("workspace-switch").locator("option", { hasText: "SlowSecond" }).getAttribute("value"))! };
+  try {
+    const firstId = await page.getByTestId("workspace-switch").locator("option").filter({ hasNotText: "SlowSecond" }).first().getAttribute("value");
+    await page.getByTestId("workspace-switch").selectOption(firstId!);
+    await openGuide(page);
+    await page.getByTestId("ask-whole-document").click();
+    await page.getByTestId("selection-question").fill(`Slow e2e: see [the slow spec](${file})`);
+    await page.getByTestId("selection-send").click();
+    const answer = page.locator('[data-testid="message-agent"][data-status="completed"]').last();
+    await expect(answer).toContainText("the slow spec", { timeout: 20000 });
+    // the other folder's document takes a while to open; meanwhile you go back to the guide
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((r) => { release = r; });
+    await page.route(/documents\/open\?path=Xe3p/, async (route) => { await held; await route.continue(); });
+    await answer.getByRole("link", { name: "the slow spec" }).click();
+    await expect(page.getByTestId("workspace-switch")).toHaveValue(added.id);
+    await page.locator(`[data-testid="doc-tab"][data-ws="${firstId}"][data-path="docs/guide.md"]`).click();
+    await expect(page.getByTestId("markdown-body").locator("h1")).toContainText("Guide");
+    release();
+    await page.waitForTimeout(1500);
+    // the late answer is dropped: the guide stays, no tab of the spec under this folder, no error
+    await expect(page.getByTestId("workspace-switch")).toHaveValue(firstId!);
+    await expect(page.getByTestId("markdown-body").locator("h1")).toContainText("Guide");
+    await expect(page.locator(`[data-testid="doc-tab"][data-ws="${firstId}"][data-path="Xe3p/EU/e2e-slow-spec.docx"]`)).toHaveCount(0);
+    await expect(page.locator(".banner.warn", { hasText: "FILE_NOT_FOUND" })).toHaveCount(0);
+    await page.unroute(/documents\/open\?path=Xe3p/);
+    // the link again: it opens in its own folder, its tab is that folder's
+    await page.locator('[data-testid="message-agent"][data-status="completed"]').last().getByRole("link", { name: "the slow spec" }).click();
+    await expect(page.getByTestId("workspace-switch")).toHaveValue(added.id);
+    const tab = page.locator(`[data-testid="doc-tab"][data-ws="${added.id}"][data-path="Xe3p/EU/e2e-slow-spec.docx"]`);
+    await expect(tab).toHaveCount(1);
+    await expect(page.locator(".banner.warn", { hasText: "FILE_NOT_FOUND" })).toHaveCount(0);
+    await tab.getByTestId("doc-tab-close").click();
+    expect(errs).toEqual([]);
+  } finally {
+    await showTree();
+    await page.getByTestId("tree-root").filter({ has: page.getByTestId("tree-remove-SlowSecond") }).locator(".tree-root button").first().focus(); // its actions show while it has focus
+    await page.getByTestId("tree-remove-SlowSecond").click();
+    await page.getByTestId("confirm-ok").click();
+    await expect(page.getByTestId("tree-root")).toHaveCount(1);
+    fs.rmSync(second, { recursive: true, force: true });
+  }
 });

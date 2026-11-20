@@ -109,6 +109,8 @@ class Tmux:
             # clipboard through xterm.js (the frontend handles OSC 52).
             "set -g set-clipboard on",
             'set -as terminal-features ",xterm-256color:clipboard"',
+            # programs that know they run in tmux (OpenCode's copy-on-select) wrap OSC 52 in tmux's passthrough
+            "set -g allow-passthrough on",
             "set -g window-size latest",
             "setw -g aggressive-resize on",
             "set -g status off",
