@@ -17,6 +17,25 @@ export interface InsightsRepo {
   schedule: { enabled: boolean; time: string };
   reports?: { week: boolean; month: boolean; quarter: boolean; year: boolean };
   rfc: { repos: string[]; labels: string[]; title_patterns: string[] };
+  new_baseline?: Baseline;
+}
+export interface Baseline { mode: BaselineMode; date: string | null; label?: string; days?: number }
+type BaselineMode = "previous" | "day" | "week" | "month" | "quarter" | "year" | "before" | "after";
+const BASELINES: [BaselineMode, string][] = [["previous", "everything before"], ["day", "only the day before"], ["week", "only the week before"], ["month", "only the month before"],
+  ["quarter", "only the quarter before"], ["year", "only the year before"], ["before", "everything before a date"], ["after", "from a date until the period"]];
+
+/** What a report's new things (features, terms, concepts …) are compared with. */
+function BaselinePick({ value, onChange, testid }: { value: Baseline; onChange: (b: Baseline) => void; testid: string }) {
+  const dated = value.mode === "before" || value.mode === "after";
+  return (
+    <span className="row nowrap small" title="What counts as new: what no daily summary of this baseline has (by default everything before the period: day to day, month to month …)">
+      🆕 new vs
+      <select value={value.mode} onChange={(e) => { const mode = e.target.value as BaselineMode; onChange({ mode, date: mode === "before" || mode === "after" ? value.date || daysAgo(90) : null }); }} data-testid={`${testid}-mode`}>
+        {BASELINES.map(([m, l]) => <option key={m} value={m}>{l}</option>)}
+      </select>
+      {dated && <input type="date" value={value.date ?? ""} max={todayIso()} onChange={(e) => onChange({ ...value, date: e.target.value })} data-testid={`${testid}-date`} />}
+    </span>
+  );
 }
 interface TaskModel { mode: "api" | "agent"; provider: string | null; model: string | null; variant: string | null }
 interface Settings {
@@ -25,9 +44,10 @@ interface Settings {
   presets: { id: string; name: string; text: string }[];
   endpoint: { base_url: string; model: string; has_key: boolean };
 }
-interface FileRow { path: string; name: string; since: string; until: string; daily: boolean; partial: boolean; size: number; mtime: number }
+interface FileRow { path: string; name: string; since: string; until: string; daily: boolean; partial: boolean; size: number; mtime: number; new?: number; unread?: number }
 interface ReportMeta { id: string; repo: string; since: string; until: string; label: string; kind?: string; status: string; step?: string; created_at: string;
-  sources: Record<string, boolean>; focus: string; preset: string | null; error?: string; facts?: string[]; log?: string[]; text?: string | null }
+  sources: Record<string, boolean>; focus: string; preset: string | null; error?: string; facts?: string[]; log?: string[]; text?: string | null; new?: number; unread?: number; baseline?: Baseline;
+  read_new?: string[] }
 interface Job { id: string; kind: string; status: string; step: string; error: string | null; log: string[] }
 interface Overview {
   repo: string; config: InsightsRepo; daily: FileRow[]; daily_count: number; first_day: string | null; last_day: string | null;
@@ -35,7 +55,7 @@ interface Overview {
 }
 interface Highlight { title: string; url: string; xpu_relevance_score: number; xpu_relevance_justification: string; body: string; submitter: string; state: string; vendor_involvement?: string[] }
 
-const TASK_LABEL: Record<string, string> = { daily: "Daily summaries", rollup: "Weekly roll-ups", commits: "Commit summaries", report: "Reports", highlight: "XPU highlight scoring" };
+const TASK_LABEL: Record<string, string> = { daily: "Daily summaries", rollup: "Weekly roll-ups", commits: "Commit summaries", report: "Reports", highlight: "XPU highlight scoring", terms: "What a day is about (baseline of new things)", check: "New-things check (repeat / extension / new)" };
 const PERIODS = ["day", "week", "month", "quarter", "year", "custom"] as const;
 const PERIOD_LABEL: Record<string, string> = { day: "Day", week: "Week", month: "Month", quarter: "Quarter", year: "Year", custom: "Dates" };
 const KINDS = [["daily", "Daily"], ["weekly", "Weekly"], ["monthly", "Monthly"], ["quarterly", "Quarterly"], ["yearly", "Yearly"], ["dates", "Dates"]] as const;
@@ -167,12 +187,13 @@ function RepoPage({ repo, onOpenChat, onOpenPrReview, sessions }: { repo: string
           <>
             <div className="insights-list">
               {tabs}
-              {tab === "reports" && <ReportList reports={ov.reports} openId={open?.kind === "report" ? open.id : null} onOpen={(id) => setOpen({ kind: "report", id })} />}
+              {tab === "reports" && <ReportList repo={repo} reports={ov.reports} openId={open?.kind === "report" ? open.id : null} onOpen={(id) => setOpen({ kind: "report", id })}
+                onOpenChat={onOpenChat} onChanged={(gone) => { if (open?.kind === "report" && gone.includes(open.id)) setOpen(null); void load(); }} />}
               {tab === "daily" && <DailyList ov={ov} openPath={open?.kind === "file" ? open.path : null} onOpen={(p) => setOpen({ kind: "file", path: p })} onRan={load} />}
             </div>
             <div className="insights-main">
-              {open?.kind === "report" ? <ReportViewer repo={repo} id={open.id} onOpenChat={onOpenChat} onDeleted={() => { setOpen(null); void load(); }} />
-                : open?.kind === "file" ? <FileViewer path={open.path} />
+              {open?.kind === "report" ? <ReportViewer repo={repo} id={open.id} onOpenChat={onOpenChat} onDeleted={() => { setOpen(null); void load(); }} onRead={() => void load()} />
+                : open?.kind === "file" ? <FileViewer path={open.path} onRead={() => void load()} />
                 : <div className="muted pad">Choose a report or a day.</div>}
             </div>
           </>
@@ -182,12 +203,50 @@ function RepoPage({ repo, onOpenChat, onOpenPrReview, sessions }: { repo: string
   );
 }
 
-function ReportList({ reports, openId, onOpen }: { reports: ReportMeta[]; openId: string | null; onOpen: (id: string) => void }) {
+function ReportList({ repo, reports, openId, onOpen, onOpenChat, onChanged }: { repo: string; reports: ReportMeta[]; openId: string | null; onOpen: (id: string) => void;
+  onOpenChat: (ws: string, path: string) => void; onChanged: (deleted: string[]) => void }) {
   const [folded, setFolded] = useState<Record<string, boolean>>(() => { try { return JSON.parse(localStorage.getItem("waw.insights.folded") || "{}"); } catch { return {}; } });
   useEffect(() => localStorage.setItem("waw.insights.folded", JSON.stringify(folded)), [folded]);
+  const [picked, setPicked] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const ids = new Set(reports.map((r) => r.id));
+  const sel = picked.filter((id) => ids.has(id));
+  const pick = (id: string, on: boolean) => setPicked((p) => (on ? [...p.filter((x) => x !== id), id] : p.filter((x) => x !== id)));
   if (reports.length === 0) return <div className="insights-items"><div className="muted small pad">No report yet: choose a period above.</div></div>;
+  const ready = sel.every((id) => reports.find((r) => r.id === id)?.status === "done");
+  const chat = async () => {
+    setBusy(true); setErr(null);
+    try {
+      const c = await post<{ workspace_id: string; path: string }>(`/insights/reports/${repo}/chat`, { ids: sel });
+      setPicked([]);
+      onOpenChat(c.workspace_id, c.path);
+    } catch (e) { setErr((e as ApiError).message); } finally { setBusy(false); }
+  };
+  const remove = async () => {
+    if (!(await confirmAction({ title: `Delete ${sel.length} report${sel.length === 1 ? "" : "s"}?`, message: "Their daily summaries and highlights stay.", confirmLabel: "Delete" }))) return;
+    setBusy(true); setErr(null);
+    const gone: string[] = [];
+    try {
+      for (const id of sel) { await del(`/insights/reports/${repo}/${id}`); gone.push(id); }
+    } catch (e) { setErr((e as ApiError).message); } finally {
+      setBusy(false);
+      setPicked((p) => p.filter((x) => !gone.includes(x)));
+      onChanged(gone);
+    }
+  };
   return (
     <div className="insights-items">
+      {sel.length > 0 && (
+        <div className="row nowrap small pad-x insights-picked" data-testid="insights-picked">
+          <b>{sel.length} selected</b>
+          <span className="spacer" />
+          <button className="btn small" disabled={busy || !ready} onClick={() => void chat()} title={ready ? (sel.length === 1 ? "Ask the agent about this report" : "Ask the agent about these reports together (e.g. to compare them)") : "Only finished reports can be discussed"} data-testid="insights-picked-chat">Chat</button>
+          <button className="btn small danger" disabled={busy} onClick={() => void remove()} data-testid="insights-picked-delete">Delete</button>
+          <button className="btn small" disabled={busy} onClick={() => setPicked([])} data-testid="insights-picked-clear">Clear</button>
+        </div>
+      )}
+      {err && <div className="error-text small pad-x">{err}</div>}
       {KINDS.map(([kind, title]) => {
         const rows = reports.filter((r) => (r.kind ?? "dates") === kind).sort((x, y) => (y.since + y.created_at).localeCompare(x.since + x.created_at));
         if (!rows.length) return null;
@@ -198,10 +257,14 @@ function ReportList({ reports, openId, onOpen }: { reports: ReportMeta[]; openId
               {isOpen ? "▾" : "▸"} {title} <span className="muted">({rows.length})</span>
             </button>
             {isOpen && rows.map((r) => (
-              <button key={r.id} className={`list-item ${openId === r.id ? "selected" : ""}`} onClick={() => onOpen(r.id)} data-testid="insights-report" data-status={r.status}>
-                <span className="insights-item-main"><b>{r.label}</b>
-                  <span className="muted small">{r.status === "running" ? `⏳ ${r.step ?? "working…"}` : r.status === "done" ? `made ${utc8(r.created_at, false)}` : r.status}{r.preset ? ` · ${r.preset}` : ""}</span></span>
-              </button>
+              <div key={r.id} className={`list-item insights-pick-row ${openId === r.id ? "selected" : ""}`} data-testid="insights-report" data-status={r.status} data-id={r.id}>
+                <input type="checkbox" checked={sel.includes(r.id)} onChange={(e) => pick(r.id, e.target.checked)} title="Select (to chat about or delete several reports)" aria-label={`Select ${r.label}`} data-testid="insights-report-pick" />
+                <button className="insights-pick-open" onClick={() => onOpen(r.id)} data-testid="insights-report-open">
+                  <span className="insights-item-main"><b>{r.label}</b>
+                    <span className="muted small">{r.status === "running" ? `⏳ ${r.step ?? "working…"}` : r.status === "done" ? `made ${utc8(r.created_at, false)}` : r.status}{r.preset ? ` · ${r.preset}` : ""}</span></span>
+                  <NewCount n={r.new} unread={r.unread} />
+                </button>
+              </div>
             ))}
           </div>
         );
@@ -228,6 +291,8 @@ function NewReport({ repo, cfg, onCreated }: { repo: string; cfg: InsightsRepo; 
   const [src, setSrc] = useState({ issues: cfg.sources.issues, commits: cfg.sources.commits, rfcs: cfg.sources.rfcs, highlights: cfg.highlights });
   const [preset, setPreset] = useState("");
   const [focus, setFocus] = useState("");
+  const [baseline, setBaseline] = useState<Baseline>(cfg.new_baseline ?? { mode: "previous", date: null });
+  useEffect(() => setBaseline(cfg.new_baseline ?? { mode: "previous", date: null }), [cfg.new_baseline?.mode, cfg.new_baseline?.date]); // eslint-disable-line react-hooks/exhaustive-deps
   const [presets, setPresets] = useState(settingsCache?.presets ?? []);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -239,7 +304,7 @@ function NewReport({ repo, cfg, onCreated }: { repo: string; cfg: InsightsRepo; 
       const value = period === "day" ? day : period === "week" ? (week || weekList[0]?.[0]) : period === "month" ? `${year}-${String(Math.min(month, lastMonth) + 1).padStart(2, "0")}`
         : period === "quarter" ? `${year}-Q${Math.min(quarter, lastQ)}` : String(year);
       const body = period === "custom" ? { repo, period, since, until } : { repo, period, value };
-      const r = await post<ReportMeta>("/insights/reports", { ...body, sources: src, focus, preset: preset || undefined });
+      const r = await post<ReportMeta>("/insights/reports", { ...body, sources: src, focus, preset: preset || undefined, baseline: { mode: baseline.mode, date: baseline.date } });
       onCreated(r.id);
     } catch (e) {
       setErr((e as ApiError).message);
@@ -282,6 +347,7 @@ function NewReport({ repo, cfg, onCreated }: { repo: string; cfg: InsightsRepo; 
             {" "}{k === "issues" ? "Issues & PRs" : k === "commits" ? "Commits" : k === "rfcs" ? "RFCs" : "XPU highlights"}</label>
         ))}
       </span>
+      <BaselinePick value={baseline} onChange={setBaseline} testid="insights-baseline" />
       <select value={preset} onChange={(e) => setPreset(e.target.value)} title="Focus preset" data-testid="insights-preset">
         <option value="">no preset</option>
         {presets.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
@@ -293,7 +359,7 @@ function NewReport({ repo, cfg, onCreated }: { repo: string; cfg: InsightsRepo; 
   );
 }
 
-function ReportViewer({ repo, id, onOpenChat, onDeleted }: { repo: string; id: string; onOpenChat: (ws: string, path: string) => void; onDeleted: () => void }) {
+function ReportViewer({ repo, id, onOpenChat, onDeleted, onRead }: { repo: string; id: string; onOpenChat: (ws: string, path: string) => void; onDeleted: () => void; onRead: () => void }) {
   const [r, setR] = useState<ReportMeta | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -316,6 +382,7 @@ function ReportViewer({ repo, id, onOpenChat, onDeleted }: { repo: string; id: s
     <div className="insights-report" data-testid="insights-report-view" data-status={r.status}>
       <div className="row nowrap">
         <b>{r.label}</b><span className="muted small">{r.since} – {r.until} · {Object.entries(r.sources).filter(([, v]) => v).map(([k]) => k).join(", ")}</span>
+        {r.baseline && <span className="chip new-vs" title="What counts as new in this report" data-testid="insights-report-baseline">🆕 new vs {r.baseline.label ?? BASELINES.find(([m]) => m === r.baseline!.mode)?.[1]}{r.baseline.mode === "before" || r.baseline.mode === "after" ? (r.baseline.label ? "" : ` ${r.baseline.date}`) : ""}</span>}
         <span className="spacer" />
         {r.status === "done" && (
           <button className="btn small" disabled={busy} onClick={async () => { setBusy(true); try { const c = await post<{ workspace_id: string; path: string }>(`/insights/reports/${repo}/${id}/chat`, {}); onOpenChat(c.workspace_id, c.path); } catch (e) { setErr((e as ApiError).message); } finally { setBusy(false); } }}
@@ -332,18 +399,88 @@ function ReportViewer({ repo, id, onOpenChat, onDeleted }: { repo: string; id: s
       {r.status === "failed" && <div className="banner warn small" role="alert">Failed: {r.error}</div>}
       {r.status === "interrupted" && <div className="banner warn small">Interrupted (the server restarted): make it again.</div>}
       {r.facts && <details className="small muted"><summary>Material</summary><ul>{r.facts.map((f) => <li key={f}>{f}</li>)}</ul></details>}
-      {text && <MarkdownView text={text} className="insights-md" />}
+      {text && <NewThings repo={repo} readKey={`r:${id}`} text={text} read={r.read_new ?? []} onRead={onRead} />}
       {err && <div className="error-text small">{err}</div>}
     </div>
   );
 }
 
-function FileViewer({ path }: { path: string }) {
-  const [t, setT] = useState<string | null>(null);
-  useEffect(() => { setT(null); void get<{ text: string }>(`/insights/file?path=${encodeURIComponent(path)}`).then((r) => setT(r.text)).catch((e) => setT(`(${(e as ApiError).message})`)); }, [path]);
-  if (t === null) return <div className="muted pad">Loading…</div>;
-  const [head, ...rest] = t.split("\n");
-  return <div className="insights-report" data-testid="insights-file-view"><div className="muted small">{head}</div><MarkdownView text={rest.join("\n")} className="insights-md" /></div>;
+function FileViewer({ path, onRead }: { path: string; onRead: () => void }) {
+  const [f, setF] = useState<{ text: string; name?: string; repo?: string | null; read_new?: string[] } | null>(null);
+  useEffect(() => { setF(null); void get<{ text: string; name: string; repo: string | null; read_new: string[] }>(`/insights/file?path=${encodeURIComponent(path)}`).then(setF).catch((e) => setF({ text: `(${(e as ApiError).message})` })); }, [path]);
+  if (f === null) return <div className="muted pad">Loading…</div>;
+  const [head, ...rest] = f.text.split("\n");
+  return (
+    <div className="insights-report" data-testid="insights-file-view"><div className="muted small">{head}</div>
+      {f.repo && f.name ? <NewThings repo={f.repo} readKey={`f:${f.name}`} text={rest.join("\n")} read={f.read_new ?? []} onRead={onRead} />
+        : <MarkdownView text={rest.join("\n")} className="insights-md" />}
+    </div>
+  );
+}
+
+/** A summary or report whose new things can be marked read (click a NEW badge), or all at once; the lists count the unread ones. */
+function NewThings({ repo, readKey, text, read: initial, onRead }: { repo: string; readKey: string; text: string; read: string[]; onRead: () => void }) {
+  const box = useRef<HTMLDivElement>(null);
+  const [read, setRead] = useState<string[]>(initial);
+  const [names, setNames] = useState<string[]>([]);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => setRead(initial), [readKey, initial.join("\n")]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const done = new Set(read);
+    const all = new Set<string>();
+    el.querySelectorAll<HTMLElement>(".waw-new-badge[data-new-name]").forEach((b) => {
+      const n = b.dataset.newName!;
+      if (!n) return;
+      all.add(n);
+      const on = done.has(n);
+      b.classList.add("toggle");
+      b.classList.toggle("read", on);
+      b.textContent = on ? "READ" : "NEW";
+      b.title = on ? "Read: click to mark it unread" : "New to the project: click to mark it read";
+      b.closest("li, p, td")?.classList.toggle("waw-new-read", on);
+    });
+    setNames((old) => (old.join("\n") === [...all].join("\n") ? old : [...all]));
+  }, [text, read]);
+  const mark = async (list: string[], on: boolean) => {
+    if (!list.length) return;
+    setErr(null);
+    try {
+      const r = await put<{ read_new: string[] }>("/insights/read", { repo, key: readKey, names: list, read: on });
+      setRead(r.read_new);
+      onRead();
+    } catch (e) { setErr((e as ApiError).message); }
+  };
+  const onClick = (e: React.MouseEvent) => {
+    const b = (e.target as HTMLElement).closest<HTMLElement>(".waw-new-badge[data-new-name]");
+    if (!b?.dataset.newName) return;
+    e.preventDefault();
+    void mark([b.dataset.newName], !read.includes(b.dataset.newName));
+  };
+  const unread = names.filter((n) => !read.includes(n)).length;
+  return (
+    <>
+      {names.length > 0 && (
+        <div className="row nowrap small insights-new-bar" data-testid="insights-new-bar">
+          <span className="chip new-count" data-testid="insights-new-unread">🆕 {unread} of {names.length} unread</span>
+          <span className="muted">click a NEW badge to mark it read</span>
+          <span className="spacer" />
+          <button className="btn small" disabled={unread === 0} onClick={() => void mark(names.filter((n) => !read.includes(n)), true)} data-testid="insights-new-all-read">Mark all read</button>
+          <button className="btn small" disabled={unread === names.length} onClick={() => void mark(names.filter((n) => read.includes(n)), false)} data-testid="insights-new-all-unread">Mark all unread</button>
+        </div>
+      )}
+      {err && <div className="error-text small">{err}</div>}
+      <div ref={box} onClick={onClick}><MarkdownView text={text} className="insights-md" /></div>
+    </>
+  );
+}
+
+/** How many new things (new features, terms, concepts …) a summary or report marks and are not read yet; nothing when none. */
+function NewCount({ n, unread }: { n?: number; unread?: number }) {
+  const left = unread ?? n;
+  if (!left) return null;
+  return <span className="chip new-count" title={`${left} unread of ${n ?? left} new thing${n === 1 ? "" : "s"} (features, terms, concepts …) marked in it`} data-testid="insights-new-count">🆕 {left}</span>;
 }
 
 function DailyList({ ov, openPath, onOpen, onRan }: { ov: Overview; openPath: string | null; onOpen: (p: string) => void; onRan: () => void }) {
@@ -362,7 +499,7 @@ function DailyList({ ov, openPath, onOpen, onRan }: { ov: Overview; openPath: st
       {err && <div className="error-text small pad-x">{err}</div>}
       {ov.daily.map((f) => (
         <button key={f.path} className={`list-item ${openPath === f.path ? "selected" : ""}`} onClick={() => onOpen(f.path)} data-testid="insights-day" data-day={f.since}>
-          <span className="mono small">{f.since}</span>{f.partial && <span className="chip">so far</span>}<span className="muted small">{Math.ceil(f.size / 1024)} KB</span>
+          <span className="mono small">{f.since}</span>{f.partial && <span className="chip">so far</span>}<span className="muted small">{Math.ceil(f.size / 1024)} KB</span><NewCount n={f.new} unread={f.unread} />
         </button>
       ))}
     </div>
@@ -606,6 +743,8 @@ function InsightsSettings() {
               return <label key={k}><input type="checkbox" checked={rp[k]} onChange={(e) => setRepo(i, { reports: { ...rp, [k]: e.target.checked } })} data-testid={`insights-report-${k}`} /> {k === "week" ? "weekly" : `${k}ly`}</label>;
             })}
           </div>
+          <div className="row nowrap small">reports compare what is new with:
+            <BaselinePick value={r.new_baseline ?? { mode: "previous", date: null }} onChange={(b) => setRepo(i, { new_baseline: b })} testid="insights-repo-baseline" /></div>
           <div className="row nowrap small">RFCs: repos <input className="mono" defaultValue={r.rfc.repos.join(", ")} onBlur={(e) => setRepo(i, { rfc: { ...r.rfc, repos: list(e.target.value) } })} />
             labels <input defaultValue={r.rfc.labels.join(", ")} onBlur={(e) => setRepo(i, { rfc: { ...r.rfc, labels: list(e.target.value) } })} />
             titles <input defaultValue={r.rfc.title_patterns.join(", ")} onBlur={(e) => setRepo(i, { rfc: { ...r.rfc, title_patterns: list(e.target.value) } })} /></div>

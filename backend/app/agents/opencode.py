@@ -38,6 +38,8 @@ from .base import (
     run_capture,
 )
 
+LONG_PROMPT = 100_000  # bytes; longer prompts are sent on stdin
+
 
 def _ms_to_iso(ms: Any) -> str | None:
     try:
@@ -256,13 +258,17 @@ class OpenCodeCliAdapter(AgentAdapter):
         # (the prompt then becomes a "file": "File not found: <prompt>"). "--" ends the options, so the prompt
         # is always the message — also when it starts with "-".
         args += [f"--file={p}" for p in ctx.attachments]
-        args += ["--", ctx.prompt]
+        # one argument is at most 128 KiB (Linux MAX_ARG_STRLEN: "Argument list too long"): a long prompt goes on
+        # stdin, which `opencode run` reads as the message when none is given
+        stdin = ctx.prompt.encode("utf-8") if len(ctx.prompt.encode("utf-8")) > LONG_PROMPT else None
+        if stdin is None:
+            args += ["--", ctx.prompt]
         env = None
         if ctx.skill_roots and ctx.remote is None:
             from ..skills import opencode_env
 
             env = opencode_env(ctx.skill_roots)
-        return OpenCodeCliTurn(args, cwd=ctx.cwd or ctx.workspace, env=env, remote=ctx.remote, provider="opencode")
+        return OpenCodeCliTurn(args, cwd=ctx.cwd or ctx.workspace, stdin_data=stdin, env=env, remote=ctx.remote, provider="opencode")
 
     async def list_models(self) -> list[dict[str, Any]]:
         if not self.exe:

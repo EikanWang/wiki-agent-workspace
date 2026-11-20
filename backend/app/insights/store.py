@@ -24,16 +24,17 @@ def _scan(folder: Path, kind: str) -> list[dict[str, Any]]:
         try:
             with p.open(encoding="utf-8", errors="replace") as fh:
                 head = fh.read(400 if kind == "summary" else 300)
+                m = (HEADER if kind == "summary" else HL_HEADER).search(head)
+                if not m:
+                    continue
+                fresh = [new_key(n) for n in new_names(head + fh.read())] if kind == "summary" else []
         except OSError:
-            continue
-        m = (HEADER if kind == "summary" else HL_HEADER).search(head)
-        if not m:
             continue
         day = m["b"]
         if kind == "highlight" and (m.groupdict().get("bt") or "23:59") < "06:00":  # a window ending early in the morning reports the day before
             day = (dt.date.fromisoformat(m["b"]) - dt.timedelta(days=1)).isoformat()
         out.append({"path": str(p), "name": p.name, "repo": m["repo"], "since": m["a"], "until": m["b"], "day": day, "size": p.stat().st_size,
-                    "mtime": p.stat().st_mtime, "daily": m["a"] == m["b"], "partial": ".partial." in p.name})
+                    "mtime": p.stat().st_mtime, "daily": m["a"] == m["b"], "partial": ".partial." in p.name, "new": len(fresh), "new_names": fresh})
     return out
 
 
@@ -62,6 +63,146 @@ def daily(ctx: Any, repo: str, day: str) -> dict[str, Any] | None:
     """The newest complete daily summary of the day."""
     rows = [r for r in index(ctx, repo) if r["daily"] and r["since"] == day and not r["partial"]]
     return max(rows, key=lambda r: r["mtime"]) if rows else None
+
+
+NEW_NAME = re.compile(r"🆕\s*\*\*([^*\n]{2,120})\*\*")
+
+
+def new_key(name: str) -> str:
+    """A new thing's name as its read mark keeps it (as the page shows it: no backticks; spaces collapsed, lower case)."""
+    return " ".join(name.replace("`", "").split()).strip(" :").lower()
+
+
+_NOTE = re.compile(r"\s*\((?:new|now|added|introduced|experimental|beta|prototype|rfc|proposal)\b[^)]*\)\s*$")
+
+
+def match_key(name: str) -> str:
+    """A name as "seen before?" compares it: case, backticks, punctuation, "()" and a trailing note such as
+    "(new feature)" do not count ("`RVV` fused-Adam()" is "rvv fused adam")."""
+    s = _NOTE.sub("", name.lower()).replace("()", " ")
+    return " ".join(re.sub(r"[^\w]+|_", " ", s).split())
+
+
+def new_names(text: str) -> list[str]:
+    """The names a summary or report marks as new ("🆕 **name**"), in order, without duplicates."""
+    seen: dict[str, str] = {}
+    for m in NEW_NAME.finditer(text):
+        name = " ".join(m.group(1).split()).strip(" :")
+        if name and name.lower() not in seen:
+            seen[name.lower()] = name
+    return list(seen.values())
+
+
+def flagged_new(ctx: Any, repo: str, before: str, days: int = 30, limit: int = 200) -> list[str]:
+    """The names flagged "🆕" in the daily summaries of the `days` days before `before`, newest first, without duplicates."""
+    lo = (dt.date.fromisoformat(before) - dt.timedelta(days=days)).isoformat()
+    rows = sorted((r for r in index(ctx, repo) if r["daily"] and not r["partial"] and lo <= r["since"] < before),
+                  key=lambda r: (r["since"], r["mtime"]), reverse=True)
+    seen: dict[str, str] = {}
+    for r in rows:
+        try:
+            text = Path(r["path"]).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for name in new_names(text):
+            if name.lower() not in seen:
+                seen[name.lower()] = name
+                if len(seen) >= limit:
+                    return list(seen.values())
+    return list(seen.values())
+
+
+def unmark(text: str, keys: set[str]) -> tuple[str, list[str]]:
+    """Takes the "🆕" off the names whose `match_key` is in `keys` (seen before, so not new); in a "🆕 What's new" section, a bullet whose
+    every new thing was seen before is dropped (with its sub-bullets that mark nothing new). Returns the text and the
+    names unmarked."""
+    keys = keys - {""}
+    if not keys:
+        return text, []
+    out, dropped, in_new, cut = [], {}, False, None
+    for line in text.split("\n"):
+        indent = len(line) - len(line.lstrip())
+        if cut is not None and line.strip() and indent > cut and "🆕" not in line:
+            continue
+        cut = None
+        if line.lstrip().startswith("#"):
+            in_new = "🆕" in line
+            out.append(line)
+            continue
+        marks = list(NEW_NAME.finditer(line))
+        seen = [m for m in marks if match_key(m.group(1)) in keys]
+        if not seen:
+            out.append(line)
+            continue
+        for m in seen:
+            dropped.setdefault(new_key(m.group(1)), " ".join(m.group(1).split()).strip(" :"))
+        if in_new and len(seen) == len(marks) and line.lstrip()[:1] in ("-", "*"):
+            cut = indent
+            continue
+        for m in reversed(seen):
+            line = line[:m.start()] + f"**{m.group(1)}**" + line[m.end():]
+        out.append(line)
+    return "\n".join(out), list(dropped.values())
+
+
+def _read_file(ctx: Any, repo: str) -> Path:
+    return st.data_dir(ctx) / "read" / f"{repo}.json"
+
+
+def read_new(ctx: Any, repo: str) -> dict[str, list[str]]:
+    """The new things marked read, per file ("f:<summary file name>") or report ("r:<id>"): lower-case names."""
+    try:
+        d = json.loads(_read_file(ctx, repo).read_text())
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def mark_read(ctx: Any, repo: str, key: str, names: list[str], read: bool) -> list[str]:
+    """Marks these new things read (or unread again) in one file or report; returns what is read there now."""
+    d = read_new(ctx, repo)
+    have = dict.fromkeys(d.get(key) or [])
+    for n in map(new_key, names):
+        if read:
+            have[n] = None
+        else:
+            have.pop(n, None)
+    d[key] = list(have)
+    if not d[key]:
+        del d[key]
+    p = _read_file(ctx, repo)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_name(f".{p.name}.tmp")
+    tmp.write_text(json.dumps(d, ensure_ascii=False))
+    os.replace(tmp, p)
+    return d.get(key, [])
+
+
+def unread(names: list[str], read: list[str] | None) -> int:
+    done = set(read or [])
+    return sum(1 for n in names if new_key(n) not in done)
+
+
+def previous_day_known(ctx: Any, repo: str, day: str) -> tuple[str | None, dict[str, Any] | None, list[str]]:
+    """The day before `day`: its date, its daily summary (if any) and the names it flagged new."""
+    prev = (dt.date.fromisoformat(day) - dt.timedelta(days=1)).isoformat()
+    row = daily(ctx, repo, prev)
+    if row is None:
+        return prev, None, []
+    try:
+        return prev, row, new_names(Path(row["path"]).read_text(encoding="utf-8", errors="replace"))
+    except OSError:
+        return prev, row, []
+
+
+def write_check(ctx: Any, repo: str, day: str, chk: dict[str, Any]) -> None:
+    """The new-things check of a day's summary (what the model decided for each mark)."""
+    folder = st.data_dir(ctx) / "check" / repo
+    folder.mkdir(parents=True, exist_ok=True)
+    p = folder / f"{day}.json"
+    tmp = p.with_name(f".{p.name}.tmp")
+    tmp.write_text(json.dumps(chk, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, p)
 
 
 def write_summary(ctx: Any, repo: str, since: str, until: str, text: str, partial: bool = False) -> Path:

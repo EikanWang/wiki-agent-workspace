@@ -99,6 +99,15 @@ def build_trend_prompt(ctx: Any, *, repo: str, question: str, prior: list[dict[s
         "longer summaries where they fit and fill the rest from daily summaries; read in batches and condense as you go. "
         "Keep the GitHub links (issues, PRs, people) the summaries have. The `gh` CLI may be used for something the files "
         "do not have; say when you did. Do not modify or delete files in this folder unless the user explicitly asks.",
+        "What is new: summaries and reports mark things new to the project (new features, APIs, options, terms, concepts, "
+        "RFCs, components, any first appearance) with \"🆕\" and a \"🆕 What's new\" section. In your answers, highlight "
+        "everything new in the period asked the same way — start its bullet with \"🆕 \" and bold the new name — and, when "
+        "there is anything new, add a \"## 🆕 What's new\" section (one bullet each: name, kind, what it is, link). Older "
+        "summaries may lack the marks: judge what is new from the material itself (first appearance in the files). New is "
+        "relative to a baseline: by default everything before the period asked (day to day, week to week, month to month, "
+        "quarter to quarter, year to year: what no earlier day had); the user may name another (e.g. only the month before, "
+        "everything before a date, or from a date on) — "
+        "then compare with the summaries of that baseline, and say which baseline you used.",
     ]
     if brief:
         parts.append(brief)

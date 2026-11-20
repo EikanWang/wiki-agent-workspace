@@ -11,7 +11,7 @@ import subprocess
 from pathlib import Path
 
 from backend.app.insights import pipeline as pl
-from backend.app.insights import scheduler, store
+from backend.app.insights import registry, scheduler, store
 from backend.app.insights import settings as st
 
 
@@ -211,6 +211,15 @@ async def test_reports_of_any_period_with_blocks_commits_rfcs_highlights(running
     c = await api.post(f"/api/v1/insights/reports/acme/proj/{rid}/chat", json={})
     assert c.status_code == 201, c.text
     await api.wait_job(c.json()["job_id"])
+    # several chosen reports in one chat (compared)
+    c = await api.post("/api/v1/insights/reports/acme/proj/chat", json={"ids": [r2["id"], rid]})
+    assert c.status_code == 201, c.text
+    await api.wait_job(c.json()["job_id"])
+    with h.ctx.db.read() as s:
+        from backend.app.models import Job
+        prompt = s.get(Job, c.json()["job_id"]).prompt
+    assert prompt.count("<<<REPORT ") == 2 and "Compare them" in prompt, prompt[:2000]
+    assert (await api.post("/api/v1/insights/reports/acme/proj/chat", json={"ids": ["nope"]})).status_code == 404
     assert (await api.delete(f"/api/v1/insights/reports/acme/proj/{rid}")).status_code == 200
     assert (await api.get(f"/api/v1/insights/reports/acme/proj/{rid}")).status_code == 404
     for bad in ({"repo": "acme/proj", "period": "custom", "since": "2026-11-05", "until": "2026-11-01"}, {"repo": "x", "period": "week"},
@@ -452,3 +461,185 @@ async def test_highlights_per_day_and_flat_without_duplicates(running_app, tmp_p
     flat = (await h.api.get(base, params={"since": "2026-11-09", "until": "2026-11-12"})).json()["items"]
     assert [(x["url"], x["xpu_relevance_score"], x["days"]) for x in flat] == [
         ("c", 91, ["2026-11-12", "2026-11-10"]), ("a", 85, ["2026-11-10", "2026-11-09"]), ("b", 40, ["2026-11-09"])]
+
+
+async def test_new_things_are_marked_remembered_and_counted(running_app, tmp_path):
+    h, _, model = await make(running_app, tmp_path, proj_nodes())
+    # an earlier day already flagged something as new: later days and reports are told, so it is not flagged again
+    store.write_summary(h.ctx, "acme/proj", "2026-11-01", "2026-11-01",
+                        "# Day\n\n## 🆕 What's new\n- 🆕 **Ring buffer API** (new feature): x\n- 🆕 **Ring buffer API**: again\n")
+    base = model.__call__
+
+    def answer(task, prompt, as_json):
+        out = base(task, prompt, as_json)
+        if task == "terms":
+            return json.dumps({"terms": ["Old widget", "Ring buffer API", {"name": "Device mesh", "what": "a mesh of devices"}]})
+        if task == "check" and "a report (" not in prompt:
+            return "{}"
+        if task == "check":  # "Device mesh v2" extends the known "Device mesh"
+            import re
+            m = re.search(r"Candidate (\d+): Device mesh v2\n.*?\[(\d+)\] Device mesh:", prompt, re.S)
+            return json.dumps({"results": [{"id": int(m[1]), "verdict": "extension", "match": int(m[2]), "confidence": 80}] if m else []})
+        extra = "\n- 🆕 **Old widget**: seen before\n- 🆕 **`Ring  buffer` API** again" if task == "report" else ""
+        return out if task == "highlight" else out + "\n\n## 🆕 What's new\n- 🆕 **Device mesh v2** (new concept): y\n- 🆕 **XPU graphs**: z" + extra
+    h.ctx.extra["insights_llm"] = answer
+    await pl.daily_summary(h.ctx, "acme/proj", DAY)
+    prompt = next(p for t, p in model.calls if t == "daily")
+    assert "## 🆕 What's new" in prompt and 'with "🆕 "' in prompt
+    # day to day: against everything before the day (the summary of 2026-11-01 and what it flagged new)
+    assert "baseline: everything before 2026-11-03 (1 day(s) with a summary)" in prompt and "Known in the baseline: Ring buffer API" in prompt
+    assert prompt.index("everything before") < prompt.index("Below is the detailed information") < prompt.index("Number: 10\n")
+    rows = {r["since"]: r for r in store.index(h.ctx, "acme/proj")}
+    assert rows["2026-11-01"]["new"] == 1 and rows[DAY]["new"] == 2
+    assert store.flagged_new(h.ctx, "acme/proj", "2026-11-04") == ["Device mesh v2", "XPU graphs", "Ring buffer API"]
+    assert store.flagged_new(h.ctx, "acme/proj", "2026-11-01") == []  # only days before
+    # a report has the section and is compared with its baseline: what the baseline's daily summaries are about
+    async def report(**kw):
+        meta = pl.new_report(h.ctx, "acme/proj", DAY, DAY, {"issues": True}, "", DAY, None, **kw)
+        for _ in range(200):
+            rep = pl.report(h.ctx, "acme/proj", meta["id"])
+            if rep["status"] != "running":
+                return rep, [p for t, p in model.calls if t == "report"][-1].split("Material:")[0]
+            await asyncio.sleep(0.05)
+    rep, ins = await report(baseline={"mode": "after", "date": "2026-11-01"})
+    assert rep["status"] == "done" and rep["new"] == 1, rep  # what the baseline had is unmarked, its bullets in What's new dropped
+    assert "➕ **Device mesh v2** *(extends Device mesh)*" in rep["text"]  # an extension: not counted as new
+    assert rep["check"]["counts"] == {"extension": 1, "unchecked": 1} and rep["check"]["items"][0]["match"] == "Device mesh"
+    assert any(f.startswith("New-things check (model, against 3 registry entries): 0 repeat") for f in rep["facts"])
+    assert "Old widget" not in rep["text"] and "Ring  buffer" not in rep["text"]
+    assert any(f.startswith("Marks of new things removed (already in the baseline): 2") for f in rep["facts"])
+    assert "## 🆕 What's new ::" in ins and "baseline: from 2026-11-01 until the period (2026-11-01 … 2026-11-02) (1 day(s) with a summary)" in ins
+    known = ins.split("Known in the baseline: ")[1]
+    assert "Ring buffer API" in known and "Old widget" in known and "Device mesh v2" not in known  # the report's own day is material
+    assert rep["baseline"]["mode"] == "after" and rep["baseline"]["days"] == 1
+    assert any(f.startswith("New compared with: from 2026-11-01") for f in rep["facts"])
+    n_terms = model.count("terms")
+    assert n_terms == 1
+    # the default (the repository's: the period before) — the day before has no summary; the terms are kept per file
+    rep, ins = await report()
+    assert rep["baseline"]["mode"] == "previous" and "everything before the period (up to 2026-11-02) (1 day(s) with a summary)" in ins
+    rep, ins = await report(baseline={"mode": "before", "date": "2026-11-03"})
+    assert "everything before 2026-11-03" in ins and "Old widget" in ins and model.count("terms") == n_terms
+    # a daily summary knows what the day before was about (its terms) and flagged new
+    store.write_summary(h.ctx, "acme/proj", "2026-11-02", "2026-11-02", "# Day\n\n- 🆕 **Old gadget**: x\n")
+    await pl.daily_summary(h.ctx, "acme/proj", DAY, force=True)
+    prompt = [p for t, p in model.calls if t == "daily"][-1].split("Below is the detailed information")[0]
+    assert "everything before 2026-11-03 (2 day(s) with a summary)" in prompt
+    assert "Old gadget" in prompt and "Old widget" in prompt and model.count("terms") == n_terms + 1  # only the day before listed now
+    # the new things can be marked read: the lists count the unread ones
+    api = h.api
+    day = next(r for r in (await api.get("/api/v1/insights/repos/acme/proj")).json()["daily"] if r["since"] == DAY)
+    assert day["new"] == 2 and day["unread"] == 2 and "new_names" not in day
+    r = await api.put("/api/v1/insights/read", json={"repo": "acme/proj", "key": f"f:{day['name']}", "names": ["device  mesh v2"]})
+    assert r.status_code == 200 and r.json()["read_new"] == ["device mesh v2"]
+    ov = (await api.get("/api/v1/insights/repos/acme/proj")).json()
+    assert next(r for r in ov["daily"] if r["since"] == DAY)["unread"] == 1
+    assert (await api.get(f"/api/v1/insights/file?path={day['path']}")).json()["read_new"] == ["device mesh v2"]
+    rep_row = next(r for r in ov["reports"] if r["id"] == rep["id"])
+    assert rep_row["new"] == 1 and rep_row["unread"] == 1  # "Device mesh v2" is an extension there
+    await api.put("/api/v1/insights/read", json={"repo": "acme/proj", "key": f"r:{rep['id']}", "names": ["Device mesh v2", "XPU graphs"]})
+    ov = (await api.get("/api/v1/insights/repos/acme/proj")).json()
+    assert next(r for r in ov["reports"] if r["id"] == rep["id"])["unread"] == 0
+    assert (await api.get(f"/api/v1/insights/reports/acme/proj/{rep['id']}")).json()["read_new"] == ["device mesh v2", "xpu graphs"]
+    await api.put("/api/v1/insights/read", json={"repo": "acme/proj", "key": f"r:{rep['id']}", "names": ["XPU graphs"], "read": False})
+    ov = (await api.get("/api/v1/insights/repos/acme/proj")).json()
+    assert next(r for r in ov["reports"] if r["id"] == rep["id"])["unread"] == 1
+    assert (await api.put("/api/v1/insights/read", json={"repo": "acme/proj", "key": "x:../y", "names": []})).status_code in (400, 422)
+
+
+def test_baseline_windows():
+    w = pl.baseline_window
+    for kind in ("daily", "weekly", "monthly", "quarterly", "yearly", "dates"):  # day to day, month to month …: all before
+        assert w({"mode": "previous"}, "2026-11-09", "2026-11-15", kind) == ("0001-01-01", "2026-11-08", "everything before the period (up to 2026-11-08)")
+    assert w({"mode": "week"}, "2026-11-09", "2026-11-15", "weekly")[:2] == ("2026-11-02", "2026-11-08")
+    assert w({"mode": "quarter"}, "2026-10-01", "2026-12-31")[:2] == ("2026-07-01", "2026-09-30")
+    assert w({"mode": "year"}, "2026-01-01", "2026-12-31")[:2] == ("2025-01-01", "2025-12-31")
+    assert w({"mode": "day"}, "2026-11-03", "2026-11-03")[:2] == ("2026-11-02", "2026-11-02")
+    assert w({"mode": "month"}, "2026-03-31", "2026-03-31")[:2] == ("2026-02-28", "2026-03-30")
+    assert w({"mode": "week"}, "2026-11-09", "2026-11-30", "monthly")[:2] == ("2026-11-02", "2026-11-08")
+    assert w({"mode": "before", "date": "2026-06-01"}, "2026-11-09", "2026-11-15")[:2] == ("0001-01-01", "2026-05-31")
+    assert w({"mode": "before", "date": "2026-12-01"}, "2026-11-09", "2026-11-15")[1:] == ("2026-11-08", "everything before 2026-11-09")
+    assert w({"mode": "after", "date": "2026-06-01"}, "2026-11-09", "2026-11-15")[:2] == ("2026-06-01", "2026-11-08")
+    assert w({"mode": "after", "date": "2026-11-10"}, "2026-11-09", "2026-11-15") is None
+
+
+def test_unmark_what_was_seen_before():
+    text = ("# R\n\n- 🆕 **Aa** grew, 🆕 **`Bb`** too\n\n## 🆕 What's new\n- 🆕 **Aa**: x\n- 🆕 **Cc**: y\n- 🆕 **Aa** and 🆕 **Cc**\n\n## Other\n- 🆕 **Aa** z")
+    out, gone = store.unmark(text, {"aa", "bb"})
+    assert gone == ["Aa", "`Bb`"]
+    assert out == ("# R\n\n- **Aa** grew, **`Bb`** too\n\n## 🆕 What's new\n- 🆕 **Cc**: y\n- **Aa** and 🆕 **Cc**\n\n## Other\n- **Aa** z")
+    assert store.unmark(text, set()) == (text, [])
+    sub = "## 🆕 What's new\n- 🆕 **Aa** additions:\n  - `x`\n  - 🆕 **Cc** inside\n- 🆕 **Dd**: w\n"
+    assert store.unmark(sub, {"aa"})[0] == "## 🆕 What's new\n  - 🆕 **Cc** inside\n- 🆕 **Dd**: w\n"
+    # looser: case, backticks, punctuation, "()" and a trailing note do not count
+    k = store.match_key
+    assert k("`torch.export.load(weights_only=)`") == k("torch.export.load weights_only") == "torch export load weights only"
+    assert k("`torch.assert_async`") == k("torch._assert_async") and k("RVV FusedAdam()") == k("rvv fusedadam")
+    assert k("Ring buffer API (new feature)") == k("ring-buffer API") and k("()") == ""
+    assert store.unmark("- 🆕 **()**", {""}) == ("- 🆕 **()**", [])
+
+
+async def test_baseline_settings(running_app, tmp_path):
+    h, _, _ = await make(running_app, tmp_path, proj_nodes())
+    assert st.repo_cfg(h.ctx, "pytorch/pytorch")["new_baseline"] == {"mode": "previous", "date": None}
+    st.save(h.ctx, {"repos": [{"repo": "acme/proj", "new_baseline": {"mode": "before", "date": "2026-01-01"}}]})
+    assert st.repo_cfg(h.ctx, "acme/proj")["new_baseline"] == {"mode": "before", "date": "2026-01-01"}
+    r = await h.api.put("/api/v1/insights/settings", json={"repos": [{"repo": "acme/proj", "new_baseline": {"mode": "after"}}]})
+    assert r.status_code == 400
+    r = await h.api.post("/api/v1/insights/reports", json={"repo": "acme/proj", "period": "day", "value": DAY, "baseline": {"mode": "after", "date": "x"}})
+    assert r.status_code == 400
+
+
+def test_registry_merges_strictly():
+    t = lambda name, *aliases, what="": {"name": name, "aliases": list(aliases), "what": what}  # noqa: E731
+    reg = registry.build([
+        ("2026-07-01", [t("weights_only=True for object collectives", "c10d", "weights-only unpickler"), t("safetensors")]),
+        ("2026-07-02", [t("`Weights_only=True` for object collectives()"), t("c10d", "c10d library"),
+                        t("weights-only unpickler", "pickle guard"), t("pickle guard"), t("SafeTensors loading", "safetensors")]),
+        ("2026-07-03", [t("c10d library", what="the distributed backend library")]),
+    ])
+    names = {e["name"]: e for e in reg}
+    w = names["weights_only=True for object collectives"]
+    assert w["days"] == 2 and w["last"] == "2026-07-02"  # its main name again (case, backticks, () do not count)
+    assert "c10d" in names  # a short other spelling ("c10d") does not merge
+    assert "weights-only unpickler" in w["aliases"] and "pickle guard" in names  # its name is a specific other spelling: merged; alias to alias: not
+    assert names["safetensors"]["aliases"] == ["SafeTensors loading"]  # its other spelling is an entry's main name
+    assert names["c10d"]["what"] == "the distributed backend library" and names["c10d"]["days"] == 2
+    near = registry.nearest(reg, [registry._toks("the distributed backend")])
+    assert reg[near[0][0]]["name"] == "c10d"
+    assert registry.entries_of(["Plain name", {"name": " A  b ", "aliases": ["A  b", "x"], "refs": [1, "2"]}, {"x": 1}]) == [
+        {"name": "Plain name", "aliases": [], "kind": "", "area": "", "what": "", "refs": []},
+        {"name": "A b", "aliases": ["x"], "kind": "", "area": "", "what": "", "refs": [1]}]
+
+
+async def test_new_things_check():
+    reg = registry.build([("2026-09-01", [{"name": "FSDP2 per-param mixed precision", "what": "a policy per parameter"},
+                                           {"name": "CUDA graphs", "what": "capture and replay"}])])
+    text = ("# R\n\n- 🆕 **FSDP2 per-parameter mixed-precision policy** landed; 🆕 **Breakable CUDA graphs** too\n\n"
+            "## 🆕 What's new\n- 🆕 **FSDP2 per-parameter mixed-precision policy**: x\n- 🆕 **Breakable CUDA graphs**: y\n"
+            "- 🆕 **Breakable graphs**: same\n- 🆕 **torch.float8_e5m3fnu**: a dtype\n- 🆕 **Low-confidence thing**: z\n")
+    seen = []
+
+    def model(task, prompt, as_json):
+        seen.append((task, prompt))
+        fsdp = next(i for i, e in enumerate(reg) if e["name"].startswith("FSDP2"))
+        cuda = 1 - fsdp
+        return json.dumps({"results": [
+            {"id": 1, "verdict": "repeat", "match": fsdp, "confidence": 92, "why": "same"},
+            {"id": 2, "verdict": "extension", "match": cuda, "confidence": 70, "why": "new part"},
+            {"id": 3, "verdict": "duplicate", "same_as": 2, "confidence": 90},
+            {"id": 4, "verdict": "new", "confidence": 85},
+            {"id": 5, "verdict": "repeat", "match": fsdp, "confidence": 40}]})
+    ctx = type("Ctx", (), {"extra": {"insights_llm": model}})()
+    out, chk = await registry.check(ctx, "acme/proj", text, reg, "a report", "everything before")
+    assert len(seen) == 1 and seen[0][0] == "check" and "All candidates of this text: 1. FSDP2" in seen[0][1]
+    assert "[0] FSDP2 per-param mixed precision" in seen[0][1] or "[1] FSDP2 per-param mixed precision" in seen[0][1]
+    assert chk["counts"] == {"repeat": 1, "extension": 1, "duplicate": 1, "new": 2} and chk["entries"] == 2
+    assert out == ("# R\n\n- **FSDP2 per-parameter mixed-precision policy** landed; ➕ **Breakable CUDA graphs** *(extends CUDA graphs)* too\n\n"
+                   "## 🆕 What's new\n- ➕ **Breakable CUDA graphs**: y\n"
+                   "- 🆕 **torch.float8_e5m3fnu**: a dtype\n- 🆕 **Low-confidence thing**: z\n")
+    assert store.new_names(out) == ["torch.float8_e5m3fnu", "Low-confidence thing"]  # an extension is not counted as new
+    assert "1 extension (marked ➕, not counted as new), 2 new" in registry.summary(chk)
+    # a failed or unreadable answer leaves the text as it was
+    ctx.extra["insights_llm"] = lambda task, prompt, as_json: "no json"
+    assert (await registry.check(ctx, "acme/proj", text, reg, "a report", "x"))[0] == text

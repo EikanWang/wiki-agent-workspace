@@ -124,3 +124,14 @@ async def test_a_turn_runs_in_the_documents_folder_whatever_the_servers_pwd(runn
     assert (await api.wait_job(r.json()["job_id"]))[-1]["type"] == "completed"
     sessions = json.loads((fake_env / "opencode_sessions.json").read_text())
     assert sessions[-1]["directory"] == str(workspace), sessions[-1]
+
+
+async def test_a_long_prompt_goes_on_stdin(tmp_path: Path):
+    ad = OpenCodeCliAdapter(ProviderConfig(bin=str(FAKES / "fake-opencode")))
+    short = await ad.resume_turn(TurnContext(prompt="-hi", workspace=tmp_path, native_session_id=None, cwd=tmp_path))
+    assert short.args[-2:] == ["--", "-hi"] and short.stdin_data is None
+    text = "é" * 60_000  # 120 kB: more than one argument may be (128 KiB) with the rest of the command line
+    long = await ad.resume_turn(TurnContext(prompt=text, workspace=tmp_path, native_session_id=None, cwd=tmp_path,
+                                            attachments=[str(tmp_path / "a.png")]))
+    assert long.stdin_data == text.encode() and text not in long.args and "--" not in long.args
+    assert long.args[-1] == f"--file={tmp_path / 'a.png'}"

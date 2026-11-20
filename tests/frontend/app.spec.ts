@@ -3977,8 +3977,37 @@ test("Repo Insights: the history in the folder, a week's report (daily summaries
   await expect(page.getByTestId("insights-view")).toContainText("daily summaries 2026-11-10 … 2026-11-10 (1)");
   // a day of the history
   await page.getByTestId("insights-tab-daily").click();
+  await expect(page.locator('[data-testid="insights-day"][data-day="2026-11-10"]').getByTestId("insights-new-count")).toHaveText("🆕 2");
   await page.locator('[data-testid="insights-day"][data-day="2026-11-10"]').click();
   await expect(page.getByTestId("insights-file-view")).toContainText("Old day");
+  // what is new is highlighted: the "What's new" section boxed, the marks as NEW badges, the new things' bullets tinted
+  const dayView = page.getByTestId("insights-file-view");
+  await expect(dayView.locator("section.waw-new-section h2.waw-new-head")).toHaveText("NEWWhat's new");
+  await expect(dayView.locator("section.waw-new-section li")).toHaveCount(1);
+  await expect(dayView.locator("section.waw-new-section")).not.toContainText("did a thing"); // the section ends at the next heading
+  await expect(dayView.locator(".waw-new-badge")).toHaveCount(3);
+  await expect(dayView.locator("li.waw-new")).toHaveCount(2);
+  await expect(dayView.locator("li.waw-new .waw-new-name")).toHaveText(["Ring buffer API", "Device mesh"]);
+  // an extension of something known: its own badge, not counted as new
+  await expect(dayView.locator("li.waw-ext .waw-ext-badge")).toHaveText("EXTENDS");
+  await expect(dayView.locator("li.waw-ext .waw-ext-name")).toHaveText("Mesh slicing");
+  await expect(dayView.locator("li.waw-ext")).toContainText("(extends Device mesh)");
+  await expect(dayView.locator(".insights-md")).not.toContainText("🆕");
+  // each new thing can be marked read: the list counts the unread ones, none when all are read
+  await expect(dayView.getByTestId("insights-new-unread")).toHaveText("🆕 2 of 2 unread");
+  const dayRow = page.locator('[data-testid="insights-day"][data-day="2026-11-10"]');
+  await dayView.locator('.waw-new-badge[data-new-name="device mesh"]').click();
+  await expect(dayView.locator('.waw-new-badge[data-new-name="device mesh"]')).toHaveText("READ");
+  await expect(dayView.locator("li.waw-new-read")).toHaveText(/Device mesh/);
+  await expect(dayView.getByTestId("insights-new-unread")).toHaveText("🆕 1 of 2 unread");
+  await expect(dayRow.getByTestId("insights-new-count")).toHaveText("🆕 1");
+  await dayView.getByTestId("insights-new-all-read").click();
+  await expect(dayView.getByTestId("insights-new-unread")).toHaveText("🆕 0 of 2 unread");
+  await expect(dayRow.getByTestId("insights-new-count")).toHaveCount(0);
+  await dayView.locator('.waw-new-badge[data-new-name="ring buffer api"]').first().click(); // unread again
+  await expect(dayRow.getByTestId("insights-new-count")).toHaveText("🆕 1");
+  await dayView.getByTestId("insights-new-all-unread").click();
+  await expect(dayRow.getByTestId("insights-new-count")).toHaveText("🆕 2");
   // XPU highlights of the history
   await page.getByTestId("insights-tab-highlights").click();
   await page.getByTestId("insights-hl-view-day").click();
@@ -4021,10 +4050,16 @@ test("Repo Insights: the history in the folder, a week's report (daily summaries
   await page.getByTestId("insights-since").fill("2026-11-08");
   await page.getByTestId("insights-until").fill("2026-11-12");
   await page.getByTestId("insights-preset").selectOption("xpu");
+  // what is new is compared with a baseline: by default the period before; here from a picked date
+  await expect(page.getByTestId("insights-baseline-mode")).toHaveValue("previous");
+  await expect(page.getByTestId("insights-baseline-date")).toHaveCount(0);
+  await page.getByTestId("insights-baseline-mode").selectOption("after");
+  await page.getByTestId("insights-baseline-date").fill("2026-11-01");
   await page.getByTestId("insights-create").click();
   const view = page.getByTestId("insights-report-view");
   await expect(view).toHaveAttribute("data-status", "done", { timeout: 30000 });
   await expect(view).toContainText("Fake report");
+  await expect(view.getByTestId("insights-report-baseline")).toHaveText("🆕 new vs from 2026-11-01 until the period (2026-11-01 … 2026-11-07)");
   await expect(view.locator("a", { hasText: "issue #777" })).toHaveAttribute("href", "https://github.com/pytorch/pytorch/issues/777");
   await view.locator("summary", { hasText: "Material" }).click();
   await expect(view).toContainText("Days with a summary of issues and PRs: 5");
@@ -4046,15 +4081,31 @@ test("Repo Insights: the history in the folder, a week's report (daily summaries
   // the week list: calendar weeks of the year
   await page.getByTestId("insights-period-week").click();
   await expect(page.getByTestId("insights-week").locator("option").first()).toContainText(/^Week \d+ · /);
+  // reports can be selected: several in one chat, or deleted together
+  const monthRow = page.locator('[data-testid="insights-group"][data-kind="monthly"]').getByTestId("insights-report");
+  const datesRow = page.locator('[data-testid="insights-group"][data-kind="dates"]').getByTestId("insights-report");
+  await monthRow.getByTestId("insights-report-pick").check();
+  await datesRow.getByTestId("insights-report-pick").check();
+  await expect(page.getByTestId("insights-picked")).toContainText("2 selected");
+  await page.getByTestId("insights-picked-clear").click();
+  await expect(page.getByTestId("insights-picked")).toHaveCount(0);
+  await monthRow.getByTestId("insights-report-pick").check();
+  await page.getByTestId("insights-picked-delete").click();
+  await page.getByTestId("confirm-ok").click();
+  await expect(page.getByTestId("insights-group")).toHaveCount(1);
+  await expect(page.getByTestId("insights-picked")).toHaveCount(0);
+  await datesRow.getByTestId("insights-report-pick").check();
+  await expect(page.getByTestId("insights-picked-chat")).toBeEnabled();
+  await page.getByTestId("insights-picked-clear").click();
   // continue in a chat
-  await page.locator('[data-testid="insights-group"][data-kind="dates"]').getByTestId("insights-report").first().click();
+  await datesRow.first().getByTestId("insights-report-open").click();
   await page.getByTestId("insights-chat").click();
   await expect(page.getByTestId("chats-page")).toBeVisible({ timeout: 15000 });
   // settings
   await page.getByTestId("activity-insights").click(); // (the chat opened the wiki side)
   await page.getByTestId("insights-settings-open").click();
   await expect(page.getByTestId("insights-settings")).toBeVisible();
-  await expect(page.getByTestId("insights-task")).toHaveCount(5);
+  await expect(page.getByTestId("insights-task")).toHaveCount(7);
   // the agent for two tasks, one right after the other: both stay chosen (on the page and on the server)
   const task = (t: string) => page.locator(`[data-testid="insights-task"][data-task="${t}"]`);
   await task("report").getByTestId("insights-task-mode").selectOption("agent");
@@ -4070,12 +4121,16 @@ test("Repo Insights: the history in the folder, a week's report (daily summaries
   await vllm.getByTestId("insights-schedule").check();
   await vllm.getByTestId("insights-report-week").check(); // reports made by the scheduler when a period ends
   await vllm.getByTestId("insights-report-month").check();
+  await vllm.getByTestId("insights-repo-baseline-mode").selectOption("before"); // what its reports compare new things with
+  await vllm.getByTestId("insights-repo-baseline-date").fill("2026-06-01");
   await page.getByTestId("insights-repos-save").click();
   await expect(page.getByTestId("insights-note")).toContainText("Saved");
   const s = await (await page.request.get("/api/v1/insights/settings")).json();
   const saved = s.repos.find((r: any) => r.repo === "vllm-project/vllm");
   expect(saved.schedule.enabled).toBe(true);
   expect(saved.reports).toEqual({ week: true, month: true, quarter: false, year: false });
+  expect(saved.new_baseline).toEqual({ mode: "before", date: "2026-06-01" });
+  await vllm.getByTestId("insights-repo-baseline-mode").selectOption("previous");
   await vllm.getByTestId("insights-report-week").uncheck();
   await vllm.getByTestId("insights-report-month").uncheck();
   await vllm.getByTestId("insights-schedule").uncheck();

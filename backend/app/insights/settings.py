@@ -14,7 +14,7 @@ from ..kv import kv_get, kv_put
 from .prompts import XPU_FOCUS
 
 KEY = "insights_settings"
-TASKS = ("daily", "rollup", "commits", "report", "highlight")
+TASKS = ("daily", "rollup", "commits", "report", "highlight", "terms", "check")
 
 DEFAULT_RFC = {"repos": [], "labels": ["RFC"], "title_patterns": ["[RFC]", "RFC:"]}
 DEFAULT_REPOS: list[dict[str, Any]] = [
@@ -28,6 +28,22 @@ DEFAULT_REPOS: list[dict[str, Any]] = [
 ]
 REPO = re.compile(r"^[\w.-]+/[\w.-]+$")
 REPORT_PERIODS = ("week", "month", "quarter", "year")
+# what a report's new things are compared with: the period before (same kind / length), the day / week / month /
+# quarter / year before it, everything before a date, or from a date until the period
+BASELINES = ("previous", "day", "week", "month", "quarter", "year", "before", "after")
+DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def baseline_of(b: Any) -> dict[str, Any]:
+    """A valid baseline {mode, date} (date only for before / after)."""
+    b = b if isinstance(b, dict) else {}
+    mode = b.get("mode") if b.get("mode") in BASELINES else "previous"
+    date = str(b.get("date") or "")
+    if mode in ("before", "after"):
+        if not DATE.match(date):
+            raise ApiError(400, "INVALID_DATE", f"the {mode!r} baseline needs a date (YYYY-MM-DD)")
+        return {"mode": mode, "date": date}
+    return {"mode": mode, "date": None}
 
 
 def _repo_defaults(r: dict[str, Any]) -> dict[str, Any]:
@@ -39,7 +55,15 @@ def _repo_defaults(r: dict[str, Any]) -> dict[str, Any]:
         # the report of each finished week / month / quarter / year, made by the scheduler (after the daily run)
         "reports": {p: bool((r.get("reports") or {}).get(p, False)) for p in REPORT_PERIODS},
         "rfc": {**DEFAULT_RFC, **(r.get("rfc") or {})},
+        "new_baseline": _safe_baseline(r.get("new_baseline")),
     }
+
+
+def _safe_baseline(b: Any) -> dict[str, Any]:
+    try:
+        return baseline_of(b)
+    except ApiError:
+        return {"mode": "previous", "date": None}
 
 
 def defaults(state_dir: Path) -> dict[str, Any]:
@@ -60,7 +84,10 @@ def load(ctx: Any) -> dict[str, Any]:
     d = defaults(ctx.settings.state_dir)
     s = kv_get(ctx, KEY, {}) or {}
     out = {**d, **{k: v for k, v in s.items() if k in d}}
-    out["llm"] = {t: {**d["llm"][t], **((s.get("llm") or {}).get(t) or {})} for t in TASKS}
+    saved = dict(s.get("llm") or {})
+    if "check" not in saved and saved.get("terms"):  # the check came later: it reaches a model as the term listing does
+        saved["check"] = saved["terms"]
+    out["llm"] = {t: {**d["llm"][t], **(saved.get(t) or {})} for t in TASKS}
     out["highlight"] = {**d["highlight"], **(s.get("highlight") or {})}
     out["repos"] = [_repo_defaults(r) for r in (s.get("repos") if s.get("repos") is not None else d["repos"])]
     presets = s.get("presets") if s.get("presets") is not None else d["presets"]
@@ -98,6 +125,8 @@ def save(ctx: Any, patch: dict[str, Any]) -> dict[str, Any]:
             rep = r.get("reports") or {}
             if not isinstance(rep, dict) or set(rep) - set(REPORT_PERIODS):
                 raise ApiError(400, "INVALID_PERIOD", f"{name}: reports are week, month, quarter, year")
+            if r.get("new_baseline") is not None:
+                baseline_of(r["new_baseline"])  # a bad one is refused, not dropped
             repos.append(_repo_defaults({**r, "repo": name, "schedule": {"enabled": bool((r.get("schedule") or {}).get("enabled")), "time": t},
                                          "reports": {p: bool(rep.get(p)) for p in REPORT_PERIODS},
                                          "rfc": {"repos": [str(x) for x in rfc.get("repos") or []][:10],
