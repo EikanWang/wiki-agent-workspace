@@ -2185,6 +2185,43 @@ test("GitHub review sources: requests, mentions, overlap and persistence", async
   await page.screenshot({ path: test.info().outputPath("review-sources-mobile.png") });
 });
 
+test("GitHub reviews: PRs only cc'd by a bot are hidden unless asked for", async ({ page }) => {
+  await ensureGithubSignIn(page);
+  await page.route("**/api/v1/github/reviews*", async (route) => {
+    const response = await route.fetch();
+    const queue = await response.json();
+    const base = queue.items.slice(0, 3);
+    queue.items = base.slice(0, 2).map((pr: Record<string, unknown>, i: number) => ({
+      ...pr, title: `cc-person-${i}`, draft: false, review_requested: i === 0, mentioned: i === 1, requested: i === 0 ? "you" : null,
+      ...(i === 1 ? { mention_by: "person", mention_who: "alice" } : {}),
+    }));
+    queue.bot_cc = [{ ...base[2], number: 9203240, title: "cc-bot-only", draft: false, review_requested: false, mentioned: true, requested: null, mention_by: "bot" }];
+    queue.watched = [];
+    queue.deferred = [];
+    await route.fulfill({ response, json: queue });
+  });
+  await page.goto("/");
+  await page.getByTestId("login-github").click();
+  await page.getByTestId("activity-reviews").click();
+  const rows = page.getByTestId("review-pr");
+  await expect(rows).toHaveCount(2);
+  await expect(page.getByTestId("review-mentioned")).toHaveText("@mentioned by alice");
+  await expect(page.getByTestId("reviews-bot-cc-hidden")).toContainText("1 cc'd by bot hidden");
+  const toggle = page.getByTestId("reviews-bot-cc");
+  await expect(toggle).not.toBeChecked();
+  await toggle.check();
+  await expect(rows).toHaveCount(3);
+  const bot = page.getByTestId("review-group-botcc").getByTestId("review-pr");
+  await expect(bot).toContainText("cc-bot-only");
+  await expect(bot.getByTestId("review-bot-cc")).toBeVisible();
+  await expect(page.getByTestId("reviews-bot-cc-hidden")).toHaveCount(0);
+  await page.reload();
+  await expect(toggle).toBeChecked();
+  await expect(rows).toHaveCount(3);
+  await toggle.uncheck();
+  await expect(rows).toHaveCount(2);
+});
+
 test("GitHub review hub: priority requests, hide a repository, watch a repository", async ({ page }) => {
   await ensureGithubSignIn(page);
   await page.goto("/");

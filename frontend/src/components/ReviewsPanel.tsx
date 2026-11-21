@@ -33,6 +33,9 @@ export interface ReviewPR {
   requested: "you" | "team" | "codeowner" | null;
   review_requested?: boolean;
   mentioned?: boolean;
+  /** only mentioning you (no review request): who wrote the mention — a person, or only a bot ("cc'd by bot") */
+  mention_by?: "person" | "bot";
+  mention_who?: string;
   /** the files of this PR you own in CODEOWNERS (up to 20) and how many there are */
   owned_paths?: string[];
   owned_count?: number;
@@ -124,6 +127,8 @@ interface Queue {
   codeowned?: CodeownedSource[];
   codeowned_problems?: string[];
   deferred?: ReviewPR[];
+  /** PRs that mention you only in a bot-written cc line (e.g. pytorch-bot's label subscribers): hidden unless asked for */
+  bot_cc?: ReviewPR[];
   hidden_count?: number;
   approved_hidden?: number;
   prefs?: HubPrefs;
@@ -218,6 +223,7 @@ export default function ReviewsPanel({ onOpen, onOpenPr }: { onOpen: (pr: Review
   useEffect(() => localStorage.setItem("waw.reviews.source", source), [source]);
   const [showDrafts, setShowDrafts] = useState(() => localStorage.getItem("waw.reviews.drafts") === "1");
   const [agentOnly, setAgentOnly] = usePersistedFlag("reviews.agentOnly");
+  const [showBotCc, setShowBotCc] = usePersistedFlag("reviews.botCc");
   const [maxRank, setMaxRank] = useState<number>(() => Number(localStorage.getItem("waw.reviews.maxRank") ?? "99"));
   useEffect(() => localStorage.setItem("waw.reviews.maxRank", String(maxRank)), [maxRank]);
   const agentWaiting = [...(queue?.items ?? []), ...(queue?.watched ?? [])].filter((p) => p.agent_review?.state === "waiting").length;
@@ -327,7 +333,7 @@ export default function ReviewsPanel({ onOpen, onOpenPr }: { onOpen: (pr: Review
   const prefs = queue?.prefs;
   const levels = prefs?.priority_levels ?? [];
   const categories = prefs?.categories?.length ? prefs.categories : DEFAULT_CATEGORIES;
-  const { groups, watchedGroups } = useMemo(() => {
+  const { groups, watchedGroups, botGroups } = useMemo(() => {
     const f = filter.trim().toLowerCase();
     const keep = (p: ReviewPR) => (agentOnly ? p.agent_review?.state === "waiting" : showDrafts || !p.draft) && (p.level_rank ?? 0) <= maxRank
       && matchesSource(p, source)
@@ -341,8 +347,10 @@ export default function ReviewsPanel({ onOpen, onOpenPr }: { onOpen: (pr: Review
       for (const p of list) by.set(p.repo, [...(by.get(p.repo) ?? []), p]);
       return [...by.entries()].map(([repo, prs]) => ({ repo, prs: prs.sort(cmp) })).sort((a, b) => b.prs.length - a.prs.length || a.repo.localeCompare(b.repo));
     };
-    return { groups: group((queue?.items ?? []).filter(keep)), watchedGroups: group((queue?.watched ?? []).filter(keep)) };
-  }, [queue, filter, source, showDrafts, sort, agentOnly, maxRank, hiddenCats]);
+    return { groups: group((queue?.items ?? []).filter(keep)), watchedGroups: group((queue?.watched ?? []).filter(keep)),
+      botGroups: showBotCc ? group((queue?.bot_cc ?? []).filter(keep)) : [] };
+  }, [queue, filter, source, showDrafts, sort, agentOnly, maxRank, hiddenCats, showBotCc]);
+  const botCc = queue?.bot_cc?.length ?? 0;
   const drafts = queue?.items.filter((p) => p.draft).length ?? 0;
   const deferred = (queue?.deferred ?? []).filter((p) => matchesSource(p, source));
   // per category: the PRs in it (drafts only when shown), for the category choice
@@ -393,7 +401,8 @@ export default function ReviewsPanel({ onOpen, onOpenPr }: { onOpen: (pr: Review
         <span className="review-pr-meta muted small">
           {showRepo ? `${p.repo}` : ""}#{p.number} · <GhUser login={p.author} bold={false} inButton /> · {ago(p.updated_at)} · <span className="add">+{p.additions}</span> <span className="del">−{p.deletions}</span>
           {reviewRequested(p) && <span className="git-badge" title="GitHub formally requests your review" data-testid="review-requested"> review requested</span>}
-          {p.mentioned && <span className="git-badge" title="GitHub's mention search includes you in this PR's description or discussion" data-testid="review-mentioned"> @mentioned</span>}
+          {p.mentioned && p.mention_by !== "bot" && <span className="git-badge" title={p.mention_who ? `@${p.mention_who} mentioned you in the description or discussion` : "GitHub's mention search includes you in this PR's description or discussion"} data-testid="review-mentioned"> @mentioned{p.mention_who ? ` by ${p.mention_who}` : ""}</span>}
+          {p.mention_by === "bot" && <span className="git-badge clean" title="Only a bot's cc line mentions you (e.g. pytorch-bot adding the subscribers of the PR's labels); no person asked for you" data-testid="review-bot-cc"> cc'd by bot</span>}
           {p.requested === "codeowner" && (
             <span className="git-badge" title={`Not requested from you: it touches ${p.owned_count ?? 0} file(s) you own in CODEOWNERS${p.draft ? " (a draft: GitHub requests code owners only once it is ready for review)" : ""}`} data-testid="review-codeowner"> code owner</span>
           )}
@@ -455,11 +464,11 @@ export default function ReviewsPanel({ onOpen, onOpenPr }: { onOpen: (pr: Review
         onClick={(e) => { e.stopPropagation(); pickAll(prs, !all); }} onKeyDown={(e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); e.stopPropagation(); pickAll(prs, !all); } }}>{all ? "✓" : n ? "–" : ""}</span>
     );
   };
-  const groupBox = (repo: string, prs: ReviewPR[], watched: boolean) => {
-    const id = (watched ? "w:" : "") + repo;
+  const groupBox = (repo: string, prs: ReviewPR[], watched: boolean, bot = false) => {
+    const id = (bot ? "b:" : watched ? "w:" : "") + repo;
     const open = !collapsed.has(id);
     return (
-      <div key={id} className="review-group" data-testid={watched ? "review-group-watched" : "review-group"} data-repo={repo}>
+      <div key={id} className="review-group" data-testid={bot ? "review-group-botcc" : watched ? "review-group-watched" : "review-group"} data-repo={repo}>
         <div className="review-group-head-row">
           {selectBox(prs, repo, "review-select-group", "group")}
           <button className="review-group-head" onClick={() => toggle(id)} aria-expanded={open}>
@@ -584,6 +593,9 @@ export default function ReviewsPanel({ onOpen, onOpenPr }: { onOpen: (pr: Review
                 onChange={(e) => void change("approved", { show_approved: e.target.checked })} data-testid="reviews-show-approved" /> approved ({queue.prefs.show_approved ? queue.items.filter((p) => p.approved_no_news).length : queue.approved_hidden ?? 0})
             </label>
           )}
+          <label className="small" title="PRs that mention you only in a bot-written cc line (e.g. pytorch-bot cc-ing the subscribers of a label), without a review request or a person @-mentioning you. Hidden by default.">
+            <input type="checkbox" checked={showBotCc} onChange={(e) => setShowBotCc(e.target.checked)} data-testid="reviews-bot-cc" /> cc'd by bot ({botCc})
+          </label>
           <label className="small" title="Only the PRs the agent reviewed whose suggested comments wait for you to apply or discard (drafts included)">
             <input type="checkbox" checked={agentOnly} onChange={(e) => setAgentOnly(e.target.checked)} data-testid="reviews-agent-waiting" /> 🤖 agent reviewed ({agentWaiting})
           </label>
@@ -634,6 +646,7 @@ export default function ReviewsPanel({ onOpen, onOpenPr }: { onOpen: (pr: Review
             Requests and mentions: {queue.items.length - owned}{queue.truncated ? `+ (of ${queue.total})` : ""}
             {owned > 0 && <span title="Not requested from you, but they touch files you own in CODEOWNERS" data-testid="reviews-codeowned-count"> · touching your files: {owned}</span>} · showing {shown}
             {deferred.length > 0 && <span data-testid="reviews-deferred-count"> · {deferred.length} deferred</span>}
+            {!showBotCc && botCc > 0 && <span title="Tick “cc'd by bot” to show them" data-testid="reviews-bot-cc-hidden"> · {botCc} cc'd by bot hidden</span>}
             {!showDrafts && !agentOnly && drafts > 0 && <span title="Tick “drafts” to show them"> · {drafts} draft{drafts > 1 ? "s" : ""} hidden</span>}
             {filter.trim() && <span> · filtered</span>}
             {categories.some((c) => hiddenCats.has(c.key)) && <span data-testid="reviews-categories-hidden"> · hidden: {categories.filter((c) => hiddenCats.has(c.key)).map((c) => c.title).join(", ")}</span>}
@@ -650,6 +663,8 @@ export default function ReviewsPanel({ onOpen, onOpenPr }: { onOpen: (pr: Review
         {groups.map(({ repo, prs }) => groupBox(repo, prs, false))}
         {watchedGroups.length > 0 && <div className="muted small reviews-meta" data-testid="reviews-watched-head">Watched repositories (all open PRs)</div>}
         {watchedGroups.map(({ repo, prs }) => groupBox(repo, prs, true))}
+        {botGroups.length > 0 && <div className="muted small reviews-meta" data-testid="reviews-bot-cc-head" title="No review request, and no person @-mentioned you: only a bot's cc line">cc'd by bot (only an automatic cc line mentions you)</div>}
+        {botGroups.map(({ repo, prs }) => groupBox(repo, prs, true, true))}
         {deferred.length > 0 && (
           <div className="review-group" data-testid="reviews-deferred">
             <div className="review-group-head-row">

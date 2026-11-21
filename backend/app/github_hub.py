@@ -370,6 +370,107 @@ def fetch_queue(graphql: Callable[[str, dict], dict], owner: str) -> dict[str, A
             "truncated": truncated, "rate_limit": rate}
 
 
+# Who @mentioned you in a PR that does not request your review: a person, or only a bot (pytorch-bot replaces the
+# author's "cc" line with the subscribers of the PR's labels). Read from the description's edit history (who wrote
+# each version) and the comments, reviews and review comments; "cc'd by bot" PRs are kept apart (hidden by default).
+MENTION_BATCH = 10
+MENTION_EDITS = 40
+_MENTION_AUTHOR = "author { __typename login }"
+MENTION_FIELDS = f"""
+        updatedAt body {_MENTION_AUTHOR}
+        userContentEdits(first: {MENTION_EDITS}) {{ totalCount nodes {{ diff editor {{ __typename login }} }} }}
+        comments(last: 100) {{ nodes {{ body {_MENTION_AUTHOR} }} }}
+        reviews(last: 40) {{ nodes {{ body {_MENTION_AUTHOR} comments(first: 30) {{ nodes {{ body {_MENTION_AUTHOR} }} }} }} }}
+"""
+
+
+def mention_query(numbers: list[int]) -> str:
+    body = "\n".join(f"    p{n}: pullRequest(number: {int(n)}) {{{MENTION_FIELDS}    }}" for n in numbers)
+    return ("query MentionWho($owner: String!, $name: String!) {\n  rateLimit { remaining resetAt }\n"
+            f"  repository(owner: $owner, name: $name) {{\n{body}\n  }}\n}}\n")
+
+
+def _mentions(text: str | None, owner: str) -> bool:
+    """`@owner` in the text, outside quoted lines ("> …", someone quoting a cc line is not a mention)."""
+    pat = re.compile(rf"(?<![\w/-])@{re.escape(owner)}(?![\w-])", re.I)
+    return any(pat.search(line) for line in (text or "").splitlines() if not line.lstrip().startswith(">"))
+
+
+def mention_by(node: dict[str, Any], owner: str) -> dict[str, Any]:
+    """{"by": "person", "who": login} when a person wrote the mention, else {"by": "bot"}."""
+    edits = (node.get("userContentEdits") or {})
+    versions = list(reversed(edits.get("nodes") or []))  # GitHub lists the newest first
+    if versions:
+        before = False if (edits.get("totalCount") or 0) <= len(versions) else None  # None: older versions not read
+        for v in versions:
+            now = _mentions(v.get("diff"), owner)
+            if now and before is not True and not is_bot(v.get("editor")):
+                return {"by": "person", "who": (v.get("editor") or {}).get("login")}
+            before = now
+    elif _mentions(node.get("body"), owner) and not is_bot(node.get("author")):
+        return {"by": "person", "who": (node.get("author") or {}).get("login")}
+    texts = list((node.get("comments") or {}).get("nodes") or [])
+    for r in (node.get("reviews") or {}).get("nodes") or []:
+        texts += [r, *((r.get("comments") or {}).get("nodes") or [])]
+    for t in texts:
+        if t and _mentions(t.get("body"), owner) and not is_bot(t.get("author")):
+            return {"by": "person", "who": (t.get("author") or {}).get("login")}
+    return {"by": "bot"}
+
+
+def mention_key(owner: str) -> str:
+    return f"github:mention_by:{owner.lower()}"
+
+
+def classify_mentions(graphql: Callable[[str, dict], dict], owner: str, items: list[dict[str, Any]],
+                      known: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Who mentioned the owner in the PRs that only mention them (`known`: earlier answers, reused while a PR has not
+    changed). Sets `mention_by` (and `mention_who`) on those items; returns the answers to keep. A PR that could not be
+    read counts as mentioned by a person (shown)."""
+    out: dict[str, dict[str, Any]] = {}
+    todo: dict[str, list[dict[str, Any]]] = {}
+    for p in items:
+        if not p.get("mentioned") or p.get("review_requested"):
+            continue
+        key = f"{p['repo']}#{p['number']}".lower()
+        hit = known.get(key)
+        if hit and hit.get("updated_at") == p.get("updated_at"):
+            out[key] = hit
+        else:
+            todo.setdefault(p["repo"], []).append(p)
+    for repo, prs in todo.items():
+        o, name = repo.split("/")
+        i, size = 0, MENTION_BATCH
+        while i < len(prs):
+            part = prs[i:i + size]
+            try:
+                d = graphql(mention_query([p["number"] for p in part]), {"owner": o, "name": name})
+            except ApiError as exc:
+                if exc.code == "GH_BUSY" and size > 1:
+                    size = max(1, size // 2)
+                    continue
+                log.warning("who mentioned you: %s: %s", repo, exc.message)
+                i += len(part)
+                continue
+            except Exception:  # noqa: BLE001 — unreadable: shown as a mention by a person
+                log.exception("who mentioned you: %s", repo)
+                i += len(part)
+                continue
+            r = (d or {}).get("repository") or {}
+            for p in part:
+                node = r.get(f"p{p['number']}")
+                if node:
+                    out[f"{p['repo']}#{p['number']}".lower()] = {**mention_by(node, owner), "updated_at": p.get("updated_at")}
+            i += len(part)
+    for p in items:
+        hit = out.get(f"{p['repo']}#{p['number']}".lower())
+        if hit and p.get("mentioned") and not p.get("review_requested"):
+            p["mention_by"] = hit["by"]
+            if hit.get("who"):
+                p["mention_who"] = hit["who"]
+    return out
+
+
 _cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _tasks: dict[str, asyncio.Task] = {}
 _errors: dict[str, dict[str, Any]] = {}
@@ -433,6 +534,7 @@ def fetch_owned(graphql: Callable[[str, dict], dict], owner: str, found: dict[st
     return items, gone, problems
 
 
+_mention_memo: dict[str, dict[str, dict[str, Any]]] = {}  # who mentioned you, without an app context (tests)
 _watched: dict[str, list[str]] = {}  # owner -> watched repositories (latest prefs, read by a running refresh)
 _ctxs: dict[str, AppContext] = {}  # owner -> the app context (for the code-owned PRs, kept in the kv table)
 
@@ -460,6 +562,17 @@ def _owned_found(ctx: AppContext, owner: str, data: dict[str, Any]) -> dict[str,
 async def _fetch(graphql: Callable[[str, dict], dict], owner: str) -> dict[str, Any]:
     data = await asyncio.to_thread(fetch_queue, graphql, owner)
     ctx = _ctxs.get(owner)
+    from .kv import kv_get, kv_put
+
+    known = (kv_get(ctx, mention_key(owner), {}) or {}) if ctx is not None else _mention_memo.get(owner, {})
+    answers = await asyncio.to_thread(classify_mentions, graphql, owner, data["items"], known)
+    if ctx is not None:
+        kv_put(ctx, mention_key(owner), answers)
+    else:
+        _mention_memo[owner] = answers
+    # cc'd by bot only: apart from the list (not prioritized, prefetched or counted); Reviews can show them
+    data["bot_cc"] = [p for p in data["items"] if p.get("mention_by") == "bot"]
+    data["items"] = [p for p in data["items"] if p.get("mention_by") != "bot"]
     if ctx is not None:
         from . import codeowned
 
@@ -514,7 +627,8 @@ def review_queue_data(ctx: AppContext, raw: dict[str, Any], prefs: dict[str, Any
 
     extra = prefs.get("core_maintainers") or []
     annotated = {**raw, "items": [with_mine(p) for p in maintainers.annotate(ctx, raw.get("items") or [], extra)],
-                 "watched": [with_mine(p) for p in maintainers.annotate(ctx, raw.get("watched") or [], extra)]}
+                 "watched": [with_mine(p) for p in maintainers.annotate(ctx, raw.get("watched") or [], extra)],
+                 "bot_cc": [with_mine(p) for p in maintainers.annotate(ctx, raw.get("bot_cc") or [], extra)]}
     return apply_prefs(annotated, prefs, rp.results(ctx))
 
 
@@ -556,7 +670,7 @@ async def review_queue(refresh: bool = Query(False), auth: tuple[AppContext, str
 
     gc.prefetch(ctx, data["items"] + data["watched"], lambda r, n: _fetch_all(ctx, r, n), RATE)  # PRs ready to open
     agent = agent_review_states(ctx)
-    for key in ("items", "watched"):
+    for key in ("items", "watched", "bot_cc"):
         data[key] = [{**p, "agent_review": agent.get(f"{p['repo']}#{p['number']}".lower())} for p in data.get(key) or []]
     from . import codeowned, maintainers
 
@@ -598,6 +712,7 @@ def reset_cache() -> None:
     _people_cache.clear()
     _user_cache.clear()
     _mention_cache.clear()
+    _mention_memo.clear()
     _participants.clear()
 
 
@@ -1431,6 +1546,7 @@ def apply_prefs(data: dict[str, Any], prefs: dict[str, Any], agent_results: dict
     watching = {r.lower() for r in prefs.get("watched_repos") or []}  # a repository just unwatched disappears at once
     watched = [{**with_level(p, prefs, agent_results), "priority": False, "watched": True} for p in data.get("watched", [])
                if p["repo"].lower() not in hidden and p["repo"].lower() in watching and (prefs.get("show_approved") or not p.get("approved_no_news"))]
+    bot_cc = [with_level(p, prefs, agent_results) for p in data.get("bot_cc") or [] if p["repo"].lower() not in hidden]
     deferred: list[dict[str, Any]] = []
     rules = prefs.get("deferred") or {}
     if rules:
@@ -1444,7 +1560,7 @@ def apply_prefs(data: dict[str, Any], prefs: dict[str, Any], agent_results: dict
                     keep.append({**p, "deferred_ended": d} if d else p)
             return keep
         items, watched = split(items), split(watched)
-    return {**data, "items": items, "watched": watched, "deferred": deferred,
+    return {**data, "items": items, "watched": watched, "deferred": deferred, "bot_cc": bot_cc,
             "hidden_count": sum(1 for p in data.get("items", []) if p["repo"].lower() in hidden), "approved_hidden": len(quiet)}
 
 

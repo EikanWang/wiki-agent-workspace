@@ -76,6 +76,65 @@ async def test_review_queue_owner_only_paginated_and_cached(running_app):
     assert r["refreshing"] is False and r["age_seconds"] < 5 and len(calls) == 12
 
 
+def _who(diffs=(), body=None, author="rajfirke", comments=(), reviews=(), total=None):
+    edits = [{"diff": d, "editor": {"__typename": "Bot" if e.endswith("bot") else "User", "login": e}} for e, d in diffs]
+    user = lambda login: {"__typename": "Bot" if login.endswith("bot") else "User", "login": login}  # noqa: E731
+    return {"body": body if body is not None else (diffs[-1][1] if diffs else ""), "author": user(author),
+            "userContentEdits": {"totalCount": total if total is not None else len(edits), "nodes": list(reversed(edits))},
+            "comments": {"nodes": [{"body": t, "author": user(a)} for a, t in comments]},
+            "reviews": {"nodes": [{"body": t, "author": user(a), "comments": {"nodes": []}} for a, t in reviews]}}
+
+
+def test_mention_by_tells_a_person_from_a_bot_cc_line():
+    bot_cc = "Fix it\n\ncc @voznesenskym @EikanWang @jgong5"
+    # pytorch-bot replaced the author's cc line with the label's subscribers (twice): a bot mention
+    node = _who([("rajfirke", "Fix it\n\ncc @ezyang"), ("pytorch-bot", bot_cc), ("rajfirke", "Fix it\n\ncc @ezyang"), ("pytorch-bot", bot_cc)])
+    assert github_hub.mention_by(node, "EikanWang") == {"by": "bot"}
+    # a person editing the description afterwards only keeps the bot's line: still the bot's
+    assert github_hub.mention_by(_who([("rajfirke", "x"), ("pytorch-bot", bot_cc), ("rajfirke", bot_cc + "\nmore")]), "EikanWang") == {"by": "bot"}
+    # the author wrote it (never edited: no history), or added it in an edit
+    assert github_hub.mention_by(_who(body="@eikanwang please review"), "EikanWang") == {"by": "person", "who": "rajfirke"}
+    assert github_hub.mention_by(_who([("rajfirke", "x"), ("alice", "x\ncc @EikanWang")]), "EikanWang") == {"by": "person", "who": "alice"}
+    # a comment or review by a person; bots, quotes and other names do not count
+    assert github_hub.mention_by(_who(body=bot_cc, author="pytorch-bot", comments=[("pytorchmergebot", "@EikanWang merged")]), "EikanWang") == {"by": "bot"}
+    assert github_hub.mention_by(_who(body="x", comments=[("bob", "> cc @EikanWang"), ("bob", "@EikanWang2 hi")]), "EikanWang") == {"by": "bot"}
+    assert github_hub.mention_by(_who(body="x", reviews=[("bob", "@EikanWang thoughts?")]), "EikanWang") == {"by": "person", "who": "bob"}
+
+
+async def test_review_queue_keeps_bot_cc_mentions_apart(running_app):
+    github_hub.reset_cache()
+    who_calls: list = []
+    who = {5: _who([("rajfirke", "x"), ("pytorch-bot", "x\ncc @EikanWang")]), 6: _who(body="@EikanWang can you look?", author="alice")}
+
+    def graphql(query, variables):
+        if "MentionWho" in query:
+            who_calls.append(query)
+            nums = [n for n in who if f"pullRequest(number: {n})" in query]
+            return {"repository": {f"p{n}": who[n] for n in nums}}
+        if "mentions:@me" in (variables.get("q") or ""):
+            nodes = [pr(1), pr(5, user=None), pr(6, user=None)]
+        elif "in:comments" in (variables.get("q") or ""):
+            nodes = []
+        else:
+            nodes = [pr(1)]
+        return {"search": {"issueCount": len(nodes), "pageInfo": {"hasNextPage": False}, "nodes": nodes}}
+
+    h = await running_app()
+    h.ctx.extra["gh_owner"] = lambda: "EikanWang"
+    h.ctx.extra["gh_graphql"] = graphql
+    as_github(h, "EikanWang")
+    r = (await h.api.get("/api/v1/github/reviews")).json()
+    assert sorted(p["number"] for p in r["items"]) == [1, 6]
+    by = {p["number"]: p for p in r["items"]}
+    assert by[6]["mention_by"] == "person" and by[6]["mention_who"] == "alice" and "mention_by" not in by[1]
+    assert [p["number"] for p in r["bot_cc"]] == [5] and r["bot_cc"][0]["mention_by"] == "bot"
+    assert len(who_calls) == 1
+    # the answers are kept: an unchanged PR is not read again
+    github_hub.reset_cache()
+    await h.api.get("/api/v1/github/reviews")
+    assert len(who_calls) == 1
+
+
 def test_review_queue_includes_mentions_and_deduplicates_requests():
     calls = []
 

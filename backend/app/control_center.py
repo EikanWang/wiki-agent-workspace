@@ -30,10 +30,10 @@ async def reviews(ctx: AppContext) -> dict[str, Any]:
     data = await asyncio.to_thread(hub.review_queue_data, ctx, hit[1], prefs)
     fields = ("repo", "number", "title", "url", "author", "state", "ci", "draft", "labels", "review_decision",
               "review_requested", "mentioned", "updated_at", "requested", "requested_by", "my_review", "my_activity",
-              "since_mine", "approved_no_news", "level", "level_rank", "level_source", "level_reasons", "priority",
+              "since_mine", "approved_no_news", "mention_by", "mention_who", "level", "level_rank", "level_source", "level_reasons", "priority",
               "author_roles", "owned_count", "deferred")
     rows = [{"queue_group": group, **{key: row.get(key) for key in fields}}
-            for group in ("items", "watched", "deferred") for row in data.get(group, [])]
+            for group in ("items", "watched", "deferred", "bot_cc") for row in data.get(group, [])]
     age = max(0, int(time.time() - hit[0]))
     return {"status": "live", "source_url": "/api/v1/github/reviews", "owner": owner,
             "fetched_at": data.get("fetched_at"), "age_seconds": age, "total": len(rows), "items": rows,
@@ -42,7 +42,7 @@ async def reviews(ctx: AppContext) -> dict[str, Any]:
             "watch_problems": data.get("watch_problems", []), "codeowned_problems": data.get("codeowned_problems", []),
             "limits": {"per_requested_or_mentioned_search": hub.MAX_PRS, "per_watched_repository": hub.WATCH_PRS},
             "filters": {key: prefs.get(key) for key in ("hidden_repos", "watched_repos", "show_approved", "codeowned")},
-            "view": "Full server queue including watched and deferred PRs; browser-local display filters are not applied. "
+            "view": "Full server queue including watched and deferred PRs, and (group bot_cc) PRs that only mention the owner in a bot-written cc line; browser-local display filters are not applied. "
                     "All pages returned by Reviews are included; there is no chat-specific row limit or cursor."}
 
 
