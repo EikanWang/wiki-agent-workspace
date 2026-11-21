@@ -255,6 +255,19 @@ async def test_reports_of_any_period_with_blocks_commits_rfcs_highlights(running
     assert (await api.get("/api/v1/agent-context", params={"scope": "chat:x:../etc/passwd"})).status_code == 400
     bad = await api.post(f"/api/v1/insights/reports/acme/proj/{rid}/chat", json={"quote": "x", "dirs": [str(tmp_path / "missing")]})
     assert bad.status_code == 404 and bad.json()["error"]["code"] == "FOLDER_NOT_FOUND"
+    # a daily summary: a selected part, or all of it
+    day = store.daily(h.ctx, "acme/proj", "2026-10-20")["path"]
+    c = await api.post("/api/v1/insights/file/chat", json={"path": day, "quote": "No notable activity", "question": "Is that right?", "dirs": [str(own)]})
+    assert c.status_code == 201, c.text
+    await api.wait_job(c.json()["job_id"])
+    with h.ctx.db.read() as s:
+        prompt = s.get(Job, c.json()["job_id"]).prompt
+    assert "> No notable activity" in prompt and "Is that right?" in prompt and "daily summary" in prompt and str(own) in prompt and str(shared) in prompt
+    assert "daily summary 2026-10-20" in (await api.get(f"/api/v1/documents/open?path={c.json()['path']}")).json()["text"].split("\n", 1)[0]
+    c = await api.post("/api/v1/insights/file/chat", json={"path": day})
+    assert c.status_code == 201, c.text
+    await api.wait_job(c.json()["job_id"])
+    assert (await api.post("/api/v1/insights/file/chat", json={"path": "/etc/passwd"})).status_code == 400
     assert (await api.delete(f"/api/v1/insights/reports/acme/proj/{rid}")).status_code == 200
     assert (await api.get(f"/api/v1/insights/reports/acme/proj/{rid}")).status_code == 404
     for bad in ({"repo": "acme/proj", "period": "custom", "since": "2026-11-05", "until": "2026-11-01"}, {"repo": "x", "period": "week"},

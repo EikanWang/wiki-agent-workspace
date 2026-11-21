@@ -4222,6 +4222,32 @@ test("Repo Insights: the history in the folder, a week's report (daily summaries
   // the days it made are in the list now
   await page.getByTestId("insights-tab-daily").click();
   await expect(page.getByTestId("insights-day")).toHaveCount(5);
+  // a daily summary: select a part of it and discuss it (or chat about all of it)
+  await page.getByTestId("insights-day").first().click();
+  const fileView = page.getByTestId("insights-file-view");
+  await expect(fileView.locator(".insights-report-text")).not.toBeEmpty();
+  await expect(fileView.getByTestId("insights-file-chat")).toBeVisible();
+  const picked = await page.evaluate(() => {
+    const root = document.querySelector('[data-testid="insights-file-view"] .insights-report-text')!;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let n = walker.nextNode() as Text | null;
+    while (n && n.data.trim().length < 6) n = walker.nextNode() as Text | null;
+    const i = n!.data.search(/\S/);
+    const range = document.createRange();
+    range.setStart(n!, i);
+    range.setEnd(n!, i + 6);
+    window.getSelection()!.removeAllRanges();
+    window.getSelection()!.addRange(range);
+    root.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+    return n!.data.slice(i, i + 6).trim();
+  });
+  await page.getByTestId("insights-sel-open").click();
+  await expect(page.getByTestId("insights-sel-quote")).toHaveText(picked);
+  await page.getByTestId("insights-sel-send").click(); // no question: the agent explains it
+  await expect(page.getByTestId("chats-page")).toBeVisible({ timeout: 15000 });
+  await expect(page.getByTestId("chat-title")).toContainText("daily summary");
+  await page.getByTestId("activity-insights").click();
+  await page.getByTestId("insights-tab-daily").click();
   // a month of this year: its own category in the list
   await page.getByTestId("insights-tab-reports").click();
   await page.getByTestId("insights-period-month").click();

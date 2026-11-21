@@ -252,7 +252,7 @@ function RepoPage({ repo, onOpenChat, onOpenPrReview, sessions }: { repo: string
             </div>
             <div className="insights-main">
               {open?.kind === "report" ? <ReportViewer repo={repo} id={open.id} onOpenChat={onOpenChat} onDeleted={() => { setOpen(null); void load(); }} onRead={() => void load()} />
-                : open?.kind === "file" ? <FileViewer path={open.path} onRead={() => void load()} />
+                : open?.kind === "file" ? <FileViewer repo={repo} path={open.path} onOpenChat={onOpenChat} onRead={() => void load()} />
                 : <div className="muted pad">Choose a report or a day.</div>}
             </div>
           </>
@@ -501,15 +501,37 @@ function DiscussFolders({ repo, dirs, onChange }: { repo: string; dirs: string[]
   );
 }
 
-function FileViewer({ path, onRead }: { path: string; onRead: () => void }) {
-  const [f, setF] = useState<{ text: string; name?: string; repo?: string | null; read_new?: string[] } | null>(null);
-  useEffect(() => { setF(null); void get<{ text: string; name: string; repo: string | null; read_new: string[] }>(`/insights/file?path=${encodeURIComponent(path)}`).then(setF).catch((e) => setF({ text: `(${(e as ApiError).message})` })); }, [path]);
+/** A daily summary or a highlights file: select a part of it to discuss it with the agent, or chat about all of it. */
+function FileViewer({ repo, path, onOpenChat, onRead }: { repo: string; path: string; onOpenChat: (ws: string, path: string) => void; onRead: () => void }) {
+  const [f, setF] = useState<{ text: string; name?: string; repo?: string | null; read_new?: string[]; failed?: boolean } | null>(null);
+  const textRef = useRef<HTMLDivElement>(null);
+  const [dirs, setDirs] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => { setF(null); void get<{ text: string; name: string; repo: string | null; read_new: string[] }>(`/insights/file?path=${encodeURIComponent(path)}`).then(setF).catch((e) => setF({ text: `(${(e as ApiError).message})`, failed: true })); }, [path]);
   if (f === null) return <div className="muted pad">Loading…</div>;
   const [head, ...rest] = f.text.split("\n");
+  const chat = async (body: Record<string, unknown>) => {
+    const c = await post<{ workspace_id: string; path: string }>("/insights/file/chat", { path, ...body });
+    onOpenChat(c.workspace_id, c.path);
+  };
   return (
-    <div className="insights-report" data-testid="insights-file-view"><div className="muted small">{head}</div>
-      {f.repo && f.name ? <NewThings repo={f.repo} readKey={`f:${f.name}`} text={rest.join("\n")} read={f.read_new ?? []} onRead={onRead} />
-        : <MarkdownView text={rest.join("\n")} className="insights-md" />}
+    <div className="insights-report" data-testid="insights-file-view">
+      <div className="row nowrap"><span className="muted small">{head}</span><span className="spacer" />
+        {!f.failed && <button className="btn small" disabled={busy} onClick={async () => { setBusy(true); setErr(null); try { await chat({}); } catch (e) { setErr((e as ApiError).message); } finally { setBusy(false); } }}
+          title="Ask the agent about this in a chat (or select a part of it: Discuss this)" data-testid="insights-file-chat">Continue in chat</button>}
+      </div>
+      {err && <div className="error-text small">{err}</div>}
+      <div ref={textRef} className="insights-report-text">
+        {f.repo && f.name ? <NewThings repo={f.repo} readKey={`f:${f.name}`} text={rest.join("\n")} read={f.read_new ?? []} onRead={onRead} />
+          : <MarkdownView text={rest.join("\n")} className="insights-md" />}
+      </div>
+      {!f.failed && (
+        <SelectionAsk container={textRef} within=".insights-report-text" label="Discuss this" sendLabel="Start discussion" pictures={false} optional testId="insights-sel"
+          hint="A new chat, with this as its material"
+          extra={<DiscussFolders repo={f.repo ?? repo} dirs={dirs} onChange={setDirs} />}
+          onAsk={async (part, question) => { await chat({ quote: part.quote, question, dirs }); setDirs([]); }} />
+      )}
     </div>
   );
 }

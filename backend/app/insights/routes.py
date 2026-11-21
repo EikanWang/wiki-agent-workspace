@@ -202,7 +202,27 @@ async def reports_chat(owner: str, name: str, body: ChatManyIn, ctx: AppContext 
     return await _chat_on(ctx, _repo(owner, name), list(dict.fromkeys(body.ids)), body)
 
 
-async def _chat_on(ctx: AppContext, repo: str, ids: list[str], body: ChatIn):
+class FileChatIn(ChatIn):
+    path: str = Field(..., max_length=4096)
+
+
+@router.post("/insights/file/chat", status_code=201)
+async def file_chat(body: FileChatIn, ctx: AppContext = Depends(require_auth_mutating)):
+    """A chat about a daily summary (or a highlights file), e.g. a selected part of it."""
+    p = _under(ctx, body.path)
+    text = p.read_text(encoding="utf-8", errors="replace") if p.suffix == ".md" else ""
+    m = store.HEADER.search(text[:400]) or store.HL_HEADER.search(text[:400])
+    if not m:
+        raise ApiError(409, "NOT_A_SUMMARY", "only a summary or a highlights file can be discussed")
+    hl = not store.HEADER.search(text[:400])
+    a, b = m["a"], m["b"]
+    span = a if (dt.date.fromisoformat(b) - dt.date.fromisoformat(a)).days <= 1 else f"{a} – {b}"
+    mat = {"label": span, "since": a, "until": b, "text": text}
+    return await _chat_on(ctx, m["repo"], [], body, mats=[mat], what="highlights" if hl else "summary")
+
+
+async def _chat_on(ctx: AppContext, repo: str, ids: list[str], body: ChatIn, mats: list[dict[str, Any]] | None = None, what: str = "report"):
+    """A chat with reports (`ids`), or other material (`mats`: label, since, until, text), of the repository."""
     from dataclasses import replace
 
     from ..annotations import ThreadCreateIn, ThreadService
@@ -214,7 +234,7 @@ async def _chat_on(ctx: AppContext, repo: str, ids: list[str], body: ChatIn):
     dirs = clean_dirs(body.dirs)
     quote = body.quote.strip()
 
-    reps = [pl.report(ctx, repo, rid) for rid in ids]
+    reps = mats if mats is not None else [pl.report(ctx, repo, rid) for rid in ids]
     if any(not r.get("text") for r in reps):
         raise ApiError(409, "REPORT_NOT_READY", "the report is not ready")
     reps.sort(key=lambda r: (r["since"], r["until"]))
@@ -224,7 +244,8 @@ async def _chat_on(ctx: AppContext, repo: str, ids: list[str], body: ChatIn):
     if rt is None:
         raise ApiError(404, "WORKSPACE_NOT_FOUND", "that wiki folder is not open")
     label = lambda r: r.get("label") or f"{r['since']} – {r['until']}"  # noqa: E731
-    head = f"{repo} · {', '.join(label(r) for r in reps)}"
+    noun = {"report": "report", "summary": "daily summary", "highlights": "highlights"}[what]
+    head = f"{repo} · {'' if what == 'report' else noun + ' '}{', '.join(label(r) for r in reps)}"
     if quote:
         head += " · “" + " ".join(quote.split())[:60] + ("…”" if len(" ".join(quote.split())) > 60 else "”")
     chat = new_chat(rt.docs, head[:160])
@@ -235,17 +256,17 @@ async def _chat_on(ctx: AppContext, repo: str, ids: list[str], body: ChatIn):
     opened = rt.docs.open_document(chat["path"])
     room = 380_000 // len(reps)
     parts = [f"<<<REPORT {label(r)} ({r['since']} to {r['until']})\n{r['text'][:room]}\nREPORT>>>" for r in reps]
-    brief = (f"Material: {'the Repo Insights report' if len(reps) == 1 else f'{len(reps)} Repo Insights reports'} of {repo} (made "
+    brief = (f"Material: {f'the Repo Insights {noun}' if len(reps) == 1 else f'{len(reps)} Repo Insights reports'} of {repo} (made "
              "from GitHub issues, pull requests, RFCs and the git history; 🆕 marks what is new in each):\n" + "\n".join(parts))
     if len(reps) == 1:
-        q = f"Here is the report of {repo} for {label(reps[0])}. Give me the three things I should look at first, with their links."
+        q = f"Here is the {noun} of {repo} for {label(reps[0])}. Give me the three things I should look at first, with their links."
     else:
         q = (f"Here are the reports of {repo} for {', '.join(label(r) for r in reps)}. Compare them: what changed between them, "
              "what is new in each, and the three things I should look at first, with their links.")
     asked = body.question.strip()
     if quote:
         quoted = "\n".join("> " + line for line in quote.splitlines())
-        q = (f"About this part of the {'report' if len(reps) == 1 else 'reports'}:\n\n{quoted}\n\n"
+        q = (f"About this part of the {noun if len(reps) == 1 else 'reports'}:\n\n{quoted}\n\n"
              + (asked or "Explain it: what it is about, why it matters, and what I should look at, with the links."))
     elif asked:
         q = asked
