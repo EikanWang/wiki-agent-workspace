@@ -437,7 +437,8 @@ test("Terminal activity: its own list of terminals (home or a chosen folder), th
   await page.getByTestId("activity-terminal").click();
   await expect(page.getByTestId("terminals-panel")).toBeVisible();
   await expect(page.locator(".terminal-center")).toBeVisible();
-  await expect(page.getByTestId("view-document")).toHaveCount(0); // Document / Terminal / Chats / Diff are the wiki's
+  await expect(page.getByTestId("view-document")).toBeVisible(); // the header's Document / Terminal / Chats / Diff are on every page
+  await expect(page.getByTestId("view-terminal")).not.toHaveClass(/active/); // this is the activity's page, not the wiki's terminal
   const n0 = await page.getByTestId("terminals-item").count();
   // a terminal in the home folder
   await page.getByTestId("terminals-new").click();
@@ -461,11 +462,14 @@ test("Terminal activity: its own list of terminals (home or a chosen folder), th
   await page.getByTestId("terminals-item").nth(n0).click();
   await expect(page.getByTestId("terminals-item").nth(n0)).toHaveClass(/selected/);
   await expect(page.locator(".term-view.active .xterm-rows")).toContainText(`AT_${process.env.HOME}`);
-  // still the Terminal activity after a reload; the wiki brings its tabs back
+  // still the Terminal activity after a reload; the header's Terminal goes to the wiki's terminal
   await page.reload();
   await expect(page.getByTestId("terminals-panel")).toBeVisible({ timeout: 15000 });
   await expect(page.locator(".terminal-center")).toBeVisible();
-  await page.getByTestId("activity-files").click();
+  await page.getByTestId("view-terminal").click();
+  await expect(page.getByTestId("view-terminal")).toHaveClass(/active/);
+  await expect(page.getByTestId("activity-files")).toHaveAttribute("aria-pressed", "true");
+  await page.getByTestId("view-document").click();
   await expect(page.getByTestId("view-document")).toHaveClass(/active/);
   await page.getByTestId("activity-terminal").click();
   // close the two terminals again
@@ -4060,7 +4064,8 @@ test("Repo Insights: the history in the folder, a week's report (daily summaries
   await login(page);
   await page.getByTestId("activity-insights").click();
   await expect(page.getByTestId("insights-panel")).toBeVisible();
-  await expect(page.getByTestId("view-document")).toHaveCount(0); // the wiki's tabs are not shown here
+  await expect(page.getByTestId("view-document")).toBeVisible(); // the same header as the wiki's
+  await expect(page.getByTestId("view-document")).not.toHaveClass(/active/);
   await expect(page.getByTestId("insights-repo")).toHaveCount(7);
   await page.locator('[data-testid="insights-repo"][data-repo="pytorch/pytorch"]').click();
   await expect(page.getByTestId("insights-view")).toContainText("daily summaries 2026-11-10 … 2026-11-10 (1)");
@@ -4250,17 +4255,19 @@ test("Agents: find sessions in folders, add one by id, alarms, a session on stag
   }
   await page.getByTestId("activity-agents").click();
   await expect(page.getByTestId("agents-panel")).toBeVisible();
-  // the agents' status page; Document / Terminal / Chats / Diff (and the document's session) do not apply here
+  // the agents' status page: the same header with Document / Terminal / Chats / Diff (the document's session does not apply here)
   await expect(page.getByTestId("agent-monitor")).toBeVisible();
-  await expect(page.getByTestId("view-document")).toHaveCount(0);
-  await expect(page.getByTestId("view-diff")).toHaveCount(0);
+  await expect(page.getByTestId("view-document")).toBeVisible();
+  await expect(page.getByTestId("view-diff")).toBeVisible();
+  await expect(page.getByTestId("view-document")).not.toHaveClass(/active/);
   await expect(page.getByTestId("session-area")).toHaveCount(0);
   await page.reload(); // still the status page after a reload
   await expect(page.getByTestId("agent-monitor")).toBeVisible({ timeout: 15000 });
-  await expect(page.getByTestId("view-document")).toHaveCount(0);
-  // the wiki brings them back, with the document that was open
-  await page.getByTestId("activity-files").click();
+  await expect(page.getByTestId("view-document")).not.toHaveClass(/active/);
+  // the header's Document goes back to the wiki, with the document that was open
+  await page.getByTestId("view-document").click();
   await expect(page.getByTestId("view-document")).toHaveClass(/active/);
+  await expect(page.getByTestId("activity-files")).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByTestId("markdown-body").locator("h1")).toContainText("Guide");
   await page.getByTestId("activity-agents").click();
   await expect(page.getByTestId("agent-monitor")).toBeVisible();

@@ -638,7 +638,7 @@ export default function App() {
   const refreshReviews = useCallback(() => void loadReviews(true), []);
   useGhAutoRefresh("reviews", refreshReviews, !!hub?.available); // the Reviews list and its badge, at the chosen interval
   const sidebarView = (prefs.sidebarView === "reviews" && !hub?.available) ? "files" : prefs.sidebarView ?? "files";
-  // the Terminal activity: its terminals page, without the wiki's Document / Terminal / Chats / Diff
+  // the Terminal activity: its terminals page (the header's Terminal tab goes to the wiki's terminal)
   const terminalMode = sidebarView === "terminal" && view === "terminal";
   const [insightsRepo, setInsightsRepo] = useState<string | null>(() => localStorage.getItem("waw.insights.repo") || "pytorch/pytorch");
   useEffect(() => { if (insightsRepo) localStorage.setItem("waw.insights.repo", insightsRepo); }, [insightsRepo]);
@@ -966,9 +966,9 @@ export default function App() {
             </button>}
           </div>
         )}
-        {view !== "agents" && view !== "insights" && !terminalMode && <nav className="view-tabs">
+        <nav className="view-tabs">
           <button className={view === "document" ? "active" : ""} onClick={() => setView("document")} data-testid="view-document">Document</button>
-          <button className={view === "terminal" ? "active" : ""} onClick={() => setView("terminal")} data-testid="view-terminal">Terminal</button>
+          <button className={view === "terminal" && !terminalMode ? "active" : ""} onClick={() => { if (terminalMode) updatePrefs({ sidebarView: "files" }); setView("terminal"); }} data-testid="view-terminal">Terminal</button>
           <button className={view === "chats" ? "active" : ""} onClick={() => openChats(chatTarget ?? { ws: getWorkspace() ?? "", path: null })} title="Chat with a project (a folder of this window) directly" data-testid="view-chats">Chats</button>
           <button
             className={view === "diff" ? "active" : ""}
@@ -978,7 +978,7 @@ export default function App() {
           >
             Diff
           </button>
-        </nav>}
+        </nav>
         <button className="btn small" onClick={() => { setRecentKey((k) => k + 1); setShowRecent(true); }} title="Documents and discussions you worked on, newest first" data-testid="recent-button">Recent</button>
         <span className="font-settings-anchor">
           <button className="btn small" onClick={() => setShowFonts((v) => !v)} title="Font style and size" data-testid="font-button">Aa</button>
