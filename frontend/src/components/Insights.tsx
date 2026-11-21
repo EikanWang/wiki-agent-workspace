@@ -80,6 +80,7 @@ const todayIso = () => new Date().toISOString().slice(0, 10);
 const daysAgo = (n: number) => new Date(Date.now() - n * 86400_000).toISOString().slice(0, 10);
 
 let settingsCache: Settings | null = null;
+const cacheSettings = (next: Settings) => { settingsCache = next; window.dispatchEvent(new CustomEvent("waw-insights-settings")); };
 export async function loadInsightsSettings(): Promise<Settings> {
   settingsCache = await get<Settings>("/insights/settings");
   return settingsCache;
@@ -91,6 +92,11 @@ export function InsightsPanel({ active, onOpen }: { active: string | null; onOpe
   const [add, setAdd] = useState("");
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => { void loadInsightsSettings().then(setS).catch((e) => setErr((e as ApiError).message)); }, []);
+  useEffect(() => {
+    const sync = () => setS(settingsCache);
+    window.addEventListener("waw-insights-settings", sync);
+    return () => window.removeEventListener("waw-insights-settings", sync);
+  }, []);
   const addRepo = async () => {
     const r = add.trim().replace(/^https:\/\/github\.com\//, "").replace(/\.git$|\/$/g, "");
     if (!s || !r) return;
@@ -104,6 +110,32 @@ export function InsightsPanel({ active, onOpen }: { active: string | null; onOpe
       setErr((e as ApiError).message);
     }
   };
+  const [drag, setDrag] = useState<string | null>(null);
+  const [over, setOver] = useState<{ repo: string; after: boolean } | null>(null);
+  const reorder = async (order: string[]) => {
+    if (!s || order.join("\n") === s.repos.map((r) => r.repo).join("\n")) return;
+    const repos = order.map((n) => s.repos.find((r) => r.repo === n)!);
+    setS({ ...s, repos });
+    try {
+      const next = await put<Settings>("/insights/settings", { repos });
+      settingsCache = next;
+      setS(next);
+    } catch (e) {
+      setErr((e as ApiError).message);
+      setS(s);
+    }
+  };
+  const place = (from: string, to: string, after: boolean) => {
+    if (!s || from === to) return;
+    const order = s.repos.map((r) => r.repo).filter((n) => n !== from);
+    order.splice(order.indexOf(to) + (after ? 1 : 0), 0, from);
+    void reorder(order);
+  };
+  const step = (repo: string, d: number) => {
+    const list = s?.repos.map((r) => r.repo) ?? [];
+    const other = list[list.indexOf(repo) + d];
+    if (other) place(repo, other, d > 0);
+  };
   return (
     <div className="insights-panel" data-testid="insights-panel">
       <div className="local-head"><b>Repo Insights</b><span className="spacer" />
@@ -111,7 +143,28 @@ export function InsightsPanel({ active, onOpen }: { active: string | null; onOpe
       </div>
       <div className="insights-repos">
         {s?.repos.map((r) => (
-          <button key={r.repo} className={`list-item ${active === r.repo ? "selected" : ""}`} onClick={() => onOpen(r.repo)} data-testid="insights-repo" data-repo={r.repo}>
+          <button key={r.repo} className={`list-item ${active === r.repo ? "selected" : ""} ${drag === r.repo ? "dragging" : ""} ${over?.repo === r.repo && drag !== r.repo ? (over.after ? "drop-after" : "drop-before") : ""}`}
+            onClick={() => onOpen(r.repo)} data-testid="insights-repo" data-repo={r.repo}
+            title="Drag to change the order (or Alt+↑ / Alt+↓)" draggable
+            onKeyDown={(e) => { if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) { e.preventDefault(); step(r.repo, e.key === "ArrowUp" ? -1 : 1); } }}
+            onDragStart={(e) => { setDrag(r.repo); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/x-waw-repo", r.repo); }}
+            onDragEnd={() => { setDrag(null); setOver(null); }}
+            onDragOver={(e) => {
+              if (!drag) return;
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "move";
+              const b = e.currentTarget.getBoundingClientRect();
+              const after = e.clientY > b.top + b.height / 2;
+              if (over?.repo !== r.repo || over.after !== after) setOver({ repo: r.repo, after });
+            }}
+            onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setOver((o) => (o?.repo === r.repo ? null : o)); }}
+            onDrop={(e) => {
+              e.preventDefault();
+              const from = e.dataTransfer.getData("text/x-waw-repo") || drag;
+              const b = e.currentTarget.getBoundingClientRect();
+              if (from) place(from, r.repo, e.clientY > b.top + b.height / 2);
+              setDrag(null); setOver(null);
+            }}>
             <span className="insights-repo-name">{r.repo}</span>
             <span className="muted small">{r.schedule.enabled ? `⏰ ${r.schedule.time}` : ""}{r.highlights ? " · XPU" : ""}</span>
           </button>
@@ -256,7 +309,7 @@ function ReportList({ repo, reports, openId, onOpen, onOpenChat, onChanged }: { 
             <button className="insights-group-head" onClick={() => setFolded({ ...folded, [kind]: isOpen })} aria-expanded={isOpen}>
               {isOpen ? "▾" : "▸"} {title} <span className="muted">({rows.length})</span>
             </button>
-            {isOpen && rows.map((r) => (
+            {isOpen && <ByYear items={rows} group={`r:${kind}`} year={(r) => r.since.slice(0, 4)} open={(r) => r.id === openId} unread={(r) => r.unread ?? r.new ?? 0} render={(r) => (
               <div key={r.id} className={`list-item insights-pick-row ${openId === r.id ? "selected" : ""}`} data-testid="insights-report" data-status={r.status} data-id={r.id}>
                 <input type="checkbox" checked={sel.includes(r.id)} onChange={(e) => pick(r.id, e.target.checked)} title="Select (to chat about or delete several reports)" aria-label={`Select ${r.label}`} data-testid="insights-report-pick" />
                 <button className="insights-pick-open" onClick={() => onOpen(r.id)} data-testid="insights-report-open">
@@ -265,7 +318,7 @@ function ReportList({ repo, reports, openId, onOpen, onOpenChat, onChanged }: { 
                   <NewCount n={r.new} unread={r.unread} />
                 </button>
               </div>
-            ))}
+            )} />}
           </div>
         );
       })}
@@ -477,10 +530,37 @@ function NewThings({ repo, readKey, text, read: initial, onRead }: { repo: strin
 }
 
 /** How many new things (new features, terms, concepts …) a summary or report marks and are not read yet; nothing when none. */
-function NewCount({ n, unread }: { n?: number; unread?: number }) {
+function NewCount({ n, unread, testId = "insights-new-count" }: { n?: number; unread?: number; testId?: string }) {
   const left = unread ?? n;
   if (!left) return null;
-  return <span className="chip new-count" title={`${left} unread of ${n ?? left} new thing${n === 1 ? "" : "s"} (features, terms, concepts …) marked in it`} data-testid="insights-new-count">🆕 {left}</span>;
+  return <span className="chip new-count" title={`${left} unread of ${n ?? left} new thing${n === 1 ? "" : "s"} (features, terms, concepts …) marked in it`} data-testid={testId}>🆕 {left}</span>;
+}
+
+const yearFolds = (): Record<string, boolean> => { try { return JSON.parse(localStorage.getItem("waw.insights.years") || "{}"); } catch { return {}; } };
+
+/** Items grouped by year, newest year first, each year foldable (kept per browser); the year holding the open item stays open. */
+function ByYear<T>({ items, year, group, render, open, unread }: { items: T[]; year: (x: T) => string; group: string; render: (x: T) => React.ReactNode; open?: (x: T) => boolean; unread?: (x: T) => number }) {
+  const [folded, setFolded] = useState<Record<string, boolean>>(yearFolds);
+  const years = [...new Set(items.map(year))].sort((a, b) => b.localeCompare(a));
+  return (
+    <>
+      {years.map((y) => {
+        const rows = items.filter((x) => year(x) === y);
+        const key = `${group}:${y}`;
+        const isOpen = !folded[key] || (!!open && rows.some(open));
+        const left = unread ? rows.reduce((n, x) => n + unread(x), 0) : 0;
+        const toggle = () => { const next = { ...yearFolds(), [key]: isOpen }; localStorage.setItem("waw.insights.years", JSON.stringify(next)); setFolded(next); };
+        return (
+          <div key={y} className="insights-year" data-testid="insights-year-group" data-year={y}>
+            <button className="insights-year-head" onClick={toggle} aria-expanded={isOpen} data-testid="insights-year-head">
+              {isOpen ? "▾" : "▸"} {y} <span className="muted">({rows.length})</span><span className="spacer" /><NewCount n={left} testId="insights-year-new" />
+            </button>
+            {isOpen && rows.map(render)}
+          </div>
+        );
+      })}
+    </>
+  );
 }
 
 function DailyList({ ov, openPath, onOpen, onRan }: { ov: Overview; openPath: string | null; onOpen: (p: string) => void; onRan: () => void }) {
@@ -497,11 +577,11 @@ function DailyList({ ov, openPath, onOpen, onRan }: { ov: Overview; openPath: st
       </div>
       {job && job.status === "running" && <div className="muted small pad-x" data-testid="insights-daily-job">⏳ {job.step}</div>}
       {err && <div className="error-text small pad-x">{err}</div>}
-      {ov.daily.map((f) => (
+      <ByYear items={ov.daily} group="daily" year={(f) => f.since.slice(0, 4)} open={(f) => f.path === openPath} unread={(f) => f.unread ?? f.new ?? 0} render={(f) => (
         <button key={f.path} className={`list-item ${openPath === f.path ? "selected" : ""}`} onClick={() => onOpen(f.path)} data-testid="insights-day" data-day={f.since}>
           <span className="mono small">{f.since}</span>{f.partial && <span className="chip">so far</span>}<span className="muted small">{Math.ceil(f.size / 1024)} KB</span><NewCount n={f.new} unread={f.unread} />
         </button>
-      ))}
+      )} />
     </div>
   );
 }
@@ -586,7 +666,7 @@ function Highlights({ repo, tabs, onRan, enabled, onOpenPr }: { repo: string; ta
             </span>
           </div>
           {view === "day" && dayList.length === 0 && days && <div className="muted small pad">No highlights in these days.</div>}
-          {view === "day" && dayList.map((d) => {
+          {view === "day" && <ByYear items={dayList} group="hl" year={(d) => d.day.slice(0, 4)} open={(d) => d.day === picked} render={(d) => {
             const seen = d.shown.filter((x) => x.seen_before).length;
             return (
               <button key={d.day} className={`list-item ${d.day === picked ? "selected" : ""}`} onClick={() => setPicked(d.day)} aria-selected={d.day === picked}
@@ -595,7 +675,7 @@ function Highlights({ repo, tabs, onRan, enabled, onOpenPr }: { repo: string; ta
                 <span className="muted small">{d.shown.length}{d.shown.length !== d.items.length ? ` of ${d.items.length}` : ""}{seen ? ` · ${seen} seen before` : ""}</span>
               </button>
             );
-          })}
+          }} />}
           {view === "flat" && <div className="muted small pad">Each item once, over all the days of these dates.</div>}
         </div>
       </div>
@@ -661,6 +741,11 @@ function InsightsSettings() {
   const [note, setNote] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => { void loadInsightsSettings().then(setS).catch((e) => setErr((e as ApiError).message)); }, []);
+  useEffect(() => {
+    const sync = () => setS(settingsCache);
+    window.addEventListener("waw-insights-settings", sync);
+    return () => window.removeEventListener("waw-insights-settings", sync);
+  }, []);
   // saves run one after another, and each takes from the answer only what it saved: a quick second change (or an
   // unsaved edit elsewhere on the page) is not overwritten by an earlier answer
   const queue = useRef<Promise<unknown>>(Promise.resolve());
@@ -671,7 +756,7 @@ function InsightsSettings() {
     const run = queue.current.then(async () => {
       try {
         const next = await put<Settings>("/insights/settings", patch);
-        settingsCache = next;
+        cacheSettings(next);
         setS((prev) => {
           if (!prev) return next;
           const out: Settings = { ...prev, endpoint: next.endpoint };
@@ -732,6 +817,8 @@ function InsightsSettings() {
       {s.repos.map((r, i) => (
         <div key={r.repo} className="insights-repo-cfg" data-testid="insights-repo-cfg" data-repo={r.repo}>
           <div className="row nowrap"><b className="mono">{r.repo}</b><span className="spacer" />
+            <button className="icon-btn small" disabled={i === 0} onClick={() => setS({ ...s, repos: s.repos.map((x, k) => (k === i - 1 ? r : k === i ? s.repos[i - 1] : x)) })} title="Move up (Save repositories to keep the order)" data-testid="insights-repo-up">↑</button>
+            <button className="icon-btn small" disabled={i === s.repos.length - 1} onClick={() => setS({ ...s, repos: s.repos.map((x, k) => (k === i + 1 ? r : k === i ? s.repos[i + 1] : x)) })} title="Move down (Save repositories to keep the order)" data-testid="insights-repo-down">↓</button>
             <button className="icon-btn small" onClick={() => setS({ ...s, repos: s.repos.filter((_, k) => k !== i) })} title="Remove (its files stay)">×</button></div>
           <div className="row nowrap small">
             {(["issues", "commits", "rfcs"] as const).map((k) => <label key={k}><input type="checkbox" checked={r.sources[k]} onChange={(e) => setRepo(i, { sources: { ...r.sources, [k]: e.target.checked } })} /> {k}</label>)}

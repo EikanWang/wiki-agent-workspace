@@ -4067,11 +4067,35 @@ test("Repo Insights: the history in the folder, a week's report (daily summaries
   await expect(page.getByTestId("view-document")).toBeVisible(); // the same header as the wiki's
   await expect(page.getByTestId("view-document")).not.toHaveClass(/active/);
   await expect(page.getByTestId("insights-repo")).toHaveCount(7);
+  // the order of the repositories: drag one, Alt+↑ / Alt+↓, or ↑ / ↓ in the settings; it is kept
+  const repoOrder = () => page.getByTestId("insights-repo").evaluateAll((els) => els.map((e) => e.getAttribute("data-repo")));
+  const order0 = await repoOrder();
+  await page.locator(`[data-testid="insights-repo"][data-repo="${order0[0]}"]`).dragTo(page.locator(`[data-testid="insights-repo"][data-repo="${order0[1]}"]`), { targetPosition: { x: 20, y: 30 } });
+  await expect.poll(repoOrder).toEqual([order0[1], order0[0], ...order0.slice(2)]);
+  await page.reload();
+  await expect.poll(repoOrder, { timeout: 15000 }).toEqual([order0[1], order0[0], ...order0.slice(2)]);
+  await page.locator(`[data-testid="insights-repo"][data-repo="${order0[0]}"]`).focus();
+  await page.keyboard.press("Alt+ArrowUp");
+  await expect.poll(repoOrder).toEqual(order0);
+  await page.getByTestId("insights-settings-open").click();
+  await page.locator(`[data-testid="insights-repo-cfg"][data-repo="${order0[1]}"]`).getByTestId("insights-repo-up").click();
+  await page.getByTestId("insights-repos-save").click();
+  await expect.poll(repoOrder).toEqual([order0[1], order0[0], ...order0.slice(2)]); // the list follows the settings
+  await page.locator(`[data-testid="insights-repo-cfg"][data-repo="${order0[1]}"]`).getByTestId("insights-repo-down").click();
+  await page.getByTestId("insights-repos-save").click();
+  await expect.poll(repoOrder).toEqual(order0);
   await page.locator('[data-testid="insights-repo"][data-repo="pytorch/pytorch"]').click();
   await expect(page.getByTestId("insights-view")).toContainText("daily summaries 2026-11-10 … 2026-11-10 (1)");
   // a day of the history
   await page.getByTestId("insights-tab-daily").click();
   await expect(page.locator('[data-testid="insights-day"][data-day="2026-11-10"]').getByTestId("insights-new-count")).toHaveText("🆕 2");
+  // grouped by year, foldable, with the year's unread new things
+  const y2026 = page.locator('[data-testid="insights-year-group"][data-year="2026"]');
+  await expect(y2026.getByTestId("insights-year-head")).toContainText("2026 (1)");
+  await expect(y2026.getByTestId("insights-year-new")).toHaveText("🆕 2");
+  await y2026.getByTestId("insights-year-head").click();
+  await expect(page.getByTestId("insights-day")).toHaveCount(0);
+  await y2026.getByTestId("insights-year-head").click();
   await page.locator('[data-testid="insights-day"][data-day="2026-11-10"]').click();
   await expect(page.getByTestId("insights-file-view")).toContainText("Old day");
   // what is new is highlighted: the "What's new" section boxed, the marks as NEW badges, the new things' bullets tinted
@@ -4172,6 +4196,7 @@ test("Repo Insights: the history in the folder, a week's report (daily summaries
   await expect(page.getByTestId("insights-group")).toHaveCount(2);
   await expect(page.locator('[data-testid="insights-group"][data-kind="monthly"]')).toContainText("Monthly (1)");
   await expect(page.locator('[data-testid="insights-group"][data-kind="dates"]')).toContainText("Dates (1)");
+  await expect(page.locator('[data-testid="insights-group"][data-kind="monthly"]').getByTestId("insights-year-head")).toContainText(`${new Date().getUTCFullYear()} (1)`);
   // the week list: calendar weeks of the year
   await page.getByTestId("insights-period-week").click();
   await expect(page.getByTestId("insights-week").locator("option").first()).toContainText(/^Week \d+ · /);
