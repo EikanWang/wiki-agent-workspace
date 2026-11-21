@@ -232,6 +232,29 @@ async def test_reports_of_any_period_with_blocks_commits_rfcs_highlights(running
         prompt = s.get(Job, c.json()["job_id"]).prompt
     assert prompt.count("<<<REPORT ") == 2 and "Compare them" in prompt, prompt[:2000]
     assert (await api.post("/api/v1/insights/reports/acme/proj/chat", json={"ids": ["nope"]})).status_code == 404
+    # a discussion about a selected part, with your question and its own reference folders; the repository's apply too
+    own, shared = tmp_path / "own-refs", tmp_path / "repo-refs"
+    own.mkdir()
+    shared.mkdir()
+    r = await api.put("/api/v1/agent-context?scope=insights:acme/proj", json={"dirs": [str(shared)]})
+    assert r.status_code == 200 and r.json()["scope"] == "insights:acme/proj", r.text
+    c = await api.post(f"/api/v1/insights/reports/acme/proj/{rid}/chat", json={"quote": "Change 1 (#901)\nsecond line", "question": "Why did this land?", "dirs": [str(own)]})
+    assert c.status_code == 201, c.text
+    await api.wait_job(c.json()["job_id"])
+    with h.ctx.db.read() as s:
+        prompt = s.get(Job, c.json()["job_id"]).prompt
+    assert "> Change 1 (#901)\n> second line" in prompt and "Why did this land?" in prompt and "three things" not in prompt
+    assert str(own) in prompt and str(shared) in prompt and prompt.index(str(own)) < prompt.index(str(shared))
+    chat_path = c.json()["path"]
+    assert "Change 1 (#901)" in (await api.get(f"/api/v1/documents/open?path={chat_path}")).json()["text"].split("\n", 1)[0]
+    opened = (await api.get(f"/api/v1/documents/open?path={chat_path}")).json()
+    assert opened["insights_repo"] == "acme/proj"
+    scope = f"chat:{c.json()['workspace_id']}:{chat_path}"
+    assert (await api.get("/api/v1/agent-context", params={"scope": scope})).json()["dirs"] == [str(own.resolve())]
+    assert (await api.put("/api/v1/agent-context", params={"scope": scope}, json={"dirs": []})).json()["dirs"] == []
+    assert (await api.get("/api/v1/agent-context", params={"scope": "chat:x:../etc/passwd"})).status_code == 400
+    bad = await api.post(f"/api/v1/insights/reports/acme/proj/{rid}/chat", json={"quote": "x", "dirs": [str(tmp_path / "missing")]})
+    assert bad.status_code == 404 and bad.json()["error"]["code"] == "FOLDER_NOT_FOUND"
     assert (await api.delete(f"/api/v1/insights/reports/acme/proj/{rid}")).status_code == 200
     assert (await api.get(f"/api/v1/insights/reports/acme/proj/{rid}")).status_code == 404
     for bad in ({"repo": "acme/proj", "period": "custom", "since": "2026-11-05", "until": "2026-11-01"}, {"repo": "x", "period": "week"},

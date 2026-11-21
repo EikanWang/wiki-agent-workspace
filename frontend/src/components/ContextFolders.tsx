@@ -6,7 +6,7 @@ import FolderPicker from "./FolderPicker";
  * Extra reference folders for the agent (server paths): named in its prompt so it reads them for background.
  * scope: `repo:<owner>/<name>` (that repository's PR tabs) or `ws:<folder id>` (documents of that wiki folder).
  */
-export default function ContextFolders({ scope, title, onClose }: { scope: string; title: string; onClose: () => void }) {
+export default function ContextFolders({ scope, title, onClose, footer }: { scope: string; title: string; onClose: () => void; footer?: React.ReactNode }) {
   const [dirs, setDirs] = useState<string[] | null>(null);
   const [path, setPath] = useState("");
   const [err, setErr] = useState<string | null>(null);
@@ -57,6 +57,7 @@ export default function ContextFolders({ scope, title, onClose }: { scope: strin
             onChoose={(p) => { setBrowse(false); void save([...dirs, p]); }} />
         )}
         {err && <div className="tree-error small" role="alert" data-testid="context-folder-error">{err}</div>}
+        {footer}
       </div>
     </div>
   );

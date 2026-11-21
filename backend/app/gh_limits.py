@@ -789,7 +789,8 @@ def raise_for(res: GhResult, what: str = "gh") -> None:
         raise RateLimited(429, "GH_RATE_LIMITED", "GitHub's rate limit is reached"
                           + (f"; it resets at {_hhmm(reset)} (UTC+8)" if reset else "; try again in a minute"),
                           {"detail": err[-300:], "retry_at": reset})
-    if "http 502" in low or "http 504" in low or "invalid character '<'" in low:
+    # (a 502 / 504 with an empty body: gh says only "unexpected end of JSON input")
+    if res.status in (502, 504) or "http 502" in low or "http 504" in low or "invalid character '<'" in low or "unexpected end of json input" in low:
         raise ApiError(502, "GH_BUSY", "GitHub took too long to answer (HTTP 502)", {"detail": err[-300:]})
     if kind == "auth":
         raise ApiError(503, "GH_AUTH", "the server's gh CLI is not logged in to GitHub (run `gh auth login` in a terminal)", {"detail": err[-300:]})

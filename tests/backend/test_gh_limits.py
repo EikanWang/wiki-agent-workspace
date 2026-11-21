@@ -455,3 +455,17 @@ def test_speculative_background_work_may_wait_a_few_seconds_for_its_pace():
     g.bg["core"] = (-50.0, c.t)
     with priority(BACKGROUND, wait=False), pytest.raises(ApiError):
         g.acquire("core")  # far behind: stops instead
+
+
+def test_an_empty_502_or_504_counts_as_busy():
+    """gh says only "unexpected end of JSON input" when GitHub times out with an empty body: busy (callers shrink pages)."""
+    from backend.app.errors import ApiError
+
+    for res in (GhResult(1, "", "unexpected end of JSON input", 504), GhResult(1, "", "unexpected end of JSON input", None),
+                GhResult(1, "", "something", 502)):
+        try:
+            gh_limits.raise_for(res)
+        except ApiError as exc:
+            assert exc.code == "GH_BUSY", (res, exc.code)
+        else:
+            raise AssertionError("no error")

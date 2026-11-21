@@ -5,6 +5,7 @@ import { AgentSession, ApiError, OpenDocument, Thread, del, getWorkspace } from 
 import DiscussionPanel, { LiveJob, MessageView } from "./DiscussionPanel";
 import { Resizer } from "./Layout";
 import SelectionAsk from "./SelectionAsk";
+import ContextFolders from "./ContextFolders";
 import { confirmAction } from "./Confirm";
 import { usePersistentState } from "../persist";
 import { COMPOSER_HINT, composerKeyDown } from "./keys";
@@ -64,6 +65,8 @@ export default function ChatView({ doc, folderName, threads, sessions, liveJob, 
   const control = doc.chat_scope === "control_center";
   const [text, setText] = usePersistentState(`chat.${doc.document_id}`, ""); // an unsent message survives a reload
   const [busy, setBusy] = useState(false);
+  const [refs, setRefs] = useState<"chat" | "repo" | null>(null);
+  const insightsRepo = doc.insights_repo ?? trend ?? null;
   const [err, setErr] = useState<string | null>(null);
   const pics = usePictures();
   const [action, setAction] = useState<Action | null>(null);
@@ -153,8 +156,18 @@ export default function ChatView({ doc, folderName, threads, sessions, liveJob, 
         <span className="spacer" />
         {!control && <SkillsChip workspace={workspaceId ?? getWorkspace()} docId={doc.document_id} />}
         {!control && !trend && <button className="btn small" onClick={onReviewChanges} title="Review the folder's uncommitted changes (what a distill / update wrote)" data-testid="chat-review-changes">Review changes</button>}
+        {!control && <button className="btn small" onClick={() => setRefs("chat")} title="Extra folders on the server the agent reads for this chat" data-testid="chat-refs">Reference folders</button>}
         <button className="btn small" onClick={archive} disabled={busy} data-testid="chat-archive">Archive</button>
       </header>
+      {refs === "chat" && (
+        <ContextFolders key="chat" scope={`chat:${workspaceId ?? getWorkspace()}:${doc.path}`} onClose={() => setRefs(null)}
+          title={insightsRepo ? `For this discussion only (${insightsRepo}'s reference folders apply too).` : "For this chat only (the wiki folder's reference folders apply too)."}
+          footer={insightsRepo ? <button className="link-btn small" onClick={() => setRefs("repo")} data-testid="chat-refs-repo">Folders for every {insightsRepo} discussion…</button> : undefined} />
+      )}
+      {refs === "repo" && insightsRepo && (
+        <ContextFolders key="repo" scope={`insights:${insightsRepo}`} title={`For every discussion about ${insightsRepo}'s reports, and its trend chats.`} onClose={() => setRefs(null)}
+          footer={<button className="link-btn small" onClick={() => setRefs("chat")}>Folders for this discussion only…</button>} />
+      )}
       <div className="chat-main">
       <section className="chat-messages messages" ref={messagesRef}>
         {!thread && control && <div className="chat-empty muted">No messages yet.</div>}

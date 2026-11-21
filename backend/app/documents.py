@@ -962,6 +962,9 @@ def open_document(path: str = Query(...), ctx: AppContext = Depends(require_auth
     if is_chat_path(out["path"]):
         out["chat_scope"] = chat_scope(ctx, ctx.workspace_id, out["path"])
         out["chat_sources"] = control_settings(ctx, ctx.workspace_id, out["path"]).get("sources", [])
+        from .kv import insights_repo_of
+
+        out["insights_repo"] = insights_repo_of(ctx, ctx.workspace_id, out["path"])
     return out
 
 

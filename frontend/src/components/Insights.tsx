@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AgentSession, ApiError, del, get, post, put } from "../api";
 import TrendChat from "./TrendChat";
+import SelectionAsk from "./SelectionAsk";
+import ContextFolders from "./ContextFolders";
+import FolderPicker from "./FolderPicker";
 import MarkdownView from "./MarkdownView";
 import GithubRate from "./GithubRate";
 import ModelChoice, { ModelChoiceValue } from "./ModelChoice";
@@ -195,6 +198,7 @@ function RepoPage({ repo, onOpenChat, onOpenPrReview, sessions }: { repo: string
   const [tab, setTab] = useState<Tab>(() => (localStorage.getItem("waw.insights.tab") as Tab) || "reports");
   useEffect(() => localStorage.setItem("waw.insights.tab", tab), [tab]);
   const [open, setOpen] = useState<{ kind: "report"; id: string } | { kind: "file"; path: string } | null>(null);
+  const [refs, setRefs] = useState(false);
   const load = useCallback(async () => {
     try {
       setOv(await get<Overview>(`/insights/repos/${repo}`));
@@ -231,8 +235,10 @@ function RepoPage({ repo, onOpenChat, onOpenPrReview, sessions }: { repo: string
         </span>
         <span className="spacer" />
         <GithubRate />
+        <button className="btn small" onClick={() => setRefs(true)} title={`Extra folders on the server the agent reads in every discussion about ${repo}'s reports and in its trend chats`} data-testid="insights-refs">Reference folders</button>
         <a className="btn small" href={`https://github.com/${repo}`} target="_blank" rel="noreferrer">GitHub</a>
       </div>
+      {refs && <ContextFolders scope={`insights:${repo}`} title={`For every discussion about ${repo}'s reports, and its trend chats (a discussion can add its own).`} onClose={() => setRefs(false)} />}
       {err && <div className="banner warn small">{err}</div>}
       {tab !== "chat" && <NewReport repo={repo} cfg={ov.config} onCreated={(id) => { setTab("reports"); setOpen({ kind: "report", id }); void load(); }} />}
       <div className="insights-body">
@@ -416,6 +422,8 @@ function ReportViewer({ repo, id, onOpenChat, onDeleted, onRead }: { repo: strin
   const [r, setR] = useState<ReportMeta | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const textRef = useRef<HTMLDivElement>(null);
+  const [dirs, setDirs] = useState<string[]>([]);
   const load = useCallback(async () => {
     try {
       setR(await get<ReportMeta>(`/insights/reports/${repo}/${id}`));
@@ -452,8 +460,43 @@ function ReportViewer({ repo, id, onOpenChat, onDeleted, onRead }: { repo: strin
       {r.status === "failed" && <div className="banner warn small" role="alert">Failed: {r.error}</div>}
       {r.status === "interrupted" && <div className="banner warn small">Interrupted (the server restarted): make it again.</div>}
       {r.facts && <details className="small muted"><summary>Material</summary><ul>{r.facts.map((f) => <li key={f}>{f}</li>)}</ul></details>}
-      {text && <NewThings repo={repo} readKey={`r:${id}`} text={text} read={r.read_new ?? []} onRead={onRead} />}
+      {text && <div ref={textRef} className="insights-report-text"><NewThings repo={repo} readKey={`r:${id}`} text={text} read={r.read_new ?? []} onRead={onRead} /></div>}
+      {text && r.status === "done" && (
+        <SelectionAsk container={textRef} within=".insights-report-text" label="Discuss this" sendLabel="Start discussion" pictures={false} optional testId="insights-sel"
+          hint="A new chat, with the report as its material"
+          extra={<DiscussFolders repo={repo} dirs={dirs} onChange={setDirs} />}
+          onAsk={async (part, question) => {
+            const c = await post<{ workspace_id: string; path: string }>(`/insights/reports/${repo}/${id}/chat`, { quote: part.quote, question, dirs });
+            setDirs([]);
+            onOpenChat(c.workspace_id, c.path);
+          }} />
+      )}
       {err && <div className="error-text small">{err}</div>}
+    </div>
+  );
+}
+
+/** Reference folders for one new discussion (besides its repository's). */
+function DiscussFolders({ repo, dirs, onChange }: { repo: string; dirs: string[]; onChange: (dirs: string[]) => void }) {
+  const [browse, setBrowse] = useState(false);
+  return (
+    <div className="insights-discuss-folders small" data-testid="insights-sel-folders">
+      <div className="row nowrap">
+        <span className="muted">Reference folders for this discussion</span><span className="spacer" />
+        <button className="link-btn small" onClick={() => setBrowse(true)} data-testid="insights-sel-folder-add">+ Add…</button>
+      </div>
+      {dirs.map((d) => (
+        <div key={d} className="row nowrap" data-testid="insights-sel-folder">
+          <span className="mono ellipsis" title={d}>{d}</span><span className="spacer" />
+          <button className="icon-btn small" onClick={() => onChange(dirs.filter((x) => x !== d))} aria-label={`Remove ${d}`}>×</button>
+        </div>
+      ))}
+      <div className="muted">{dirs.length ? "" : "None. "}{repo}'s reference folders apply too.</div>
+      {browse && (
+        <FolderPicker title="Add a reference folder" hint="The agent reads this folder for background in this discussion." start={dirs[dirs.length - 1]}
+          confirmLabel="Add this folder" onClose={() => setBrowse(false)}
+          onChoose={(p) => { setBrowse(false); if (!dirs.includes(p)) onChange([...dirs, p]); }} />
+      )}
     </div>
   );
 }

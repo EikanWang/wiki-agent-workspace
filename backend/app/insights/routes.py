@@ -179,12 +179,17 @@ def delete_report(owner: str, name: str, rid: str, ctx: AppContext = Depends(req
 
 class ChatIn(BaseModel):
     workspace_id: str | None = Field(None, max_length=36)
+    # a discussion about a part of the report: the selected text, and your question (else a default one)
+    quote: str = Field("", max_length=20_000)
+    question: str = Field("", max_length=8_000)
+    # reference folders for this discussion only (besides the repository's)
+    dirs: list[str] = Field(default_factory=list, max_length=30)
 
 
 @router.post("/insights/reports/{owner}/{name}/{rid}/chat", status_code=201)
 async def report_chat(owner: str, name: str, rid: str, body: ChatIn, ctx: AppContext = Depends(require_auth_mutating)):
     """Continue with the agent: a chat in a wiki folder with the report as its material."""
-    return await _chat_on(ctx, _repo(owner, name), [rid], body.workspace_id)
+    return await _chat_on(ctx, _repo(owner, name), [rid], body)
 
 
 class ChatManyIn(ChatIn):
@@ -194,14 +199,20 @@ class ChatManyIn(ChatIn):
 @router.post("/insights/reports/{owner}/{name}/chat", status_code=201)
 async def reports_chat(owner: str, name: str, body: ChatManyIn, ctx: AppContext = Depends(require_auth_mutating)):
     """A chat with several reports as its material (e.g. to compare months)."""
-    return await _chat_on(ctx, _repo(owner, name), list(dict.fromkeys(body.ids)), body.workspace_id)
+    return await _chat_on(ctx, _repo(owner, name), list(dict.fromkeys(body.ids)), body)
 
 
-async def _chat_on(ctx: AppContext, repo: str, ids: list[str], workspace_id: str | None):
+async def _chat_on(ctx: AppContext, repo: str, ids: list[str], body: ChatIn):
     from dataclasses import replace
 
     from ..annotations import ThreadCreateIn, ThreadService
     from ..chats import new_chat
+    from ..github_hub import clean_dirs
+    from ..kv import kv_put
+
+    workspace_id = body.workspace_id
+    dirs = clean_dirs(body.dirs)
+    quote = body.quote.strip()
 
     reps = [pl.report(ctx, repo, rid) for rid in ids]
     if any(not r.get("text") for r in reps):
@@ -213,7 +224,13 @@ async def _chat_on(ctx: AppContext, repo: str, ids: list[str], workspace_id: str
     if rt is None:
         raise ApiError(404, "WORKSPACE_NOT_FOUND", "that wiki folder is not open")
     label = lambda r: r.get("label") or f"{r['since']} – {r['until']}"  # noqa: E731
-    chat = new_chat(rt.docs, f"{repo} · {', '.join(label(r) for r in reps)}"[:160])
+    head = f"{repo} · {', '.join(label(r) for r in reps)}"
+    if quote:
+        head += " · “" + " ".join(quote.split())[:60] + ("…”" if len(" ".join(quote.split())) > 60 else "”")
+    chat = new_chat(rt.docs, head[:160])
+    kv_put(ctx, f"chat_insights:{rt.id}:{chat['path']}", repo)  # its repository's reference folders apply
+    if dirs:
+        kv_put(ctx, f"context:chat:{rt.id}:{chat['path']}", dirs)
     sctx = replace(ctx, documents=rt.docs, locks=rt.locks, watcher=rt.watcher, workspace_id=rt.id, workspace_root=rt.root)
     opened = rt.docs.open_document(chat["path"])
     room = 380_000 // len(reps)
@@ -225,6 +242,13 @@ async def _chat_on(ctx: AppContext, repo: str, ids: list[str], workspace_id: str
     else:
         q = (f"Here are the reports of {repo} for {', '.join(label(r) for r in reps)}. Compare them: what changed between them, "
              "what is new in each, and the three things I should look at first, with their links.")
+    asked = body.question.strip()
+    if quote:
+        quoted = "\n".join("> " + line for line in quote.splitlines())
+        q = (f"About this part of the {'report' if len(reps) == 1 else 'reports'}:\n\n{quoted}\n\n"
+             + (asked or "Explain it: what it is about, why it matters, and what I should look at, with the links."))
+    elif asked:
+        q = asked
     t = await ThreadService(sctx).create_thread(chat["document_id"], ThreadCreateIn(version_sha256=opened["sha256"], question=q,
                                                                                    whole_document=True, chat_brief=brief))
     return {**chat, "workspace_id": rt.id, "thread_id": t["thread_id"], "job_id": t["job_id"]}

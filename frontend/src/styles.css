@@ -1686,3 +1686,5 @@ a.ref-path code { text-decoration: underline dotted; }
 .insights-repos .list-item.dragging { opacity: 0.4; }
 .insights-repos .list-item.drop-before { box-shadow: inset 0 2px 0 var(--primary); }
 .insights-repos .list-item.drop-after { box-shadow: inset 0 -2px 0 var(--primary); }
+.insights-discuss-folders { display: flex; flex-direction: column; gap: 3px; padding: 4px 6px; border: 1px dashed var(--border); border-radius: 6px; }
+.insights-discuss-folders .ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }

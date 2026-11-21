@@ -135,6 +135,24 @@ async def test_review_queue_keeps_bot_cc_mentions_apart(running_app):
     assert len(who_calls) == 1
 
 
+def test_review_queue_survives_github_timing_out_on_the_mention_search():
+    from backend.app import gh_limits
+    from backend.app.gh_limits import GhResult
+
+    sizes = []
+
+    def graphql(query, variables):
+        if "mentions:@me" in variables["q"] or "in:comments" in variables["q"]:
+            sizes.append(variables["n"])
+            gh_limits.raise_for(GhResult(1, "", "unexpected end of JSON input", 504))  # GitHub's empty 504
+        nodes = [pr(1)]
+        return {"search": {"issueCount": 1, "pageInfo": {"hasNextPage": False}, "nodes": nodes}}
+
+    data = github_hub.fetch_queue(graphql, "EikanWang")
+    assert [p["number"] for p in data["items"]] == [1] and "timing out" in data["note"] and data["truncated"]
+    assert sizes[:3] == [40, 20, 10]  # smaller pages first
+
+
 def test_review_queue_includes_mentions_and_deduplicates_requests():
     calls = []
 

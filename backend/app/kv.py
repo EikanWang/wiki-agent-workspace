@@ -60,9 +60,29 @@ def scopes_for(doc_path: str, workspace_id: str) -> list[str]:
     return scopes
 
 
+def insights_repo_of(ctx: AppContext, workspace_id: str, norm: str) -> str | None:
+    """The repository of a Repo Insights chat (about reports, or a trend chat)."""
+    from .insights.chat import trend_of
+    from .insights.settings import REPO
+
+    v = kv_get(ctx, f"chat_insights:{workspace_id}:{norm}", None)
+    return v if isinstance(v, str) and REPO.match(v) else trend_of(ctx, workspace_id, norm)
+
+
+def chat_scopes(ctx: AppContext, doc_path: str, workspace_id: str) -> list[str]:
+    """A chat's own reference folders, then (a Repo Insights chat) its repository's."""
+    from .chats import is_chat_path
+
+    norm = doc_path.replace("\\", "/").lstrip("/")
+    if not is_chat_path(norm):
+        return []
+    repo = insights_repo_of(ctx, workspace_id, norm)
+    return [f"chat:{workspace_id}:{norm}"] + ([f"insights:{repo.lower()}"] if repo else [])
+
+
 def extra_context(ctx: AppContext, doc_path: str, workspace_id: str) -> str | None:
     dirs: list[str] = []
-    for sc in scopes_for(doc_path, workspace_id):
+    for sc in chat_scopes(ctx, doc_path, workspace_id) + scopes_for(doc_path, workspace_id):
         dirs += [d for d in context_dirs(ctx, sc) if d not in dirs]
     parts = [context_prompt(dirs)]
     from .documents import PR_PREFIX, is_pr_path

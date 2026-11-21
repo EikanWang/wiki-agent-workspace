@@ -4253,7 +4253,48 @@ test("Repo Insights: the history in the folder, a week's report (daily summaries
   await datesRow.getByTestId("insights-report-pick").check();
   await expect(page.getByTestId("insights-picked-chat")).toBeEnabled();
   await page.getByTestId("insights-picked-clear").click();
+  // reference folders for every discussion of the repository's reports
+  await datesRow.first().getByTestId("insights-report-open").click();
+  await expect(view).toContainText("Fake report");
+  await page.getByTestId("insights-refs").click();
+  await expect(page.getByTestId("context-folders")).toContainText("pytorch/pytorch");
+  await page.getByTestId("context-folder-input").fill("/tmp");
+  await page.getByTestId("context-folder-add").click();
+  await expect(page.getByTestId("context-folder")).toHaveCount(1);
+  await page.getByTestId("context-folders").getByRole("button", { name: "Close" }).click();
+  // discuss a selected part of the report: your question, then a chat with the report as its material
+  await page.evaluate(() => {
+    const root = document.querySelector(".insights-report-text")!;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let n = walker.nextNode() as Text | null;
+    while (n && n.data.indexOf("Fake report") < 0) n = walker.nextNode() as Text | null;
+    const i = n!.data.indexOf("Fake report");
+    const range = document.createRange();
+    range.setStart(n!, i);
+    range.setEnd(n!, i + "Fake report".length);
+    window.getSelection()!.removeAllRanges();
+    window.getSelection()!.addRange(range);
+    root.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+  });
+  await page.getByTestId("insights-sel-open").click();
+  await expect(page.getByTestId("insights-sel-quote")).toHaveText("Fake report");
+  await expect(page.getByTestId("insights-sel-folders")).toContainText("pytorch/pytorch's reference folders apply too");
+  await page.getByTestId("insights-sel-input").fill("What does this mean?");
+  await page.getByTestId("insights-sel-send").click();
+  await expect(page.getByTestId("chats-page")).toBeVisible({ timeout: 15000 });
+  await expect(page.getByTestId("chat-title")).toContainText("“Fake report”");
+  await expect(page.locator(".msg").first()).toContainText("What does this mean?");
+  // the chat's own reference folders, and a way to the repository's
+  await page.getByTestId("chat-refs").click();
+  await expect(page.getByTestId("context-folders")).toContainText("this discussion only");
+  await expect(page.getByTestId("context-folder")).toHaveCount(0);
+  await page.getByTestId("chat-refs-repo").click();
+  await expect(page.getByTestId("context-folder")).toHaveCount(1);
+  await page.getByTestId("context-folder-remove").click();
+  await expect(page.getByTestId("context-folder")).toHaveCount(0);
+  await page.getByTestId("context-folders").getByRole("button", { name: "Close" }).click();
   // continue in a chat
+  await page.getByTestId("activity-insights").click();
   await datesRow.first().getByTestId("insights-report-open").click();
   await page.getByTestId("insights-chat").click();
   await expect(page.getByTestId("chats-page")).toBeVisible({ timeout: 15000 });

@@ -314,6 +314,7 @@ def fetch_queue(graphql: Callable[[str, dict], dict], owner: str) -> dict[str, A
     total = 0
     rate = None
     truncated = False
+    partial: list[str] = []  # mention searches GitHub kept failing on: the queue is shown without (the rest of) them
     for qualifier, source in (("review-requested:@me", "review_requested"), ("mentions:@me", "mentioned"),
                               (f'"@{owner}" in:comments', "mentioned")):
         after = None
@@ -324,10 +325,15 @@ def fetch_queue(graphql: Callable[[str, dict], dict], owner: str) -> dict[str, A
             try:
                 d = graphql(REVIEW_QUERY, {"q": f"is:pr is:open archived:false {qualifier}", "after": after, "n": size, "me": owner})
             except ApiError as exc:
-                if exc.code != "GH_BUSY" or size <= 10:
+                if exc.code == "GH_BUSY" and size > 10:
+                    size //= 2
+                    continue
+                if source == "review_requested" or exc.code in ("GH_RATE_LIMITED", "GH_AUTH"):
                     raise
-                size //= 2
-                continue
+                log.warning("review queue: %s search: %s", qualifier, exc.message)
+                partial.append(qualifier)
+                truncated = True
+                break
             search = d["search"]
             source_total = search["issueCount"]
             rate = d.get("rateLimit")
@@ -366,6 +372,9 @@ def fetch_queue(graphql: Callable[[str, dict], dict], owner: str) -> dict[str, A
                 "Authorize it once: run `gh auth refresh -h github.com` in a terminal, or on github.com → Settings → "
                 "Applications → Authorized OAuth Apps → GitHub CLI → Grant for that organization."
                 if saml else f"{hidden} PR(s) could not be read: {problems[0]['message'] if problems else 'unknown reason'}")
+    if partial:
+        note = ((note + " ") if note else "") + (
+            "GitHub kept timing out on the search for PRs that mention you, so some of them may be missing; ↻ to try again.")
     return {"items": list(by_pr.values()), "total": total, "hidden": hidden, "note": note,
             "truncated": truncated, "rate_limit": rate}
 
@@ -1741,7 +1750,31 @@ def _check_scope(ctx: AppContext, scope: str) -> str:
         return f"repo:{val.lower()}"
     if kind == "ws" and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", val):
         return f"ws:{val}"
-    raise ApiError(400, "INVALID_SCOPE", "scope must be repo:owner/name or ws:<folder id>")
+    if kind == "insights" and len(val.split("/")) == 2:
+        _check_names(*val.split("/"))
+        return f"insights:{val.lower()}"
+    if kind == "chat":
+        from .chats import is_chat_path
+
+        ws, _, path = val.partition(":")
+        path = path.replace("\\", "/").lstrip("/")
+        if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", ws) and is_chat_path(path) and ".." not in path.split("/") and len(path) < 1000:
+            return f"chat:{ws}:{path}"
+    raise ApiError(400, "INVALID_SCOPE", "scope must be repo:owner/name, insights:owner/name, chat:<folder id>:<chat path> or ws:<folder id>")
+
+
+def clean_dirs(dirs: list[str]) -> list[str]:
+    """Existing absolute server folders, resolved, without duplicates (at most 30)."""
+    clean: list[str] = []
+    for d in dirs[:30]:
+        p = Path(d.strip()).expanduser()
+        if not p.is_absolute():
+            raise ApiError(400, "INVALID_PATH", f"{d!r}: give an absolute path on the server")
+        if not p.is_dir():
+            raise ApiError(404, "FOLDER_NOT_FOUND", f"{p} is not a directory on the server")
+        if str(p.resolve()) not in clean:
+            clean.append(str(p.resolve()))
+    return clean
 
 
 @router.put("/agent-context")
@@ -1750,15 +1783,7 @@ async def put_agent_context(body: ContextIn, request: Request, scope: str = Quer
     scope = _check_scope(ctx, scope)
     if scope.startswith("repo:") and not (await hub_status(ctx, request))["available"]:
         raise ApiError(403, "NOT_GITHUB_OWNER", "only the server's owner signed in with GitHub can change this")
-    clean: list[str] = []
-    for d in body.dirs[:30]:
-        p = Path(d.strip()).expanduser()
-        if not p.is_absolute():
-            raise ApiError(400, "INVALID_PATH", f"{d!r}: give an absolute path on the server")
-        if not p.is_dir():
-            raise ApiError(404, "FOLDER_NOT_FOUND", f"{p} is not a directory on the server")
-        if str(p.resolve()) not in clean:
-            clean.append(str(p.resolve()))
+    clean = clean_dirs(body.dirs)
     kv_put(ctx, f"context:{scope}", clean)
     return {"scope": scope, "dirs": clean}
 

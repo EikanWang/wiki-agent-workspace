@@ -391,6 +391,8 @@ export interface OpenDocument {
   missing: boolean;
   chat_scope?: "wiki" | "control_center";
   chat_sources?: string[];
+  /** a Repo Insights chat (about reports, or a trend chat): its repository */
+  insights_repo?: string | null;
 }
 
 export interface Anchor {
