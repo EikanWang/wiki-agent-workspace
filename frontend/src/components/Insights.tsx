@@ -200,6 +200,7 @@ function RepoPage({ repo, onOpenPrReview, sessions }: { repo: string; onOpenPrRe
   const [tab, setTab] = useState<Tab>(() => (localStorage.getItem("waw.insights.tab") as Tab) || "reports");
   useEffect(() => localStorage.setItem("waw.insights.tab", tab), [tab]);
   const [open, setOpen] = useState<Opened | null>(null);
+  const [readRev, setReadRev] = useState(0); // bumped by "mark read" on a selection: the open report / summary reloads its marks
   const [refs, setRefs] = useState(false);
   // the discussions of what is open (a finished report, several of them, a daily summary): in a panel on its right
   const done = (id: string) => ov?.reports.find((r) => r.id === id)?.status === "done";
@@ -260,13 +261,15 @@ function RepoPage({ repo, onOpenPrReview, sessions }: { repo: string; onOpenPrRe
               {tabs}
               {tab === "reports" && <ReportList repo={repo} reports={ov.reports} openId={open?.kind === "report" ? open.id : null} onOpen={(id) => setOpen({ kind: "report", id })}
                 onOpenTogether={(ids) => setOpen({ kind: "reports", ids })}
-                onChanged={(gone) => { if ((open?.kind === "report" && gone.includes(open.id)) || (open?.kind === "reports" && open.ids.some((x) => gone.includes(x)))) setOpen(null); void load(); }} />}
-              {tab === "daily" && <DailyList ov={ov} openPath={open?.kind === "file" ? open.path : null} onOpen={(p) => setOpen({ kind: "file", path: p })} onRan={load} />}
+                onChanged={(gone) => { if ((open?.kind === "report" && gone.includes(open.id)) || (open?.kind === "reports" && open.ids.some((x) => gone.includes(x)))) setOpen(null); void load(); }}
+                onMarked={() => { setReadRev((n) => n + 1); void load(); }} />}
+              {tab === "daily" && <DailyList ov={ov} openPath={open?.kind === "file" ? open.path : null} onOpen={(p) => setOpen({ kind: "file", path: p })} onRan={load}
+                onMarked={() => { setReadRev((n) => n + 1); void load(); }} />}
             </div>
             <div className="insights-main">
-              {open?.kind === "report" ? <ReportViewer repo={repo} id={open.id} onDiscuss={disc.ask} onDeleted={() => { setOpen(null); void load(); }} onRead={() => void load()} />
+              {open?.kind === "report" ? <ReportViewer key={`${open.id}:${readRev}`} repo={repo} id={open.id} onDiscuss={disc.ask} onDeleted={() => { setOpen(null); void load(); }} onRead={() => void load()} />
                 : open?.kind === "reports" ? <ReportsViewer repo={repo} ids={open.ids} onDiscuss={disc.ask} onClose={() => setOpen(null)} />
-                : open?.kind === "file" ? <FileViewer repo={repo} path={open.path} onDiscuss={disc.ask} onRead={() => void load()} />
+                : open?.kind === "file" ? <FileViewer key={`${open.path}:${readRev}`} repo={repo} path={open.path} onDiscuss={disc.ask} onRead={() => void load()} />
                 : <div className="muted pad">Choose a report or a day.</div>}
             </div>
             {disc.panel}
@@ -277,16 +280,54 @@ function RepoPage({ repo, onOpenPrReview, sessions }: { repo: string; onOpenPrRe
   );
 }
 
-function ReportList({ repo, reports, openId, onOpen, onOpenTogether, onChanged }: { repo: string; reports: ReportMeta[]; openId: string | null; onOpen: (id: string) => void;
-  onOpenTogether: (ids: string[]) => void; onChanged: (deleted: string[]) => void }) {
-  const [folded, setFolded] = useState<Record<string, boolean>>(() => { try { return JSON.parse(localStorage.getItem("waw.insights.folded") || "{}"); } catch { return {}; } });
-  useEffect(() => localStorage.setItem("waw.insights.folded", JSON.stringify(folded)), [folded]);
+/** The items ticked in a list (only those still in it); `set` ticks or unticks several at once (a whole category or year). */
+function usePicks(valid: string[]) {
   const [picked, setPicked] = useState<string[]>([]);
+  const have = new Set(valid);
+  const sel = picked.filter((id) => have.has(id));
+  const set = (ids: string[], on: boolean) => setPicked((p) => (on ? [...p.filter((x) => !ids.includes(x)), ...ids] : p.filter((x) => !ids.includes(x))));
+  return { sel, set, setPicked };
+}
+
+/** A checkbox that selects every item of a category, a year or the whole list (partly ticked when some are). */
+function PickAll({ ids, sel, onSet, label, testId }: { ids: string[]; sel: string[]; onSet: (ids: string[], on: boolean) => void; label: string; testId: string }) {
+  const ref = useRef<HTMLInputElement>(null);
+  const n = ids.filter((id) => sel.includes(id)).length;
+  useEffect(() => { if (ref.current) ref.current.indeterminate = n > 0 && n < ids.length; });
+  return <input ref={ref} type="checkbox" checked={ids.length > 0 && n === ids.length} onChange={(e) => onSet(ids, e.target.checked)}
+    title={`Select all ${label}`} aria-label={`Select all ${label}`} data-testid={testId} />;
+}
+
+/** Mark read / Mark unread for every new thing of the selected reports or summaries (one request). */
+function MarkSelected({ repo, items, onMarked }: { repo: string; items: { key: string; n: number; unread: number }[]; onMarked: () => void }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const ids = new Set(reports.map((r) => r.id));
-  const sel = picked.filter((id) => ids.has(id));
-  const pick = (id: string, on: boolean) => setPicked((p) => (on ? [...p.filter((x) => x !== id), id] : p.filter((x) => x !== id)));
+  const unread = items.reduce((s, x) => s + x.unread, 0);
+  const read = items.reduce((s, x) => s + x.n - x.unread, 0);
+  const mark = async (on: boolean) => {
+    setBusy(true); setErr(null);
+    try {
+      await put("/insights/read-all", { repo, keys: items.filter((x) => x.n > 0).map((x) => x.key), read: on });
+      onMarked();
+    } catch (e) { setErr((e as ApiError).message); } finally { setBusy(false); }
+  };
+  return (
+    <>
+      <button className="btn small" disabled={busy || unread === 0} onClick={() => void mark(true)}
+        title={unread ? `Mark the ${unread} unread new thing${unread === 1 ? "" : "s"} of the selection read` : "Nothing unread in the selection"} data-testid="insights-picked-read">Mark read</button>
+      <button className="btn small" disabled={busy || read === 0} onClick={() => void mark(false)} title="Mark every new thing of the selection unread again" data-testid="insights-picked-unread">Mark unread</button>
+      {err && <span className="error-text small">{err}</span>}
+    </>
+  );
+}
+
+function ReportList({ repo, reports, openId, onOpen, onOpenTogether, onChanged, onMarked }: { repo: string; reports: ReportMeta[]; openId: string | null; onOpen: (id: string) => void;
+  onOpenTogether: (ids: string[]) => void; onChanged: (deleted: string[]) => void; onMarked: () => void }) {
+  const [folded, setFolded] = useState<Record<string, boolean>>(() => { try { return JSON.parse(localStorage.getItem("waw.insights.folded") || "{}"); } catch { return {}; } });
+  useEffect(() => localStorage.setItem("waw.insights.folded", JSON.stringify(folded)), [folded]);
+  const { sel, set, setPicked } = usePicks(reports.map((r) => r.id));
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
   if (reports.length === 0) return <div className="insights-items"><div className="muted small pad">No report yet: choose a period above.</div></div>;
   const ready = sel.every((id) => reports.find((r) => r.id === id)?.status === "done");
   const chat = () => {
@@ -306,30 +347,38 @@ function ReportList({ repo, reports, openId, onOpen, onOpenTogether, onChanged }
       onChanged(gone);
     }
   };
+  const picks = reports.filter((r) => sel.includes(r.id)).map((r) => ({ key: `r:${r.id}`, n: r.new ?? 0, unread: r.unread ?? r.new ?? 0 }));
   return (
     <div className="insights-items">
-      {sel.length > 0 && (
-        <div className="row nowrap small pad-x insights-picked" data-testid="insights-picked">
-          <b>{sel.length} selected</b>
-          <span className="spacer" />
+      <div className="row nowrap small pad-x insights-picked" data-testid="insights-picked">
+        <PickAll ids={reports.map((r) => r.id)} sel={sel} onSet={set} label="reports" testId="insights-pick-all" />
+        {sel.length > 0 ? <b>{sel.length} selected</b> : <span className="muted">Select all</span>}
+        <span className="spacer" />
+        {sel.length > 0 && <>
+          <MarkSelected repo={repo} items={picks} onMarked={onMarked} />
           <button className="btn small" disabled={busy || !ready} onClick={chat} title={ready ? (sel.length === 1 ? "Open this report and discuss it with the agent" : "Open these reports together and discuss them with the agent (e.g. to compare them)") : "Only finished reports can be discussed"} data-testid="insights-picked-chat">Discuss</button>
           <button className="btn small danger" disabled={busy} onClick={() => void remove()} data-testid="insights-picked-delete">Delete</button>
           <button className="btn small" disabled={busy} onClick={() => setPicked([])} data-testid="insights-picked-clear">Clear</button>
-        </div>
-      )}
+        </>}
+      </div>
       {err && <div className="error-text small pad-x">{err}</div>}
       {KINDS.map(([kind, title]) => {
         const rows = reports.filter((r) => (r.kind ?? "dates") === kind).sort((x, y) => (y.since + y.created_at).localeCompare(x.since + x.created_at));
         if (!rows.length) return null;
         const isOpen = !folded[kind] || rows.some((r) => r.id === openId && r.status === "running");
+        const left = rows.reduce((n, r) => n + (r.unread ?? r.new ?? 0), 0);
         return (
           <div key={kind} className="insights-group" data-testid="insights-group" data-kind={kind}>
-            <button className="insights-group-head" onClick={() => setFolded({ ...folded, [kind]: isOpen })} aria-expanded={isOpen}>
-              {isOpen ? "▾" : "▸"} {title} <span className="muted">({rows.length})</span>
-            </button>
-            {isOpen && <ByYear items={rows} group={`r:${kind}`} year={(r) => r.since.slice(0, 4)} open={(r) => r.id === openId} unread={(r) => r.unread ?? r.new ?? 0} render={(r) => (
+            <div className="insights-head-row">
+              <PickAll ids={rows.map((r) => r.id)} sel={sel} onSet={set} label={`${title} reports`} testId="insights-group-pick" />
+              <button className="insights-group-head" onClick={() => setFolded({ ...folded, [kind]: isOpen })} aria-expanded={isOpen}>
+                {isOpen ? "▾" : "▸"} {title} <span className="muted">({rows.length})</span><span className="spacer" /><NewCount n={left} testId="insights-group-new" />
+              </button>
+            </div>
+            {isOpen && <ByYear items={rows} group={`r:${kind}`} year={(r) => r.since.slice(0, 4)} open={(r) => r.id === openId} unread={(r) => r.unread ?? r.new ?? 0}
+              pick={{ id: (r) => r.id, sel, onSet: set, label: `${title} reports of` }} render={(r) => (
               <div key={r.id} className={`list-item insights-pick-row ${openId === r.id ? "selected" : ""}`} data-testid="insights-report" data-status={r.status} data-id={r.id}>
-                <input type="checkbox" checked={sel.includes(r.id)} onChange={(e) => pick(r.id, e.target.checked)} title="Select (to chat about or delete several reports)" aria-label={`Select ${r.label}`} data-testid="insights-report-pick" />
+                <input type="checkbox" checked={sel.includes(r.id)} onChange={(e) => set([r.id], e.target.checked)} title="Select (to discuss, mark read or delete several reports)" aria-label={`Select ${r.label}`} data-testid="insights-report-pick" />
                 <button className="insights-pick-open" onClick={() => onOpen(r.id)} data-testid="insights-report-open">
                   <span className="insights-item-main"><b>{r.label}</b>
                     <span className="muted small">{r.status === "running" ? `⏳ ${r.step ?? "working…"}` : r.status === "done" ? `made ${utc8(r.created_at, false)}` : r.status}{r.preset ? ` · ${r.preset}` : ""}</span></span>
@@ -649,7 +698,8 @@ function NewCount({ n, unread, testId = "insights-new-count" }: { n?: number; un
 const yearFolds = (): Record<string, boolean> => { try { return JSON.parse(localStorage.getItem("waw.insights.years") || "{}"); } catch { return {}; } };
 
 /** Items grouped by year, newest year first, each year foldable (kept per browser); the year holding the open item stays open. */
-function ByYear<T>({ items, year, group, render, open, unread }: { items: T[]; year: (x: T) => string; group: string; render: (x: T) => React.ReactNode; open?: (x: T) => boolean; unread?: (x: T) => number }) {
+function ByYear<T>({ items, year, group, render, open, unread, pick }: { items: T[]; year: (x: T) => string; group: string; render: (x: T) => React.ReactNode; open?: (x: T) => boolean; unread?: (x: T) => number;
+  pick?: { id: (x: T) => string; sel: string[]; onSet: (ids: string[], on: boolean) => void; label: string } }) {
   const [folded, setFolded] = useState<Record<string, boolean>>(yearFolds);
   const years = [...new Set(items.map(year))].sort((a, b) => b.localeCompare(a));
   return (
@@ -662,9 +712,12 @@ function ByYear<T>({ items, year, group, render, open, unread }: { items: T[]; y
         const toggle = () => { const next = { ...yearFolds(), [key]: isOpen }; localStorage.setItem("waw.insights.years", JSON.stringify(next)); setFolded(next); };
         return (
           <div key={y} className="insights-year" data-testid="insights-year-group" data-year={y}>
-            <button className="insights-year-head" onClick={toggle} aria-expanded={isOpen} data-testid="insights-year-head">
-              {isOpen ? "▾" : "▸"} {y} <span className="muted">({rows.length})</span><span className="spacer" /><NewCount n={left} testId="insights-year-new" />
-            </button>
+            <div className="insights-head-row">
+              {pick && <PickAll ids={rows.map(pick.id)} sel={pick.sel} onSet={pick.onSet} label={`${pick.label} ${y}`} testId="insights-year-pick" />}
+              <button className="insights-year-head" onClick={toggle} aria-expanded={isOpen} data-testid="insights-year-head">
+                {isOpen ? "▾" : "▸"} {y} <span className="muted">({rows.length})</span><span className="spacer" /><NewCount n={left} testId="insights-year-new" />
+              </button>
+            </div>
             {isOpen && rows.map(render)}
           </div>
         );
@@ -673,10 +726,12 @@ function ByYear<T>({ items, year, group, render, open, unread }: { items: T[]; y
   );
 }
 
-function DailyList({ ov, openPath, onOpen, onRan }: { ov: Overview; openPath: string | null; onOpen: (p: string) => void; onRan: () => void }) {
+function DailyList({ ov, openPath, onOpen, onRan, onMarked }: { ov: Overview; openPath: string | null; onOpen: (p: string) => void; onRan: () => void; onMarked: () => void }) {
   const [since, setSince] = useState(daysAgo(1));
   const [until, setUntil] = useState(daysAgo(1));
   const [err, setErr] = useState<string | null>(null);
+  const { sel, set, setPicked } = usePicks(ov.daily.map((f) => f.name));
+  const picks = ov.daily.filter((f) => sel.includes(f.name)).map((f) => ({ key: `f:${f.name}`, n: f.new ?? 0, unread: f.unread ?? f.new ?? 0 }));
   const job = ov.jobs.filter((j) => j.kind === "daily").slice(-1)[0];
   return (
     <div className="insights-items">
@@ -687,10 +742,26 @@ function DailyList({ ov, openPath, onOpen, onRan }: { ov: Overview; openPath: st
       </div>
       {job && job.status === "running" && <div className="muted small pad-x" data-testid="insights-daily-job">⏳ {job.step}</div>}
       {err && <div className="error-text small pad-x">{err}</div>}
-      <ByYear items={ov.daily} group="daily" year={(f) => f.since.slice(0, 4)} open={(f) => f.path === openPath} unread={(f) => f.unread ?? f.new ?? 0} render={(f) => (
-        <button key={f.path} className={`list-item ${openPath === f.path ? "selected" : ""}`} onClick={() => onOpen(f.path)} data-testid="insights-day" data-day={f.since}>
-          <span className="mono small">{f.since}</span>{f.partial && <span className="chip">so far</span>}<span className="muted small">{Math.ceil(f.size / 1024)} KB</span><NewCount n={f.new} unread={f.unread} />
-        </button>
+      {ov.daily.length > 0 && (
+        <div className="row nowrap small pad-x insights-picked" data-testid="insights-day-picked">
+          <PickAll ids={ov.daily.map((f) => f.name)} sel={sel} onSet={set} label="daily summaries" testId="insights-day-pick-all" />
+          {sel.length > 0 ? <b>{sel.length} selected</b> : <span className="muted">Select all</span>}
+          <span className="spacer" />
+          {sel.length > 0 && <>
+            <MarkSelected repo={ov.repo} items={picks} onMarked={onMarked} />
+            <button className="btn small" onClick={() => setPicked([])} data-testid="insights-picked-clear">Clear</button>
+          </>}
+        </div>
+      )}
+      <ByYear items={ov.daily} group="daily" year={(f) => f.since.slice(0, 4)} open={(f) => f.path === openPath} unread={(f) => f.unread ?? f.new ?? 0}
+        pick={{ id: (f) => f.name, sel, onSet: set, label: "daily summaries of" }} render={(f) => (
+        <div key={f.path} className={`list-item insights-pick-row ${openPath === f.path ? "selected" : ""}`} data-testid="insights-day" data-day={f.since}>
+          <input type="checkbox" checked={sel.includes(f.name)} onChange={(e) => set([f.name], e.target.checked)} title="Select (to mark several summaries read)" aria-label={`Select ${f.since}`} data-testid="insights-day-pick" />
+          <button className="insights-pick-open" onClick={() => onOpen(f.path)} data-testid="insights-day-open">
+            <span className="row nowrap"><span className="mono small">{f.since}</span>{f.partial && <span className="chip">so far</span>}<span className="muted small">{Math.ceil(f.size / 1024)} KB</span></span>
+            <NewCount n={f.new} unread={f.unread} />
+          </button>
+        </div>
       )} />
     </div>
   );

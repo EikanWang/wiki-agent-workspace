@@ -3776,6 +3776,17 @@ test("PR Development: your pull requests of a repository; check one out in a fol
   await page.getByTestId("dev-push").click();
   await expect(page.getByTestId("dev-note")).toContainText("Pushed to demo-fix", { timeout: 15000 });
   expect(g(bare, "log", "-1", "--format=%s", "demo-fix")).toBe("Update demo fix");
+  // rewrite the pushed commit (amend): Push is off, Force push (confirmed) replaces the branch
+  g(proj, "commit", "-q", "--amend", "-m", "Update demo fix (amended)");
+  await page.getByTestId("dev-diff-reload").click();
+  await expect(page.getByTestId("dev-replaced")).toContainText("1 pushed commit rewritten here");
+  await expect(page.getByTestId("dev-push")).toBeDisabled();
+  await page.getByTestId("dev-force-push").click();
+  await expect(page.getByTestId("confirm-dialog")).toContainText("Force push to demo-fix?");
+  await page.getByTestId("confirm-ok").click();
+  await expect(page.getByTestId("dev-note")).toContainText("Force pushed to demo-fix", { timeout: 15000 });
+  expect(g(bare, "log", "-1", "--format=%s", "demo-fix")).toBe("Update demo fix (amended)");
+  await expect(page.getByTestId("dev-replaced")).toHaveCount(0);
   // switch back to main: no longer the PR's
   await page.getByTestId("dev-branch-button").click();
   await page.getByTestId("dev-branch-switch").filter({ hasText: /^main$/ }).click();
@@ -4241,6 +4252,20 @@ test("Repo Insights: the history in the folder, a week's report (daily summaries
   await expect(dayRow.getByTestId("insights-new-count")).toHaveText("🆕 1");
   await dayView.getByTestId("insights-new-all-unread").click();
   await expect(dayRow.getByTestId("insights-new-count")).toHaveText("🆕 2");
+  // select a whole year (or the whole list) and mark it read at once; the open summary follows
+  await y2026.getByTestId("insights-year-pick").check();
+  await expect(dayRow.getByTestId("insights-day-pick")).toBeChecked();
+  await expect(page.getByTestId("insights-day-pick-all")).toBeChecked();
+  await expect(page.getByTestId("insights-day-picked")).toContainText("1 selected");
+  await page.getByTestId("insights-day-picked").getByTestId("insights-picked-read").click();
+  await expect(dayRow.getByTestId("insights-new-count")).toHaveCount(0);
+  await expect(y2026.getByTestId("insights-year-new")).toHaveCount(0);
+  await expect(dayView.getByTestId("insights-new-unread")).toHaveText("🆕 0 of 2 unread");
+  await expect(page.getByTestId("insights-day-picked").getByTestId("insights-picked-read")).toBeDisabled();
+  await page.getByTestId("insights-day-picked").getByTestId("insights-picked-unread").click();
+  await expect(dayRow.getByTestId("insights-new-count")).toHaveText("🆕 2");
+  await page.getByTestId("insights-day-pick-all").uncheck();
+  await expect(page.getByTestId("insights-day-picked")).not.toContainText("selected");
   // XPU highlights of the history
   await page.getByTestId("insights-tab-highlights").click();
   await page.getByTestId("insights-hl-view-day").click();
@@ -4369,12 +4394,24 @@ test("Repo Insights: the history in the folder, a week's report (daily summaries
   await datesRow.getByTestId("insights-report-pick").check();
   await expect(page.getByTestId("insights-picked")).toContainText("2 selected");
   await page.getByTestId("insights-picked-clear").click();
-  await expect(page.getByTestId("insights-picked")).toHaveCount(0);
+  await expect(page.getByTestId("insights-picked")).not.toContainText("selected");
+  // select all at any level: the whole list, a category, a year of a category
+  await page.getByTestId("insights-pick-all").check();
+  await expect(page.getByTestId("insights-picked")).toContainText("2 selected");
+  await expect(page.getByTestId("insights-picked-read")).toBeVisible();
+  await page.getByTestId("insights-pick-all").uncheck();
+  await page.locator('[data-testid="insights-group"][data-kind="monthly"]').getByTestId("insights-group-pick").check();
+  await expect(monthRow.getByTestId("insights-report-pick")).toBeChecked();
+  await expect(datesRow.getByTestId("insights-report-pick")).not.toBeChecked();
+  await expect(page.getByTestId("insights-pick-all")).toHaveJSProperty("indeterminate", true);
+  await page.locator('[data-testid="insights-group"][data-kind="dates"]').getByTestId("insights-year-pick").check();
+  await expect(page.getByTestId("insights-picked")).toContainText("2 selected");
+  await page.getByTestId("insights-picked-clear").click();
   await monthRow.getByTestId("insights-report-pick").check();
   await page.getByTestId("insights-picked-delete").click();
   await page.getByTestId("confirm-ok").click();
   await expect(page.getByTestId("insights-group")).toHaveCount(1);
-  await expect(page.getByTestId("insights-picked")).toHaveCount(0);
+  await expect(page.getByTestId("insights-picked")).not.toContainText("selected");
   await datesRow.getByTestId("insights-report-pick").check();
   await expect(page.getByTestId("insights-picked-chat")).toBeEnabled();
   await page.getByTestId("insights-picked-clear").click();

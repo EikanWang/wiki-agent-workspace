@@ -739,6 +739,8 @@ export interface DevGitStatus {
   files: { path: string; status: string }[];
   commits_on_branch: number | null;
   unpushed: number | null;
+  /** pushed commits the branch no longer has (history rewritten here): only a force push replaces them */
+  replaced?: number;
   push_remote: string | null;
   push_branch: string | null;
   identity: { name: string; email: string; configured: boolean };

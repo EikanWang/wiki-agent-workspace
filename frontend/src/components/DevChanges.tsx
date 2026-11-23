@@ -7,6 +7,7 @@ import { Line, SplitCols, UnifiedCols, buildSplitRows, numColStyle, parseUnified
 import { Gap, expandLines } from "./PrDiff";
 import { useJobStream } from "./DiscussionPanel";
 import { isArtifact } from "./DevTabs";
+import { confirmAction } from "./Confirm";
 import { CodeAnchor } from "./DevAgentPanel";
 import { PASTE_HINT, PictureStrip, picturesOnly, usePictures } from "./Pictures";
 
@@ -169,7 +170,8 @@ export default function DevChanges({ dev, refreshKey, onChanged, onAsk, onOpenFi
           <span className="muted small">
             {st.push_remote ? <> → {st.push_remote === "origin" ? "origin" : "remote"}/{st.push_branch}</> : " · no remote"}
             {st.commits_on_branch !== null ? ` · ${st.commits_on_branch} commit(s) on the branch` : ""}
-            {st.unpushed ? <> · <span className="warn">{st.unpushed} not pushed</span></> : st.push_remote ? " · all pushed" : ""}
+            {st.unpushed ? <> · <span className="warn">{st.unpushed} not pushed</span></> : st.push_remote && !st.replaced ? " · all pushed" : ""}
+            {st.replaced ? <> · <span className="warn" data-testid="dev-replaced">{st.replaced} pushed commit{st.replaced > 1 ? "s" : ""} rewritten here</span></> : ""}
           </span>
         </div>
         <div className="muted small" title={`${st.identity.name} <${st.identity.email}>`}>
@@ -218,10 +220,27 @@ export default function DevChanges({ dev, refreshKey, onChanged, onAsk, onOpenFi
       <section>
         <div className="label">Share</div>
         <div className="row">
-          <button className="btn" disabled={!st.unpushed || !!busy || !st.push_remote} data-testid="dev-push" title={st.push_remote ? `git push ${st.push_remote} HEAD:${st.push_branch}` : "No remote to push to"}
+          <button className="btn" disabled={!st.unpushed || !!st.replaced || !!busy || !st.push_remote} data-testid="dev-push"
+            title={st.replaced ? "The branch's pushed history was rewritten here: a plain push would be refused (use Force push)" : st.push_remote ? `git push ${st.push_remote} HEAD:${st.push_branch}` : "No remote to push to"}
             onClick={() => void run("push", async () => { await post(`/dev/workspaces/${dev.id}/push`); setNote(`Pushed to ${st.push_branch}.`); await load(); onChanged(); })}>
             {busy === "push" ? "Pushing…" : st.unpushed ? `Push ${st.unpushed} commit${st.unpushed > 1 ? "s" : ""}` : "Push"}</button>
-          <span className="muted small">{st.push_remote ? `To ${st.push_branch} (never forced). The pull request is in the Pull request tab below the editor.` : "This checkout has no remote (add an origin in the terminal)."}</span>
+          <button className={`btn ${st.replaced ? "danger" : ""}`} disabled={(!st.unpushed && !st.replaced) || !!busy || !st.push_remote} data-testid="dev-force-push"
+            title={st.push_remote ? `git push --force-with-lease ${st.push_remote} HEAD:${st.push_branch} — replaces the remote branch with this one (after a rebase, amend or squash); refused if someone else pushed to it since` : "No remote to push to"}
+            onClick={() => void run("force-push", async () => {
+              const ok = await confirmAction({
+                title: `Force push to ${st.push_branch}?`,
+                message: `The remote branch ${st.push_branch} becomes this branch (${st.head}${st.subject ? ` — ${st.subject}` : ""}).`
+                  + (st.replaced ? ` ${st.replaced} commit${st.replaced > 1 ? "s" : ""} pushed before and no longer on this branch will be gone from it.` : "")
+                  + " It is refused (nothing overwritten) if someone else pushed to it since it was last pushed or fetched here.",
+                confirmLabel: "Force push",
+              });
+              if (!ok) return;
+              await post(`/dev/workspaces/${dev.id}/push`, { force: true });
+              setNote(`Force pushed to ${st.push_branch}.`);
+              await load();
+              onChanged();
+            })}>{busy === "force-push" ? "Force pushing…" : "Force push"}</button>
+          <span className="muted small">{st.push_remote ? `To ${st.push_branch}. Push never forces; Force push replaces the branch's history (with a lease). The pull request is in the Pull request tab below the editor.` : "This checkout has no remote (add an origin in the terminal)."}</span>
         </div>
       </section>
       {note && <div className="small" data-testid="dev-note">{note}</div>}

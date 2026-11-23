@@ -160,22 +160,32 @@ def read_new(ctx: Any, repo: str) -> dict[str, list[str]]:
 
 def mark_read(ctx: Any, repo: str, key: str, names: list[str], read: bool) -> list[str]:
     """Marks these new things read (or unread again) in one file or report; returns what is read there now."""
+    return mark_read_many(ctx, repo, {key: names}, read).get(key, [])
+
+
+def mark_read_many(ctx: Any, repo: str, items: dict[str, list[str]], read: bool) -> dict[str, list[str]]:
+    """`mark_read` for several files / reports at once (one write); returns what is read in each now."""
     d = read_new(ctx, repo)
-    have = dict.fromkeys(d.get(key) or [])
-    for n in map(new_key, names):
-        if read:
-            have[n] = None
-        else:
-            have.pop(n, None)
-    d[key] = list(have)
-    if not d[key]:
-        del d[key]
+    for key, names in items.items():
+        have = dict.fromkeys(d.get(key) or [])
+        for n in map(new_key, names):
+            if read:
+                have[n] = None
+            else:
+                have.pop(n, None)
+        d[key] = list(have)
+        if not d[key]:
+            del d[key]
+    _write_read(ctx, repo, d)
+    return {key: d.get(key, []) for key in items}
+
+
+def _write_read(ctx: Any, repo: str, d: dict[str, list[str]]) -> None:
     p = _read_file(ctx, repo)
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_name(f".{p.name}.tmp")
     tmp.write_text(json.dumps(d, ensure_ascii=False))
     os.replace(tmp, p)
-    return d.get(key, [])
 
 
 def unread(names: list[str], read: list[str] | None) -> int:

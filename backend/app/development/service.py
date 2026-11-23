@@ -5,7 +5,8 @@
   on the local branch `waw/pr-<n>`; pushes go back to the PR's head branch (its fork when the PR comes from one —
   GitHub then needs "allow edits by maintainers").
 
-The user's own checkout is never switched, reset or committed to. History is never rewritten (no force-push).
+The user's own checkout is never switched, reset or committed to. Pushes never force unless the user asks for a force
+push, which is always with a lease (refused when the remote branch moved since it was last pushed or fetched here).
 """
 
 from __future__ import annotations
@@ -698,11 +699,18 @@ class DevService:
                 unpushed = int(n.strip())
             elif ahead is not None:
                 unpushed = ahead  # never pushed: every commit of the branch
+        # pushed commits the branch no longer has (rebased / amended / squashed here): only a force push replaces them
+        replaced = 0
+        for ref in (f"refs/waw/pushed/{row.branch}", "@{upstream}"):
+            c, n, _ = await t.git(wt, ["rev-list", "--count", f"HEAD..{ref}"])
+            if c == 0 and n.strip().isdigit():
+                replaced = int(n.strip())
+                break
         _, name, _ = await t.git(wt, ["config", "user.name"])
         _, email, _ = await t.git(wt, ["config", "user.email"])
         return {"branch": row.branch, "head": head.strip(), "subject": subject.strip(), "files": sorted(files, key=lambda f: f["path"]),
                 "mode": row.mode, "base_ref": row.base_ref,
-                "commits_on_branch": ahead, "unpushed": unpushed, "push_remote": row.push_remote, "push_branch": row.push_branch,
+                "commits_on_branch": ahead, "unpushed": unpushed, "replaced": replaced, "push_remote": row.push_remote, "push_branch": row.push_branch,
                 "identity": {"name": name.strip(), "email": email.strip(), "configured": bool(name.strip() and email.strip())}}
 
     async def diff(self, dev_id: str, path: str | None = None, max_bytes: int = 400_000) -> dict[str, Any]:
@@ -1023,19 +1031,44 @@ class DevService:
         self._update(dev_id)
         return {"commit": head.strip(), "files": len(sel)}
 
-    async def push(self, dev_id: str) -> dict[str, Any]:
+    async def _lease(self, row: Any, t: Any) -> str:
+        """What the remote branch must still be for a force push: the commit last pushed (or fetched) from here, else
+        the checkout's upstream, else what the remote has now ("" = the branch must not exist)."""
+        wt = row.worktree_path
+        for ref in (f"refs/waw/pushed/{row.branch}", "@{upstream}"):
+            rc, sha, _ = await t.git(wt, ["rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"])
+            if rc == 0 and sha.strip():
+                return sha.strip()
+        rc, out, err = await t.git(wt, ["ls-remote", row.push_remote, f"refs/heads/{row.push_branch}"], timeout=120)
+        if rc != 0:
+            raise ApiError(400, "PUSH_FAILED", f"git ls-remote failed: {(err or out).strip()[-500:]}")
+        return out.split()[0] if out.strip() else ""
+
+    async def push(self, dev_id: str, force: bool = False) -> dict[str, Any]:
+        """Push HEAD to the workspace's branch. `force` replaces the remote branch's history (after a rebase / amend /
+        squash) with a lease: refused when the branch moved on the remote since it was last pushed or fetched here."""
         row, t = self._ready(dev_id)
         if not row.push_remote or not row.push_branch:
             raise conflict("NO_PUSH_TARGET", "this workspace has no remote to push to (add an `origin` remote to the checkout)")
-        rc, out, err = await t.git(row.worktree_path, ["push", "--porcelain", row.push_remote, f"HEAD:refs/heads/{row.push_branch}"], timeout=600)
+        args = ["push", "--porcelain"]
+        if force:
+            base = (row.base_ref or "").removeprefix("refs/waw/base/").removeprefix("refs/heads/").removeprefix("origin/")
+            if row.push_branch in {base, "main", "master"} and not row.pr_number:
+                raise conflict("FORCE_PUSH_PROTECTED", f"force pushing to `{row.push_branch}` (a base branch) is not allowed from here")
+            args.append(f"--force-with-lease=refs/heads/{row.push_branch}:{await self._lease(row, t)}")
+        rc, out, err = await t.git(row.worktree_path, [*args, row.push_remote, f"HEAD:refs/heads/{row.push_branch}"], timeout=600)
         if rc != 0:
-            text = (err or out).strip()
+            text = f"{err.strip()}\n{out.strip()}".strip()  # (--porcelain: the reason a ref was rejected is on stdout)
+            if force and "stale info" in text:
+                raise conflict("PUSH_STALE", f"`{row.push_branch}` changed on the remote since it was last pushed or fetched here "
+                               f"(someone else pushed?): nothing was overwritten. Look at their commits first. git: {text[-300:]}")
             code = "PUSH_REJECTED" if "rejected" in text or "non-fast-forward" in text else (
                 "PUSH_AUTH" if any(k in text.lower() for k in ("permission", "denied", "authentication", "403")) else "PUSH_FAILED")
-            raise ApiError(409 if code == "PUSH_REJECTED" else 400, code, f"git push failed: {text[-500:]}")
+            hint = " (the branch's history was rewritten here: use Force push)" if code == "PUSH_REJECTED" and not force else ""
+            raise ApiError(409 if code == "PUSH_REJECTED" else 400, code, f"git push failed{hint}: {text[-500:]}")
         await t.git(row.worktree_path, ["update-ref", f"refs/waw/pushed/{row.branch}", "HEAD"])
         self._update(dev_id)
-        return {"pushed": True, "remote": row.push_remote, "branch": row.push_branch}
+        return {"pushed": True, "forced": force, "remote": row.push_remote, "branch": row.push_branch}
 
     async def create_pr(self, dev_id: str, title: str, body: str, draft: bool) -> dict[str, Any]:
         row, t = self._ready(dev_id)

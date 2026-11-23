@@ -188,6 +188,25 @@ async def test_new_branch_workspace_editor_proxy_and_agent(running_app, dev_sett
     assert p.status_code == 200, p.text
     assert git(bare, "log", "-1", "--format=%s", "feature/x") == "Add a test"
     assert (await api.get(f"/api/v1/dev/workspaces/{d['id']}/status")).json()["unpushed"] == 0
+    # history rewritten here (amend): a plain push is refused, a force push replaces the branch
+    wt_ = Path(d["worktree_path"])
+    git(wt_, "commit", "-q", "--amend", "-m", "Add a test (amended)")
+    st = (await api.get(f"/api/v1/dev/workspaces/{d['id']}/status")).json()
+    assert st["replaced"] == 1 and st["unpushed"] == 1, st
+    p = await api.post(f"/api/v1/dev/workspaces/{d['id']}/push")
+    assert p.status_code == 409 and p.json()["error"]["code"] == "PUSH_REJECTED" and "Force push" in p.json()["error"]["message"]
+    p = await api.post(f"/api/v1/dev/workspaces/{d['id']}/push", json={"force": True})
+    assert p.status_code == 200 and p.json()["forced"] is True, p.text
+    assert git(bare, "log", "-1", "--format=%s", "feature/x") == "Add a test (amended)"
+    st = (await api.get(f"/api/v1/dev/workspaces/{d['id']}/status")).json()
+    assert st["replaced"] == 0 and st["unpushed"] == 0
+    # someone else pushed to the branch since: the force push is refused, their commit kept
+    theirs = git(bare, "commit-tree", "feature/x^{tree}", "-p", "feature/x", "-m", "Their fix")
+    git(bare, "update-ref", "refs/heads/feature/x", theirs)
+    git(wt_, "commit", "-q", "--amend", "-m", "Add a test (again)")
+    p = await api.post(f"/api/v1/dev/workspaces/{d['id']}/push", json={"force": True})
+    assert p.status_code == 409 and p.json()["error"]["code"] == "PUSH_STALE", p.text
+    assert git(bare, "log", "-1", "--format=%s", "feature/x") == "Their fix"
 
     # --- settings update rewrites the workspace file of the running editor
     r = await api.patch(f"/api/v1/dev/workspaces/{d['id']}", json={"settings": {"python": "/opt/venv/bin/python", "debug_program": "build/app"}})

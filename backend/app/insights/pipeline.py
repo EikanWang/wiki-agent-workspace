@@ -634,6 +634,21 @@ def report(ctx: Any, repo: str, rid: str) -> dict[str, Any]:
     return {**m, "text": md.read_text(encoding="utf-8") if md.is_file() else None, "read_new": store.read_new(ctx, repo).get(f"r:{rid}", [])}
 
 
+def report_new_names(ctx: Any, repo: str, rid: str) -> list[str]:
+    """The new things a report marks (its `new_names`; read from its text for reports made before them)."""
+    p = _reports_dir(ctx, repo) / f"{rid}.json"
+    try:
+        m = json.loads(p.read_text())
+    except (OSError, ValueError):
+        return []
+    if "new_names" in m:
+        return list(m.get("new_names") or [])
+    try:
+        return [store.new_key(n) for n in store.new_names(p.with_suffix(".md").read_text(encoding="utf-8"))]
+    except OSError:
+        return []
+
+
 def delete_report(ctx: Any, repo: str, rid: str) -> None:
     for ext in (".json", ".md"):
         (_reports_dir(ctx, repo) / f"{rid}{ext}").unlink(missing_ok=True)

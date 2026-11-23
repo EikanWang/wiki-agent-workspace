@@ -116,6 +116,29 @@ def mark_read(body: ReadIn, ctx: AppContext = Depends(require_auth_mutating)):
     return {"key": body.key, "read_new": store.mark_read(ctx, repo, body.key, [n[:200] for n in body.names], body.read)}
 
 
+class ReadAllIn(BaseModel):
+    repo: str = Field(..., max_length=200)
+    keys: list[str] = Field(..., max_length=2000)  # reports ("r:<id>") and summary files ("f:<name>")
+    read: bool = True
+
+
+@router.put("/insights/read-all")
+def mark_all_read(body: ReadAllIn, ctx: AppContext = Depends(require_auth_mutating)):
+    """Marks every new thing of these reports / summaries read (or unread again): "select all, mark read" in a list."""
+    repo = body.repo.strip()
+    if not st.REPO.match(repo):
+        raise ApiError(400, "INVALID_REPO", "use owner/name")
+    bad = [k for k in body.keys if not READ_KEY.match(k)]
+    if bad:
+        raise ApiError(400, "INVALID_KEY", f"r:<report id> or f:<summary file name>, not {bad[0][:60]!r}")
+    files = {r["name"]: r["new_names"] for r in store.index(ctx, repo)}
+    items = {k: (pl.report_new_names(ctx, repo, k[2:]) if k.startswith("r:") else files.get(k[2:], [])) for k in dict.fromkeys(body.keys)}
+    items = {k: v for k, v in items.items() if v}
+    if items:
+        store.mark_read_many(ctx, repo, items, body.read)
+    return {"marked": len(items), "names": sum(len(v) for v in items.values())}
+
+
 @router.get("/insights/repos/{owner}/{name}/highlights")
 def get_highlights(owner: str, name: str, since: str = Query(...), until: str = Query(...), view: str = Query("flat", pattern="^(flat|day)$"),
                    ctx: AppContext = Depends(require_auth)):

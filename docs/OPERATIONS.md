@@ -156,7 +156,9 @@ dismissed.
 | Terminal copy shows "The browser blocked the clipboard" | On plain `http://` (not localhost) a clipboard write needs a recent click/key press. Click **Copy now** in the note or the toolbar **Copy** button; serve over HTTPS (or an SSH tunnel to localhost) to avoid it. |
 | Editor: "The file was changed on disk after you started editing" | Someone (agent, terminal, Git) changed the file since you opened the editor. Choose *Overwrite with mine* or *Discard mine, reload*; *Copy my text* keeps your version on the clipboard. |
 | `NOT_EDITABLE` | Only Markdown and text/source files can be edited in the browser; Word, PowerPoint and PDF are read-only. |
-| `PUSH_REJECTED` | The remote branch has commits you don't have. The app never force-pushes: `git pull --rebase` (or merge) in the terminal, then push again. |
+| `PUSH_REJECTED` | The remote branch has commits you don't have. **Push** never forces: `git pull --rebase` (or merge) in the terminal, then push again. In PR Development, if you rewrote the branch's history yourself (rebase / amend / squash), use **Force push**. |
+| `PUSH_STALE` | A PR Development **Force push** was refused because someone else pushed to the branch since it was last pushed or fetched there; nothing was overwritten. Fetch and look at their commits, then rebase onto them. |
+| `FORCE_PUSH_PROTECTED` | Force push to the base branch (`main` / `master`) of a workspace that isn't a PR is refused. |
 | `PUSH_AUTH` | `git push` was refused by the remote's authentication. Fix credentials/SSH keys in the terminal (`gh auth login`, `ssh -T git@github.com`, credential helper). |
 | `GH_UNAVAILABLE` / `NOT_GITHUB` | Pull requests need the GitHub CLI logged in (`gh auth login`) and an `origin` on github.com. |
 | `GIT_IDENTITY_MISSING` | Set `git config --global user.name` / `user.email` for the server user; commits are made with that identity. |

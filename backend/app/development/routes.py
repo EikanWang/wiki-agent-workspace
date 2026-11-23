@@ -88,6 +88,10 @@ class CommitIn(BaseModel):
     paths: list[str] | None = None
 
 
+class PushIn(BaseModel):
+    force: bool = False  # replace the remote branch's history (with a lease)
+
+
 class PrCreateIn(BaseModel):
     title: str = Field(min_length=1, max_length=300)
     body: str = Field("", max_length=60_000)
@@ -656,8 +660,8 @@ async def git_commit(dev_id: str, body: CommitIn, ctx: AppContext = Depends(requ
 
 
 @router.post("/dev/workspaces/{dev_id}/push")
-async def git_push(dev_id: str, ctx: AppContext = Depends(require_auth_mutating)):
-    return await _svc(ctx).push(dev_id)
+async def git_push(dev_id: str, body: PushIn | None = None, ctx: AppContext = Depends(require_auth_mutating)):
+    return await _svc(ctx).push(dev_id, force=bool(body and body.force))
 
 
 @router.post("/dev/workspaces/{dev_id}/pull-request", status_code=201)

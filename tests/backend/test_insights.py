@@ -632,6 +632,16 @@ async def test_new_things_are_marked_remembered_and_counted(running_app, tmp_pat
     ov = (await api.get("/api/v1/insights/repos/acme/proj")).json()
     assert next(r for r in ov["reports"] if r["id"] == rep["id"])["unread"] == 1
     assert (await api.put("/api/v1/insights/read", json={"repo": "acme/proj", "key": "x:../y", "names": []})).status_code in (400, 422)
+    # select all, mark read: every new thing of several reports and summaries at once (the server knows their names)
+    keys = [f"r:{rep['id']}", f"f:{day['name']}", "r:no-such-report"]
+    r = await api.put("/api/v1/insights/read-all", json={"repo": "acme/proj", "keys": keys})
+    assert r.status_code == 200 and r.json()["marked"] == 2, r.text
+    ov = (await api.get("/api/v1/insights/repos/acme/proj")).json()
+    assert next(r for r in ov["reports"] if r["id"] == rep["id"])["unread"] == 0 and next(r for r in ov["daily"] if r["since"] == DAY)["unread"] == 0
+    await api.put("/api/v1/insights/read-all", json={"repo": "acme/proj", "keys": keys, "read": False})
+    ov = (await api.get("/api/v1/insights/repos/acme/proj")).json()
+    assert next(r for r in ov["reports"] if r["id"] == rep["id"])["unread"] == 1 and next(r for r in ov["daily"] if r["since"] == DAY)["unread"] == 2
+    assert (await api.put("/api/v1/insights/read-all", json={"repo": "acme/proj", "keys": ["f:../x"]})).status_code == 400
 
 
 def test_baseline_windows():
