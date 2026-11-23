@@ -62,6 +62,7 @@ interface Highlight { title: string; url: string; xpu_relevance_score: number; x
 const TASK_LABEL: Record<string, string> = { daily: "Daily summaries", rollup: "Weekly roll-ups", commits: "Commit summaries", report: "Reports", highlight: "XPU highlight scoring", terms: "What a day is about (baseline of new things)", check: "New-things check (repeat / extension / new)" };
 const PERIODS = ["day", "week", "month", "quarter", "year", "custom"] as const;
 const PERIOD_LABEL: Record<string, string> = { day: "Day", week: "Week", month: "Month", quarter: "Quarter", year: "Year", custom: "Dates" };
+const MAX_TOGETHER = 40; // the server's limit on reports discussed together (ChatManyIn.ids)
 const KINDS = [["daily", "Daily"], ["weekly", "Weekly"], ["monthly", "Monthly"], ["quarterly", "Quarterly"], ["yearly", "Yearly"], ["dates", "Dates"]] as const;
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const iso = (d: Date) => d.toISOString().slice(0, 10);
@@ -348,6 +349,17 @@ function ReportList({ repo, reports, openId, onOpen, onOpenTogether, onChanged, 
     }
   };
   const picks = reports.filter((r) => sel.includes(r.id)).map((r) => ({ key: `r:${r.id}`, n: r.new ?? 0, unread: r.unread ?? r.new ?? 0 }));
+  /** On hover of a category or year head: open all its finished reports together, with their discussions on the right. */
+  const discussAll = (rows: ReportMeta[], label: string) => {
+    const ids = rows.filter((r) => r.status === "done").map((r) => r.id);
+    const tip = ids.length === 0 ? `No finished ${label} report to discuss`
+      : ids.length > MAX_TOGETHER ? `${ids.length} finished reports: at most ${MAX_TOGETHER} can be discussed together (open a year instead)`
+      : `Discuss all ${ids.length} finished ${label} report${ids.length === 1 ? "" : "s"} with the agent`;
+    return (
+      <button className="icon-btn small insights-head-discuss" disabled={ids.length === 0 || ids.length > MAX_TOGETHER} title={tip} aria-label={tip}
+        onClick={() => (ids.length === 1 ? onOpen(ids[0]) : onOpenTogether(ids))} data-testid="insights-head-discuss">💬</button>
+    );
+  };
   return (
     <div className="insights-items">
       <div className="row nowrap small pad-x insights-picked" data-testid="insights-picked">
@@ -374,8 +386,10 @@ function ReportList({ repo, reports, openId, onOpen, onOpenTogether, onChanged, 
               <button className="insights-group-head" onClick={() => setFolded({ ...folded, [kind]: isOpen })} aria-expanded={isOpen}>
                 {isOpen ? "▾" : "▸"} {title} <span className="muted">({rows.length})</span><span className="spacer" /><NewCount n={left} testId="insights-group-new" />
               </button>
+              {discussAll(rows, title)}
             </div>
             {isOpen && <ByYear items={rows} group={`r:${kind}`} year={(r) => r.since.slice(0, 4)} open={(r) => r.id === openId} unread={(r) => r.unread ?? r.new ?? 0}
+              action={(ys, y) => discussAll(ys, `${title} ${y}`)}
               pick={{ id: (r) => r.id, sel, onSet: set, label: `${title} reports of` }} render={(r) => (
               <div key={r.id} className={`list-item insights-pick-row ${openId === r.id ? "selected" : ""}`} data-testid="insights-report" data-status={r.status} data-id={r.id}>
                 <input type="checkbox" checked={sel.includes(r.id)} onChange={(e) => set([r.id], e.target.checked)} title="Select (to discuss, mark read or delete several reports)" aria-label={`Select ${r.label}`} data-testid="insights-report-pick" />
@@ -698,8 +712,8 @@ function NewCount({ n, unread, testId = "insights-new-count" }: { n?: number; un
 const yearFolds = (): Record<string, boolean> => { try { return JSON.parse(localStorage.getItem("waw.insights.years") || "{}"); } catch { return {}; } };
 
 /** Items grouped by year, newest year first, each year foldable (kept per browser); the year holding the open item stays open. */
-function ByYear<T>({ items, year, group, render, open, unread, pick }: { items: T[]; year: (x: T) => string; group: string; render: (x: T) => React.ReactNode; open?: (x: T) => boolean; unread?: (x: T) => number;
-  pick?: { id: (x: T) => string; sel: string[]; onSet: (ids: string[], on: boolean) => void; label: string } }) {
+function ByYear<T>({ items, year, group, render, open, unread, pick, action }: { items: T[]; year: (x: T) => string; group: string; render: (x: T) => React.ReactNode; open?: (x: T) => boolean; unread?: (x: T) => number;
+  pick?: { id: (x: T) => string; sel: string[]; onSet: (ids: string[], on: boolean) => void; label: string }; action?: (rows: T[], year: string) => React.ReactNode }) {
   const [folded, setFolded] = useState<Record<string, boolean>>(yearFolds);
   const years = [...new Set(items.map(year))].sort((a, b) => b.localeCompare(a));
   return (
@@ -717,6 +731,7 @@ function ByYear<T>({ items, year, group, render, open, unread, pick }: { items: 
               <button className="insights-year-head" onClick={toggle} aria-expanded={isOpen} data-testid="insights-year-head">
                 {isOpen ? "▾" : "▸"} {y} <span className="muted">({rows.length})</span><span className="spacer" /><NewCount n={left} testId="insights-year-new" />
               </button>
+              {action?.(rows, y)}
             </div>
             {isOpen && rows.map(render)}
           </div>

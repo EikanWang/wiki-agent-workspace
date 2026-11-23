@@ -4407,6 +4407,17 @@ test("Repo Insights: the history in the folder, a week's report (daily summaries
   await page.locator('[data-testid="insights-group"][data-kind="dates"]').getByTestId("insights-year-pick").check();
   await expect(page.getByTestId("insights-picked")).toContainText("2 selected");
   await page.getByTestId("insights-picked-clear").click();
+  // hover a category or a year: discuss all its finished reports
+  const monthGroup = page.locator('[data-testid="insights-group"][data-kind="monthly"]');
+  const monthHead = monthGroup.locator(".insights-head-row").first();
+  await monthHead.hover();
+  await expect(monthHead.getByTestId("insights-head-discuss")).toHaveAttribute("title", "Discuss all 1 finished Monthly report with the agent");
+  await monthHead.getByTestId("insights-head-discuss").click();
+  await expect(view).toContainText(`January ${new Date().getUTCFullYear()}`);
+  await expect(page.getByTestId("insights-chat")).toBeVisible();
+  const yearHead = monthGroup.getByTestId("insights-year-group").locator(".insights-head-row");
+  await yearHead.hover();
+  await expect(yearHead.getByTestId("insights-head-discuss")).toBeEnabled();
   await monthRow.getByTestId("insights-report-pick").check();
   await page.getByTestId("insights-picked-delete").click();
   await page.getByTestId("confirm-ok").click();
