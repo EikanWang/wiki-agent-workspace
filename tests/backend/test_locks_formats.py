@@ -124,6 +124,10 @@ async def test_open_text_source_docx_and_pdf(api: Api, workspace: Path):
     assert pdf["format"] == "pdf" and pdf["html"] is None
     raw = await api.get("/api/v1/raw", params={"path": "src/paper.pdf"})
     assert raw.status_code == 200 and raw.headers["content-type"].startswith("application/pdf") and raw.headers["x-frame-options"] == "SAMEORIGIN"
+    # SVG is served as an image (agent answers and pages show it), sandboxed when opened directly
+    (workspace / "src" / "chart.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>')
+    svg = await api.get("/api/v1/raw", params={"path": "src/chart.svg"})
+    assert svg.headers["content-type"].startswith("image/svg+xml") and "sandbox" in svg.headers["content-security-policy"]
     # tree flags
     items = {i["name"]: i for i in (await api.get("/api/v1/files", params={"path": "src"})).json()["items"]}
     assert all(items[n]["openable"] for n in ("kernel.cpp", "config.yaml", "report.docx", "paper.pdf"))

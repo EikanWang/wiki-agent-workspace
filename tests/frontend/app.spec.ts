@@ -3747,6 +3747,7 @@ test("PR Development: your pull requests of a repository; check one out in a fol
   expect(g(proj, "symbolic-ref", "--short", "HEAD")).toBe("demo-fix");
   expect(fs.readFileSync(path.join(proj, "app.py"), "utf-8")).toContain("the fix");
   await expect(page.locator(".dev-toolbar")).toContainText("#5");
+  await expect(page.getByTestId("dev-pr-github")).toHaveAttribute("href", "https://github.com/acme/demo/pull/5");
   await expect(fix).toHaveClass(/here/);
   // close the PR from its Pull request tab (with a comment), then reopen it
   await page.getByTestId("dev-tab-pr").click();
@@ -3773,6 +3774,7 @@ test("PR Development: your pull requests of a repository; check one out in a fol
   await page.getByTestId("dev-commit-msg").fill("Update demo fix");
   await page.getByTestId("dev-commit").click();
   await expect(page.getByTestId("dev-note")).toContainText("Committed 1 file(s)");
+  await expect(page.getByTestId("dev-changes-pr-github")).toHaveAttribute("href", "https://github.com/acme/demo/pull/5");
   await page.getByTestId("dev-push").click();
   await expect(page.getByTestId("dev-note")).toContainText("Pushed to demo-fix", { timeout: 15000 });
   expect(g(bare, "log", "-1", "--format=%s", "demo-fix")).toBe("Update demo fix");
@@ -4085,6 +4087,45 @@ test("Local files: chat with the agent about a folder or a file, next to the edi
   await root.hover();
   await root.getByTestId("local-close-root").click();
   await expect(root).toHaveCount(0);
+  await page.getByTestId("activity-files").click();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("Agent answers show images: linked PNG / SVG files, Markdown images and ```svg blocks", async ({ page }) => {
+  await login(page);
+  const dir = path.join(path.dirname(workspaceDir()), "chatimages");
+  fs.mkdirSync(dir, { recursive: true });
+  const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+  fs.writeFileSync(path.join(dir, "plot.png"), Buffer.from(png, "base64"));
+  fs.writeFileSync(path.join(dir, "chart.svg"), '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><rect width="20" height="20" fill="red"/></svg>');
+  await page.getByTestId("activity-local").click();
+  await page.getByTestId("local-open-folder").click();
+  await page.getByTestId("folder-picker-path").fill(dir);
+  await page.getByTestId("folder-picker-path").press("Enter");
+  await expect(page.getByTestId("folder-picker-selected")).toContainText(dir);
+  await page.getByTestId("folder-picker-choose").click();
+  const root = page.locator(`[data-testid="local-root"][data-path="${dir}"]`);
+  await root.hover();
+  await root.getByTestId("local-chat-root").click();
+  const svgBlock = '```svg\n<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><circle r="5" cx="5" cy="5"/></svg>\n```';
+  await page.getByTestId("local-chat-first").fill(`The plot: [plot](${dir}/plot.png), the chart \`${dir}/chart.svg\`, inline ![pic](${dir}/plot.png) and a missing [one](${dir}/none.png)\n\n${svgBlock}`);
+  await page.getByTestId("local-chat-send").click();
+  const done = page.locator('[data-testid="local-chat"] [data-testid="message-agent"][data-status="completed"]');
+  await expect(done).toContainText("echo: The plot", { timeout: 20000 });
+  const pics = done.locator('a[data-image="1"]');
+  await expect(pics).toHaveCount(4); // plot.png once, chart.svg, the ```svg block, none.png (hidden)
+  const loaded = async (sel: string) => done.locator(sel).evaluate((i: HTMLImageElement) => i.complete && i.naturalWidth > 0);
+  await expect.poll(() => loaded(`img[src*="plot.png"]`)).toBe(true);
+  await expect.poll(() => loaded(`img[src*="chart.svg"]`)).toBe(true);
+  await expect.poll(() => loaded(`img[src^="data:image/svg+xml"]`)).toBe(true);
+  await expect(done.locator("details summary")).toHaveText("SVG source");
+  await expect(done.locator('a.msg-image-auto:has(img[src*="none.png"])')).toBeHidden();
+  await expect(done.locator(`a[href="${dir}/none.png"]`)).toBeVisible(); // the link itself stays
+  const svgRes = await page.request.get(`/api/v1/local/raw?path=${encodeURIComponent(dir + "/chart.svg")}`);
+  expect(svgRes.headers()["content-security-policy"]).toContain("sandbox");
+  await page.getByTestId("local-chat-close").click();
+  await root.hover();
+  await root.getByTestId("local-close-root").click();
   await page.getByTestId("activity-files").click();
   fs.rmSync(dir, { recursive: true, force: true });
 });

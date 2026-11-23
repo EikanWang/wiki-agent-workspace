@@ -640,7 +640,8 @@ reference wiki, and for a PR tab the PR's connected local checkout. Skills are t
   *Share* (to the branch's remote; for a PR, to its head branch; never forced). After a rebase, amend or squash, the
   status shows "N pushed commits rewritten here" and **Force push** (after a confirmation) replaces the remote branch
   with yours. It is a `--force-with-lease`: refused, with nothing overwritten, if someone else pushed to the branch
-  since it was last pushed or fetched here. The branch's commits are listed at
+  since it was last pushed or fetched here. Once the workspace belongs to a pull request, **GitHub ↗** in the toolbar
+  and **Open #N on GitHub ↗** under *Share* open it on GitHub in a new tab. The branch's commits are listed at
   the bottom of the panel: click one to see its changes. **Diff** in the toolbar (or **⤢ Expand**) shows all the
   changes in the editor area; **±** on a file or folder of the explorer shows only its changes ("only <path>" — × for
   all of them again). **Back to editor** returns the view to the bottom panel.
@@ -848,6 +849,11 @@ shows its date and time in **UTC+8** (e.g. `2026-11-12 15:03:21 UTC+8`): when yo
   dialog, in the discussion's session box, or in the flat composer. OpenCode lists its real models; for Codex the
   configured default, profiles and common ids are offered, or type any id. Past answers keep their model.
 - Jobs on the same session run one after another ("waiting for session"); different sessions run in parallel.
+- **Images in answers**: every agent answer (wiki chats, discussions, Insights, Local files and PR Development chats,
+  …) shows the images it points at — Markdown images, links or `code` paths to `.png`, `.jpg`, `.gif`, `.webp`,
+  `.svg`, … files on the server (absolute paths, or wiki paths) or on the web, and ```` ```svg ```` blocks (drawn, the
+  source folded under them). Click a picture to open it full size in a new tab. A link whose file doesn't load stays
+  a plain link. SVGs are always shown as images, so their scripts never run.
 
 ## Editing a file yourself
 

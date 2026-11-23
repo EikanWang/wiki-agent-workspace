@@ -240,6 +240,10 @@ export default function DevChanges({ dev, refreshKey, onChanged, onAsk, onOpenFi
               await load();
               onChanged();
             })}>{busy === "force-push" ? "Force pushing…" : "Force push"}</button>
+          {dev.pr_number && dev.github_repo && (
+            <a className="btn" href={`https://github.com/${dev.github_repo}/pull/${dev.pr_number}`} target="_blank" rel="noopener noreferrer"
+              title={`Open ${dev.github_repo}#${dev.pr_number} on GitHub`} data-testid="dev-changes-pr-github">Open #{dev.pr_number} on GitHub ↗</a>
+          )}
           <span className="muted small">{st.push_remote ? `To ${st.push_branch}. Push never forces; Force push replaces the branch's history (with a lease). The pull request is in the Pull request tab below the editor.` : "This checkout has no remote (add an origin in the terminal)."}</span>
         </div>
       </section>

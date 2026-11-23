@@ -191,6 +191,10 @@ export default function DevView({ devId, workspaces, sessions, onSessionsChanged
         {dev.pr_number && dev.github_repo && (
           <button className="chip chip-btn" onClick={() => onOpenPrReview?.(dev.github_repo!, dev.pr_number!)} title="Open it in PR Review">#{dev.pr_number}</button>
         )}
+        {dev.pr_number && dev.github_repo && (
+          <a className="btn small" href={`https://github.com/${dev.github_repo}/pull/${dev.pr_number}`} target="_blank" rel="noopener noreferrer"
+            title={`Open ${dev.github_repo}#${dev.pr_number} on GitHub`} data-testid="dev-pr-github">GitHub ↗</a>
+        )}
         {wiki && <span className="muted small" title={wiki.root}>wiki: {wiki.name}</span>}
         <span className="spacer" />
         {dev.status === "ready" && (

@@ -105,7 +105,83 @@ export function linkGithubRefs(html: string, repo?: string): string {
   return tpl.innerHTML;
 }
 
-export function renderMarkdown(src: string, docPath: string, opts: { imageUrl?: (rel: string) => string } = {}): string {
+/** A file of the server by its absolute path (images are served as images, SVG sandboxed). */
+export const localRawUrl = (abs: string) => `/api/v1/local/raw?path=${encodeURIComponent(abs)}`;
+
+const IMAGE_FILE = /\.(png|jpe?g|gif|webp|svg|bmp|ico|avif)$/i;
+
+/** Is this link one to an image file (an absolute path on the server, or a web URL)? Its address to show it, else null. */
+function imageSrcOf(href: string): string | null {
+  const [p] = href.split(/[?#]/);
+  if (!IMAGE_FILE.test(p)) return null;
+  if (/^https?:\/\//i.test(href)) return href;
+  if (p.startsWith("/") && !p.startsWith("//")) return localRawUrl(safeDecode(p));
+  if (/^[a-z][a-z0-9+.-]*:/i.test(p) || p.startsWith("//")) return null;
+  // a path inside the wiki
+  const ws = getWorkspace();
+  return `/api/v1/raw?path=${encodeURIComponent(resolveRelative("", p))}${ws ? `&workspace=${encodeURIComponent(ws)}` : ""}`;
+}
+
+/**
+ * Agent answers show their images: links to image files (`[plot](/tmp/plot.png)`, or a path in `code` turned into a
+ * link) get the picture under them, and a ```svg block is drawn (its source folded below). Each picture opens full
+ * size in a new tab. `<img>` never runs an SVG's scripts, and the server sandboxes SVG files it serves.
+ */
+export function showImages(html: string): string {
+  const tpl = document.createElement("template");
+  tpl.innerHTML = html;
+  const shown = new Set<string>();
+  tpl.content.querySelectorAll("img[src]").forEach((img) => shown.add(img.getAttribute("src") || ""));
+  const picture = (src: string, alt: string) => {
+    const a = document.createElement("a");
+    a.href = src;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    a.className = "msg-image";
+    a.setAttribute("data-image", "1");
+    a.title = `${alt} (open full size)`;
+    const img = document.createElement("img");
+    img.src = src;
+    img.alt = alt;
+    img.loading = "lazy";
+    a.append(img);
+    return a;
+  };
+  tpl.content.querySelectorAll("img[src]").forEach((img) => {
+    if (img.closest("a")) return;
+    const pic = picture(img.getAttribute("src") || "", img.getAttribute("alt") || "image");
+    img.replaceWith(pic);
+  });
+  tpl.content.querySelectorAll("a[href]").forEach((a) => {
+    if (a.closest("pre") || a.hasAttribute("data-image")) return;
+    const src = imageSrcOf(a.getAttribute("href") || "");
+    if (!src || shown.has(src)) return;
+    shown.add(src);
+    const label = (a.textContent || "").trim() || src;
+    // a picture can't sit inside a heading or a table cell's line nicely: put it after the link's block-level parent line
+    const pic = picture(src, label);
+    pic.classList.add("msg-image-auto"); // hidden if it doesn't load (the link may not be to a file this side has)
+    const block = a.closest("p, li, td, th, h1, h2, h3, h4, h5, h6, blockquote");
+    if (block && !/^(TD|TH|LI)$/.test(block.tagName)) block.after(pic);
+    else (block ?? a).append(pic);
+  });
+  tpl.content.querySelectorAll("pre > code.language-svg").forEach((code) => {
+    const text = (code.textContent || "").trim();
+    if (!/^(<\?xml[^>]*>\s*)?<svg[\s>]/i.test(text) || !/<\/svg>\s*$/i.test(text)) return; // still streaming, or not SVG
+    const pre = code.parentElement!;
+    const pic = picture(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(text)}`, "SVG image");
+    const src = document.createElement("details");
+    const sum = document.createElement("summary");
+    sum.textContent = "SVG source";
+    pre.replaceWith(pic);
+    src.append(sum, pre);
+    pic.after(src);
+  });
+  tpl.content.querySelectorAll("img").forEach((img) => img.classList.add("msg-img"));
+  return tpl.innerHTML;
+}
+
+export function renderMarkdown(src: string, docPath: string, opts: { imageUrl?: (rel: string) => string; absoluteImageUrl?: (abs: string) => string } = {}): string {
   const html = md.render(src, {});
   const clean = DOMPurify.sanitize(html, {
     USE_PROFILES: { html: true },
@@ -139,6 +215,11 @@ export function renderMarkdown(src: string, docPath: string, opts: { imageUrl?: 
     if (/^https?:/i.test(src) || src.startsWith("data:image/")) return;
     if (/^[a-z]+:/i.test(src)) {
       img.removeAttribute("src");
+      return;
+    }
+    if (opts.absoluteImageUrl && src.startsWith("/") && !src.startsWith("//")) {
+      img.setAttribute("src", opts.absoluteImageUrl(safeDecode(src.split(/[?#]/)[0])));
+      img.setAttribute("loading", "lazy");
       return;
     }
     if (opts.imageUrl) {

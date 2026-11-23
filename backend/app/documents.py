@@ -893,13 +893,13 @@ def raw_file(path: str = Query(...), ctx: AppContext = Depends(require_auth)):
     if p.stat().st_size > svc.max_bytes:
         raise ApiError(413, "FILE_TOO_LARGE", "file exceeds the configured size limit")
     ctype = mimetypes.guess_type(norm)[0] or "application/octet-stream"
-    if ctype in ("text/html", "application/xhtml+xml", "image/svg+xml", "application/javascript", "text/javascript"):
+    if ctype in ("text/html", "application/xhtml+xml", "application/javascript", "text/javascript"):
         ctype = "text/plain"
-    if ctype == "application/pdf":
-        # the browser's PDF viewer runs in a sandboxed frame; scripts inside PDFs are never executed by it
-        pass
-    return RawResponse(content=p.read_bytes(), media_type=ctype,
-                       headers={"Content-Disposition": "inline", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-cache"})
+    headers = {"Content-Disposition": "inline", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-cache"}
+    if ctype == "image/svg+xml":
+        # shown as an image (<img> never runs its scripts); opened directly it is sandboxed, with no scripts either
+        headers["Content-Security-Policy"] = "default-src 'none'; style-src 'unsafe-inline'; sandbox"
+    return RawResponse(content=p.read_bytes(), media_type=ctype, headers=headers)
 
 
 def _office_file(ctx: AppContext, path: str) -> tuple[str, Path]:
