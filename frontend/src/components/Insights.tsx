@@ -63,6 +63,26 @@ const TASK_LABEL: Record<string, string> = { daily: "Daily summaries", rollup: "
 const PERIODS = ["day", "week", "month", "quarter", "year", "custom"] as const;
 const PERIOD_LABEL: Record<string, string> = { day: "Day", week: "Week", month: "Month", quarter: "Quarter", year: "Year", custom: "Dates" };
 const MAX_TOGETHER = 40; // the server's limit on reports discussed together (ChatManyIn.ids)
+
+/** 53-bit string hash (cyrb53), as 14 hex digits. */
+function hash53(s: string): string {
+  let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 2654435761);
+    h2 = Math.imul(h2 ^ c, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(16).padStart(14, "0");
+}
+
+/** The discussions key of reports opened together: their ids, or (when too long for the server's 600 characters,
+ * e.g. a whole category) a hash of them; short keys stay as before so earlier discussions are found again. */
+function groupKey(ids: string[]): string {
+  const k = `reports:${[...ids].sort().join(",")}`;
+  return k.length <= 600 ? k : `reports#${ids.length}:${hash53(k)}`;
+}
 const KINDS = [["daily", "Daily"], ["weekly", "Weekly"], ["monthly", "Monthly"], ["quarterly", "Quarterly"], ["yearly", "Yearly"], ["dates", "Dates"]] as const;
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const iso = (d: Date) => d.toISOString().slice(0, 10);
@@ -207,7 +227,7 @@ function RepoPage({ repo, onOpenPrReview, sessions }: { repo: string; onOpenPrRe
   const done = (id: string) => ov?.reports.find((r) => r.id === id)?.status === "done";
   const discKey = tab === "chat" || tab === "highlights" || !open ? null
     : open.kind === "report" ? (done(open.id) ? `report:${open.id}` : null)
-    : open.kind === "reports" ? (open.ids.every(done) ? `reports:${[...open.ids].sort().join(",")}` : null)
+    : open.kind === "reports" ? (open.ids.every(done) ? groupKey(open.ids) : null)
     : `file:${open.path}`;
   const disc = useInsightsDiscussion(repo, discKey, sessions, (body) => (
     open?.kind === "report" ? post<Started>(`/insights/reports/${repo}/${open.id}/chat`, body)
