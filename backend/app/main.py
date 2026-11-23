@@ -347,6 +347,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from . import localfs
 
     api.include_router(localfs.router)
+    from . import local_chat
+
+    api.include_router(local_chat.router)
     from . import refs
 
     api.include_router(refs.router)

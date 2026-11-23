@@ -101,6 +101,44 @@ def test_mention_by_tells_a_person_from_a_bot_cc_line():
     assert github_hub.mention_by(_who(body="x", reviews=[("bob", "@EikanWang thoughts?")]), "EikanWang") == {"by": "person", "who": "bob"}
 
 
+def test_mention_by_ghstack_bringing_back_the_bot_cc_line():
+    # pytorch/pytorch#203717: ghstack rewrites the description on each push, dropping pytorch-bot's cc line; a later
+    # push by the author brings the same line back — still the bot's
+    bot_cc = "cc @voznesenskym @penguinwu @EikanWang @jgong5"
+    stack = "Stack from ghstack:\n* #2\n* __->__ #1\n\nFix it"
+    hist = [("mlazos", stack), ("pytorch-bot", f"{stack}\n\n{bot_cc}"), ("mlazos", stack + " v2"), ("pytorch-bot", f"{stack} v2\n\n{bot_cc}"),
+            ("mlazos", f"{stack} v3\n\n{bot_cc}"), ("mlazos", stack + " v4"), ("mlazos", f"{stack} v5\n\n{bot_cc}"), ("mlazos", f"{stack} v6\n\n{bot_cc}")]
+    assert github_hub.mention_by(_who(hist), "EikanWang") == {"by": "bot"}
+    # the bot rewrote its line when the labels changed; an older one of its lines coming back is still the bot's
+    assert github_hub.mention_by(_who([*hist, ("pytorch-bot", f"{stack} v6\n\ncc @EikanWang @other"), ("mlazos", f"{stack} v7\n\n  {bot_cc} ")]),
+                                 "EikanWang") == {"by": "bot"}
+    # the author really mentions you: a line of their own, or their own cc line
+    assert github_hub.mention_by(_who([*hist, ("mlazos", f"{stack} v7\n\n{bot_cc}\n\n@EikanWang could you check the XPU part?")]),
+                                 "EikanWang") == {"by": "person", "who": "mlazos"}
+    assert github_hub.mention_by(_who([("mlazos", stack), ("pytorch-bot", f"{stack}\n\n{bot_cc}"), ("mlazos", f"{stack}\n\ncc @EikanWang")]),
+                                 "EikanWang") == {"by": "person", "who": "mlazos"}
+    # older versions not read: the first one read counts as new (a person's line is shown, as before)
+    assert github_hub.mention_by(_who([("mlazos", f"{stack}\n\n@EikanWang ptal")], total=60), "EikanWang") == {"by": "person", "who": "mlazos"}
+
+
+def test_mention_answers_from_older_rules_are_worked_out_again():
+    p = {"repo": "pytorch/pytorch", "number": 7, "mentioned": True, "review_requested": False, "updated_at": "t1"}
+    node = _who([("mlazos", "x"), ("pytorch-bot", "x\ncc @EikanWang"), ("mlazos", "y"), ("mlazos", "y\ncc @EikanWang")])
+    calls: list = []
+
+    def graphql(query, variables):
+        calls.append(query)
+        return {"repository": {"p7": node}}
+
+    old = {"pytorch/pytorch#7": {"by": "person", "who": "mlazos", "updated_at": "t1"}}  # kept before MENTION_RULES
+    out = github_hub.classify_mentions(graphql, "EikanWang", [dict(p)], old)
+    assert len(calls) == 1 and out["pytorch/pytorch#7"]["by"] == "bot"
+    # an answer from the current rules is reused while the PR has not changed
+    item = dict(p)
+    github_hub.classify_mentions(graphql, "EikanWang", [item], out)
+    assert len(calls) == 1 and item["mention_by"] == "bot"
+
+
 async def test_review_queue_keeps_bot_cc_mentions_apart(running_app):
     github_hub.reset_cache()
     who_calls: list = []
@@ -1100,6 +1138,66 @@ async def test_defer_a_review_until_a_time_or_new_activity(running_app):
     for bad in ({"pr": "nope", "until": soon}, {"pr": "pytorch/pytorch#1"}, {"pr": "pytorch/pytorch#1", "until": "2001-01-01T00:00:00Z"},
                 {"pr": "pytorch/pytorch#1", "until": "tomorrow"}):
         assert (await api.put("/api/v1/github/prefs", json={"defer": bad})).status_code == 400, bad
+
+
+async def test_hide_a_pr_until_you_are_requested_or_mentioned_directly(running_app):
+    github_hub.reset_cache()
+    h = await running_app()
+    as_github(h, "EikanWang")
+    h.ctx.extra["gh_owner"] = lambda: "EikanWang"
+    user = lambda login: {"__typename": "Bot" if login.endswith("bot") else "User", "login": login}  # noqa: E731
+    old, later = "2026-01-01T00:00:00Z", "2099-01-01T00:00:00Z"
+    talk = {5: [("alice", "@EikanWang can you look?", old)], 2: [("bob", "cc @EikanWang", old)]}
+    nodes = {1: pr(1), 2: pr(2), 5: pr(5, user=None)}
+
+    def graphql(q, v):
+        if "MentionWho" in q:
+            return {"repository": {f"p{n}": {"body": "x", "author": user("someone"), "createdAt": old, "userContentEdits": {"totalCount": 0, "nodes": []},
+                                             "comments": {"nodes": [{"body": b, "author": user(a), "createdAt": at} for a, b, at in talk[n]]},
+                                             "reviews": {"nodes": []}}
+                                   for n in talk if f"pullRequest(number: {n})" in q}}
+        s = v.get("q") or ""
+        page = [] if "repo:" in s or "in:comments" in s else [nodes[2], nodes[5]] if "mentions:@me" in s else [nodes[1], nodes[2]]
+        return {"search": {"issueCount": len(page), "pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": page}}
+
+    h.ctx.extra["gh_graphql"] = graphql
+    api = h.api
+
+    async def reviews(changed=()):
+        for n in changed:  # GitHub's updatedAt moves on new activity: the mentions are read again
+            nodes[n]["updatedAt"] = f"2099-01-01T00:00:{len(talk[n]) if n in talk else 0:02d}Z"
+        github_hub._cache.clear()
+        return (await api.get("/api/v1/github/reviews")).json()
+
+    assert {p["number"] for p in (await reviews())["items"]} == {1, 2, 5}
+    for n in (1, 2, 5):
+        assert (await api.put("/api/v1/github/prefs", json={"hide_pr": {"pr": f"pytorch/pytorch#{n}", "title": f"PR {n}"}})).status_code == 200
+    r = await reviews()
+    assert r["items"] == [] and {p["number"] for p in r["hidden_prs"]} == {1, 2, 5}
+    assert r["prefs"]["hidden_prs"]["pytorch/pytorch#5"]["title"] == "PR 5"
+    # new activity that is not a review request or a direct mention: still hidden (a bot's cc, your own comment, a plain comment)
+    talk[5] += [("pytorch-bot", "cc @EikanWang", later), ("EikanWang", "@EikanWang note to self", later), ("carol", "LGTM", later)]
+    nodes[5]["comments"] = {"nodes": [{"createdAt": later, "author": user("carol")}]}
+    assert (await reviews([5]))["items"] == []
+    # someone mentions you directly: back, and says why — also on a PR that already requested your review
+    talk[5].append(("alice", "@EikanWang ping", later))
+    talk[2].append(("bob", "@EikanWang what do you think?", later))
+    r = await reviews([2, 5])
+    back = {p["number"]: p for p in r["items"]}
+    assert set(back) == {2, 5} and back[5]["hidden_ended"]["why"] == ["@alice mentioned you"]
+    assert back[2]["hidden_ended"]["why"] == ["@bob mentioned you"]
+    # you are added as a reviewer after you hid it: back
+    nodes[1]["timelineItems"] = {"nodes": [{"createdAt": later, "actor": {"login": "albanD"}, "requestedReviewer": {"__typename": "User", "login": "EikanWang"}}]}
+    back = {p["number"]: p for p in (await reviews([1]))["items"]}
+    assert back[1]["hidden_ended"]["why"] == ["your review was requested"]
+    # hiding again starts over (a request from before does not bring it back); show again ends it
+    nodes[1]["timelineItems"]["nodes"][0]["createdAt"] = "2026-01-02T00:00:00Z"
+    assert (await api.put("/api/v1/github/prefs", json={"hide_pr": {"pr": "pytorch/pytorch#1"}})).status_code == 200
+    assert 1 not in {p["number"] for p in (await reviews())["items"]}
+    assert (await api.put("/api/v1/github/prefs", json={"unhide_pr": "pytorch/pytorch#1"})).status_code == 200
+    r = await reviews()
+    assert "hidden_ended" not in {p["number"]: p for p in r["items"]}[1] and "pytorch/pytorch#1" not in r["prefs"]["hidden_prs"]
+    assert (await api.put("/api/v1/github/prefs", json={"hide_pr": {"pr": "nope"}})).status_code == 400
 
 
 async def test_your_review_or_comment_moves_the_pr_to_commented_nothing_new_at_once(running_app):

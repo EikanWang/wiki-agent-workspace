@@ -268,6 +268,28 @@ async def test_reports_of_any_period_with_blocks_commits_rfcs_highlights(running
     assert c.status_code == 201, c.text
     await api.wait_job(c.json()["job_id"])
     assert (await api.post("/api/v1/insights/file/chat", json={"path": "/etc/passwd"})).status_code == 400
+    # discussions next to the material: those about one report share a document, kept out of Chats
+    key = f"report:{rid}"
+    assert (await api.get("/api/v1/insights/repos/acme/proj/discussion", params={"key": key})).json()["discussion"] is None
+    d1 = await api.post(f"/api/v1/insights/reports/acme/proj/{rid}/chat", json={"discussion": key})
+    assert d1.status_code == 201, d1.text
+    await api.wait_job(d1.json()["job_id"])
+    d2 = await api.post(f"/api/v1/insights/reports/acme/proj/{rid}/chat", json={"discussion": key, "quote": "Change 1 (#901)", "question": "And this?", "dirs": [str(own)]})
+    assert d2.status_code == 201, d2.text
+    await api.wait_job(d2.json()["job_id"])
+    assert d2.json()["document_id"] == d1.json()["document_id"] and d2.json()["thread_id"] != d1.json()["thread_id"]
+    found = (await api.get("/api/v1/insights/repos/acme/proj/discussion", params={"key": key})).json()["discussion"]
+    assert found["document_id"] == d1.json()["document_id"]
+    threads = (await api.get(f"/api/v1/documents/{found['document_id']}/threads")).json()["threads"]
+    assert len(threads) == 2
+    with h.ctx.db.read() as s:
+        prompt = s.get(Job, d2.json()["job_id"]).prompt
+    assert "> Change 1 (#901)" in prompt and "And this?" in prompt and "<<<REPORT " in prompt and str(own) in prompt
+    listed = {x["path"] for x in (await api.get("/api/v1/chats")).json()["chats"]}
+    assert found["path"] not in listed and chat_path in listed
+    other = await api.post("/api/v1/insights/file/chat", json={"path": day, "discussion": f"file:{day}"})
+    assert other.status_code == 201 and other.json()["document_id"] != found["document_id"]
+    await api.wait_job(other.json()["job_id"])
     assert (await api.delete(f"/api/v1/insights/reports/acme/proj/{rid}")).status_code == 200
     assert (await api.get(f"/api/v1/insights/reports/acme/proj/{rid}")).status_code == 404
     for bad in ({"repo": "acme/proj", "period": "custom", "since": "2026-11-05", "until": "2026-11-01"}, {"repo": "x", "period": "week"},
@@ -509,6 +531,23 @@ async def test_highlights_per_day_and_flat_without_duplicates(running_app, tmp_p
     flat = (await h.api.get(base, params={"since": "2026-11-09", "until": "2026-11-12"})).json()["items"]
     assert [(x["url"], x["xpu_relevance_score"], x["days"]) for x in flat] == [
         ("c", 91, ["2026-11-12", "2026-11-10"]), ("a", 85, ["2026-11-10", "2026-11-09"]), ("b", 40, ["2026-11-09"])]
+    # discuss the highlights shown: a day (only the new ones), or every item of the dates above a score
+    from backend.app.models import Job
+
+    async def prompt_of(body):
+        c = await h.api.post(f"{base}/chat", json={"since": "2026-11-09", "until": "2026-11-12", **body})
+        assert c.status_code == 201, c.text
+        await h.api.wait_job(c.json()["job_id"])
+        with h.ctx.db.read() as s:
+            return s.get(Job, c.json()["job_id"]).prompt
+
+    p = await prompt_of({"day": "2026-11-10", "only_new": True, "quote": "c", "question": "Why is c urgent?"})
+    assert "XPU highlights of acme/proj for 2026-11-10" in p and "- [90] [c](c)" in p and "[a](a)" not in p and "Why is c urgent?" in p
+    p = await prompt_of({"min_score": 50})
+    assert "for 2026-11-09 – 2026-11-12" in p and "- [91] [c](c)" in p and "(on 2026-11-10, 2026-11-09)" in p and "[b](b)" not in p
+    assert "Give me the three things" in p and "Why: j" in p
+    r = await h.api.post(f"{base}/chat", json={"since": "2026-11-09", "until": "2026-11-12", "min_score": 99})
+    assert r.status_code == 409 and r.json()["error"]["code"] == "NO_HIGHLIGHTS"
 
 
 async def test_new_things_are_marked_remembered_and_counted(running_app, tmp_path):

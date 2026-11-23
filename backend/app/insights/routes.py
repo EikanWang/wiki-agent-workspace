@@ -184,6 +184,17 @@ class ChatIn(BaseModel):
     question: str = Field("", max_length=8_000)
     # reference folders for this discussion only (besides the repository's)
     dirs: list[str] = Field(default_factory=list, max_length=30)
+    # the material's discussions (e.g. "report:<id>"): one more discussion in the document they share, shown next to the
+    # material (instead of a chat of its own)
+    discussion: str | None = Field(None, max_length=600)
+
+
+@router.get("/insights/repos/{owner}/{name}/discussion")
+def material_discussion(owner: str, name: str, key: str = Query(..., max_length=600), ctx: AppContext = Depends(require_auth)):
+    """The document with the discussions about one report / summary / highlights (null before the first one)."""
+    from .chat import discussion_doc
+
+    return {"discussion": discussion_doc(ctx, _repo(owner, name), key.strip())}
 
 
 @router.post("/insights/reports/{owner}/{name}/{rid}/chat", status_code=201)
@@ -228,9 +239,11 @@ async def _chat_on(ctx: AppContext, repo: str, ids: list[str], body: ChatIn, mat
     from ..annotations import ThreadCreateIn, ThreadService
     from ..chats import new_chat
     from ..github_hub import clean_dirs
-    from ..kv import kv_put
+    from ..kv import kv_get, kv_put
+    from .chat import discussion_doc, mark_discussion
 
     workspace_id = body.workspace_id
+    key = (body.discussion or "").strip()
     dirs = clean_dirs(body.dirs)
     quote = body.quote.strip()
 
@@ -240,18 +253,25 @@ async def _chat_on(ctx: AppContext, repo: str, ids: list[str], body: ChatIn, mat
     reps.sort(key=lambda r: (r["since"], r["until"]))
     if ctx.workspaces is None:
         raise ApiError(409, "NO_WIKI", "no wiki folder is open")
-    rt = ctx.workspaces.runtimes.get(workspace_id) if workspace_id else ctx.workspaces.primary
+    shared = discussion_doc(ctx, repo, key) if key else None
+    rt = ctx.workspaces.runtimes.get(shared["workspace_id"] if shared else workspace_id) if (shared or workspace_id) else ctx.workspaces.primary
     if rt is None:
         raise ApiError(404, "WORKSPACE_NOT_FOUND", "that wiki folder is not open")
     label = lambda r: r.get("label") or f"{r['since']} – {r['until']}"  # noqa: E731
     noun = {"report": "report", "summary": "daily summary", "highlights": "highlights"}[what]
     head = f"{repo} · {'' if what == 'report' else noun + ' '}{', '.join(label(r) for r in reps)}"
-    if quote:
+    if quote and not key:
         head += " · “" + " ".join(quote.split())[:60] + ("…”" if len(" ".join(quote.split())) > 60 else "”")
-    chat = new_chat(rt.docs, head[:160])
-    kv_put(ctx, f"chat_insights:{rt.id}:{chat['path']}", repo)  # its repository's reference folders apply
-    if dirs:
-        kv_put(ctx, f"context:chat:{rt.id}:{chat['path']}", dirs)
+    if shared:
+        chat = {**shared, "title": head[:160]}
+    else:
+        chat = new_chat(rt.docs, head[:160])
+        kv_put(ctx, f"chat_insights:{rt.id}:{chat['path']}", repo)  # its repository's reference folders apply
+        if key:
+            mark_discussion(ctx, repo, key, rt.id, chat["path"])
+    if dirs:  # (the discussions of one material share their document, and so these folders)
+        had = kv_get(ctx, f"context:chat:{rt.id}:{chat['path']}", []) or []
+        kv_put(ctx, f"context:chat:{rt.id}:{chat['path']}", list(dict.fromkeys([*had, *dirs])))
     sctx = replace(ctx, documents=rt.docs, locks=rt.locks, watcher=rt.watcher, workspace_id=rt.id, workspace_root=rt.root)
     opened = rt.docs.open_document(chat["path"])
     room = 380_000 // len(reps)
@@ -273,6 +293,52 @@ async def _chat_on(ctx: AppContext, repo: str, ids: list[str], body: ChatIn, mat
     t = await ThreadService(sctx).create_thread(chat["document_id"], ThreadCreateIn(version_sha256=opened["sha256"], question=q,
                                                                                    whole_document=True, chat_brief=brief))
     return {**chat, "workspace_id": rt.id, "thread_id": t["thread_id"], "job_id": t["job_id"]}
+
+
+class HighlightsChatIn(ChatIn):
+    since: str = Field(..., max_length=10)
+    until: str = Field(..., max_length=10)
+    day: str | None = Field(None, max_length=10)  # one day of the per-day view, else every item of the dates once
+    min_score: int = Field(0, ge=0, le=100)
+    only_new: bool = False  # (per day) leave out what an earlier day had
+
+
+def _hl_line(x: dict[str, Any]) -> str:
+    score = x.get("xpu_relevance_score")
+    who = " · ".join(v for v in (x.get("submitter"), x.get("state"), ", ".join(x.get("vendor_involvement") or [])) if v)
+    out = f"- [{score if isinstance(score, int) and score >= 0 else '?'}] [{x.get('title') or x.get('url')}]({x.get('url')})"
+    out += (f" — {who}" if who else "") + (f" (on {', '.join(x['days'])})" if len(x.get("days") or []) > 1 else "")
+    if x.get("body"):
+        out += f"\n  {' '.join(str(x['body']).split())}"
+    if x.get("xpu_relevance_justification"):
+        out += f"\n  Why: {' '.join(str(x['xpu_relevance_justification']).split())}"
+    return out
+
+
+@router.post("/insights/repos/{owner}/{name}/highlights/chat", status_code=201)
+async def highlights_chat(owner: str, name: str, body: HighlightsChatIn, ctx: AppContext = Depends(require_auth_mutating)):
+    """A chat about the XPU highlights shown (a day, or the dates), e.g. a selected part of them."""
+    repo = _repo(owner, name)
+    since, until = _date(body.since), _date(body.until)
+
+    def keep(x: dict[str, Any]) -> bool:
+        score = x.get("xpu_relevance_score")
+        return not isinstance(score, int) or score < 0 or score >= body.min_score
+
+    if body.day:
+        day = _date(body.day)
+        d = next((x for x in store.highlights_by_day(ctx, repo, since, until) if x["day"] == day), None)
+        items = [x for x in (d or {}).get("items") or [] if keep(x) and not (body.only_new and x.get("seen_before"))]
+        span = day
+    else:
+        items = [x for x in store.highlights(ctx, repo, since, until) if keep(x)]
+        span = since if since == until else f"{since} – {until}"
+    if not items:
+        raise ApiError(409, "NO_HIGHLIGHTS", "no highlights shown to discuss")
+    text = (f"XPU highlights of {repo} for {span} (score ≥ {body.min_score}; each: [XPU relevance score 0–100] the issue / PR, "
+            "who opened it · its state · vendors involved, what it is, why it matters for XPU):\n\n" + "\n".join(_hl_line(x) for x in items))
+    return await _chat_on(ctx, repo, [], body, mats=[{"label": span, "since": body.day or since, "until": body.day or until, "text": text}],
+                          what="highlights")
 
 
 class TrendChatIn(BaseModel):

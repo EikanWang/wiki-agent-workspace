@@ -47,6 +47,9 @@ export interface ReviewPR {
   /** deferred by you (only in `deferred`); a deferral that just ended (back in the list) */
   deferred?: Deferral;
   deferred_ended?: Deferral;
+  /** hidden by you (only in `hidden_prs`); hidden, but back because your review was requested or someone mentioned you since */
+  hidden_pr?: HiddenPr;
+  hidden_ended?: HiddenPr & { why: string[] };
   requested_by_core?: boolean;
   author_roles?: string;
   priority?: boolean;
@@ -79,7 +82,6 @@ const DEFAULT_CATEGORIES: Category[] = [
 ];
 const categoryOf = (p: ReviewPR) => p.my_activity ?? "todo";
 /** the category choice above the list: short names (the full title is the tooltip) */
-const CAT_SHORT: Record<string, string> = { todo: "Not reviewed", news: "New activity", quiet: "Nothing new" };
 
 export interface MaintainerSource { repo: string; people: number; sources: string[]; fetched: number | null; error?: string | null }
 /** a repository checked for open PRs touching your files: matches, your CODEOWNERS rules, the latest scan */
@@ -110,7 +112,10 @@ export interface HubPrefs {
   priority_agent: PriorityAgent;
   priority_manual: Record<string, string>;
   categories: Category[];
+  /** PRs you hid ("owner/repo#n", lower case): out of Reviews until your review is requested or someone mentions you */
+  hidden_prs?: Record<string, HiddenPr>;
 }
+export interface HiddenPr { at: string; title: string }
 interface Queue {
   items: ReviewPR[];
   total: number;
@@ -129,6 +134,8 @@ interface Queue {
   deferred?: ReviewPR[];
   /** PRs that mention you only in a bot-written cc line (e.g. pytorch-bot's label subscribers): hidden unless asked for */
   bot_cc?: ReviewPR[];
+  /** PRs you hid that are open and would be listed */
+  hidden_prs?: ReviewPR[];
   hidden_count?: number;
   approved_hidden?: number;
   prefs?: HubPrefs;
@@ -145,8 +152,42 @@ export interface BatchStatus {
 }
 const prKey = (p: { repo: string; number: number }) => `${p.repo}#${p.number}`.toLowerCase();
 
-// ---- one shared copy of the queue (the activity-bar badge and the panel use the same data)
-let state: { queue: Queue | null; error: string | null; loading: boolean } = { queue: null, error: null, loading: false };
+type Sort = "updated" | "waiting" | "size";
+type ReviewSource = "all" | "requested" | "mentioned" | "both";
+
+const reviewRequested = (p: ReviewPR) => p.review_requested ?? (p.requested === "you" || p.requested === "team");
+const matchesSource = (p: ReviewPR, source: ReviewSource) => source === "all"
+  || (source === "requested" && reviewRequested(p))
+  || (source === "mentioned" && !!p.mentioned)
+  || (source === "both" && reviewRequested(p) && !!p.mentioned);
+
+/** The panel's filters (what the list shows); the activity-bar badge counts with the same ones. */
+export interface ReviewView {
+  filter: string;
+  source: ReviewSource;
+  showDrafts: boolean;
+  agentOnly: boolean;
+  maxRank: number;
+}
+const storedView = (): ReviewView => {
+  const saved = localStorage.getItem("waw.reviews.source");
+  return {
+    filter: "",
+    source: ["requested", "mentioned", "both"].includes(saved ?? "") ? saved as ReviewSource : "all",
+    showDrafts: localStorage.getItem("waw.reviews.drafts") === "1",
+    agentOnly: localStorage.getItem("waw.reviews.agentOnly") === "1",
+    maxRank: Number(localStorage.getItem("waw.reviews.maxRank") ?? "99"),
+  };
+};
+const keepPr = (p: ReviewPR, v: ReviewView) => {
+  const f = v.filter.trim().toLowerCase();
+  return (v.agentOnly ? p.agent_review?.state === "waiting" : v.showDrafts || !p.draft) && (p.level_rank ?? 0) <= v.maxRank
+    && matchesSource(p, v.source)
+    && (!f || `${p.repo} #${p.number} ${p.title} ${p.author ?? ""} ${p.requested_by ?? ""} ${p.level ?? ""} ${p.labels.map((l) => l.name).join(" ")}`.toLowerCase().includes(f));
+};
+
+// ---- one shared copy of the queue and of the panel's filters (the activity-bar badge and the panel use the same data)
+let state: { queue: Queue | null; error: string | null; loading: boolean; view: ReviewView } = { queue: null, error: null, loading: false, view: storedView() };
 const subs = new Set<() => void>();
 const set = (s: Partial<typeof state>) => {
   state = { ...state, ...s };
@@ -185,9 +226,9 @@ export function useReviews() {
   );
 }
 
-/** Number shown on the activity bar: PRs that are ready for review (not drafts). */
-export function reviewBadge(q: Queue | null): number {
-  return q ? q.items.filter((p) => !p.draft).length : 0;
+/** Number shown on the activity bar: the PRs the list shows with the panel's current filters ("showing N"). */
+export function reviewBadge(q: Queue | null, view: ReviewView = state.view): number {
+  return q ? q.items.filter((p) => keepPr(p, view)).length : 0;
 }
 
 const ago = (iso: string) => {
@@ -198,15 +239,6 @@ const ago = (iso: string) => {
   return `${Math.round(s / (86400 * 30))}mo`;
 };
 const CI_LABEL: Record<string, string> = { SUCCESS: "checks passed", FAILURE: "checks failing", ERROR: "checks errored", PENDING: "checks running", EXPECTED: "checks expected" };
-
-type Sort = "updated" | "waiting" | "size";
-type ReviewSource = "all" | "requested" | "mentioned" | "both";
-
-const reviewRequested = (p: ReviewPR) => p.review_requested ?? (p.requested === "you" || p.requested === "team");
-const matchesSource = (p: ReviewPR, source: ReviewSource) => source === "all"
-  || (source === "requested" && reviewRequested(p))
-  || (source === "mentioned" && !!p.mentioned)
-  || (source === "both" && reviewRequested(p) && !!p.mentioned);
 
 /** Sidebar view: the pull requests waiting for your review, grouped by repository. */
 export default function ReviewsPanel({ onOpen, onOpenPr }: { onOpen: (pr: ReviewPR) => void; onOpenPr: (repo: string, number: number, title: string) => void }) {
@@ -231,9 +263,6 @@ export default function ReviewsPanel({ onOpen, onOpenPr }: { onOpen: (pr: Review
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set(JSON.parse(localStorage.getItem("waw.reviews.collapsed") || "[]")));
   useEffect(() => localStorage.setItem("waw.reviews.drafts", showDrafts ? "1" : "0"), [showDrafts]);
   // the categories you chose to see (not reviewed yet / new activity / nothing new), kept per browser
-  const [hiddenCats, setHiddenCats] = useState<Set<string>>(() => new Set(JSON.parse(localStorage.getItem("waw.reviews.hiddenCats") || "[]")));
-  useEffect(() => localStorage.setItem("waw.reviews.hiddenCats", JSON.stringify([...hiddenCats])), [hiddenCats]);
-  const toggleCat = (k: string) => setHiddenCats((s) => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n; });
   useEffect(() => localStorage.setItem("waw.reviews.sort", sort), [sort]);
   useEffect(() => localStorage.setItem("waw.reviews.collapsed", JSON.stringify([...collapsed])), [collapsed]);
   useEffect(() => {
@@ -333,12 +362,12 @@ export default function ReviewsPanel({ onOpen, onOpenPr }: { onOpen: (pr: Review
   const prefs = queue?.prefs;
   const levels = prefs?.priority_levels ?? [];
   const categories = prefs?.categories?.length ? prefs.categories : DEFAULT_CATEGORIES;
+  // the badge counts with these filters: publish them whenever they change
+  useEffect(() => set({ view: { filter, source, showDrafts, agentOnly, maxRank } }), [filter, source, showDrafts, agentOnly, maxRank]);
+  useEffect(() => () => set({ view: { ...state.view, filter: "" } }), []); // the text filter is not kept when the panel closes
   const { groups, watchedGroups, botGroups } = useMemo(() => {
-    const f = filter.trim().toLowerCase();
-    const keep = (p: ReviewPR) => (agentOnly ? p.agent_review?.state === "waiting" : showDrafts || !p.draft) && (p.level_rank ?? 0) <= maxRank
-      && matchesSource(p, source)
-      && !hiddenCats.has(categoryOf(p))
-      && (!f || `${p.repo} #${p.number} ${p.title} ${p.author ?? ""} ${p.requested_by ?? ""} ${p.level ?? ""} ${p.labels.map((l) => l.name).join(" ")}`.toLowerCase().includes(f));
+    const view = { filter, source, showDrafts, agentOnly, maxRank };
+    const keep = (p: ReviewPR) => keepPr(p, view);
     const key = (p: ReviewPR) => (sort === "updated" ? -new Date(p.updated_at).getTime() : sort === "waiting" ? new Date(p.created_at).getTime() : p.additions + p.deletions);
     // inside a repository (and a category): the most urgent level first, then your sort
     const cmp = (a: ReviewPR, b: ReviewPR) => (a.level_rank ?? 99) - (b.level_rank ?? 99) || key(a) - key(b);
@@ -349,12 +378,11 @@ export default function ReviewsPanel({ onOpen, onOpenPr }: { onOpen: (pr: Review
     };
     return { groups: group((queue?.items ?? []).filter(keep)), watchedGroups: group((queue?.watched ?? []).filter(keep)),
       botGroups: showBotCc ? group((queue?.bot_cc ?? []).filter(keep)) : [] };
-  }, [queue, filter, source, showDrafts, sort, agentOnly, maxRank, hiddenCats, showBotCc]);
+  }, [queue, filter, source, showDrafts, sort, agentOnly, maxRank, showBotCc]);
   const botCc = queue?.bot_cc?.length ?? 0;
   const drafts = queue?.items.filter((p) => p.draft).length ?? 0;
   const deferred = (queue?.deferred ?? []).filter((p) => matchesSource(p, source));
   // per category: the PRs in it (drafts only when shown), for the category choice
-  const catCount = (k: string) => [...(queue?.items ?? []), ...(queue?.watched ?? [])].filter((p) => categoryOf(p) === k && (showDrafts || agentOnly || !p.draft)).length;
   const owned = queue?.items.filter((p) => p.requested === "codeowner").length ?? 0;
   const shown = groups.reduce((n, g) => n + g.prs.length, 0);
   const change = async (what: string, c: Partial<HubPrefs> & Record<string, unknown>) => {
@@ -432,6 +460,7 @@ export default function ReviewsPanel({ onOpen, onOpenPr }: { onOpen: (pr: Review
           )}
           {p.deferred_ended && <span className="git-badge approved-news" title={`You deferred it (${deferLabel(p.deferred_ended)}); it is back${p.deferred_ended.note ? `\nnote: ${p.deferred_ended.note}` : ""}`} data-testid="review-defer-ended"> ⏰ back</span>}
           {p.deferred && <span className="git-badge" title={p.deferred.note || undefined} data-testid="review-deferred-until"> ⏰ {deferLabel(p.deferred)}{p.deferred.note ? ` · ${p.deferred.note}` : ""}</span>}
+          {p.hidden_ended && <span className="git-badge approved-news" title={`You hid it (${new Date(p.hidden_ended.at).toLocaleString()}); it is back: ${p.hidden_ended.why.join(", ")}. Hide it again to start over.`} data-testid="review-hide-ended"> back: {p.hidden_ended.why.join(", ")}</span>}
           {p.labels.slice(0, 2).map((l) => (
             <span key={l.name} className="review-label" style={l.color ? { borderColor: `#${l.color}` } : undefined}>{l.name}</span>
           ))}
@@ -444,6 +473,12 @@ export default function ReviewsPanel({ onOpen, onOpenPr }: { onOpen: (pr: Review
         {prefs && p.deferred && (
           <span role="button" tabIndex={0} className="btn small" onClick={(e) => { e.stopPropagation(); void change(`undefer:${p.repo}#${p.number}`, { undefer: `${p.repo}#${p.number}` }); }}
             title="Back in the list now" data-testid="review-undefer">Back now</span>
+        )}
+        {prefs && !p.deferred && (
+          <span role="button" tabIndex={0} className="icon-btn small review-hide-pr" aria-label={`Hide ${p.repo}#${p.number}`} data-testid="review-hide-pr"
+            title="Hide this PR: it leaves Reviews (and the badge) until your review is requested or someone @-mentions you directly (bot cc lines do not count). Show it again under ⚙ → Repositories → Hidden PRs."
+            onClick={(e) => { e.stopPropagation(); if (busy === null) void change(`hidepr:${p.repo}#${p.number}`, { hide_pr: { pr: `${p.repo}#${p.number}`, title: p.title } }); }}
+            onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); void change(`hidepr:${p.repo}#${p.number}`, { hide_pr: { pr: `${p.repo}#${p.number}`, title: p.title } }); } }}>⊘</span>
         )}
         {prefs && (
           <LevelMenu pr={`${p.repo}#${p.number}`} level={p.level} source={p.level_source} reasons={p.level_reasons} levels={levels} compact
@@ -534,7 +569,8 @@ export default function ReviewsPanel({ onOpen, onOpenPr }: { onOpen: (pr: Review
       </div>
       {tab === "queue" && (<>
       <div className="pad-x"><GithubRate /></div>
-      {settings && prefs && <ReviewsSettings prefs={prefs} busy={busy} change={change} problems={[...(queue?.watch_problems ?? []), ...(queue?.codeowned_problems ?? [])]} status={queue?.priority_agent ?? null} maintainers={queue?.maintainers ?? []} codeowned={queue?.codeowned ?? []} />}
+      {settings && prefs && <ReviewsSettings prefs={prefs} busy={busy} change={change} problems={[...(queue?.watch_problems ?? []), ...(queue?.codeowned_problems ?? [])]} status={queue?.priority_agent ?? null} maintainers={queue?.maintainers ?? []} codeowned={queue?.codeowned ?? []}
+        back={Object.fromEntries([...(queue?.items ?? []), ...(queue?.watched ?? []), ...(queue?.bot_cc ?? [])].filter((p) => p.hidden_ended).map((p) => [prKey(p), p.hidden_ended!.why]))} />}
       <div className="reviews-search">
         {search === null ? (
           <button className="link-btn small" onClick={() => setSearch("")} data-testid="reviews-search-open">🔍 Search pull requests on GitHub…</button>
@@ -572,16 +608,6 @@ export default function ReviewsPanel({ onOpen, onOpenPr }: { onOpen: (pr: Review
             <option value="mentioned">Mentioned</option>
             <option value="both">Requested and mentioned</option>
           </select>
-        </div>
-        <div className="reviews-cats" role="group" aria-label="Show categories" data-testid="reviews-categories">
-          {categories.map((c) => {
-            const on = !hiddenCats.has(c.key);
-            return (
-              <label key={c.key} className={`review-cat-chip small ${c.key} ${on ? "on" : ""}`} title={`${on ? "Hide" : "Show"} “${c.title}”${CATEGORY_HINT[c.key] ? ` — ${CATEGORY_HINT[c.key]}` : ""}`} data-testid="reviews-category" data-category={c.key}>
-                <input type="checkbox" checked={on} onChange={() => toggleCat(c.key)} aria-label={c.title} />{CAT_SHORT[c.key] ?? c.title} {catCount(c.key)}
-              </label>
-            );
-          })}
         </div>
         <div className="reviews-row">
           <label className="small" title={`${drafts} draft PR(s)`}>
@@ -646,10 +672,10 @@ export default function ReviewsPanel({ onOpen, onOpenPr }: { onOpen: (pr: Review
             Requests and mentions: {queue.items.length - owned}{queue.truncated ? `+ (of ${queue.total})` : ""}
             {owned > 0 && <span title="Not requested from you, but they touch files you own in CODEOWNERS" data-testid="reviews-codeowned-count"> · touching your files: {owned}</span>} · showing {shown}
             {deferred.length > 0 && <span data-testid="reviews-deferred-count"> · {deferred.length} deferred</span>}
+            {(queue.hidden_prs?.length ?? 0) > 0 && <span title="PRs you hid: back when your review is requested or someone @-mentions you (⚙ → Repositories → Hidden PRs to show them again)" data-testid="reviews-hidden-prs-count"> · {queue.hidden_prs!.length} hidden</span>}
             {!showBotCc && botCc > 0 && <span title="Tick “cc'd by bot” to show them" data-testid="reviews-bot-cc-hidden"> · {botCc} cc'd by bot hidden</span>}
             {!showDrafts && !agentOnly && drafts > 0 && <span title="Tick “drafts” to show them"> · {drafts} draft{drafts > 1 ? "s" : ""} hidden</span>}
             {filter.trim() && <span> · filtered</span>}
-            {categories.some((c) => hiddenCats.has(c.key)) && <span data-testid="reviews-categories-hidden"> · hidden: {categories.filter((c) => hiddenCats.has(c.key)).map((c) => c.title).join(", ")}</span>}
             {agentOnly && <span> · only those the agent reviewed, waiting for you</span>}
             {maxRank < 99 && <span> · only {levels[0]?.id}–{levels[maxRank]?.id}</span>}
             {queue.priority_agent && queue.priority_agent.running.length + queue.priority_agent.queued > 0 && (
@@ -659,7 +685,7 @@ export default function ReviewsPanel({ onOpen, onOpenPr }: { onOpen: (pr: Review
             {" · "}<GhRefreshSelect kind="reviews" testId="reviews-auto-refresh" title="How often the Reviews list (and its badge) refreshes from GitHub on its own; ↻ refreshes now" />
           </div>
         )}
-        {queue && shown === 0 && <div className="tree-empty">{queue.items.length ? (categories.every((c) => hiddenCats.has(c.key)) ? "All categories are hidden: tick one above." : "Nothing matches the filter.") : "No pull requests are waiting for your review. 🎉"}</div>}
+        {queue && shown === 0 && <div className="tree-empty">{queue.items.length ? "Nothing matches the filter." : "No pull requests are waiting for your review. 🎉"}</div>}
         {groups.map(({ repo, prs }) => groupBox(repo, prs, false))}
         {watchedGroups.length > 0 && <div className="muted small reviews-meta" data-testid="reviews-watched-head">Watched repositories (all open PRs)</div>}
         {watchedGroups.map(({ repo, prs }) => groupBox(repo, prs, true))}
@@ -686,9 +712,11 @@ export default function ReviewsPanel({ onOpen, onOpenPr }: { onOpen: (pr: Review
   );
 }
 
-function ReviewsSettings({ prefs, busy, change, problems, status, maintainers, codeowned }: {
+function ReviewsSettings({ prefs, busy, change, problems, status, maintainers, codeowned, back }: {
   prefs: HubPrefs; busy: string | null; change: (what: string, c: Partial<HubPrefs> & Record<string, unknown>) => Promise<void>; problems: string[]; status: AgentStatus | null;
   maintainers: MaintainerSource[]; codeowned: CodeownedSource[];
+  /** hidden PRs that are back in the list, and why */
+  back: Record<string, string[]>;
 }) {
   const [repo, setRepo] = useState("");
   const [cm, setCm] = useState((prefs.core_maintainers ?? []).join(", "));
@@ -749,6 +777,14 @@ function ReviewsSettings({ prefs, busy, change, problems, status, maintainers, c
         <div key={r} className="reviews-settings-item" data-testid="reviews-hidden-item">
           <span className="mono small">{r}</span>
           <button className="btn small" disabled={busy !== null} onClick={() => void change(`unhide:${r}`, { hidden_repos: prefs.hidden_repos.filter((x) => x !== r) })} data-testid="reviews-unhide">Show again</button>
+        </div>
+      ))}
+      <div className="small strong">Hidden PRs <span className="muted">(back by themselves when your review is requested or someone @-mentions you directly)</span></div>
+      {Object.keys(prefs.hidden_prs ?? {}).length === 0 && <div className="muted small">None — use ⊘ on a PR to hide it.</div>}
+      {Object.entries(prefs.hidden_prs ?? {}).reverse().map(([k, h]) => (
+        <div key={k} className="reviews-settings-item" data-testid="reviews-hidden-pr-item">
+          <span className="small" title={`hidden ${new Date(h.at).toLocaleString()}`}><span className="mono">{k}</span>{h.title ? ` ${h.title}` : ""}{back[k] ? <span className="muted"> · back: {back[k].join(", ")}</span> : null}</span>
+          <button className="btn small" disabled={busy !== null} onClick={() => void change(`unhidepr:${k}`, { unhide_pr: k })} data-testid="reviews-unhide-pr">Show again</button>
         </div>
       ))}
       <div className="small strong">Maintainers <span className="muted">(who asked for your review: for priority rules and the agent)</span></div>

@@ -42,6 +42,42 @@ export const KIND_LABEL: Record<string, string> = {
   broken_link: "Broken symbolic link",
 };
 
+// Same table as Documents.KINDS / SPECIAL_NAMES on the server (backend/app/documents.py), for explorers whose
+// listings carry only a name (Local files, the development web editor).
+const EXT_KIND: Record<string, string> = {};
+for (const [kind, exts] of Object.entries({
+  markdown: "md markdown",
+  image: "png jpg jpeg gif svg webp bmp ico avif",
+  pdf: "pdf",
+  slides: "pptx ppt odp key",
+  word: "docx doc odt rtf",
+  diagram: "vsdx vsd vsdm vss vssx vst vstx odg",
+  notebook: "ipynb",
+  code: "py js ts tsx jsx c cc cpp h hpp cu rs go java kt swift rb php cs scala lua pl r m mm cl glsl asm s",
+  shell: "sh bash zsh fish ps1 bat cmd",
+  data: "json yaml yml toml ini cfg conf xml csv tsv parquet sqlite sqlite3 db",
+  text: "txt rst adoc org log tex bib html htm css",
+  archive: "zip tar gz tgz bz2 xz zst 7z rar",
+  binary: "bin so o a dll exe wasm pt pth onnx npy npz pkl",
+})) for (const e of exts.split(" ")) EXT_KIND[e] = kind;
+const SPECIAL_NAMES: Record<string, string> = {
+  makefile: "shell", dockerfile: "shell", license: "text", readme: "text", ".gitignore": "data",
+  ".gitattributes": "data", ".editorconfig": "data", ".env": "data",
+};
+
+/** The icon kind of a file from its name (what the server sends as `kind` for the wiki tree). */
+export function fileKind(name: string): string {
+  const lower = (name.split("/").pop() ?? name).toLowerCase();
+  if (lower in SPECIAL_NAMES) return SPECIAL_NAMES[lower];
+  const dot = lower.lastIndexOf(".");
+  return (dot > 0 && EXT_KIND[lower.slice(dot + 1)]) || "file";
+}
+
+/** FileIcon for an explorer entry that only has a name: `dir` / `link` as in the Local files and web-editor listings. */
+export function NamedFileIcon({ name, dir, link = false, open = false }: { name: string; dir: boolean; link?: boolean; open?: boolean }) {
+  return <FileIcon item={{ type: dir ? "dir" : "file", kind: dir ? "dir" : fileKind(name), symlink: link }} open={open} />;
+}
+
 function Svg({ children, title }: { children: React.ReactNode; title: string }) {
   return (
     <svg className="fi" viewBox="0 0 16 16" width="16" height="16" aria-label={title} role="img">

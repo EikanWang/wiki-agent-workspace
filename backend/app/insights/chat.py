@@ -41,6 +41,39 @@ def listed(ctx: Any, repo: str) -> list[dict[str, str]]:
     return [x for x in kv_get(ctx, _list_key(repo), []) or [] if isinstance(x, dict) and x.get("path") and x.get("workspace_id")]
 
 
+def _disc_key(repo: str, key: str) -> str:
+    return f"insights_disc:{repo}:{key}"
+
+
+def discussion_of(ctx: Any, workspace_id: str, norm: str) -> str | None:
+    """The material (e.g. `report:<id>`) a chat holds the Repo Insights discussions of, else None (not in Chats)."""
+    v = kv_get(ctx, f"insights_disc_doc:{workspace_id}:{norm}", None)
+    return v if isinstance(v, str) else None
+
+
+def discussion_doc(ctx: Any, repo: str, key: str) -> dict[str, Any] | None:
+    """The document holding the discussions about one piece of a repository's insights (a report, a daily summary, the
+    highlights of some dates), shown next to it like a wiki page's discussions; None before the first one."""
+    from ..chats import chat_snapshot_path
+    from ..models import Document
+
+    x = kv_get(ctx, _disc_key(repo, key), None)
+    rt = ctx.workspaces.runtimes.get(x.get("workspace_id")) if isinstance(x, dict) and ctx.workspaces else None
+    if rt is None:
+        return None
+    with ctx.db.read() as s:
+        d = s.query(Document).filter_by(workspace_id=rt.id, path=x.get("path")).one_or_none()
+        p = chat_snapshot_path(rt.docs.snapshots_dir, rt.id, d.path) if d is not None else None
+        if d is None or d.hidden or p is None or not p.is_file():
+            return None
+        return {"path": d.path, "document_id": d.id, "workspace_id": rt.id}
+
+
+def mark_discussion(ctx: Any, repo: str, key: str, workspace_id: str, norm: str) -> None:
+    kv_put(ctx, _disc_key(repo, key), {"workspace_id": workspace_id, "path": norm})
+    kv_put(ctx, f"insights_disc_doc:{workspace_id}:{norm}", key)
+
+
 def _days(rows: list[dict[str, Any]]) -> str:
     days = sorted({r["since"] for r in rows if r["daily"] and not r["partial"]})
     if not days:

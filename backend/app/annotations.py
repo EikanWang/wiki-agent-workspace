@@ -457,6 +457,7 @@ class ThreadService:
         dev_extra: dict[str, Any] = {}
         lessons_used: list[dict[str, str]] = []
         trend = self._trend(doc)
+        local = self._local(doc)
         if is_dev_path(doc.path):
             prompt, dev_extra = await self._dev_prompt(doc, body.question, body.dev_kind, body.dev_context, None)
         elif trend:
@@ -466,6 +467,14 @@ class ThreadService:
             prompt = build_trend_prompt(self.ctx, repo=trend, question=body.question, prior=None, brief=body.chat_brief,
                                         quote=body.quote if side_of else None, main=self._messages(target["of"]) if side_of and target else None)
             dev_extra = self._trend_ctx()
+        elif local:
+            from .local_chat import build_local_prompt
+
+            side_of = target is not None and target["kind"] == "side"
+            prompt = build_local_prompt(about=local, question=body.question, prior=None, extra=self._extra(doc.path), brief=body.chat_brief,
+                                        links=self._links(None), quote=body.quote if side_of else None,
+                                        main=self._messages(target["of"]) if side_of and target else None)
+            dev_extra = {"_cwd": local["cwd"]}
         elif is_chat_path(doc.path) and target is not None and target["kind"] == "side":
             prompt = build_side_prompt(question=body.question, quote=body.quote, wiki_root=str(self.docs.root), main=self._messages(target["of"]), prior=None,
                                        extra=self._extra(doc.path), locked=self._locked(), links=self._links(None), control_context=await self._control_context(doc))
@@ -531,8 +540,9 @@ class ThreadService:
         anchor = json.loads(t.target_json) if t.target_json else None
         side = anchor if isinstance(anchor, dict) and anchor.get("kind") == "side" else None
         trend = self._trend(doc)
+        local = self._local(doc)
         if body.chat_action is not None:
-            if not is_chat_path(doc.path) or side is not None or trend:
+            if not is_chat_path(doc.path) or side is not None or trend or local:
                 raise ApiError(400, "INVALID_ACTION", "distill / update are for folder chats")
             from .chats import chat_scope
 
@@ -572,6 +582,13 @@ class ThreadService:
             prompt = build_trend_prompt(self.ctx, repo=trend, question=shown, prior=prior, quote=t.cur_quote if side is not None else None,
                                         main=self._messages(str(side.get("of") or "")) if side is not None else None)
             dev_extra = self._trend_ctx()
+        elif local:
+            from .local_chat import build_local_prompt
+
+            prompt = build_local_prompt(about=local, question=shown, prior=prior, extra=self._extra(doc.path), links=self._links(None),
+                                        quote=t.cur_quote if side is not None else None,
+                                        main=self._messages(str(side.get("of") or "")) if side is not None else None)
+            dev_extra = {"_cwd": local["cwd"]}
         elif is_chat_path(doc.path) and side is not None:
             prompt = build_side_prompt(question=shown, quote=t.cur_quote, wiki_root=str(self.docs.root), main=self._messages(str(side.get("of") or "")), prior=prior,
                                        extra=self._extra(doc.path), locked=self._locked(), links=self._links(None), control_context=await self._control_context(doc))
@@ -619,6 +636,14 @@ class ThreadService:
         from .insights.chat import trend_of
 
         return trend_of(self.ctx, self.docs.workspace_id, doc.path)
+
+    def _local(self, doc: Document) -> dict[str, str] | None:
+        """What a local chat is about (a Local files folder / file: {path, kind, cwd}), else None."""
+        if not is_chat_path(doc.path):
+            return None
+        from .local_chat import local_of
+
+        return local_of(self.ctx, self.docs.workspace_id, doc.path)
 
     def _trend_ctx(self) -> dict[str, Any]:
         from .insights import settings as insights_settings
@@ -678,6 +703,10 @@ class ThreadService:
         if is_chat_path(doc.path):
             from .chats import chat_about
 
+            local = self._local(doc)
+            if local:
+                p = Path(local["path"])
+                return {"_skill_folders": [str(p if local["kind"] == "folder" else p.parent), local["cwd"]]}
             about = chat_about(self.ctx, self.docs.workspace_id, doc.path)
             if not about:
                 return {}

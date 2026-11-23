@@ -10,6 +10,7 @@ import MarkdownPreview from "./MarkdownPreview";
 import FileViewer, { viewerKind } from "./FileViewer";
 import { Splitter, usePane } from "../Split";
 import { FilesIcon, ProblemsIcon, SearchIcon } from "../Icons";
+import { NamedFileIcon } from "../FileIcon";
 import { PASTE_HINT, PictureStrip, picturesOnly, usePictures } from "../Pictures";
 
 /**
@@ -992,6 +993,7 @@ function Explorer({ devId, roots, git, activeUri, uriOf, refreshKey, picked, onP
               else onOpen(root, rel);
             }} title={`${rel}${it.dir ? "" : "\nCtrl/⌘-click: select for the agent"}`} data-testid="webide-tree-item" data-path={rel} data-root={root} data-picked={isPicked(root, rel) ? "1" : "0"}>
             <span className="webide-twisty">{it.dir ? (isOpen ? "▾" : "▸") : ""}</span>
+            <NamedFileIcon name={it.name} dir={it.dir} link={it.link} open={isOpen} />
             <span className="webide-name">{it.name}</span>
             {g && <span className="webide-git">{g[0].toUpperCase()}</span>}
             {it.dir && root !== "wt" && (

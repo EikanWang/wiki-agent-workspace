@@ -296,7 +296,7 @@ META_EMAIL = ("@meta.com", "@fb.com")
 
 def _requester(pr: dict[str, Any], owner: str) -> dict[str, Any]:
     """Who asked the owner for this review (latest request), and whether it is a priority requester."""
-    by, company, meta = None, None, False
+    by, company, meta, at = None, None, False, None
     for n in (pr.get("timelineItems") or {}).get("nodes") or []:
         rv = (n or {}).get("requestedReviewer") or {}
         if rv.get("__typename") == "User" and (rv.get("login") or "").lower() == owner.lower():
@@ -304,7 +304,9 @@ def _requester(pr: dict[str, Any], owner: str) -> dict[str, Any]:
             by, company = a.get("login") or by, a.get("company") or None
             email = (a.get("email") or "").lower()
             meta = any(m in (company or "").lower() for m in META_COMPANY) or email.endswith(META_EMAIL)
-    return {"requested_by": by, "requested_by_company": company, "requested_by_meta": meta}
+            at = max(at or "", n.get("createdAt") or "") or None
+    # requested_me_at: when you were last added as a reviewer (a hidden PR comes back after that)
+    return {"requested_by": by, "requested_by_company": company, "requested_by_meta": meta, "requested_me_at": at}
 
 
 def fetch_queue(graphql: Callable[[str, dict], dict], owner: str) -> dict[str, Any]:
@@ -384,10 +386,10 @@ def fetch_queue(graphql: Callable[[str, dict], dict], owner: str) -> dict[str, A
 # each version) and the comments, reviews and review comments; "cc'd by bot" PRs are kept apart (hidden by default).
 MENTION_BATCH = 10
 MENTION_EDITS = 40
-_MENTION_AUTHOR = "author { __typename login }"
+_MENTION_AUTHOR = "createdAt author { __typename login }"
 MENTION_FIELDS = f"""
         updatedAt body {_MENTION_AUTHOR}
-        userContentEdits(first: {MENTION_EDITS}) {{ totalCount nodes {{ diff editor {{ __typename login }} }} }}
+        userContentEdits(first: {MENTION_EDITS}) {{ totalCount nodes {{ diff editedAt editor {{ __typename login }} }} }}
         comments(last: 100) {{ nodes {{ body {_MENTION_AUTHOR} }} }}
         reviews(last: 40) {{ nodes {{ body {_MENTION_AUTHOR} comments(first: 30) {{ nodes {{ body {_MENTION_AUTHOR} }} }} }} }}
 """
@@ -399,32 +401,65 @@ def mention_query(numbers: list[int]) -> str:
             f"  repository(owner: $owner, name: $name) {{\n{body}\n  }}\n}}\n")
 
 
-def _mentions(text: str | None, owner: str) -> bool:
-    """`@owner` in the text, outside quoted lines ("> …", someone quoting a cc line is not a mention)."""
+def _mention_lines(text: str | None, owner: str) -> set[str]:
+    """The lines of the text with `@owner`, outside quoted lines ("> …", someone quoting a cc line is not a mention),
+    whitespace-normalized."""
     pat = re.compile(rf"(?<![\w/-])@{re.escape(owner)}(?![\w-])", re.I)
-    return any(pat.search(line) for line in (text or "").splitlines() if not line.lstrip().startswith(">"))
+    return {" ".join(line.split()) for line in (text or "").splitlines() if not line.lstrip().startswith(">") and pat.search(line)}
+
+
+def _mentions(text: str | None, owner: str) -> bool:
+    return bool(_mention_lines(text, owner))
+
+
+# Bump when mention_by changes: answers kept from older rules are worked out again.
+MENTION_RULES = 3
 
 
 def mention_by(node: dict[str, Any], owner: str) -> dict[str, Any]:
-    """{"by": "person", "who": login} when a person wrote the mention, else {"by": "bot"}."""
+    """{"by": "person", "who": login} when a person wrote the mention, else {"by": "bot"}; with a person also
+    `last_at` / `last_who`: the latest time someone other than you mentioned you directly (a hidden PR comes back after it).
+
+    A person's version of the description counts only when it brings in a line with the mention that was not in the
+    version before *and* that no bot wrote earlier: ghstack rewrites the description of every PR of a stack on each push,
+    dropping pytorch-bot's cc line and bringing it back later, edited by the author."""
+    me = owner.lower()
+    first: list[str | None] = []
+    last: tuple[str, str | None] | None = None
+
+    def person(who: str | None, at: str | None) -> None:
+        nonlocal last
+        if not first:
+            first.append(who)
+        if at and (who or "").lower() != me and (last is None or at > last[0]):
+            last = (at, who)
+
     edits = (node.get("userContentEdits") or {})
     versions = list(reversed(edits.get("nodes") or []))  # GitHub lists the newest first
     if versions:
-        before = False if (edits.get("totalCount") or 0) <= len(versions) else None  # None: older versions not read
+        before: set[str] = set()  # also when older versions were not read: the first one read counts as new
+        by_bot: set[str] = set()
         for v in versions:
-            now = _mentions(v.get("diff"), owner)
-            if now and before is not True and not is_bot(v.get("editor")):
-                return {"by": "person", "who": (v.get("editor") or {}).get("login")}
+            now = _mention_lines(v.get("diff"), owner)
+            if is_bot(v.get("editor")):
+                by_bot |= now
+            elif now - before - by_bot:
+                person((v.get("editor") or {}).get("login"), v.get("editedAt"))
             before = now
     elif _mentions(node.get("body"), owner) and not is_bot(node.get("author")):
-        return {"by": "person", "who": (node.get("author") or {}).get("login")}
+        person((node.get("author") or {}).get("login"), node.get("createdAt"))
     texts = list((node.get("comments") or {}).get("nodes") or [])
     for r in (node.get("reviews") or {}).get("nodes") or []:
         texts += [r, *((r.get("comments") or {}).get("nodes") or [])]
     for t in texts:
         if t and _mentions(t.get("body"), owner) and not is_bot(t.get("author")):
-            return {"by": "person", "who": (t.get("author") or {}).get("login")}
-    return {"by": "bot"}
+            person((t.get("author") or {}).get("login"), t.get("createdAt"))
+    if not first:
+        return {"by": "bot"}
+    out: dict[str, Any] = {"by": "person", "who": first[0]}
+    if last:
+        out.update(last_at=last[0], last_who=last[1])
+    return out
 
 
 def mention_key(owner: str) -> str:
@@ -432,18 +467,20 @@ def mention_key(owner: str) -> str:
 
 
 def classify_mentions(graphql: Callable[[str, dict], dict], owner: str, items: list[dict[str, Any]],
-                      known: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    """Who mentioned the owner in the PRs that only mention them (`known`: earlier answers, reused while a PR has not
-    changed). Sets `mention_by` (and `mention_who`) on those items; returns the answers to keep. A PR that could not be
-    read counts as mentioned by a person (shown)."""
+                      known: dict[str, dict[str, Any]], also: set[str] | None = None) -> dict[str, dict[str, Any]]:
+    """Who mentioned the owner in the PRs that only mention them, and in the mentioning PRs of `also` (PRs you hid,
+    review requested or not) (`known`: earlier answers, reused while a PR has not changed). Sets `mention_by` (and
+    `mention_who`) on the PRs that only mention you, `mentioned_at` / `mentioned_at_by` (the latest direct mention by
+    someone else) on all of them; returns the answers to keep. A PR that could not be read counts as mentioned by a
+    person (shown)."""
     out: dict[str, dict[str, Any]] = {}
     todo: dict[str, list[dict[str, Any]]] = {}
     for p in items:
-        if not p.get("mentioned") or p.get("review_requested"):
+        if not p.get("mentioned") or (p.get("review_requested") and f"{p['repo']}#{p['number']}".lower() not in (also or set())):
             continue
         key = f"{p['repo']}#{p['number']}".lower()
         hit = known.get(key)
-        if hit and hit.get("updated_at") == p.get("updated_at"):
+        if hit and hit.get("updated_at") == p.get("updated_at") and hit.get("rules") == MENTION_RULES:
             out[key] = hit
         else:
             todo.setdefault(p["repo"], []).append(p)
@@ -469,7 +506,7 @@ def classify_mentions(graphql: Callable[[str, dict], dict], owner: str, items: l
             for p in part:
                 node = r.get(f"p{p['number']}")
                 if node:
-                    out[f"{p['repo']}#{p['number']}".lower()] = {**mention_by(node, owner), "updated_at": p.get("updated_at")}
+                    out[f"{p['repo']}#{p['number']}".lower()] = {**mention_by(node, owner), "updated_at": p.get("updated_at"), "rules": MENTION_RULES}
             i += len(part)
     for p in items:
         hit = out.get(f"{p['repo']}#{p['number']}".lower())
@@ -477,6 +514,8 @@ def classify_mentions(graphql: Callable[[str, dict], dict], owner: str, items: l
             p["mention_by"] = hit["by"]
             if hit.get("who"):
                 p["mention_who"] = hit["who"]
+        if hit and hit.get("last_at"):
+            p.update(mentioned_at=hit["last_at"], mentioned_at_by=hit.get("last_who"))
     return out
 
 
@@ -574,22 +613,34 @@ async def _fetch(graphql: Callable[[str, dict], dict], owner: str) -> dict[str, 
     from .kv import kv_get, kv_put
 
     known = (kv_get(ctx, mention_key(owner), {}) or {}) if ctx is not None else _mention_memo.get(owner, {})
-    answers = await asyncio.to_thread(classify_mentions, graphql, owner, data["items"], known)
+    hidden_prs = set((load_prefs(ctx).get("hidden_prs") or {}) if ctx is not None else ())  # back when someone mentions you
+    answers = await asyncio.to_thread(classify_mentions, graphql, owner, data["items"], known, hidden_prs)
     if ctx is not None:
         kv_put(ctx, mention_key(owner), answers)
     else:
         _mention_memo[owner] = answers
-    # cc'd by bot only: apart from the list (not prioritized, prefetched or counted); Reviews can show them
-    data["bot_cc"] = [p for p in data["items"] if p.get("mention_by") == "bot"]
-    data["items"] = [p for p in data["items"] if p.get("mention_by") != "bot"]
+    found = _owned_found(ctx, owner, data) if ctx is not None else {}
+
+    def owned(p: dict[str, Any]) -> dict[str, Any] | None:
+        if (p.get("author") or "").lower() == owner.lower():
+            return None
+        return (found.get(p["repo"]) or {}).get(str(p["number"]))
+
+    bot_cc: list[dict[str, Any]] = []
+    keep: list[dict[str, Any]] = []
+    for p in data["items"]:  # requested / mentioned and also yours: say which of your files it touches
+        info = owned(p)
+        if info:
+            p.update(owned_paths=info.get("paths") or [], owned_count=info.get("count") or 0)
+            if p.get("mention_by") == "bot" and not p.get("review_requested") and p.get("requested") is None:
+                p["requested"] = "codeowner"  # the bot's cc is not why it is listed: it touches your files
+        # cc'd by bot only: apart from the list (not prioritized, prefetched or counted); Reviews can show them. A PR
+        # touching files you own stays in the list: yours to review, whoever cc'd you.
+        (bot_cc if p.get("mention_by") == "bot" and not info else keep).append(p)
+    data["bot_cc"], data["items"] = bot_cc, keep
     if ctx is not None:
         from . import codeowned
 
-        found = _owned_found(ctx, owner, data)
-        for p in data["items"]:  # requested and also yours: say which of your files it touches
-            info = (found.get(p["repo"]) or {}).get(str(p["number"]))
-            if info:
-                p.update(owned_paths=info.get("paths") or [], owned_count=info.get("count") or 0)
         skip = {f"{p['repo']}#{p['number']}".lower() for p in data["items"]}
         owned_items, gone, problems = await asyncio.to_thread(fetch_owned, graphql, owner, found, skip)
         for repo, nums in gone.items():
@@ -1513,7 +1564,8 @@ async def reply_comment(owner: str, repo: str, number: int, comment_id: int, bod
 
 
 DEFAULT_PREFS: dict[str, Any] = {"hidden_repos": [], "watched_repos": [], "priority_requesters": [], "priority_meta": True, "show_approved": False,
-                                 "starred": [], "unstarred": [], "core_maintainers": [], "deferred": {}, "codeowned": True}
+                                 "starred": [], "unstarred": [], "core_maintainers": [], "deferred": {}, "codeowned": True,
+                                 "hidden_prs": {}}
 
 
 def load_prefs(ctx: AppContext) -> dict[str, Any]:
@@ -1556,6 +1608,20 @@ def apply_prefs(data: dict[str, Any], prefs: dict[str, Any], agent_results: dict
     watched = [{**with_level(p, prefs, agent_results), "priority": False, "watched": True} for p in data.get("watched", [])
                if p["repo"].lower() not in hidden and p["repo"].lower() in watching and (prefs.get("show_approved") or not p.get("approved_no_news"))]
     bot_cc = [with_level(p, prefs, agent_results) for p in data.get("bot_cc") or [] if p["repo"].lower() not in hidden]
+    hid = prefs.get("hidden_prs") or {}
+    hidden_prs: list[dict[str, Any]] = []
+    if hid:
+        def unhidden(lst: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            keep = []
+            for p in lst:
+                h = hid.get(pr_key(p))
+                why = hide_back(h, p) if h else []
+                if h and not why:
+                    hidden_prs.append({**p, "hidden_pr": h})
+                else:
+                    keep.append({**p, "hidden_ended": {**h, "why": why}} if h else p)
+            return keep
+        items, watched, bot_cc = unhidden(items), unhidden(watched), unhidden(bot_cc)
     deferred: list[dict[str, Any]] = []
     rules = prefs.get("deferred") or {}
     if rules:
@@ -1569,8 +1635,20 @@ def apply_prefs(data: dict[str, Any], prefs: dict[str, Any], agent_results: dict
                     keep.append({**p, "deferred_ended": d} if d else p)
             return keep
         items, watched = split(items), split(watched)
-    return {**data, "items": items, "watched": watched, "deferred": deferred, "bot_cc": bot_cc,
+    return {**data, "items": items, "watched": watched, "deferred": deferred, "bot_cc": bot_cc, "hidden_prs": hidden_prs,
             "hidden_count": sum(1 for p in data.get("items", []) if p["repo"].lower() in hidden), "approved_hidden": len(quiet)}
+
+
+def hide_back(h: dict[str, Any], p: dict[str, Any]) -> list[str]:
+    """Why a PR you hid is back in the list: you were added as a reviewer, or someone mentioned you directly (a person,
+    not a bot's cc line), after you hid it. Empty: it stays hidden."""
+    at = h.get("at") or ""
+    why = []
+    if (p.get("requested_me_at") or "") > at:
+        why.append("your review was requested")
+    if (p.get("mentioned_at") or "") > at:
+        why.append(f"@{p['mentioned_at_by']} mentioned you" if p.get("mentioned_at_by") else "you were mentioned")
+    return why
 
 
 def deferral_active(d: dict[str, Any], p: dict[str, Any] | None) -> bool:
@@ -1605,6 +1683,10 @@ class PrefsIn(BaseModel):
     # defer a review: {"pr": "owner/repo#n", "until": ISO time | null, "on_activity": bool, "note": str}
     defer: dict[str, Any] | None = None
     undefer: str | None = None  # "owner/repo#n": back in the list now
+    # hide a PR: {"pr": "owner/repo#n", "title": str}; it stays out of Reviews until you are added as a reviewer or
+    # someone mentions you directly after that
+    hide_pr: dict[str, Any] | None = None
+    unhide_pr: str | None = None  # "owner/repo#n": shown again
     reset_priority: bool = False  # levels, rules, agent and categories back to the defaults
 
 
@@ -1697,6 +1779,17 @@ async def put_prefs(body: PrefsIn, auth: tuple[AppContext, str] = Depends(requir
             deferred.pop(k, None)
             deferred[k] = {"until": until or None, "on_activity": on_activity, "at": now, "note": str(body.defer.get("note") or "")[:300]}
         prefs["deferred"] = dict(list(deferred.items())[-DEFER_MAX:])
+    if body.hide_pr is not None or body.unhide_pr is not None:
+        hid = dict(prefs.get("hidden_prs") or {})
+        if body.unhide_pr is not None:
+            hid.pop(body.unhide_pr.strip().lower(), None)
+        if body.hide_pr is not None:
+            k = str(body.hide_pr.get("pr") or "").strip().lower()
+            if not re.fullmatch(r"([\w.-]+)/([\w.-]+)#(\d+)", k):
+                raise ApiError(400, "INVALID_PR", f"{k!r}: use owner/repo#number")
+            hid.pop(k, None)
+            hid[k] = {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "title": str(body.hide_pr.get("title") or "")[:300]}
+        prefs["hidden_prs"] = dict(list(hid.items())[-DEFER_MAX:])
     sets: list[tuple[str, str | None]] = []
     if body.set_level is not None:
         sets.append((str(body.set_level.get("pr") or ""), body.set_level.get("level")))

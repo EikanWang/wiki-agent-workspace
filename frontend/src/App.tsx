@@ -39,6 +39,9 @@ import TerminalsPanel from "./components/TerminalsPanel";
 import { useGhAutoRefresh } from "./ghRefresh";
 import AgentMonitor, { AgentsPanel, Watch } from "./components/AgentMonitor";
 import LocalPanel from "./components/LocalPanel";
+import LocalChat, { LocalChatTarget } from "./components/LocalChat";
+import { Splitter, usePane } from "./components/Split";
+import { usePersistentState } from "./persist";
 import { ActivityButtons, orderOf } from "./components/ActivityOrder";
 const LocalEditor = lazy(() => import("./components/LocalEditor"));
 import DevPanel from "./components/DevPanel";
@@ -128,6 +131,14 @@ export default function App() {
   const [localRenamed, setLocalRenamed] = useState<{ from: string; to: string | null; at: number } | null>(null);
   const [localActive, setLocalActive] = useState<string | null>(null);
   const [localUsed, setLocalUsed] = useState(false);
+  const [localChat, setLocalChat] = usePersistentState<LocalChatTarget | null>("local.chatTarget", null);
+  const localChatPane = usePane("local.chat", 520, 320, 1200);
+  const chatLocal = (path: string, kind: "folder" | "file") => {
+    setLocalUsed(true);
+    setView("local");
+    setLocalChat({ path, kind });
+    if (localChatPane.folded) localChatPane.setFolded(false);
+  };
   // Agents dashboard: the monitored sessions
   const [watched, setWatchedState] = useState<Watch[]>([]);
   const [alarms, setAlarms] = useState(0);
@@ -1080,7 +1091,7 @@ export default function App() {
           {sidebarView === "local" && (
             <div className="sidebar-content">
               <LocalPanel activePath={view === "local" ? localActive : null} onOpen={(p) => { setLocalUsed(true); setView("local"); setLocalOpen({ path: p, at: Date.now() }); }}
-                onClosedFile={(from, to) => setLocalRenamed({ from, to, at: Date.now() })} />
+                onClosedFile={(from, to) => setLocalRenamed({ from, to, at: Date.now() })} onChat={chatLocal} />
             </div>
           )}
           {sidebarView === "agents" && (
@@ -1258,7 +1269,7 @@ export default function App() {
 
         {view === "insights" && authed && (
           <section className="center insights-center">
-            <InsightsView repo={insightsRepo} sessions={sessions} onOpenChat={(ws, p) => openChats({ ws, path: p })}
+            <InsightsView repo={insightsRepo} sessions={sessions}
               onOpenPrReview={hub?.available ? (r, n, t) => { updatePrefs({ sidebarView: "reviews", listOpen: true }); setView("document"); openPr(r, n, t ? `#${n} ${t}` : undefined); } : undefined} />
           </section>
         )}
@@ -1281,9 +1292,21 @@ export default function App() {
 
         <section className="center local-center" style={{ display: view === "local" ? undefined : "none" }}>
           {localUsed && (
-            <Suspense fallback={<div className="muted dev-hint">Loading the editor…</div>}>
-              <LocalEditor openRequest={localOpen} renamed={localRenamed} onActive={setLocalActive} />
-            </Suspense>
+            <div className="local-split">
+              <Suspense fallback={<div className="muted dev-hint">Loading the editor…</div>}>
+                <LocalEditor openRequest={localOpen} renamed={localRenamed} onActive={setLocalActive} onChat={(p) => chatLocal(p, "file")} />
+              </Suspense>
+              {localChat && (
+                <>
+                  <Splitter dir="x" side="after" pane={localChatPane} label="chat" testId="local-chat-splitter" />
+                  {!localChatPane.folded && (
+                    <div className="local-chat-pane" style={{ width: localChatPane.size }}>
+                      <LocalChat key={localChat.path} target={localChat} sessions={sessions} onClose={() => setLocalChat(null)} />
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
           )}
         </section>
 

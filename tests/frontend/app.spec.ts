@@ -900,8 +900,10 @@ test("commit workflow: pick files, draft the message with the agent, commit only
 test("review: stash comments in the diff, submit once, the agent triages (address / reply / skip)", async ({ page }) => {
   await login(page);
   const ws = workspaceDir();
-  gitCommitAll(ws, "before-review");
   const guide = path.join(ws, "docs", "guide.md");
+  // the diff test before this one leaves "- gamma line" in the guide; run on its own, add it here
+  if (!fs.readFileSync(guide, "utf-8").includes("- gamma line\n")) fs.appendFileSync(guide, "\n- alpha line\n- beta line\n- gamma line\n");
+  gitCommitAll(ws, "before-review");
   fs.writeFileSync(guide, fs.readFileSync(guide, "utf-8").replace(/- gamma line\n/, "- gamma lnie\n- delta line\n"));
   await openGuide(page);
   await page.getByTestId("view-diff").click();
@@ -2047,16 +2049,17 @@ test("GitHub review hub: only the owner's GitHub sign-in sees it; queue grouped 
   const row = await left('[data-repo="pytorch/pytorch"] [data-category="todo"] [data-testid="review-pr"] .review-pr-main');
   expect(section - head).toBeGreaterThanOrEqual(12);
   expect(row - section).toBeGreaterThanOrEqual(12);
-  // each category can be shown or hidden on its own (kept in this browser)
-  const cat = (k: string) => page.locator(`[data-testid="reviews-category"][data-category="${k}"] input`);
-  await cat("todo").uncheck();
-  await expect.poll(() => sectionsOf("pytorch/pytorch")).toEqual(["news"]);
-  await cat("quiet").uncheck();
-  await expect(page.locator('[data-testid="review-group"][data-repo="intel/torch-xpu-ops"]')).toHaveCount(0);
-  await expect(page.getByTestId("reviews-categories-hidden")).toBeVisible();
-  await cat("todo").check();
-  await cat("quiet").check();
+  // no chips to hide a category: every category is always listed
+  await expect(page.getByTestId("reviews-categories")).toHaveCount(0);
+  await expect(page.getByTestId("reviews-category")).toHaveCount(0);
+  // the activity-bar badge counts what the list shows, and follows the filters
+  const badgeText = () => page.getByTestId("activity-reviews-badge").innerText().catch(() => "0");
+  await page.getByTestId("reviews-filter").fill("torch-xpu-ops");
+  await expect(page.locator('[data-testid="review-group"][data-repo="pytorch/pytorch"]')).toHaveCount(0);
+  await expect.poll(async () => Number(await badgeText())).toBeLessThan(4);
+  await page.getByTestId("reviews-filter").fill("");
   await expect.poll(() => sectionsOf("pytorch/pytorch")).toEqual(["todo", "news"]);
+  await expect(page.getByTestId("activity-reviews-badge")).toHaveText("4");
   await expect.poll(() => sectionsOf("intel/torch-xpu-ops")).toEqual(["quiet"]);
   // the Meta maintainer's request (new activity since your comment) says so, with its level from the hard rule
   const r104 = page.locator('[data-repo="pytorch/pytorch"] [data-category="news"] [data-testid="review-pr"][data-number="104"]');
@@ -2090,6 +2093,23 @@ test("GitHub review hub: only the owner's GitHub sign-in sees it; queue grouped 
   await deferred.getByTestId("review-undefer").click();
   await expect(page.getByTestId("reviews-deferred")).toHaveCount(0);
   await expect(page.locator('[data-testid="review-group"] [data-testid="review-pr"][data-number="103"]')).toHaveCount(1);
+  // hide a PR: it leaves the list and the badge; ⚙ → Repositories → Hidden PRs shows it again
+  await r103.hover();
+  await r103.getByTestId("review-hide-pr").click();
+  await expect(page.locator('[data-testid="review-group"] [data-testid="review-pr"][data-number="103"]')).toHaveCount(0);
+  await expect(page.getByTestId("reviews-hidden-prs-count")).toContainText("1 hidden");
+  await expect(page.getByTestId("activity-reviews-badge")).toHaveText("3");
+  await page.getByTestId("reviews-settings").click();
+  await page.getByTestId("reviews-settings-repos").click();
+  const hiddenPr = page.getByTestId("reviews-hidden-pr-item");
+  await expect(hiddenPr).toHaveCount(1);
+  await expect(hiddenPr).toContainText("pytorch/pytorch#103");
+  await hiddenPr.getByTestId("reviews-unhide-pr").click();
+  await expect(page.getByTestId("reviews-hidden-pr-item")).toHaveCount(0);
+  await expect(page.locator('[data-testid="review-group"] [data-testid="review-pr"][data-number="103"]')).toHaveCount(1);
+  await expect(page.getByTestId("activity-reviews-badge")).toHaveText("4");
+  await page.getByTestId("reviews-settings-priority").click();
+  await page.getByTestId("reviews-settings").click();
   // auto-refresh from GitHub at an interval you choose (5 min by default; kept per browser)
   await expect(page.getByTestId("reviews-auto-refresh")).toHaveValue("5");
   await page.clock.install();
@@ -2762,7 +2782,10 @@ test("GitHub PR tab: agent review → suggested comments in the diff; discuss, a
   await expect(page.getByTestId("view-document")).toBeVisible({ timeout: 15000 });
   await page.getByTestId("activity-reviews").click();
   await page.locator('[data-testid="review-pr"][data-number="101"]').click();
-  await expect(page.getByTestId("pr-wiki-select")).toBeVisible(); // the wiki was chosen in an earlier test
+  // the wiki is chosen in an earlier test; run on its own, choose it here
+  await expect(page.getByTestId("pr-wiki-select").or(page.getByTestId("pr-wiki-use"))).toBeVisible({ timeout: 15000 });
+  if (await page.getByTestId("pr-wiki-use").isVisible()) await page.getByTestId("pr-wiki-use").click();
+  await expect(page.getByTestId("pr-wiki-select")).toBeVisible({ timeout: 10000 });
   const before = (await (await page.request.get("/fake-github/posted")).json()).length;
   await page.getByTestId("pr-agent-review").click();
   await expect(page.getByTestId("selection-question")).toHaveValue(/Review this pull request/);
@@ -3551,6 +3574,9 @@ test("PR Development: chat about any type of file — text, image, binary", asyn
   await page.getByTestId("dev-item").first().click();
   await expect(page.getByTestId("webide")).toBeVisible({ timeout: 20000 });
   await page.getByTestId("dev-view-file").click();
+  // each explorer entry has the icon of its type, as in the wiki tree
+  await expect(page.locator('[data-testid="webide-tree-item"][data-path="ci.yaml"] .fi-wrap')).toHaveAttribute("title", "Data / configuration");
+  await expect(page.locator('[data-testid="webide-tree-item"][data-path="logo.png"] .fi-wrap')).toHaveAttribute("title", "Image");
   // a text file: "Chat about this file" in the breadcrumbs
   await page.locator('[data-testid="webide-tree-item"][data-path="ci.yaml"] .webide-name').click();
   await page.getByTestId("webide-chat-file").click();
@@ -3968,6 +3994,9 @@ test("Local files: open a folder and a file, edit and save like a file manager; 
   await expect(root).toBeVisible();
   const notes = page.locator(`[data-testid="local-item"][data-path="${dir}/notes.txt"]`);
   if (!(await notes.isVisible())) await root.click();
+  // each entry has the icon of its type, as in the wiki tree
+  await expect(notes.locator(".fi-wrap")).toHaveAttribute("title", "Text");
+  await expect(page.locator(`[data-testid="local-item"][data-path="${dir}/README.md"] .fi-wrap`)).toHaveAttribute("title", "Markdown document");
   await notes.click();
   await expect(page.locator(`[data-testid="local-tab"][data-path="${dir}/notes.txt"]`)).toBeVisible();
   await page.locator('[data-testid="local-monaco"] .view-lines').click();
@@ -3997,6 +4026,55 @@ test("Local files: open a folder and a file, edit and save like a file manager; 
   await expect(page.locator(`[data-testid="local-root"][data-path="${dir}"]`)).toHaveCount(0);
   await page.getByTestId("activity-files").click();
   await expect(page.getByTestId("view-document")).toBeVisible();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+test("Local files: chat with the agent about a folder or a file, next to the editor", async ({ page }) => {
+  await login(page);
+  const dir = path.join(path.dirname(workspaceDir()), "localchat");
+  fs.mkdirSync(path.join(dir, "src"), { recursive: true });
+  fs.writeFileSync(path.join(dir, "src", "main.py"), "print('hi')\n");
+  await page.getByTestId("activity-local").click();
+  await page.getByTestId("local-open-folder").click();
+  await expect(page.getByTestId("folder-picker-selected")).toContainText("/");
+  await page.getByTestId("folder-picker-path").fill(dir);
+  await page.getByTestId("folder-picker-path").press("Enter");
+  await expect(page.getByTestId("folder-picker-selected")).toContainText(dir);
+  await page.getByTestId("folder-picker-choose").click();
+  const root = page.locator(`[data-testid="local-root"][data-path="${dir}"]`);
+  await expect(root).toBeVisible();
+  // the folder: 💬 on its row
+  await root.hover();
+  await root.getByTestId("local-chat-root").click();
+  await expect(page.getByTestId("local-chat-new")).toContainText(dir);
+  await page.getByTestId("local-chat-first").fill("What is in this local folder?");
+  await page.getByTestId("local-chat-send").click();
+  const done = page.locator('[data-testid="local-chat"] [data-testid="message-agent"][data-status="completed"]');
+  await expect(done).toContainText("echo: What is in this local folder?", { timeout: 20000 });
+  await expect(page.getByTestId("chat-scope-label")).toHaveText("Local files");
+  await expect(page.getByTestId("chat-actions")).toHaveCount(0); // nothing to distill into the wiki
+  await expect(page.getByTestId("chat-review-changes")).toHaveCount(0);
+  await page.getByTestId("chat-input").fill("And src?");
+  await page.getByTestId("chat-send").click();
+  await expect(done.last()).toContainText("echo: And src?", { timeout: 20000 });
+  // a file: from its open tab
+  if (!(await page.locator(`[data-testid="local-item"][data-path="${dir}/src"]`).isVisible())) await root.click();
+  await page.locator(`[data-testid="local-item"][data-path="${dir}/src"]`).click();
+  await page.locator(`[data-testid="local-item"][data-path="${dir}/src/main.py"]`).click();
+  await page.getByTestId("local-chat-file").click();
+  await expect(page.getByTestId("local-chat")).toHaveAttribute("data-path", `${dir}/src/main.py`);
+  await expect(page.getByTestId("local-chat-new")).toBeVisible();
+  // the folder's chat is still there; not in the wiki's Chats
+  await root.hover();
+  await root.getByTestId("local-chat-root").click();
+  await expect(page.getByTestId("local-chat-pick").locator("option")).toHaveCount(2);
+  const listed = await (await page.request.get("/api/v1/chats")).json();
+  expect(listed.chats.map((c: { title: string }) => c.title)).not.toContain("What is in this local folder?");
+  await page.getByTestId("local-chat-close").click();
+  await expect(page.getByTestId("local-chat")).toHaveCount(0);
+  await root.hover();
+  await root.getByTestId("local-close-root").click();
+  await expect(root).toHaveCount(0);
+  await page.getByTestId("activity-files").click();
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -4195,6 +4273,29 @@ test("Repo Insights: the history in the folder, a week's report (daily summaries
   const inductor = page.getByTestId("insights-hl").filter({ hasText: "Inductor heuristic tuned for CUDA" });
   await expect(inductor.getByTestId("insights-hl-days")).toContainText("on 2 days");
   await expect(inductor.locator(".insights-score")).toHaveText("90");
+  // discuss a selected part of the highlights shown (or all of them)
+  await expect(page.getByTestId("insights-hl-chat")).toBeEnabled();
+  await page.evaluate(() => {
+    const root = document.querySelector('[data-testid="insights-highlights"] .insights-report-text')!;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let n = walker.nextNode() as Text | null;
+    while (n && n.data.indexOf("XCCL all-gather") < 0) n = walker.nextNode() as Text | null;
+    const i = n!.data.indexOf("XCCL all-gather");
+    const range = document.createRange();
+    range.setStart(n!, i);
+    range.setEnd(n!, i + "XCCL all-gather".length);
+    window.getSelection()!.removeAllRanges();
+    window.getSelection()!.addRange(range);
+    root.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+  });
+  await page.getByTestId("insights-sel-open").click();
+  await expect(page.getByTestId("insights-sel-quote")).toHaveText("XCCL all-gather");
+  await page.getByTestId("insights-sel-input").fill("Does this affect us?");
+  await page.getByTestId("insights-sel-send").click();
+  await expect(page.getByTestId("insights-disc").getByTestId("message-user").first()).toContainText("Does this affect us?", { timeout: 15000 });
+  await expect(page.getByTestId("insights-disc").getByTestId("message-user").first()).toContainText("XCCL all-gather");
+  await expect(page.getByTestId("insights-highlights")).toBeVisible();
+  await expect(page.getByTestId("chats-page")).toBeHidden();
   await page.getByTestId("insights-hl-view-day").click();
   await page.getByTestId("insights-hl-day").first().click();
   // without GitHub sign-in (no PR Review) the links go to GitHub
@@ -4244,10 +4345,8 @@ test("Repo Insights: the history in the folder, a week's report (daily summaries
   await page.getByTestId("insights-sel-open").click();
   await expect(page.getByTestId("insights-sel-quote")).toHaveText(picked);
   await page.getByTestId("insights-sel-send").click(); // no question: the agent explains it
-  await expect(page.getByTestId("chats-page")).toBeVisible({ timeout: 15000 });
-  await expect(page.getByTestId("chat-title")).toContainText("daily summary");
-  await page.getByTestId("activity-insights").click();
-  await page.getByTestId("insights-tab-daily").click();
+  await expect(page.getByTestId("insights-disc").getByTestId("message-user").first()).toContainText("Explain it", { timeout: 15000 });
+  await expect(fileView).toBeVisible();
   // a month of this year: its own category in the list
   await page.getByTestId("insights-tab-reports").click();
   await page.getByTestId("insights-period-month").click();
@@ -4307,25 +4406,30 @@ test("Repo Insights: the history in the folder, a week's report (daily summaries
   await expect(page.getByTestId("insights-sel-folders")).toContainText("pytorch/pytorch's reference folders apply too");
   await page.getByTestId("insights-sel-input").fill("What does this mean?");
   await page.getByTestId("insights-sel-send").click();
-  await expect(page.getByTestId("chats-page")).toBeVisible({ timeout: 15000 });
-  await expect(page.getByTestId("chat-title")).toContainText("“Fake report”");
-  await expect(page.locator(".msg").first()).toContainText("What does this mean?");
-  // the chat's own reference folders, and a way to the repository's
-  await page.getByTestId("chat-refs").click();
-  await expect(page.getByTestId("context-folders")).toContainText("this discussion only");
-  await expect(page.getByTestId("context-folder")).toHaveCount(0);
-  await page.getByTestId("chat-refs-repo").click();
-  await expect(page.getByTestId("context-folder")).toHaveCount(1);
+  // the discussion opens in the panel next to the report (not in Chats)
+  const disc = page.getByTestId("insights-disc");
+  await expect(disc.getByTestId("message-user").first()).toContainText("What does this mean?", { timeout: 15000 });
+  await expect(view).toContainText("Fake report");
+  await expect(page.getByTestId("chats-page")).toBeHidden();
+  await expect(disc.locator('[data-testid="message-agent"][data-status="completed"]')).toHaveCount(1, { timeout: 30000 });
+  // one more about all of it: a second discussion of the report, in the same panel
+  await page.getByTestId("insights-chat").click();
+  await expect(disc.getByTestId("message-user").first()).toContainText("three things I should look at first");
+  await expect(disc.locator('[data-testid="message-agent"][data-status="completed"]')).toHaveCount(1, { timeout: 30000 });
+  await disc.getByTestId("thread-back").click();
+  await expect(disc.getByTestId("thread-item")).toHaveCount(2);
+  // collapsed and back; reopening the report shows its discussions
+  await disc.getByTestId("panel-collapse").click();
+  await expect(page.getByTestId("insights-disc-expand")).toContainText("Discussions (2)");
+  await page.getByTestId("insights-disc-expand").click();
+  await datesRow.first().getByTestId("insights-report-open").click();
+  await expect(page.getByTestId("insights-disc").getByTestId("thread-item")).toHaveCount(2);
+  // the repository's reference folder off again
+  await page.getByTestId("insights-refs").click();
   await page.getByTestId("context-folder-remove").click();
   await expect(page.getByTestId("context-folder")).toHaveCount(0);
   await page.getByTestId("context-folders").getByRole("button", { name: "Close" }).click();
-  // continue in a chat
-  await page.getByTestId("activity-insights").click();
-  await datesRow.first().getByTestId("insights-report-open").click();
-  await page.getByTestId("insights-chat").click();
-  await expect(page.getByTestId("chats-page")).toBeVisible({ timeout: 15000 });
   // settings
-  await page.getByTestId("activity-insights").click(); // (the chat opened the wiki side)
   await page.getByTestId("insights-settings-open").click();
   await expect(page.getByTestId("insights-settings")).toBeVisible();
   await expect(page.getByTestId("insights-task")).toHaveCount(7);

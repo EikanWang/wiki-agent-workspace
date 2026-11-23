@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from test_github_hub import as_github, pr
+from test_github_hub import _who, as_github, pr
 
 from backend.app import codeowned, github_hub, maintainers
 from backend.app.errors import ApiError
@@ -168,3 +168,39 @@ async def test_code_owned_prs_join_the_review_list(running_app):
     assert (await api.put("/api/v1/github/prefs", json={"codeowned": False})).status_code == 200
     r = (await api.get("/api/v1/github/reviews")).json()
     assert [i["number"] for i in r["items"]] == [1] and r["codeowned"] == [] and r["hidden_count"] == 0
+
+
+async def test_a_bot_cc_on_a_pr_touching_your_files_stays_in_the_list(running_app):
+    # pytorch-bot cc's you on #5 (touches your files) and #9 (does not): only #9 is "cc'd by bot"
+    github_hub.reset_cache()
+    h = await running_app()
+    as_github(h, "EikanWang")
+    h.ctx.extra["gh_owner"] = lambda: "EikanWang"
+    h.ctx.extra["codeowned_scan"] = True
+    kv_put(h.ctx, maintainers.KEY, {"pytorch/pytorch": {"fetched": 9e12, "sources": ["CODEOWNERS"], "people": maintainers.parse_codeowners(CODEOWNERS)}})
+    scan = FakeGithub([node(5, "2026-11-16T00:00:00Z", [XPU]), node(9, "2026-11-15T00:00:00Z", ["torch/_inductor/decomposition.py"])])
+    bot = _who([("dev", "x"), ("pytorch-bot", "x\n\ncc @voznesenskym @EikanWang")])
+    owned_calls: list = []
+
+    def graphql(q, v):
+        if "MentionWho" in q:
+            return {"repository": {f"p{n}": bot for n in (5, 9) if f"pullRequest(number: {n})" in q}}
+        if "query CodeownedPrs" in q:
+            owned_calls.append(q)
+            return {"repository": {}}
+        if "query Codeowners" in q or "query Codeowned" in q:
+            return scan(q, v)
+        nodes = [pr(5, user=None), pr(9, user=None)] if "mentions:@me" in (v.get("q") or "") else [pr(1)]
+        return {"search": {"issueCount": len(nodes), "pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": nodes}}
+
+    h.ctx.extra["gh_graphql"] = graphql
+    r = (await h.api.get("/api/v1/github/reviews")).json()
+    assert sorted(p["number"] for p in r["bot_cc"]) == [5, 9]  # before the scan: not known to be yours yet
+    for t in list(codeowned._running.values()):
+        await asyncio.wait_for(t, 5)
+    await asyncio.wait_for(github_hub._tasks["EikanWang"], 5)
+    r = (await h.api.get("/api/v1/github/reviews")).json()
+    by = {p["number"]: p for p in r["items"]}
+    assert set(by) == {1, 5} and [p["number"] for p in r["bot_cc"]] == [9]
+    assert by[5]["requested"] == "codeowner" and by[5]["owned_paths"] == [XPU] and by[5]["mention_by"] == "bot"
+    assert owned_calls == []  # already read by the mentions search: not fetched again

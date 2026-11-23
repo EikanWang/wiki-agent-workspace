@@ -161,6 +161,14 @@ editor (Monaco): syntax highlighting, find / replace, outline (`Ctrl+Shift+O`), 
 changed on disk in the meantime is never overwritten silently, and clean tabs follow changes on disk. Markdown has
 a preview, images are shown, other binary files can be downloaded.
 
+**Chat with the agent** about any folder or file, like a wiki folder chat: hover it and click **💬** (or **💬 Chat
+about this file** above an open file). The chat opens to the right of the editor (drag the bar to resize, × closes
+it). The agent works in the opened folder that holds the path (a path outside every opened folder: in that folder, or
+the file's folder), reads the files to answer and links them, and edits them only when you ask — open tabs follow
+the changes. Side questions on a selected part of an answer, models, pictures and reference folders work as in wiki
+chats; there is nothing to distill into the wiki. The picker at the top lists the earlier chats about the same path;
+local chats are not listed in **Chats**.
+
 ## Reviews (GitHub)
 
 When you sign in with **Continue with GitHub** as the account the server's `gh` CLI is logged in as (the server's

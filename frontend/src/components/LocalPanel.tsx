@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { ApiError, get, post, put } from "../api";
+import { NamedFileIcon } from "./FileIcon";
 import FolderPicker from "./FolderPicker";
 
 interface Root { path: string; name: string; exists: boolean }
@@ -9,11 +10,13 @@ interface Item { name: string; path: string; dir: boolean; size: number; link: b
  * Local files: any folder or file on the server, browsed and edited like a file manager (no wiki features).
  * Open folders stay in the list (server-side); a file can be opened by its path.
  */
-export default function LocalPanel({ activePath, onOpen, onClosedFile }: {
+export default function LocalPanel({ activePath, onOpen, onClosedFile, onChat }: {
   activePath: string | null;
   onOpen: (path: string) => void;
   /** a file / folder was deleted or renamed: tabs under it react */
   onClosedFile: (oldPath: string, newPath: string | null) => void;
+  /** chat with the agent about a folder / file */
+  onChat: (path: string, kind: "folder" | "file") => void;
 }) {
   const [roots, setRoots] = useState<Root[] | null>(null);
   const [dirs, setDirs] = useState<Record<string, Item[]>>({});
@@ -109,9 +112,10 @@ export default function LocalPanel({ activePath, onOpen, onClosedFile }: {
         <div className={`local-row ${it.path === activePath ? "selected" : ""}`} style={{ paddingLeft: depth * 12 + 6 }} title={it.path}
           onClick={() => (it.dir ? toggle(it.path) : onOpen(it.path))} data-testid="local-item" data-path={it.path}>
           <span className="local-twisty">{it.dir ? (open.has(it.path) ? "▾" : "▸") : ""}</span>
-          <span className="local-icon">{it.dir ? "📁" : "📄"}</span>
-          <span className="local-name">{it.name}{it.link ? " ↪" : ""}</span>
+          <NamedFileIcon name={it.name} dir={it.dir} link={it.link} open={it.dir && open.has(it.path)} />
+          <span className="local-name">{it.name}</span>
           <span className="local-actions">
+            <button className="icon-btn small" title={`Chat with the agent about this ${it.dir ? "folder" : "file"}`} onClick={(e) => { e.stopPropagation(); onChat(it.path, it.dir ? "folder" : "file"); }} data-testid="local-chat-item">💬</button>
             {it.dir && <button className="icon-btn small" title="New file" onClick={(e) => { e.stopPropagation(); void create(it.path, "file"); }}>+</button>}
             <button className="icon-btn small" title="Rename / move" onClick={(e) => { e.stopPropagation(); void rename(it); }}>✎</button>
             <button className="icon-btn small" title="Delete" onClick={(e) => { e.stopPropagation(); void remove(it); }} data-testid="local-delete">🗑</button>
@@ -137,7 +141,7 @@ export default function LocalPanel({ activePath, onOpen, onClosedFile }: {
       <div className="local-tree">
         {roots?.length === 0 && (
           <div className="muted small local-pad">
-            Browse and edit any folder or file on the server — like a file manager, without the wiki's discussions.
+            Browse and edit any folder or file on the server — like a file manager. 💬 on a folder or file chats with the agent about it.
             <div className="row"><button className="btn small primary" onClick={() => setPick(true)} data-testid="local-open-folder-empty">Open a folder…</button></div>
           </div>
         )}
@@ -148,6 +152,7 @@ export default function LocalPanel({ activePath, onOpen, onClosedFile }: {
               <b className="local-name">{r.name}</b>
               {!r.exists && <span className="warn small"> missing</span>}
               <span className="local-actions">
+                {r.exists && <button className="icon-btn small" title="Chat with the agent about this folder" onClick={(e) => { e.stopPropagation(); onChat(r.path, "folder"); }} data-testid="local-chat-root">💬</button>}
                 <button className="icon-btn small" title="New file" onClick={(e) => { e.stopPropagation(); void create(r.path, "file"); }} data-testid="local-new-file">+</button>
                 <button className="icon-btn small" title="New folder" onClick={(e) => { e.stopPropagation(); void create(r.path, "dir"); }}>⊞</button>
                 <button className="icon-btn small" title="Close this folder (nothing is deleted)" onClick={(e) => { e.stopPropagation(); void saveRoots((roots ?? []).filter((x) => x.path !== r.path).map((x) => x.path)); }} data-testid="local-close-root">✕</button>

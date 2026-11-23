@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AgentSession, ApiError, del, get, post, put } from "../api";
 import TrendChat from "./TrendChat";
+import { DiscussBody, Started, useInsightsDiscussion } from "./InsightsDiscussions";
 import SelectionAsk from "./SelectionAsk";
 import ContextFolders from "./ContextFolders";
 import FolderPicker from "./FolderPicker";
@@ -185,20 +186,31 @@ export function InsightsPanel({ active, onOpen }: { active: string | null; onOpe
 /** Main page: a repository (reports, daily summaries, highlights) or the settings. */
 type OpenPr = (repo: string, number: number, title?: string) => void;
 
-export default function InsightsView({ repo, onOpenChat, onOpenPrReview, sessions = [] }: { repo: string | null; onOpenChat: (ws: string, path: string) => void; onOpenPrReview?: OpenPr; sessions?: AgentSession[] }) {
+export default function InsightsView({ repo, onOpenPrReview, sessions = [] }: { repo: string | null; onOpenPrReview?: OpenPr; sessions?: AgentSession[] }) {
   if (!repo) return <InsightsSettings />;
-  return <RepoPage key={repo} repo={repo} onOpenChat={onOpenChat} onOpenPrReview={onOpenPrReview} sessions={sessions} />;
+  return <RepoPage key={repo} repo={repo} onOpenPrReview={onOpenPrReview} sessions={sessions} />;
 }
 
 type Tab = "reports" | "daily" | "highlights" | "chat";
+type Opened = { kind: "report"; id: string } | { kind: "reports"; ids: string[] } | { kind: "file"; path: string };
 
-function RepoPage({ repo, onOpenChat, onOpenPrReview, sessions }: { repo: string; onOpenChat: (ws: string, path: string) => void; onOpenPrReview?: OpenPr; sessions: AgentSession[] }) {
+function RepoPage({ repo, onOpenPrReview, sessions }: { repo: string; onOpenPrReview?: OpenPr; sessions: AgentSession[] }) {
   const [ov, setOv] = useState<Overview | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>(() => (localStorage.getItem("waw.insights.tab") as Tab) || "reports");
   useEffect(() => localStorage.setItem("waw.insights.tab", tab), [tab]);
-  const [open, setOpen] = useState<{ kind: "report"; id: string } | { kind: "file"; path: string } | null>(null);
+  const [open, setOpen] = useState<Opened | null>(null);
   const [refs, setRefs] = useState(false);
+  // the discussions of what is open (a finished report, several of them, a daily summary): in a panel on its right
+  const done = (id: string) => ov?.reports.find((r) => r.id === id)?.status === "done";
+  const discKey = tab === "chat" || tab === "highlights" || !open ? null
+    : open.kind === "report" ? (done(open.id) ? `report:${open.id}` : null)
+    : open.kind === "reports" ? (open.ids.every(done) ? `reports:${[...open.ids].sort().join(",")}` : null)
+    : `file:${open.path}`;
+  const disc = useInsightsDiscussion(repo, discKey, sessions, (body) => (
+    open?.kind === "report" ? post<Started>(`/insights/reports/${repo}/${open.id}/chat`, body)
+      : open?.kind === "reports" ? post<Started>(`/insights/reports/${repo}/chat`, { ...body, ids: open.ids })
+      : post<Started>("/insights/file/chat", { ...body, path: open?.kind === "file" ? open.path : "" })));
   const load = useCallback(async () => {
     try {
       setOv(await get<Overview>(`/insights/repos/${repo}`));
@@ -242,19 +254,22 @@ function RepoPage({ repo, onOpenChat, onOpenPrReview, sessions }: { repo: string
       {err && <div className="banner warn small">{err}</div>}
       {tab !== "chat" && <NewReport repo={repo} cfg={ov.config} onCreated={(id) => { setTab("reports"); setOpen({ kind: "report", id }); void load(); }} />}
       <div className="insights-body">
-        {tab === "chat" ? <TrendChat repo={repo} tabs={tabs} sessions={sessions} /> : tab === "highlights" ? <Highlights repo={repo} tabs={tabs} onRan={load} enabled={ov.config.highlights} onOpenPr={onOpenPrReview} /> : (
+        {tab === "chat" ? <TrendChat repo={repo} tabs={tabs} sessions={sessions} /> : tab === "highlights" ? <Highlights repo={repo} tabs={tabs} onRan={load} enabled={ov.config.highlights} onOpenPr={onOpenPrReview} sessions={sessions} /> : (
           <>
             <div className="insights-list">
               {tabs}
               {tab === "reports" && <ReportList repo={repo} reports={ov.reports} openId={open?.kind === "report" ? open.id : null} onOpen={(id) => setOpen({ kind: "report", id })}
-                onOpenChat={onOpenChat} onChanged={(gone) => { if (open?.kind === "report" && gone.includes(open.id)) setOpen(null); void load(); }} />}
+                onOpenTogether={(ids) => setOpen({ kind: "reports", ids })}
+                onChanged={(gone) => { if ((open?.kind === "report" && gone.includes(open.id)) || (open?.kind === "reports" && open.ids.some((x) => gone.includes(x)))) setOpen(null); void load(); }} />}
               {tab === "daily" && <DailyList ov={ov} openPath={open?.kind === "file" ? open.path : null} onOpen={(p) => setOpen({ kind: "file", path: p })} onRan={load} />}
             </div>
             <div className="insights-main">
-              {open?.kind === "report" ? <ReportViewer repo={repo} id={open.id} onOpenChat={onOpenChat} onDeleted={() => { setOpen(null); void load(); }} onRead={() => void load()} />
-                : open?.kind === "file" ? <FileViewer repo={repo} path={open.path} onOpenChat={onOpenChat} onRead={() => void load()} />
+              {open?.kind === "report" ? <ReportViewer repo={repo} id={open.id} onDiscuss={disc.ask} onDeleted={() => { setOpen(null); void load(); }} onRead={() => void load()} />
+                : open?.kind === "reports" ? <ReportsViewer repo={repo} ids={open.ids} onDiscuss={disc.ask} onClose={() => setOpen(null)} />
+                : open?.kind === "file" ? <FileViewer repo={repo} path={open.path} onDiscuss={disc.ask} onRead={() => void load()} />
                 : <div className="muted pad">Choose a report or a day.</div>}
             </div>
+            {disc.panel}
           </>
         )}
       </div>
@@ -262,8 +277,8 @@ function RepoPage({ repo, onOpenChat, onOpenPrReview, sessions }: { repo: string
   );
 }
 
-function ReportList({ repo, reports, openId, onOpen, onOpenChat, onChanged }: { repo: string; reports: ReportMeta[]; openId: string | null; onOpen: (id: string) => void;
-  onOpenChat: (ws: string, path: string) => void; onChanged: (deleted: string[]) => void }) {
+function ReportList({ repo, reports, openId, onOpen, onOpenTogether, onChanged }: { repo: string; reports: ReportMeta[]; openId: string | null; onOpen: (id: string) => void;
+  onOpenTogether: (ids: string[]) => void; onChanged: (deleted: string[]) => void }) {
   const [folded, setFolded] = useState<Record<string, boolean>>(() => { try { return JSON.parse(localStorage.getItem("waw.insights.folded") || "{}"); } catch { return {}; } });
   useEffect(() => localStorage.setItem("waw.insights.folded", JSON.stringify(folded)), [folded]);
   const [picked, setPicked] = useState<string[]>([]);
@@ -274,13 +289,10 @@ function ReportList({ repo, reports, openId, onOpen, onOpenChat, onChanged }: { 
   const pick = (id: string, on: boolean) => setPicked((p) => (on ? [...p.filter((x) => x !== id), id] : p.filter((x) => x !== id)));
   if (reports.length === 0) return <div className="insights-items"><div className="muted small pad">No report yet: choose a period above.</div></div>;
   const ready = sel.every((id) => reports.find((r) => r.id === id)?.status === "done");
-  const chat = async () => {
-    setBusy(true); setErr(null);
-    try {
-      const c = await post<{ workspace_id: string; path: string }>(`/insights/reports/${repo}/chat`, { ids: sel });
-      setPicked([]);
-      onOpenChat(c.workspace_id, c.path);
-    } catch (e) { setErr((e as ApiError).message); } finally { setBusy(false); }
+  const chat = () => {
+    if (sel.length === 1) onOpen(sel[0]);
+    else onOpenTogether(sel);
+    setPicked([]);
   };
   const remove = async () => {
     if (!(await confirmAction({ title: `Delete ${sel.length} report${sel.length === 1 ? "" : "s"}?`, message: "Their daily summaries and highlights stay.", confirmLabel: "Delete" }))) return;
@@ -300,7 +312,7 @@ function ReportList({ repo, reports, openId, onOpen, onOpenChat, onChanged }: { 
         <div className="row nowrap small pad-x insights-picked" data-testid="insights-picked">
           <b>{sel.length} selected</b>
           <span className="spacer" />
-          <button className="btn small" disabled={busy || !ready} onClick={() => void chat()} title={ready ? (sel.length === 1 ? "Ask the agent about this report" : "Ask the agent about these reports together (e.g. to compare them)") : "Only finished reports can be discussed"} data-testid="insights-picked-chat">Chat</button>
+          <button className="btn small" disabled={busy || !ready} onClick={chat} title={ready ? (sel.length === 1 ? "Open this report and discuss it with the agent" : "Open these reports together and discuss them with the agent (e.g. to compare them)") : "Only finished reports can be discussed"} data-testid="insights-picked-chat">Discuss</button>
           <button className="btn small danger" disabled={busy} onClick={() => void remove()} data-testid="insights-picked-delete">Delete</button>
           <button className="btn small" disabled={busy} onClick={() => setPicked([])} data-testid="insights-picked-clear">Clear</button>
         </div>
@@ -418,7 +430,7 @@ function NewReport({ repo, cfg, onCreated }: { repo: string; cfg: InsightsRepo; 
   );
 }
 
-function ReportViewer({ repo, id, onOpenChat, onDeleted, onRead }: { repo: string; id: string; onOpenChat: (ws: string, path: string) => void; onDeleted: () => void; onRead: () => void }) {
+function ReportViewer({ repo, id, onDiscuss, onDeleted, onRead }: { repo: string; id: string; onDiscuss: (b: DiscussBody) => Promise<void>; onDeleted: () => void; onRead: () => void }) {
   const [r, setR] = useState<ReportMeta | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -446,8 +458,8 @@ function ReportViewer({ repo, id, onOpenChat, onDeleted, onRead }: { repo: strin
         {r.baseline && <span className="chip new-vs" title="What counts as new in this report" data-testid="insights-report-baseline">🆕 new vs {r.baseline.label ?? BASELINES.find(([m]) => m === r.baseline!.mode)?.[1]}{r.baseline.mode === "before" || r.baseline.mode === "after" ? (r.baseline.label ? "" : ` ${r.baseline.date}`) : ""}</span>}
         <span className="spacer" />
         {r.status === "done" && (
-          <button className="btn small" disabled={busy} onClick={async () => { setBusy(true); try { const c = await post<{ workspace_id: string; path: string }>(`/insights/reports/${repo}/${id}/chat`, {}); onOpenChat(c.workspace_id, c.path); } catch (e) { setErr((e as ApiError).message); } finally { setBusy(false); } }}
-            title="Ask the agent about this report in a chat" data-testid="insights-chat">Continue in chat</button>
+          <button className="btn small" disabled={busy} onClick={async () => { setBusy(true); setErr(null); try { await onDiscuss({}); } catch (e) { setErr((e as ApiError).message); } finally { setBusy(false); } }}
+            title="Ask the agent what to look at first in this report: a new discussion in the panel on the right (or select a part of it: Discuss this)" data-testid="insights-chat">Ask about all of it</button>
         )}
         <button className="icon-btn small" onClick={async () => { if (await confirmAction({ title: "Delete this report?", message: "Its daily summaries and highlights stay.", confirmLabel: "Delete" })) { await del(`/insights/reports/${repo}/${id}`); onDeleted(); } }} title="Delete" data-testid="insights-report-delete">🗑</button>
       </div>
@@ -463,15 +475,51 @@ function ReportViewer({ repo, id, onOpenChat, onDeleted, onRead }: { repo: strin
       {text && <div ref={textRef} className="insights-report-text"><NewThings repo={repo} readKey={`r:${id}`} text={text} read={r.read_new ?? []} onRead={onRead} /></div>}
       {text && r.status === "done" && (
         <SelectionAsk container={textRef} within=".insights-report-text" label="Discuss this" sendLabel="Start discussion" pictures={false} optional testId="insights-sel"
-          hint="A new chat, with the report as its material"
+          hint="A new discussion in the panel on the right, with the report as its material"
           extra={<DiscussFolders repo={repo} dirs={dirs} onChange={setDirs} />}
-          onAsk={async (part, question) => {
-            const c = await post<{ workspace_id: string; path: string }>(`/insights/reports/${repo}/${id}/chat`, { quote: part.quote, question, dirs });
-            setDirs([]);
-            onOpenChat(c.workspace_id, c.path);
-          }} />
+          onAsk={async (part, question) => { await onDiscuss({ quote: part.quote, question, dirs }); setDirs([]); }} />
       )}
       {err && <div className="error-text small">{err}</div>}
+    </div>
+  );
+}
+
+/** Several reports, one after the other: discussed together (e.g. to compare them). */
+function ReportsViewer({ repo, ids, onDiscuss, onClose }: { repo: string; ids: string[]; onDiscuss: (b: DiscussBody) => Promise<void>; onClose: () => void }) {
+  const [reps, setReps] = useState<ReportMeta[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const textRef = useRef<HTMLDivElement>(null);
+  const [dirs, setDirs] = useState<string[]>([]);
+  useEffect(() => {
+    setReps(null);
+    Promise.all(ids.map((id) => get<ReportMeta>(`/insights/reports/${repo}/${id}`)))
+      .then((rs) => setReps(rs.sort((a, b) => (a.since + a.until).localeCompare(b.since + b.until))))
+      .catch((e) => setErr((e as ApiError).message));
+  }, [repo, ids]);
+  if (!reps) return <div className="muted pad">{err ?? "Loading…"}</div>;
+  return (
+    <div className="insights-report" data-testid="insights-reports-view">
+      <div className="row nowrap">
+        <b>{reps.length} reports</b><span className="muted small">{reps.map((r) => r.label).join(" · ")}</span>
+        <span className="spacer" />
+        <button className="btn small" disabled={busy} onClick={async () => { setBusy(true); setErr(null); try { await onDiscuss({}); } catch (e) { setErr((e as ApiError).message); } finally { setBusy(false); } }}
+          title="Ask the agent to compare them: a new discussion in the panel on the right (or select a part: Discuss this)" data-testid="insights-reports-chat">Compare them</button>
+        <button className="icon-btn small" onClick={onClose} title="Close" aria-label="Close">×</button>
+      </div>
+      {err && <div className="error-text small">{err}</div>}
+      <div ref={textRef} className="insights-report-text">
+        {reps.map((r) => (
+          <section key={r.id} data-testid="insights-reports-part">
+            <h2>{r.label} <span className="muted small">{r.since} – {r.until}</span></h2>
+            <MarkdownView text={(r.text ?? "").split("\n").slice(1).join("\n")} className="insights-md" />
+          </section>
+        ))}
+      </div>
+      <SelectionAsk container={textRef} within=".insights-report-text" label="Discuss this" sendLabel="Start discussion" pictures={false} optional testId="insights-sel"
+        hint="A new discussion in the panel on the right, with these reports as its material"
+        extra={<DiscussFolders repo={repo} dirs={dirs} onChange={setDirs} />}
+        onAsk={async (part, question) => { await onDiscuss({ quote: part.quote, question, dirs }); setDirs([]); }} />
     </div>
   );
 }
@@ -502,7 +550,7 @@ function DiscussFolders({ repo, dirs, onChange }: { repo: string; dirs: string[]
 }
 
 /** A daily summary or a highlights file: select a part of it to discuss it with the agent, or chat about all of it. */
-function FileViewer({ repo, path, onOpenChat, onRead }: { repo: string; path: string; onOpenChat: (ws: string, path: string) => void; onRead: () => void }) {
+function FileViewer({ repo, path, onDiscuss, onRead }: { repo: string; path: string; onDiscuss: (b: DiscussBody) => Promise<void>; onRead: () => void }) {
   const [f, setF] = useState<{ text: string; name?: string; repo?: string | null; read_new?: string[]; failed?: boolean } | null>(null);
   const textRef = useRef<HTMLDivElement>(null);
   const [dirs, setDirs] = useState<string[]>([]);
@@ -511,15 +559,12 @@ function FileViewer({ repo, path, onOpenChat, onRead }: { repo: string; path: st
   useEffect(() => { setF(null); void get<{ text: string; name: string; repo: string | null; read_new: string[] }>(`/insights/file?path=${encodeURIComponent(path)}`).then(setF).catch((e) => setF({ text: `(${(e as ApiError).message})`, failed: true })); }, [path]);
   if (f === null) return <div className="muted pad">Loading…</div>;
   const [head, ...rest] = f.text.split("\n");
-  const chat = async (body: Record<string, unknown>) => {
-    const c = await post<{ workspace_id: string; path: string }>("/insights/file/chat", { path, ...body });
-    onOpenChat(c.workspace_id, c.path);
-  };
+  const chat = onDiscuss;
   return (
     <div className="insights-report" data-testid="insights-file-view">
       <div className="row nowrap"><span className="muted small">{head}</span><span className="spacer" />
         {!f.failed && <button className="btn small" disabled={busy} onClick={async () => { setBusy(true); setErr(null); try { await chat({}); } catch (e) { setErr((e as ApiError).message); } finally { setBusy(false); } }}
-          title="Ask the agent about this in a chat (or select a part of it: Discuss this)" data-testid="insights-file-chat">Continue in chat</button>}
+          title="Ask the agent about all of it: a new discussion in the panel on the right (or select a part of it: Discuss this)" data-testid="insights-file-chat">Ask about all of it</button>}
       </div>
       {err && <div className="error-text small">{err}</div>}
       <div ref={textRef} className="insights-report-text">
@@ -528,7 +573,7 @@ function FileViewer({ repo, path, onOpenChat, onRead }: { repo: string; path: st
       </div>
       {!f.failed && (
         <SelectionAsk container={textRef} within=".insights-report-text" label="Discuss this" sendLabel="Start discussion" pictures={false} optional testId="insights-sel"
-          hint="A new chat, with this as its material"
+          hint="A new discussion in the panel on the right, with this as its material"
           extra={<DiscussFolders repo={f.repo ?? repo} dirs={dirs} onChange={setDirs} />}
           onAsk={async (part, question) => { await chat({ quote: part.quote, question, dirs }); setDirs([]); }} />
       )}
@@ -683,10 +728,17 @@ function HlItem({ x, extra, onOpenPr }: { x: Highlight & { seen_before?: boolean
 /** XPU highlights of a period, two views: per day (each day's run; items an earlier day already had are marked and
  * can be hidden), or flat (each item once, duplicates across days removed, with the days it was on). Like Daily, the
  * list (dates, the days) is on the left and the chosen day's highlights on the right. */
-function Highlights({ repo, tabs, onRan, enabled, onOpenPr }: { repo: string; tabs: React.ReactNode; onRan: () => void; enabled: boolean; onOpenPr?: OpenPr }) {
-  const [since, setSince] = useState(daysAgo(7));
-  const [until, setUntil] = useState(todayIso());
-  const [min, setMin] = useState(70);
+function Highlights({ repo, tabs, onRan, enabled, onOpenPr, sessions }: { repo: string; tabs: React.ReactNode; onRan: () => void; enabled: boolean; onOpenPr?: OpenPr;
+  sessions: AgentSession[] }) {
+  const textRef = useRef<HTMLDivElement>(null);
+  const [dirs, setDirs] = useState<string[]>([]);
+  const [chatting, setChatting] = useState(false);
+  // the dates and the score are kept while the tab is open (e.g. back from a discussion of them)
+  const kept = useMemo(() => { try { return JSON.parse(sessionStorage.getItem(`waw.insights.hl.${repo}`) ?? "{}") as { since?: string; until?: string; min?: number }; } catch { return {}; } }, [repo]);
+  const [since, setSince] = useState(kept.since ?? daysAgo(7));
+  const [until, setUntil] = useState(kept.until ?? todayIso());
+  const [min, setMin] = useState(kept.min ?? 70);
+  useEffect(() => sessionStorage.setItem(`waw.insights.hl.${repo}`, JSON.stringify({ since, until: until === todayIso() ? undefined : until, min })), [repo, since, until, min]);
   const [view, setView] = useState<"day" | "flat">(() => (localStorage.getItem("waw.insights.hlView") === "flat" ? "flat" : "day"));
   useEffect(() => localStorage.setItem("waw.insights.hlView", view), [view]);
   const [onlyNew, setOnlyNew] = useState(() => localStorage.getItem("waw.insights.hlOnlyNew") === "1");
@@ -716,6 +768,12 @@ function Highlights({ repo, tabs, onRan, enabled, onOpenPr }: { repo: string; ta
   const dayList = useMemo(() => (days ?? []).map((d) => ({ ...d, shown: d.items.filter((x) => keep(x) && (!onlyNew || !x.seen_before)) })), [days, min, onlyNew]); // eslint-disable-line react-hooks/exhaustive-deps
   const day = view === "day" ? dayList.find((d) => d.day === picked) ?? null : null;
   const total = view === "day" ? day?.shown.length ?? 0 : shown.length;
+  // discussions about what is shown: the day (per day) or the dates (with the score and "only new" filters), in a
+  // panel on the right; those of one day (or of the same dates) are kept together
+  const discKey = view === "day" ? (day ? `hl:${day.day}` : null) : `hl:${since}..${until}`;
+  const disc = useInsightsDiscussion(repo, discKey, sessions, (body) => post<Started>(`/insights/repos/${repo}/highlights/chat`,
+    { since, until, day: view === "day" ? day?.day : null, min_score: min, only_new: view === "day" && onlyNew, ...body }));
+  const chat = disc.ask;
   return (
     <>
       <div className="insights-list">
@@ -757,10 +815,13 @@ function Highlights({ repo, tabs, onRan, enabled, onOpenPr }: { repo: string; ta
             )}
             <span className="muted" data-testid="insights-hl-count">{total} shown</span>
             <span className="spacer" />
+            <button className="btn small" disabled={chatting || total === 0} onClick={async () => { setChatting(true); setErr(null); try { await chat({}); } catch (e) { setErr((e as ApiError).message); } finally { setChatting(false); } }}
+              title="Ask the agent about the highlights shown: a new discussion in the panel on the right (or select a part of them: Discuss this)" data-testid="insights-hl-chat">Ask about all of it</button>
             <button className="btn small" onClick={async () => { setErr(null); try { await post("/insights/run", { repo, kind: "highlights", since, until }); onRan(); } catch (e) { setErr((e as ApiError).message); } }}
               title={enabled ? "Score every issue and PR active in these days now" : "XPU highlights are off for this repository (⚙); you can still score now"} data-testid="insights-run-hl">Score now</button>
           </div>
           {err && <div className="error-text small">{err}</div>}
+          <div ref={textRef} className="insights-report-text">
           {view === "flat" && shown.map((x) => (
             <HlItem key={x.url} x={x} onOpenPr={onOpenPr} extra={x.days && x.days.length > 1 ? <span className="chip" title={`On ${x.days.join(", ")}`} data-testid="insights-hl-days"> on {x.days.length} days</span> : null} />
           ))}
@@ -773,8 +834,16 @@ function Highlights({ repo, tabs, onRan, enabled, onOpenPr }: { repo: string; ta
               {day.shown.length === 0 && <div className="muted small">Nothing above the score{onlyNew ? " that is new this day" : ""}.</div>}
             </div>
           )}
+          </div>
+          {total > 0 && (
+            <SelectionAsk container={textRef} within=".insights-report-text" label="Discuss this" sendLabel="Start discussion" pictures={false} optional testId="insights-sel"
+              hint="A new discussion in the panel on the right, with the highlights shown as its material"
+              extra={<DiscussFolders repo={repo} dirs={dirs} onChange={setDirs} />}
+              onAsk={async (part, question) => { await chat({ quote: part.quote, question, dirs }); setDirs([]); }} />
+          )}
         </div>
       </div>
+      {disc.panel}
     </>
   );
 }

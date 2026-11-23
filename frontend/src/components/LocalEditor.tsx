@@ -17,12 +17,14 @@ const IMAGE = /\.(png|jpe?g|gif|webp|bmp|ico|svg)$/i;
 const isDark = () => window.matchMedia?.("(prefers-color-scheme: dark)").matches;
 const raw = (p: string) => `/api/v1/local/raw?path=${encodeURIComponent(p)}`;
 
-export default function LocalEditor({ openRequest, renamed, onActive }: {
+export default function LocalEditor({ openRequest, renamed, onActive, onChat }: {
   /** a file to open (from the panel) */
   openRequest: { path: string; at: number } | null;
   /** a file / folder was renamed (new path) or deleted (null) */
   renamed: { from: string; to: string | null; at: number } | null;
   onActive: (path: string | null) => void;
+  /** chat with the agent about a file */
+  onChat?: (path: string) => void;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const ed = useRef<M.editor.IStandaloneCodeEditor | null>(null);
@@ -255,6 +257,7 @@ export default function LocalEditor({ openRequest, renamed, onActive }: {
               <button role="tab" className={!preview ? "active" : ""} onClick={() => setMdPreview((x) => ({ ...x, [tab.path]: false }))} data-testid="local-md-edit">Edit</button>
             </span>
           )}
+          {onChat && <button className="btn small" onClick={() => onChat(tab.path)} title="Chat with the agent about this file" data-testid="local-chat-file">💬 Chat about this file</button>}
           {tab.kind === "text" && <button className="btn small" disabled={!tab.dirty} onClick={() => void save(tab.path)} data-testid="local-save">Save</button>}
         </div>
       )}

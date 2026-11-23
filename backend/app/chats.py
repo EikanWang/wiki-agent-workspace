@@ -163,7 +163,8 @@ def new_chat(docs: Any, title: str, about: dict[str, str] | None = None) -> dict
 @router.get("/chats")
 def list_chats(ctx: AppContext = Depends(require_auth)):
     """This folder's chats, newest activity first (archived ones are left out)."""
-    from .insights.chat import trend_of
+    from .insights.chat import discussion_of, trend_of
+    from .local_chat import local_of
     from .models import Document, Message, Thread
 
     docs = ctx.documents
@@ -176,8 +177,10 @@ def list_chats(ctx: AppContext = Depends(require_auth)):
             if not can_read_chat(ctx, docs.workspace_id, d.path):
                 continue
             p = chat_snapshot_path(docs.snapshots_dir, docs.workspace_id, d.path)
-            if p is None or not p.is_file() or trend_of(ctx, docs.workspace_id, d.path):
-                continue  # (trend chats are listed in their repository's Trend page)
+            if (p is None or not p.is_file() or trend_of(ctx, docs.workspace_id, d.path) or local_of(ctx, docs.workspace_id, d.path)
+                    or discussion_of(ctx, docs.workspace_id, d.path)):
+                continue  # (trend chats are listed in their repository's Trend page, local chats in Local files, the
+                # discussions of a Repo Insights report / summary / highlights next to them)
             threads = s.query(Thread).filter_by(document_id=d.id).all()
             n = s.query(Message).filter(Message.thread_id.in_([t.id for t in threads])).count() if threads else 0
             times = [t.updated_at for t in threads if t.updated_at] + ([d.created_at] if d.created_at else [])

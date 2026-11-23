@@ -1139,7 +1139,6 @@ body.resizing-v iframe { pointer-events: none; }
 .local-row.selected { background: light-dark(#dbe7fb, #2b3a55); }
 .local-row.root { font-size: 12px; letter-spacing: 0.02em; }
 .local-twisty { width: 12px; flex: none; color: var(--muted); font-size: 10px; }
-.local-icon { font-size: 12px; flex: none; }
 .local-name { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .local-actions { display: none; margin-left: auto; }
 .local-row:hover .local-actions { display: inline-flex; }
@@ -1148,6 +1147,15 @@ body.resizing-v iframe { pointer-events: none; }
 .local-editor { flex: 1; }
 .local-editor > .webide-editor { flex: 1; min-height: 0; }
 .local-md { flex: 1; min-height: 0; }
+/* Local files: the editor, and a chat about a folder / file on its right */
+.local-split { display: flex; flex: 1; min-height: 0; min-width: 0; }
+.local-chat-pane { flex: none; display: flex; min-height: 0; min-width: 0; max-width: 70%; border-left: 1px solid var(--border); background: var(--bg); }
+.local-chat { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
+.local-chat-bar { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-bottom: 1px solid var(--border); background: var(--card); font-size: 12px; }
+.local-chat-about { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; max-width: 45%; }
+.local-chat-bar select { border: 1px solid var(--border); border-radius: 6px; padding: 2px 6px; background: var(--bg); color: inherit; min-width: 0; max-width: 260px; }
+.local-chat .chat-view { padding: 8px 12px; }
+.local-chat .chat-new { padding: 16px 12px; overflow: auto; }
 @media (max-width: 900px) { .layout.view-terminal .local-center { display: flex; } }
 /* PR diff: copy path, expand context */
 .diff-file-head .copy-path { padding: 0 4px; font-size: 13px; color: var(--muted); }
@@ -1359,12 +1367,6 @@ body.resizing-h iframe { pointer-events: none; }
 .review-section-head-row { display: flex; align-items: center; margin-left: -22px; }
 .review-section-head-row .review-section-head { flex: 1; min-width: 0; }
 .review-check.category { margin: 0 4px 0 3px; }
-.reviews-cats { display: flex; flex-wrap: wrap; gap: 4px; }
-.review-cat-chip { display: inline-flex; align-items: center; gap: 3px; padding: 0 6px 0 3px; border: 1px solid var(--border); border-left-width: 3px; border-radius: 10px; cursor: pointer; color: var(--muted); user-select: none; font-size: 11px; white-space: nowrap; }
-.review-cat-chip input { margin: 0; }
-.review-cat-chip.on { color: inherit; background: var(--accent); }
-.review-cat-chip.todo { border-left-color: var(--red); }
-.review-cat-chip.news { border-left-color: #d29922; }
 .git-badge.review-todo { color: var(--red); }
 .git-badge.agent-waiting { color: var(--primary); font-weight: 600; }
 .gh-refresh { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; }
@@ -1455,6 +1457,9 @@ body.resizing-h iframe { pointer-events: none; }
 .insights-items .list-item { display: flex; gap: 6px; align-items: center; text-align: left; }
 .insights-item-main { display: flex; flex-direction: column; min-width: 0; }
 .insights-main { flex: 1; min-width: 0; min-height: 0; overflow: auto; border: 1px solid var(--border); border-radius: 8px; }
+.insights-disc { flex: none; display: flex; flex-direction: column; min-height: 0; max-width: 55%; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.insights-disc > .discussion { flex: 1; min-width: 0; border-left: none; }
+.insights-disc-tab { border: 1px solid var(--border); border-radius: 8px; }
 .insights-main.trend-chat-main { display: flex; flex-direction: column; overflow: hidden; }
 .trend-chat-period { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .trend-chat-period input[type="date"] { border: 1px solid var(--border); border-radius: 6px; padding: 2px 6px; background: var(--bg); color: inherit; }
@@ -1507,6 +1512,8 @@ body.resizing-h iframe { pointer-events: none; }
 .review-pr .defer-btn { opacity: 0; }
 .review-pr:hover .defer-btn, .review-pr .defer-menu:focus-within .defer-btn { opacity: 1; }
 .defer-btn.labeled { opacity: 1; }
+.review-hide-pr { font-size: 12px; padding: 0 3px; opacity: 0; }
+.review-pr:hover .review-hide-pr, .review-hide-pr:focus-visible { opacity: 1; }
 .pr-deferred-banner { display: flex; gap: 8px; align-items: center; }
 .defer-pop { min-width: 230px; }
 .defer-custom { display: flex; gap: 4px; align-items: center; }
