@@ -1,6 +1,6 @@
-"""The prompts. Daily summaries, roll-ups and XPU scoring keep the wording of the summaries already in the folder
-(so old and new files read alike); the report adds structured sections and the focus. Summaries and reports mark what
-is new to the project with "🆕" (and a "🆕 What's new" section), which the app shows highlighted."""
+"""The prompts. Daily summaries and roll-ups keep the wording of the summaries already in the folder (so old and new
+files read alike); the report adds structured sections and the focus. Summaries and reports mark what is new to the
+project with "🆕" (and a "🆕 What's new" section), which the app shows highlighted."""
 
 NEW = "🆕"
 
@@ -16,27 +16,12 @@ NEW_RULE = """- Highlight everything new to the project: a new feature, API, opt
 """
 
 DAILY = """
-You are provided with a list of GitHub issues and pull requests (PRs), each detailed with specific information in the following format:
-
----
-Title: [Issue or PR Title]
-URL: [Issue or PR URL]
-Description: [Detailed description]
-Submitter: [Username of the person who submitted]
-Tags: [Relevant tags]
-Assignees: [Assigned users]
-Reviewers: [Reviewers, if any]
-Created At: [Creation date]
-State: [Current state, e.g., open, closed]
-Comments: [Number of comments]
-Review Comments: [Number of review comments]
-Commented by [Username] (created at [Date]): [Comment content]
-...
----
+You are provided with a list of GitHub issues and pull requests (PRs), each between "---" lines with labelled fields
+(Title, URL, Description, …) and its comments.
 
 Please generate a summary of the following list of GitHub issues and pull requests. The summary should:
 
-- Be concise, be concise, be concise.
+- Be concise.
 
 - Describe each issue or PR within two sentences.
 
@@ -101,133 +86,34 @@ commit hash. Output only the Markdown.
 """
 
 SCORE = """
-You are assisting the PyTorch XPU (Intel GPU) maintainer.
+You are assisting the PyTorch XPU (Intel GPU) maintainer. Score how much a PyTorch issue or pull request matters for
+Intel GPU (XPU). Score strictly: I can only review a few items.
 
-CRITICAL OUTPUT REQUIREMENTS (must follow):
-  - Be extremely clear and concise. No fluff. No long paragraphs.
-  - Output MUST use the exact template below.
-  - For each item, use <= 6 bullet lines total. If you need more, it is NOT concise enough.
-
-Objective:
-  - Monitor PyTorch activities and identify changes/issues that are critical to Intel GPU (XPU).
-  - Specifically, track CUDA/ROCm changes and shared components(like Inductor/Triton, torchgen, ATen schemas, etc) that may impact XPU correctness or performance.
-  - Ignore MPS and MTIA related changes as they are not relevant to Intel GPU, even if the changes touched focus areas as follow.
-
-Focus Areas (only include items related to these):
-  - CUDA backend
-  - ROCm backend
-  - Inductor and Triton backend (shared GPU backend)
+What matters: CUDA/ROCm changes and shared components that may impact XPU correctness or performance:
+  - CUDA backend, ROCm backend
+  - Inductor and Triton backend (shared GPU backend): scheduler / codegen / autotuning
   - Performance-sensitive heuristic rules (tiling, num_warps, reduction strategy, autotune defaults)
-  - TorchInductor scheduler / codegen / autotuning
   - Profiler/Kineto
   - torchgen / build registration / DispatchKey codegen
   - ATen operator schema & dispatch (native_functions.yaml)
   - Distributed / comm backends
   - Precision features (FP8/TF32/etc.)
   - Device semantics changes
+Ignore MPS and MTIA changes, even when they touch these areas.
 
-Pattern Triggers (treat as high-signal):
-  A) Hardcoded CUDA checks / CUDA-only branches (missing XPU/generalization)
-  B) Hardcoded "cuda" in tests or runtime settings (should use GPU_TYPE / parametrization)
-  C) ATen schema changes (alias annotations, mutation semantics, signatures) without XPU validation
-  D) torchgen / registration infra changes that special-case CUDA or exclude external backends
-  E) Inductor/Triton heuristic changes optimized for CUDA that may regress XPU performance
+Pattern triggers (treat as high-signal):
+  A) Hardcoded CUDA checks / CUDA-only branches in shared code, e.g. `if (act == ActivityType::CUDA)` with no XPU case
+  B) Hardcoded "cuda" in tests or runtime settings, e.g. `torch.set_default_device("cuda")` instead of GPU_TYPE
+  C) ATen schema changes (alias annotations, mutation semantics, signatures) without XPU validation, e.g.
+     `Tensor noise` -> `Tensor(b!) noise` in native_functions.yaml
+  D) torchgen / registration infra changes that special-case CUDA or exclude external backends, e.g. sharding
+     RegisterCUDA.cpp into RegisterCUDA_0.cpp for one DispatchKey only
+  E) Inductor/Triton heuristic changes optimized for CUDA that may regress XPU performance (needs XPU benchmarking)
 
-Examples below illustrate what counts as a Trigger and how to generalize for XPU.
-  EXAMPLE 1 (Trigger A: CUDA-only branch in shared code)
-  Problem: Code checks only CUDA and runs backend-specific ops.
-  Fix: Include XPU or generalize via dispatch/device tags.
+The item is between <<<BEGIN>>> and <<<END>>>: Title, Description, Tags, Diff (git diff; pull requests only).
 
-  Original (CUDA-only):
-  ```C++
-  if (act == torch::autograd::profiler::ActivityType::CUDA) {
-    torch::profiler::impl::kineto::toggleCollectionDynamic(enable);
-  }
-  ```
-
-  To make it compatible with Intel GPUs, the code should check for the Intel GPU device tag, which is "XPU". Below is the refined version:
-  ```C++
-  if (act == torch::autograd::profiler::ActivityType::CUDA ||
-      act == torch::autograd::profiler::ActivityType::XPU) {
-    torch::profiler::impl::kineto::toggleCollectionDynamic(enable);
-  }
-  ```
-
-  EXAMPLE 2 (Trigger B: hardcoded "cuda" in Inductor tests)
-  Problem: Test assumes CUDA-only.
-  Fix: Use GPU_TYPE abstraction (Inductor unifies XPU and CUDA under GPU_TYPE).
-
-  Original:
-  ```python
-  torch.set_default_device("cuda")
-  ```
-
-  Refined:
-  ```python
-  torch.set_default_device(GPU_TYPE)
-  ```
-
-  EXAMPLE 3 (Trigger C: ATen schema / alias semantics change)
-  Problem: native_functions.yaml modifies alias annotations / mutation semantics.
-  Risk: can break backend compatibility or require kernel adjustments.
-
-  Example diff:
-  ```git.diff
-  -- func: rrelu_with_noise.out(Tensor self, Tensor noise, Scalar lower=0.125, Scalar upper=0.3333333333333333, bool training=False, Generator? generator=None, *, Tensor(a!) out) -> Tensor(a!)
-  +- func: rrelu_with_noise.out(Tensor self, Tensor(b!) noise, Scalar lower=0.125, Scalar upper=0.3333333333333333, bool training=False, Generator? generator=None, *, Tensor(a!) out) -> Tensor(a!)
-     python_module: nn
-     tags: nondeterministic_seeded
-     dispatch:
-       CPU: rrelu_with_noise_out_cpu
-       CUDA: rrelu_with_noise_out_cuda
-  ```
-
-  EXAMPLE 4 (Trigger D: torchgen / registration infra becomes CUDA-special-cased)
-  Problem: torchgen generates CUDA-specific files or sharding logic without considering external backends like XPU.
-
-  Example diff:
-  ```git.diff
-  - RegisterCUDA.cpp
-  + RegisterCUDA_0.cpp
-  ...
-  fm.write_sharded_with_template(... dispatch_key == DispatchKey.CPU else 1 ...)
-  ```
-
-  EXAMPLE 5 (Trigger E: Inductor/Triton heuristic change may regress XPU)
-  Problem: CUDA-optimized tiling/warps/reduction strategy may hurt XPU (shared Triton backend).
-  Action: require XPU benchmarking and possibly a device-specific heuristic override.
-
-I will share the detailes of a PyTorch pull request or a PyTorch issue with you. The detailed information starts from <<<BEGIN>>> and is ended by <<<END>>>.
-The format of the detailed information is as follows.
-  <<<BEGIN>>>
-  Title: [Issue or PR Title]
-  Description: [Detailed description]
-  Tags: [Relevant tags]
-  Diff: [Detailed changes in the PR in git diff format]
-  <<<END>>>
-
-You need to help me evaluate their relevance on Intel GPUs. And the evaluation process must be seriously conducted because I cannot review too many issues and pull requests.
-The relevance or impact needs be represented as a score number on a scale of 0 to 100.
-- 0-24: Low relevance or impact for Intel GPU.
-- 25-50: Moderate relevance or impact for Intel GPU.
-- 51-74: Some relevance or impact for Intel GPU.
-- 75-89: High relevance or impact for Intel GPU.
-- 90-100: Critical to Intel GPU.
-
-Besides that score, you need to elaborate on the score number to express why you think the pull request or issue is low/moderate/high relevant to Intel GPU.
-
-And your answer should be in JSON format. The structure is as follows.
-- "score": represents the relevance or impact
-- "justification": represents your elaboration on the score number
-
-Below is an example except FYI ("..." is used for brevity).
-{
-    "score": 99,
-    "justification": "This PR is critical to Intel GPU. It intends to ... and it introduces ..., which is a critical feature for optimizing performance on Intel GPU."
-}
-
-Please ensure your anwser to strictly follow this JSON format. Because I will develop some codes to parse the format and
-use the score and justification to evaluate the relevance or impact of the shared pull request or issue to Intel GPU.
+Score 0-100: 0-24 low, 25-50 moderate, 51-74 some, 75-89 high, 90-100 critical relevance or impact for Intel GPU.
+Answer with ONLY a JSON object: {"score": 99, "justification": "why this score, in at most 3 short sentences"}
 """
 
 BODY = """

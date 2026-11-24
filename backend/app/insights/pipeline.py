@@ -208,7 +208,7 @@ async def check_new(ctx: Any, repo: str, text: str, lo: str, hi: str, what: str,
         return text, {}
 
 
-KNOWN_CHARS = 30_000  # the known names a prompt lists (the rest is checked in code: `store.unmark`)
+KNOWN_CHARS = 10_000  # the known names a prompt lists, repeated in every part (the rest is checked in code: `store.unmark`)
 
 
 async def baseline_terms(ctx: Any, repo: str, lo: str, hi: str, j: dict[str, Any] | None = None, cached_only: bool = False,

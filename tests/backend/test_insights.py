@@ -154,6 +154,12 @@ async def test_daily_summary_from_github_active_rule_and_local_copies(running_ap
     assert "Number: 10\n" in prompt and "Number: 11\n" in prompt  # created that day (ai_tools dropped these) / commented
     assert "Number: 12\n" not in prompt and "Number: 13\n" not in prompt and "Number: 14\n" not in prompt
     assert "- Comment by bob" in prompt and text.startswith("[daily]")
+    # an item of an earlier day (here for its comments) comes with the start of its description only
+    from backend.app.insights import github as igh
+    it = {"number": 1, "title": "t", "url": "u", "body": "q" * 3000, "labels": [], "assignees": [], "reviews": [], "comments": [], "review_comments": []}
+    a, b = igh.window(DAY)
+    assert "q" * 3000 in igh.text_of({**it, "created_at": f"{DAY}T05:00:00Z"}, a, b)
+    assert igh.text_of({**it, "created_at": "2026-10-01T00:00:00Z"}, a, b).count("q") == 500
     f = store.daily(h.ctx, "acme/proj", DAY)
     assert f["name"] == f"summary_acme_proj_0D_{DAY}_23-59-59.md" and Path(f["path"]).read_text().startswith(f"Summary of acme/proj from {DAY} 00-00-00 to {DAY} 23-59-59:")
     # again: the file; another day already fetched: the local copies (no GitHub)

@@ -132,8 +132,11 @@ def vendor_involvement(it: dict[str, Any]) -> set[str]:
     return out
 
 
-def text_of(it: dict[str, Any], a: str, b: str, body_chars: int = 4000, comment_chars: int = 1500) -> str:
-    """One item for a summary, with the comments made in [a, b] (the daily-summary format)."""
+def text_of(it: dict[str, Any], a: str, b: str, body_chars: int = 4000, comment_chars: int = 1500, old_body_chars: int = 500) -> str:
+    """One item for a summary, with the comments made in [a, b] (the daily-summary format). An item created before `a`
+    was described on its own day: only the start of its description is given (most of a day's items are such)."""
+    if (it.get("created_at") or a) < a:
+        body_chars = min(body_chars, old_body_chars)
     reviewers = sorted({r["author"] for r in it["reviews"] if r.get("author") and not is_bot(r["author"])})
     comments = [c for c in it["comments"] if _in(c.get("created_at"), a, b) and not is_bot(c.get("author"))]
     rcs = [c for c in it["review_comments"] + [r for r in it["reviews"] if r.get("body")] if _in(c.get("created_at"), a, b) and not is_bot(c.get("author"))]
