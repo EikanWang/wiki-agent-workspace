@@ -1,6 +1,7 @@
 """The daily runs (each repository's own switch, off by default): at its time (UTC+8 by default), the previous UTC day's
 summary of issues and PRs and — when on for the repository — its XPU highlights; days missed while the server was off
-are caught up (up to a week).
+are caught up (up to a week). A run that failed is tried again later (after RETRY_AFTER, a few times per day), and the
+other repositories go on meanwhile.
 
 Scheduled reports (each repository's week / month / quarter / year switches, off by default): once a period has
 ended, its report — after the repository's time of day and, when its daily run is on, after the period's last day was
@@ -22,6 +23,8 @@ from . import settings as st
 log = logging.getLogger("waw.insights")
 RUNS_KEY = "insights_runs"  # {"owner/repo": "YYYY-MM-DD" (the last day done)}
 REPORT_RUNS_KEY = "insights_report_runs"  # {"owner/repo|week": the period's value (e.g. 2026-11-09, 2026-10, 2026-Q3, 2025)}
+FAILED_KEY = "insights_failed_runs"  # {"owner/repo": {"day": the run's last day, "n": failed tries, "at": when seen (ISO), "error": …}}
+RETRY_AFTER = (30, 120, 360)  # minutes to wait after the 1st, 2nd, 3rd failed try of a day's run; after one more it rests until the next day
 _task: asyncio.Task | None = None
 
 
@@ -65,6 +68,35 @@ def _reports_due(ctx: Any, cfg: dict[str, Any], local: dt.datetime, target: dt.d
     return out
 
 
+def _held(rec: dict[str, Any] | None, target: str, now: dt.datetime, offset: int) -> str:
+    """Why a repository's run does not start now: its earlier tries for `target` failed ("" when it may start)."""
+    if not rec or rec.get("day") != target or not rec.get("at"):
+        return ""
+    n, err = int(rec.get("n") or 1), str(rec.get("error") or "")[:200]
+    if n > len(RETRY_AFTER):
+        return f"failed {n} times ({err}): not tried again before the next day (make the day in Daily to try now)"
+    until = dt.datetime.fromisoformat(rec["at"]) + dt.timedelta(minutes=RETRY_AFTER[n - 1])
+    if now >= until:
+        return ""
+    return f"failed ({err}): try {n + 1} of {len(RETRY_AFTER) + 1} at {(until + dt.timedelta(hours=offset)).strftime('%H:%M')}"
+
+
+def _run_done(ctx: Any, repo: str, target: str):
+    """Keeps a scheduled run's failure (so the next tick does not start it again at once); a run that ends well clears it."""
+    def done(j: dict[str, Any]) -> None:
+        failed = kv_get(ctx, FAILED_KEY, {}) or {}
+        rec = failed.get(repo) or {}
+        if j["status"] == "failed":
+            failed[repo] = {"day": target, "n": (int(rec.get("n") or 0) if rec.get("day") == target else 0) + 1, "at": None,
+                            "error": str(j.get("error") or "")[:500]}
+        elif j["status"] == "done" and rec:
+            failed.pop(repo)
+        else:
+            return
+        kv_put(ctx, FAILED_KEY, failed)
+    return done
+
+
 def _quota_ok() -> tuple[bool, str]:
     from .. import gh_limits
 
@@ -85,9 +117,14 @@ async def tick(ctx: Any, now: dt.datetime | None = None) -> list[str]:
     repository started (or [])."""
     now = now or gh.now()
     cfg = st.load(ctx)
-    local = now + dt.timedelta(hours=int(cfg.get("timezone_offset", 8)))
+    offset = int(cfg.get("timezone_offset", 8))
+    local = now + dt.timedelta(hours=offset)
     runs = kv_get(ctx, RUNS_KEY, {}) or {}
     target = (now - dt.timedelta(days=1)).date()  # the last complete UTC day
+    failed = kv_get(ctx, FAILED_KEY, {}) or {}
+    if any(not rec.get("at") for rec in failed.values()):  # a failure counts from the tick that sees it (GitHub's time)
+        failed = {k: {**rec, "at": rec.get("at") or now.isoformat()} for k, rec in failed.items()}
+        kv_put(ctx, FAILED_KEY, failed)
     due = []
     for r in sorted(cfg["repos"], key=lambda r: r["schedule"].get("time", "05:35")):
         sched = r["schedule"]
@@ -104,8 +141,10 @@ async def tick(ctx: Any, now: dt.datetime | None = None) -> list[str]:
         plan.update(running=live[0]["repo"], deferred=None)
         return []
     plan["running"] = None
+    held = {r["repo"]: why for r in due if (why := _held(failed.get(r["repo"]), target.isoformat(), now, offset))}
+    due = [r for r in due if r["repo"] not in held]
     if not due and not reports:
-        plan["deferred"] = None
+        plan["deferred"] = "; ".join(f"{k} {v}" for k, v in held.items()) or None
         return []
     ok, why = _quota_ok()
     if not ok:
@@ -121,6 +160,7 @@ async def tick(ctx: Any, now: dt.datetime | None = None) -> list[str]:
     first = max(dt.date.fromisoformat(last) + dt.timedelta(days=1), target - dt.timedelta(days=6)) if last else target
     todo = [(first + dt.timedelta(days=i)).isoformat() for i in range((target - first).days + 1)]
     j = pl.new_job("daily", r["repo"], days=todo, scheduled=True)
+    j["on_done"] = _run_done(ctx, r["repo"], target.isoformat())
 
     async def run(repo=r["repo"], todo=todo, hl=r["highlights"], j=j) -> dict[str, Any]:
         await pl.prefetch_days(ctx, repo, todo, j)  # catch-up days: one search, not one per day

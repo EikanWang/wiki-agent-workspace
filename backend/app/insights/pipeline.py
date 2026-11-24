@@ -391,6 +391,13 @@ def _report_done(ctx: Any, meta: dict[str, Any]):
 
 # ---------------------------------------------------------------------- daily summaries
 
+def _refused_note(items: list[dict[str, Any]]) -> str:
+    """What a daily summary says of the items the model provider's safety filter refused."""
+    return (f"## Not summarized\n\nThe model provider's safety filter refused {len(items)} item(s) of the day, "
+            "so they are not in this summary:\n\n"
+            + "\n".join(f"- [{'PR' if it['kind'] == 'pr' else 'Issue'} #{it['number']}]({it['url']}): {it['title']}" for it in items))
+
+
 async def daily_summary(ctx: Any, repo: str, day: str, j: dict[str, Any] | None = None, force: bool = False) -> str:
     """The day's summary of issues and PRs: the newest file of that day, else made now (a day not over yet is made each
     time and kept as .partial)."""
@@ -415,12 +422,16 @@ async def daily_summary(ctx: Any, repo: str, day: str, j: dict[str, Any] | None 
                 pass
             names, ndays, keys = await baseline_terms(ctx, repo, "0001-01-01", prev, cached_only=True)
             ins = prompts.daily(names, f"everything before {day}", ndays)
-            text = await llm.summarize(ctx, "daily", [gh.text_of(it, a, b) for it in items], ins, prompts.COMBINE)
+            refused: list[int] = []
+            text = await llm.summarize(ctx, "daily", [gh.text_of(it, a, b) for it in items], ins, prompts.COMBINE, skipped=refused)
             text, _ = store.unmark(text, keys)
             if prev:
                 text, chk = await check_new(ctx, repo, text, "0001-01-01", prev, f"the daily summary of {day}", f"everything before {day}")
                 if chk:
                     store.write_check(ctx, repo, day, chk)
+            if refused:
+                step(j, f"issues and PRs of {day}: the model provider refused {len(refused)} item(s); the summary is made without them")
+                text = "\n\n".join(x for x in (text.strip(), _refused_note([items[i] for i in sorted(set(refused))])) if x)
         partial = dt.date.fromisoformat(day) >= today()
         if partial:
             for old in store.index(ctx, repo):

@@ -1,14 +1,19 @@
 """Model requests: an OpenAI-compatible chat endpoint (default: DeepSeek) or the app's agents (OpenCode / Codex),
 chosen per task. Long material is split into parts of ≤ max_chars (agent_max_chars for a task on the agent) and each
-part answered (the caller combines).
+part answered (the caller combines). The parts' answers are kept on disk until the summary is whole (a retry asks only
+for what is missing), and a part the provider's safety filter refuses is halved until the texts it refuses are found.
 Tests replace the whole thing with ctx.extra["insights_llm"] = callable(task, prompt, json) -> str."""
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
+import os
 import re
+import time
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -61,27 +66,33 @@ async def complete(ctx: Any, task: str, prompt: str, *, as_json: bool = False, t
     raise ApiError(502, "LLM_FAILED", f"the model request failed: {last}")
 
 
-def pack(texts: list[str], instruction: str, max_chars: int, sep: str = "\n") -> list[str]:
-    """Material in parts of ≤ max_chars (with the instruction); a single oversized text is cut, nothing is dropped."""
+def _groups(texts: list[str], instruction: str, max_chars: int, sep: str = "\n") -> list[list[tuple[int, str]]]:
+    """The material in parts of ≤ max_chars (with the instruction), each text with its index; a single oversized text
+    is cut, nothing is dropped."""
     room = max(10_000, max_chars - len(instruction))
-    parts: list[str] = []
-    cur: list[str] = []
+    parts: list[list[tuple[int, str]]] = []
+    cur: list[tuple[int, str]] = []
     size = 0
-    for t in texts:
+    for i, t in enumerate(texts):
         if len(t) > room:
             if cur:
-                parts.append(sep.join(cur))
+                parts.append(cur)
                 cur, size = [], 0
-            parts.append(t[:room] + "\n…(cut)")
+            parts.append([(i, t[:room] + "\n…(cut)")])
             continue
         if cur and size + len(t) + len(sep) > room:
-            parts.append(sep.join(cur))
+            parts.append(cur)
             cur, size = [], 0
-        cur.append(t)
+        cur.append((i, t))
         size += len(t) + len(sep)
     if cur:
-        parts.append(sep.join(cur))
+        parts.append(cur)
     return parts
+
+
+def pack(texts: list[str], instruction: str, max_chars: int, sep: str = "\n") -> list[str]:
+    """Material in parts of ≤ max_chars (with the instruction); a single oversized text is cut, nothing is dropped."""
+    return [sep.join(t for _, t in g) for g in _groups(texts, instruction, max_chars, sep)]
 
 
 def request_chars(ctx: Any, task: str) -> int:
@@ -91,18 +102,89 @@ def request_chars(ctx: Any, task: str) -> int:
     return int(s["agent_max_chars"]) if agent else int(s["max_chars"])
 
 
-async def summarize(ctx: Any, task: str, texts: list[str], instruction: str, combine: str | None = None) -> str:
-    """One answer for the material: each part summarized, then (more than one part) combined."""
+BLOCKED = re.compile(r"blocked the response|safeguards? flagged|content[ _]?(?:filter|policy|management)|Content Exists Risk", re.I)
+BLOCK_MAX = 24      # refused requests one summary may spend on finding the texts a provider refuses
+KEPT_DAYS = 7       # how long the answers of a summary that never became whole stay on disk
+
+
+def blocked(exc: ApiError) -> bool:
+    """The provider refused the content (its safety filter) rather than failed: the same request is refused again."""
+    return bool(BLOCKED.search(exc.message or ""))
+
+
+async def _kept(ctx: Any, task: str, prompt: str, used: list[Path]) -> str:
+    """`complete`, with the answer kept on disk (by the request) until the summary it belongs to is whole: a summary
+    that failed at a later part does not pay for the earlier ones again when it is made anew."""
+    p = st.data_dir(ctx) / "parts" / (hashlib.sha256(f"{task}\0{prompt}".encode()).hexdigest()[:32] + ".md")
+    again = p in used  # the same request twice in one summary is asked twice
+    used.append(p)
+    if not again:
+        try:
+            return p.read_text(encoding="utf-8")
+        except OSError:
+            pass
+    out = await complete(ctx, task, prompt)
+    if out.strip():
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_name(f".{p.name}.tmp")
+        tmp.write_text(out, encoding="utf-8")
+        os.replace(tmp, p)
+    return out
+
+
+def _drop_old(ctx: Any) -> None:
+    old = time.time() - KEPT_DAYS * 86400
+    for p in (st.data_dir(ctx) / "parts").glob("*.md"):
+        try:
+            if p.stat().st_mtime < old:
+                p.unlink()
+        except OSError:
+            pass
+
+
+async def summarize(ctx: Any, task: str, texts: list[str], instruction: str, combine: str | None = None,
+                    skipped: list[int] | None = None) -> str:
+    """One answer for the material: each part summarized, then (more than one part) combined. With `skipped` (a list
+    to fill), a part the provider refuses is halved until the texts it refuses are found: their indexes are added to
+    `skipped` and the summary is made without them (at most BLOCK_MAX refused requests; then what is still refused
+    is skipped together)."""
     max_chars = request_chars(ctx, task)
-    parts = pack(texts, instruction, max_chars)
-    if not parts:
+    groups = _groups(texts, instruction, max_chars)
+    if not groups:
         return ""
-    outs = [await complete(ctx, task, f"{instruction}\n\n{p}") for p in parts]
+    _drop_old(ctx)
+    used: list[Path] = []
+    refused = 0
+
+    async def part(g: list[tuple[int, str]]) -> list[str]:
+        nonlocal refused
+        try:
+            return [await _kept(ctx, task, f"{instruction}\n\n" + "\n".join(t for _, t in g), used)]
+        except ApiError as exc:
+            if skipped is None or not blocked(exc):
+                raise
+            refused += 1
+            if len(g) == 1 or refused > BLOCK_MAX:
+                log.warning("%s: the provider refused %d text(s): %s", task, len(g), exc.message[:200])
+                skipped.extend(i for i, _ in g)
+                return []
+            return await part(g[:len(g) // 2]) + await part(g[len(g) // 2:])
+
+    outs: list[str] = []
+    for g in groups:
+        outs += await part(g)
     while len(outs) > 1 and combine:
-        groups = pack(outs, combine, max_chars, sep="\n\n")
-        if len(groups) >= len(outs):  # cannot shrink any more
+        packed = pack(outs, combine, max_chars, sep="\n\n")
+        if len(packed) >= len(outs):  # cannot shrink any more
             break
-        outs = [await complete(ctx, task, f"{combine}\n\n{g}") for g in groups]
+        try:
+            outs = [await _kept(ctx, task, f"{combine}\n\n{g}", used) for g in packed]
+        except ApiError as exc:
+            if skipped is None or not blocked(exc):
+                raise
+            break  # refused as a whole: the parts' summaries stand as they are
+    for p in used:
+        p.unlink(missing_ok=True)
     return "\n\n".join(outs)
 
 

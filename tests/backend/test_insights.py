@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -516,6 +517,94 @@ async def test_the_schedule_runs_one_repository_at_a_time_and_waits_for_quota(ru
     finally:
         L.buckets.clear()
         L.checked = 0.0
+
+
+async def _idle():
+    for _ in range(200):
+        if not [j for j in pl.jobs() if j.get("scheduled") and j["status"] == "running"]:
+            return
+        await asyncio.sleep(0.05)
+
+
+async def test_a_failed_scheduled_run_waits_and_the_other_repositories_go_on(running_app, tmp_path):
+    from backend.app.errors import ApiError
+    from backend.app.kv import kv_get
+
+    h, _, model = await make(running_app, tmp_path, proj_nodes())
+    st.save(h.ctx, {"repos": [{"repo": "acme/proj", "highlights": False, "schedule": {"enabled": True, "time": "05:00"}},
+                              {"repo": "acme/other", "schedule": {"enabled": True, "time": "05:30"}}]})
+
+    def broken(task, prompt, as_json):
+        model.calls.append((task, prompt))
+        raise ApiError(502, "AGENT_FAILED", "not authorized")
+    h.ctx.extra["insights_llm"] = broken
+    late = dt.datetime(2026, 11, 4, 1, 0, tzinfo=dt.timezone.utc)  # 09:00 UTC+8: both due (for Nov 3)
+    mins = lambda n: dt.timedelta(minutes=n)  # noqa: E731
+    assert await scheduler.tick(h.ctx, late) == ["acme/proj"]
+    await _idle()
+    assert await scheduler.tick(h.ctx, late) == ["acme/other"]  # not again at once (it was every minute): the next one goes on
+    await _idle()
+    assert await scheduler.tick(h.ctx, late + mins(29)) == []
+    assert scheduler.plan["deferred"] == "acme/proj failed (not authorized): try 2 of 4 at 09:30" and scheduler.plan["due"] == ["acme/proj"]
+    t = late
+    for wait in (30, 120, 360):  # the 2nd, 3rd and 4th try, each after a longer wait
+        assert await scheduler.tick(h.ctx, t + mins(wait - 1)) == []
+        assert await scheduler.tick(h.ctx, t + mins(wait)) == ["acme/proj"]
+        await _idle()
+        t += mins(wait + 1)
+        assert await scheduler.tick(h.ctx, t) == []  # the tick that sees the failure: the wait counts from it
+    assert model.count("daily") == 4 and "failed 4 times (not authorized): not tried again before the next day" in scheduler.plan["deferred"]
+    assert await scheduler.tick(h.ctx, t + mins(600)) == []
+    h.ctx.extra["insights_llm"] = model
+    assert await scheduler.tick(h.ctx, late + dt.timedelta(days=1)) == ["acme/proj"]  # the next day: tried again
+    await _idle()
+    assert kv_get(h.ctx, scheduler.FAILED_KEY, {}) == {} and store.daily(h.ctx, "acme/proj", "2026-11-04") is not None
+
+
+async def test_a_summary_keeps_its_parts_and_leaves_out_what_the_provider_refuses(running_app, tmp_path):
+    from backend.app.errors import ApiError
+    from backend.app.insights import llm
+
+    h, _, _ = await make(running_app, tmp_path, proj_nodes())
+    st.save(h.ctx, {"max_chars": 20_000})
+    asked: list[str] = []
+    down = [True]
+
+    def model(task, prompt, as_json):
+        asked.append(prompt)
+        if "part-c" in prompt and down[0]:
+            raise ApiError(502, "LLM_FAILED", "the model request failed: 500")
+        if "part-f" in prompt or "Number: 11\n" in prompt:
+            raise ApiError(502, "AGENT_FAILED", "Provider blocked the response (cyber): Cyber safeguards flagged this message.")
+        return "S:" + "".join(sorted(set(re.findall(r"part-(\w)", prompt)))) + " ".join(re.findall(r"Number: (\d+)", prompt))
+    h.ctx.extra["insights_llm"] = model
+    kept = tmp_path / "insights" / "parts"
+    # a failure at the third part: the first two are not asked again when the summary is made anew
+    texts = [f"part-{c} " + "x" * 15_000 for c in "abc"]
+    try:
+        await llm.summarize(h.ctx, "daily", texts, "ins", "combine")
+        raise AssertionError("the third part fails")
+    except ApiError as e:
+        assert e.code == "LLM_FAILED" and len(asked) == 3 and len(list(kept.glob("*.md"))) == 2
+    down[0] = False
+    assert await llm.summarize(h.ctx, "daily", texts, "ins", "combine") == "S:" and len(asked) == 5  # part c and the combination
+    assert asked[3].startswith("ins\n\npart-c") and asked[4] == "combine\n\nS:a\n\nS:b\n\nS:c" and not list(kept.glob("*.md"))
+    # a refused part: halved until the refused text is found; the rest is summarized
+    del asked[:]
+    texts, skipped = [f"part-{c}" for c in "abcdefgh"], []
+    assert await llm.summarize(h.ctx, "daily", texts, "ins", "combine", skipped=skipped) == "S:" and skipped == [5]
+    assert [re.findall(r"part-(\w)", p) for p in asked[:-1]] == [list("abcdefgh"), list("abcd"), list("efgh"), list("ef"), ["e"], ["f"], list("gh")]
+    assert asked[-1] == "combine\n\nS:abcd\n\nS:e\n\nS:gh"
+    try:  # only where the caller can say what is missing (a report's sections are not left out silently)
+        await llm.summarize(h.ctx, "report", texts, "ins", "combine")
+        raise AssertionError("refused")
+    except ApiError as e:
+        assert llm.blocked(e) and not llm.blocked(ApiError(502, "LLM_FAILED", "the model request failed: 500"))
+    # the day's summary names what was refused
+    text = await pl.daily_summary(h.ctx, "acme/proj", DAY)
+    assert any("Number: 10\n" in p and "Number: 11\n" not in p for p in asked) and text.startswith("S:")
+    assert text.endswith("## Not summarized\n\nThe model provider's safety filter refused 1 item(s) of the day, so they are not in this summary:\n\n"
+                         "- [Issue #11](https://github.com/acme/proj/issues/11): Old issue discussed")
 
 
 async def test_highlights_per_day_and_flat_without_duplicates(running_app, tmp_path):
