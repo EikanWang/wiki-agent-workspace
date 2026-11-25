@@ -684,6 +684,7 @@ export interface DevSettings {
   languages?: string[];
   python?: string;
   compile_commands_dir?: string;
+  include_paths?: string;
   clangd?: string;
   build_command?: string;
   test_command?: string;

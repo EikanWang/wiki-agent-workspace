@@ -1378,12 +1378,25 @@ async def test_clangd_without_compile_commands_gets_include_roots_and_no_false_e
     assert argv[:2] == ["env", f"XDG_CONFIG_HOME={xdg}"] and "--clang-tidy" not in argv and _shown(argv) == str(clangd)
     assert "No compile_commands.json" in note
     conf = (xdg / "clangd" / "config.yaml").read_text()
-    assert f"-I{wt}, -I{wt}/aten/src" in conf and 'Suppress: "*"' in conf
+    assert f'"-I{wt}", "-I{wt}/aten/src"' in conf and 'Suppress: "*"' in conf
     # once built: the real compile database, full checking
     (wt / "build").mkdir()
     (wt / "build" / "compile_commands.json").write_text("[]")
     argv, note = await server_command(LocalTarget(), row, "cpp")
     assert argv[0] == str(clangd) and f"--compile-commands-dir={wt}/build" in argv and "--clang-tidy" in argv and note is None
+    # extra include folders (relative or absolute, one per line, # comments): added to the flags, errors stay on
+    (tmp_path / "sdk" / "include").mkdir(parents=True)
+    row.settings_json = json.dumps({"clangd": str(clangd), "compile_commands_dir": "build",
+                                    "include_paths": f"third_party/fmt/include  # fmt\n-I {tmp_path}/sdk/include\n\n./gen"})
+    argv, note = await server_command(LocalTarget(), row, "cpp")
+    assert argv[:2] == ["env", f"XDG_CONFIG_HOME={xdg}"] and f"--compile-commands-dir={wt}/build" in argv and "--clang-tidy" in argv and note is None
+    conf = (xdg / "clangd" / "config.yaml").read_text()
+    assert f'Add: ["-I{wt}/third_party/fmt/include", "-I{tmp_path}/sdk/include", "-I{wt}/gen"]' in conf and "Suppress" not in conf
+    # and without a compile database: with the usual roots, errors off
+    (wt / "build" / "compile_commands.json").unlink()
+    argv, note = await server_command(LocalTarget(), row, "cpp")
+    conf = (xdg / "clangd" / "config.yaml").read_text()
+    assert f'"-I{tmp_path}/sdk/include"' in conf and f'"-I{wt}/aten/src"' in conf and 'Suppress: "*"' in conf and "No compile_commands.json" in note
 
 
 async def test_view_code_workspace_is_detached_at_the_fetched_default_branch(running_app, dev_settings, tmp_path, fake_env):
@@ -1435,6 +1448,8 @@ async def test_uml_class_diagram_parents_children_members_and_users(running_app,
         "};\n"
         "class Circle final : public Shape {\n public:\n  double area() const override;\n};\n"
         "template <typename T>\nclass Boxed : public Shape, protected Other<T> {};\n")
+    (src / "tests").mkdir()
+    (src / "tests" / "shape_test.cc").write_text('#include "shapes.h"\nclass ShapeMock : public Shape {};\nvoid check(Shape* s) {}\n')
     (src / "draw.cc").write_text('#include "shapes.h"\nclass Canvas {\n  void draw(const Shape& s);\n  Shape* last_;\n};\nvoid free_fn(Shape* s) {}\n')
     (src / "zoo.py").write_text("class Animal:\n    legs: int = 4\n    def speak(self, loud=False):\n        pass\n    def _secret(self):\n        pass\n\n"
                                "class Dog(Animal, metaclass=Meta):\n    pass\n\nclass Kennel:\n    def add(self, a: Animal):\n        self.a = a\n")
@@ -1446,7 +1461,10 @@ async def test_uml_class_diagram_parents_children_members_and_users(running_app,
     assert (c["path"], c["line"], c["kind"], c["bases"]) == ("shapes.h", 3, "class", ["Base"])  # not the forward declaration
     assert [m["visibility"] + m["text"] for m in c["members"]] == ["+virtual double area() const", "+int id() const", "-int id_ = 0"]
     assert [(p["name"], p["depth"], p["path"]) for p in u["parents"]] == [("Base", 1, "shapes.h")]
-    assert sorted(k["name"] for k in u["children"]) == ["Boxed", "Circle"]
+    assert sorted(k["name"] for k in u["children"]) == ["Boxed", "Circle"]  # not the test class
+    assert u["hidden_tests"] == ["ShapeMock", "shape_test.cc"] and "shape_test.cc" not in {x["name"] for x in u["users"]}
+    t = (await api.post(f"/api/v1/dev/workspaces/{d['id']}/uml", json={"name": "Shape", "path": "draw.cc", "tests": True})).json()
+    assert sorted(k["name"] for k in t["children"]) == ["Boxed", "Circle", "ShapeMock"] and "shape_test.cc" in {x["name"] for x in t["users"]}
     users = {(x["name"], x["file"]) for x in u["users"]}
     assert ("Canvas", False) in users and ("draw.cc", True) in users
     assert not {"Shape", "Circle", "Boxed"} & {x["name"] for x in u["users"] if not x["file"]}

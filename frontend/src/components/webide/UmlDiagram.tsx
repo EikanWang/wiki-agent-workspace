@@ -5,7 +5,8 @@ interface Member { text: string; method: boolean; visibility: string }
 interface UClass { name: string; path: string | null; line: number | null; kind: string; bases: string[]; members?: Member[]; others?: number }
 interface UParent extends UClass { depth: number; child: string }
 interface UUser { name: string; path: string; line: number; count: number; file: boolean }
-interface Part { name: string; class: UClass | null; parents?: UParent[]; children?: UClass[]; users?: UUser[]; more_users?: number; error?: string }
+interface Part { name: string; class: UClass | null; parents?: UParent[]; children?: UClass[]; users?: UUser[]; more_users?: number; error?: string;
+  hidden_tests?: string[] }
 type PartName = "class" | "parents" | "children" | "users";
 
 /** A class (or a file using one) in the growing diagram. */
@@ -116,6 +117,10 @@ export default function UmlDiagram({ devId, name, path, onOpen, onClose }: {
   const [root, setRoot] = useState<string>(name);
   const [err, setErr] = useState<string | null>(null);
   const [zoom, setZoom] = useState(1);
+  // test classes / files are left out unless asked for (remembered per browser)
+  const [tests, setTests] = useState(() => localStorage.getItem("waw.uml.tests") === "1");
+  const [hidden, setHidden] = useState<Set<string>>(new Set());
+  const hiddenTests = hidden.size;
   const gen = useRef(0); // a new start drops the answers of the previous one
   const clickTimer = useRef<number | null>(null);
 
@@ -138,7 +143,7 @@ export default function UmlDiagram({ devId, name, path, onOpen, onClose }: {
     await Promise.all(parts.map(async (part) => {
       try {
         const r = await post<Part>(`/dev/workspaces/${devId}/uml`, {
-          name: cls.name, parts: [part], ...(cls.path && cls.line ? { at_path: cls.path, at_line: cls.line } : { path: path ?? undefined }),
+          name: cls.name, parts: [part], tests, ...(cls.path && cls.line ? { at_path: cls.path, at_line: cls.line } : { path: path ?? undefined }),
         });
         if (g !== gen.current) return;
         if (part === "class" && r.class) upsert(id, { name: id, path: r.class.path, line: r.class.line, kind: r.class.kind, members: r.class.members ?? [] });
@@ -156,6 +161,7 @@ export default function UmlDiagram({ devId, name, path, onOpen, onClose }: {
           if (uid !== id) link({ from: uid, to: id, kind: "use", count: u.count });
         }
         if (part === "users" && r.more_users) upsert(id, { name: id, moreUsers: r.more_users });
+        if (r.hidden_tests?.length) setHidden((h) => new Set([...h, ...r.hidden_tests!]));
         setPart(id, part, "done");
       } catch (e) {
         if (g !== gen.current) return;
@@ -163,7 +169,7 @@ export default function UmlDiagram({ devId, name, path, onOpen, onClose }: {
         setErr((e as ApiError).message);
       }
     }));
-  }, [devId, path, upsert, link, setPart]);
+  }, [devId, path, tests, upsert, link, setPart]);
 
   // start: find the class quickly, then its surroundings in parallel
   const start = useCallback(async (nm: string) => {
@@ -172,9 +178,10 @@ export default function UmlDiagram({ devId, name, path, onOpen, onClose }: {
     setEdges(new Map());
     setRoot(nm);
     setErr(null);
+    setHidden(new Set());
     upsert(nm, { name: nm, parts: { class: "loading" } });
     try {
-      const r = await post<Part>(`/dev/workspaces/${devId}/uml`, { name: nm, path: path ?? undefined, parts: ["class"] });
+      const r = await post<Part>(`/dev/workspaces/${devId}/uml`, { name: nm, path: path ?? undefined, parts: ["class"], tests });
       if (g !== gen.current) return;
       if (r.error) return setErr(r.error);
       if (!r.class) return upsert(nm, { name: nm, found: false, parts: { class: "done" } });
@@ -184,8 +191,8 @@ export default function UmlDiagram({ devId, name, path, onOpen, onClose }: {
     } catch (e) {
       if (g === gen.current) setErr((e as ApiError).message);
     }
-  }, [devId, path, upsert, fetchParts]);
-  useEffect(() => { void start(name); }, [name, start]);
+  }, [devId, path, tests, upsert, fetchParts]);
+  useEffect(() => { void start(name); }, [name, start]); // also again when test classes are switched on / off
 
   const expand = useCallback((n: Node) => {
     if (n.file || !n.found) return;
@@ -257,8 +264,12 @@ export default function UmlDiagram({ devId, name, path, onOpen, onClose }: {
           <span>UML class diagram · <b className="mono">{root}</b></span>
           <span className="muted small" data-testid="uml-counts">{counts.classes} classes · {counts.inherit} inheritance · {counts.use} uses
             {rootNode?.moreUsers ? ` (+${rootNode.moreUsers} more users)` : ""}</span>
+          {hiddenTests > 0 && !tests && <span className="muted small" data-testid="uml-hidden-tests" title={`Left out: ${[...hidden].slice(0, 20).join(", ")}${hidden.size > 20 ? " …" : ""}. Tick “Test classes” to show them.`}>{hiddenTests} test class{hiddenTests === 1 ? "" : "es"} hidden</span>}
           {loading.length > 0 && <span className="muted small uml-loading" title={loading.join("\n")} data-testid="uml-loading">⏳ loading {loading[0]}{loading.length > 1 ? ` +${loading.length - 1}` : ""}</span>}
           <span className="spacer" />
+          <label className="small" title="Show test classes and test files too (in tests/ folders, test_*.py, *_test.cc …, or named TestFoo / FooTest / MockFoo)">
+            <input type="checkbox" checked={tests} onChange={(e) => { setTests(e.target.checked); localStorage.setItem("waw.uml.tests", e.target.checked ? "1" : "0"); }} data-testid="uml-tests" /> Test classes
+          </label>
           <button className="btn small" onClick={expandAll} disabled={![...nodes.values()].some(expandable)}
             title="Expand every class shown: add its parents, derived classes and users" data-testid="uml-expand-all">⊕ Expand all</button>
           <button className="btn small" onClick={() => void start(root)} disabled={nodes.size <= 1} title="Back to just this class and its surroundings" data-testid="uml-reset">Reset</button>

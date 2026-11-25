@@ -491,7 +491,9 @@ write code with the agent — a new pull request, or changes to an existing one.
   for a password (use a URL that needs none, or ssh keys on that machine).
 - **Reference wiki** — a folder of this window; the agent reads the whole folder.
 - Optional: name, Python interpreter (a virtual environment's `python`), `compile_commands.json` folder, build and
-  test commands. Defaults are detected: CMake (`cmake … -DCMAKE_EXPORT_COMPILE_COMMANDS=ON`, `ctest`), Make, and
+  test commands. Later, in the workspace's **Settings**: **C/C++ include folders** — one per line, absolute or
+  relative to the worktree (`-I` and `# comments` allowed) — added to clangd's flags in the web editor (also when
+  there is a `compile_commands.json`) and as fallback flags in VS Code; clangd restarts with them when you save. Defaults are detected: CMake (`cmake … -DCMAKE_EXPORT_COMPILE_COMMANDS=ON`, `ctest`), Make, and
   Python projects (`pytest`).
 
 ### The editor
@@ -522,7 +524,10 @@ Each workspace has one of two editors (switch with the **Web editor / VS Code** 
   The class shows as soon as it is found; its parents, derived classes and users are added as each search finishes
   (⏳ in the title bar while some are still loading). **⊕** on a class (or a double-click) **expands it in the same
   diagram** — its members, parents, derived classes and users are added — and **⊕ Expand all** does it for every
-  class shown; **Reset** goes back to the first class. Click a box to open its source; zoom with − / +. It is found by searching the worktree (C++, Python, Java, TypeScript, C#), not by a compiler: base lists
+  class shown; **Reset** goes back to the first class. **Test classes are left out by default** — classes and
+  files in test folders (`test/`, `tests/`, `testing/` …), test files (`test_*.py`, `*_test.cc`, `*.spec.ts` …) and
+  classes named like `TestFoo`, `FooTest`, `MockFoo`, `FakeFoo`; the title bar says how many were hidden (hover to see
+  which) and **Test classes** shows them (remembered in this browser). Click a box to open its source; zoom with − / +. It is found by searching the worktree (C++, Python, Java, TypeScript, C#), not by a compiler: base lists
   spread over many lines, macros and templates can be missed, and every class of the same name counts.
 - `Ctrl+S` saves; a save is refused when the file changed on disk since you opened it (agent, command, Git), and you
   choose to overwrite or reload. Files the agent or a command changes reload by themselves in clean tabs.

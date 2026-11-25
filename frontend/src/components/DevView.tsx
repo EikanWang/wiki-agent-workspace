@@ -317,7 +317,7 @@ function DevSettingsDialog({ dev, workspaces, onClose, onSaved }: { dev: DevWork
   const [name, setName] = useState(dev.name);
   const [wiki, setWiki] = useState(dev.wiki_workspace_id ?? "");
   const [s, setS] = useState<Record<string, string>>(() => ({
-    python: dev.settings.python ?? "", python_lsp: dev.settings.python_lsp ?? "", compile_commands_dir: dev.settings.compile_commands_dir ?? "", clangd: dev.settings.clangd ?? "",
+    python: dev.settings.python ?? "", python_lsp: dev.settings.python_lsp ?? "", compile_commands_dir: dev.settings.compile_commands_dir ?? "", include_paths: dev.settings.include_paths ?? "", clangd: dev.settings.clangd ?? "",
     build_command: dev.settings.build_command ?? "", test_command: dev.settings.test_command ?? "", debug_program: dev.settings.debug_program ?? "",
   }));
   const [args, setArgs] = useState((dev.settings.debug_args ?? []).join(" "));
@@ -345,6 +345,10 @@ function DevSettingsDialog({ dev, workspaces, onClose, onSaved }: { dev: DevWork
         {field("python", "Python interpreter", "python3 or /path/to/venv/bin/python")}
         {field("python_lsp", "Python language server (web editor)", "default: basedpyright-langserver / pyright-langserver / pylsp")}
         {field("compile_commands_dir", "compile_commands.json folder (relative to the worktree)", "build")}
+        <label className="dev-field"><span className="label">C/C++ include folders (one per line, absolute or relative to the worktree)</span>
+          <textarea className="mono" rows={3} value={s.include_paths ?? ""} placeholder={"third_party/fmt/include\n/opt/intel/oneapi/compiler/latest/include"}
+            onChange={(e) => setS({ ...s, include_paths: e.target.value })} data-testid="dev-set-include_paths" /></label>
+        <div className="muted small">Added to clangd's compile flags (also when there is a compile_commands.json); the C/C++ language server restarts with them when you save.</div>
         {field("clangd", "clangd executable", "default: clangd on the host's PATH")}
         {field("build_command", "Build command", "cmake --build build")}
         {field("test_command", "Test command", "ctest --test-dir build && pytest -q")}

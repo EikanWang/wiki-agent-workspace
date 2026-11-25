@@ -229,6 +229,15 @@ def class_spans(lines: list[str], lang: str) -> list[tuple[int, int, str]]:
     return out
 
 
+_TEST_PATH = re.compile(r"(^|/)(tests?|testing|unittests?|__tests__|test_utils?)/|(^|/)test_[^/]*$|_tests?\.\w+$|\.(test|spec)\.\w+$")
+_TEST_NAME = re.compile(r"^(Test|Mock|Fake)[A-Z_]|^test_|(Test|Tests|TestCase|TestBase|Mock|Fake)$")
+
+
+def is_test(name: str, path: str | None) -> bool:
+    """A test class / file: in a test folder or file, or named like one (TestFoo, FooTest, MockFoo, FakeFoo)."""
+    return bool((path and _TEST_PATH.search(path)) or _TEST_NAME.search(name or ""))
+
+
 def _lang(path: str) -> str:
     return "py" if path.endswith((".py", ".pyi")) else "cpp" if re.search(r"\.(h|hh|hpp|hxx|cuh|inl|c|cc|cpp|cxx|cu)$", path) else "other"
 
@@ -302,7 +311,7 @@ class Uml:
         return None
 
     async def diagram(self, root_name: str, name: str, near: str | None = None, parts: set[str] | None = None,
-                      at: tuple[str, int] | None = None) -> dict[str, Any]:
+                      at: tuple[str, int] | None = None, tests: bool = False) -> dict[str, Any]:
         """The diagram around `name`, or only some of its parts (`class`, `parents`, `children`, `users`) so the page
         can show the class first and add the rest as it comes. `at` (path, line): the class's definition, already
         known (no search for it)."""
@@ -355,6 +364,7 @@ class Uml:
         # children: classes whose base list names it
         children: list[dict[str, Any]] = []
         kids_seen: set[str] = set()
+        hidden_tests: list[str] = []
         for p, n, t in (await kids_task if kids_task else []):
             m = re.search(r"\b(class|struct|interface)\s+(?:[A-Za-z_][\w:()]*\s+)*(?!final\b)([A-Za-z_]\w*)\s*(?:final\s*)?(?:<[^>]*>\s*)?(?:\(|:(?!:)|\bextends\b|\bimplements\b)", t)
             if not m:
@@ -362,12 +372,17 @@ class Uml:
             kid = m.group(2)
             if kid == name or kid in kids_seen or name not in parse_header(t if t.rstrip().endswith(("{", ":")) else t + " {", kid)["bases"]:
                 continue
+            if not tests and is_test(kid, p):  # test classes are left out unless asked for
+                hidden_tests.append(kid)
+                kids_seen.add(kid)
+                continue
             kids_seen.add(kid)
             children.append({"name": kid, "path": p, "line": n, "kind": m.group(1)})
             if len(children) >= MAX_CHILDREN:
                 break
         if "children" in parts:
             out["children"] = children
+            out["hidden_tests"] = hidden_tests
         if not uses_task:
             return out
         # users: where the name is used, attributed to the class around the use (or the file)
@@ -390,5 +405,11 @@ class Uml:
             u = users.setdefault(k, {"name": label, "path": p, "line": owner[0] if owner else n, "count": 0, "file": owner is None})
             u["count"] += 1
         ulist = [u for u in users.values() if u["name"] not in known or u["file"]]
+        hidden_users: list[str] = []
+        if not tests:
+            kept = [u for u in ulist if not is_test(u["name"] if not u["file"] else "", u["path"])]
+            hidden_users = sorted({u["name"] for u in ulist if u not in kept})
+            ulist = kept
         ulist.sort(key=lambda u: (u["file"], -u["count"], u["path"]))
-        return {**out, "users": ulist[:MAX_USERS], "more_users": max(0, len(ulist) - MAX_USERS), "use_count": len(uses)}
+        return {**out, "users": ulist[:MAX_USERS], "more_users": max(0, len(ulist) - MAX_USERS), "use_count": len(uses),
+                "hidden_tests": sorted(set(out.get("hidden_tests", [])) | set(hidden_users))}

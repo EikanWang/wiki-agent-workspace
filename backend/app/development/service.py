@@ -147,7 +147,7 @@ def settings_of(row: DevWorkspace) -> dict[str, Any]:
 
 # ---------------------------------------------------------------------- language / task defaults
 
-SETTING_KEYS = ("editor", "python", "python_lsp", "compile_commands_dir", "clangd", "build_command", "test_command", "debug_program", "debug_args")
+SETTING_KEYS = ("editor", "python", "python_lsp", "compile_commands_dir", "include_paths", "clangd", "build_command", "test_command", "debug_program", "debug_args")
 EDITORS = ("web", "vscode")  # the editor of a workspace: the app's own web editor (Monaco + language servers) or code-server
 
 

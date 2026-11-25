@@ -76,23 +76,48 @@ async def _which(t: Target, names: list[str], extra_dirs: list[str]) -> str | No
     return out.strip().splitlines()[0] if rc == 0 and out.strip() else None
 
 
-async def _cpp_without_cdb(t: Target, wt: str) -> tuple[str, str]:
-    """No compile_commands.json yet (nothing built): clangd would guess bare flags and flood Problems with false errors
-    ('ATen/Functions.h' not found …). Give it the checkout's usual include roots and silence its diagnostics, through
-    a clangd user config of its own (XDG_CONFIG_HOME). Returns (the XDG dir, the note for the editor)."""
+def include_paths(cfg: dict[str, Any], wt: str) -> list[str]:
+    """The workspace's extra include folders (setting `include_paths`: one per line, absolute or relative to the
+    worktree; `#` starts a comment)."""
+    out: list[str] = []
+    for line in str(cfg.get("include_paths") or "").splitlines():
+        p = line.split("#", 1)[0].strip()
+        if p.startswith("-I"):
+            p = p[2:].strip()
+        if not p or "\0" in p:
+            continue
+        p = p if p.startswith(("/", "~")) else f"{wt}/{p.removeprefix('./')}"
+        if p not in out:
+            out.append(p.rstrip("/") or "/")
+    return out[:200]
+
+
+async def _clangd_config(t: Target, wt: str, extra: list[str], cdb: bool) -> str:
+    """A clangd user config of the workspace's own (through XDG_CONFIG_HOME, outside the worktree): the extra include
+    folders, and without a compile_commands.json (nothing built: clangd would guess bare flags and flood Problems with
+    false errors, 'ATen/Functions.h' not found …) also the checkout's usual include roots and no diagnostics. The XDG dir."""
     parent, name = wt.rstrip("/").rsplit("/", 1)
     xdg = f"{parent}/.waw-clangd/{name}"
-    script = ('set -e; wt="$1"; d="$2/clangd"; mkdir -p "$d"; inc="-I$wt"; '
-              'for s in aten/src torch/csrc/api/include include src; do [ -d "$wt/$s" ] && inc="$inc, -I$wt/$s"; done; '
-              'printf "CompileFlags:\\n  Add: [-std=c++17, %s]\\nDiagnostics:\\n  Suppress: \\"*\\"\\n  ClangTidy:\\n    Remove: \\"*\\"\\n'
-              '  UnusedIncludes: None\\n  MissingIncludes: None\\n" "$inc" > "$d/config.yaml"')
-    rc, _, err = await t.run(["sh", "-c", script, "sh", wt, xdg], timeout=30)
+    flags = [f"-I{p}" for p in extra]
+    if not cdb:
+        rc, out, _ = await t.run(["sh", "-c", 'for s in . aten/src torch/csrc/api/include include src; do [ -d "$1/$s" ] && echo "$s"; done', "sh", wt], timeout=30)
+        roots = [s for s in out.split() if s]
+        flags = ["-std=c++17", *flags, *[f"-I{wt}" if r == "." else f"-I{wt}/{r}" for r in roots]]
+    lines = ["CompileFlags:", f"  Add: [{', '.join(json.dumps(f) for f in flags)}]"]
+    if not cdb:
+        lines += ["Diagnostics:", '  Suppress: "*"', "  ClangTidy:", '    Remove: "*"', "  UnusedIncludes: None", "  MissingIncludes: None"]
+    rc, _, err = await t.run(["sh", "-c", 'mkdir -p "$1/clangd" && cat > "$1/clangd/config.yaml"', "sh", xdg], timeout=30,
+                             stdin=("\n".join(lines) + "\n").encode())
     if rc != 0:
-        log.warning("clangd fallback config in %s failed: %s", xdg, err)
-    return xdg, ("No compile_commands.json in this worktree yet (it has not been built), so C/C++ errors are not shown: "
-                 "without the real compile flags and generated headers they would be false. Go to definition, hover and "
-                 "completion still work from the source. Build once (or set the compile_commands.json folder in the "
-                 "workspace settings) and reopen the file for full checking.")
+        log.warning("clangd config in %s failed: %s", xdg, err)
+    return xdg
+
+
+NO_CDB_NOTE = ("No compile_commands.json in this worktree yet (it has not been built), so C/C++ errors are not shown: "
+               "without the real compile flags and generated headers they would be false. Go to definition, hover and "
+               "completion still work from the source (add include folders in the workspace settings if headers are not "
+               "found). Build once (or set the compile_commands.json folder in the workspace settings) and reopen the file "
+               "for full checking.")
 
 
 async def server_command(t: Target, row: Any, lang: str) -> tuple[list[str] | None, str | None]:
@@ -114,10 +139,14 @@ async def server_command(t: Target, row: Any, lang: str) -> tuple[list[str] | No
         rc, out, _ = await t.run(["sh", "-c", script], timeout=30)
         found = out.strip().splitlines()[0] if rc == 0 and out.strip() else None
         args = [exe, "--background-index", "--header-insertion=never", "--pch-storage=memory", "--log=error"]
-        if found:
+        extra = include_paths(cfg, wt)
+        if found and not extra:
             return [*args, "--clang-tidy", f"--compile-commands-dir={found}"], None
-        xdg, note = await _cpp_without_cdb(t, wt)
-        return ["env", f"XDG_CONFIG_HOME={xdg}", *args, "--enable-config"], note
+        xdg = await _clangd_config(t, wt, extra, cdb=bool(found))
+        env = ["env", f"XDG_CONFIG_HOME={xdg}"]
+        if found:
+            return [*env, *args, "--enable-config", "--clang-tidy", f"--compile-commands-dir={found}"], None
+        return [*env, *args, "--enable-config"], NO_CDB_NOTE
     if lang == "python":
         if cfg.get("python_lsp"):
             exe = cfg["python_lsp"]

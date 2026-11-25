@@ -3373,6 +3373,14 @@ test("PR Development: view the code of the main branch, Alt+← / Alt+→ betwee
   await page.getByTestId("dev-create").click();
   await expect(page.getByTestId("dev-branch-button")).toContainText("viewing main", { timeout: 20000 });
   await expect(page.getByTestId("webide")).toBeVisible({ timeout: 20000 });
+  // C/C++ include folders in the workspace settings: saved and shown again
+  await page.getByTestId("dev-settings").click();
+  await page.getByTestId("dev-set-include_paths").fill("third_party/fmt/include\n/opt/sdk/include");
+  await page.getByTestId("dev-settings-save").click();
+  await expect(page.getByTestId("dev-settings-dialog")).toHaveCount(0);
+  await page.getByTestId("dev-settings").click();
+  await expect(page.getByTestId("dev-set-include_paths")).toHaveValue("third_party/fmt/include\n/opt/sdk/include");
+  await page.locator('[data-testid="dev-settings-dialog"] .modal-head button').click();
   // back / forward between files
   await page.locator('[data-testid="webide-tree-item"][data-path="lib.py"]').click();
   await expect(page.locator('[data-testid="webide-tab"][data-path="lib.py"]')).toHaveAttribute("aria-selected", "true");
@@ -3405,6 +3413,15 @@ test("PR Development: view the code of the main branch, Alt+← / Alt+→ betwee
   await expect(uml.locator('[data-testid="uml-self"]')).toContainText("area()");
   await expect(uml.locator('[data-testid="uml-child"][data-name="Circle"]')).toBeVisible();
   await expect(uml.locator('[data-testid="uml-user"][data-name="Canvas"]')).toBeVisible();
+  // test classes are left out by default; "Test classes" shows them
+  await expect(uml.getByTestId("uml-loading")).toHaveCount(0, { timeout: 20000 });
+  await expect(uml.locator('[data-name="TestShape"]')).toHaveCount(0);
+  await expect(uml.getByTestId("uml-hidden-tests")).toContainText("1 test class hidden");
+  await uml.getByTestId("uml-tests").check();
+  await expect(uml.locator('[data-testid="uml-child"][data-name="TestShape"]')).toBeVisible({ timeout: 20000 });
+  await uml.getByTestId("uml-tests").uncheck();
+  await expect(uml.locator('[data-testid="uml-child"][data-name="Circle"]')).toBeVisible({ timeout: 20000 });
+  await expect(uml.locator('[data-name="TestShape"]')).toHaveCount(0);
   // the diagram grows in place: ⊕ on Circle adds its derived class Ring (a grandchild of Shape)
   await expect(uml.locator('[data-name="Ring"]')).toHaveCount(0);
   await expect(uml.getByTestId("uml-loading")).toHaveCount(0, { timeout: 20000 });

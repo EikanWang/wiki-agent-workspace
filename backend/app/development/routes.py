@@ -972,6 +972,7 @@ class UmlIn(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     path: str | None = Field(None, max_length=4096)  # the file it was asked from: its definition there wins
     parts: list[str] | None = Field(None, max_length=4)  # class / parents / children / users; default: all
+    tests: bool = False  # also test classes / files (left out by default)
     at_path: str | None = Field(None, max_length=4096)  # the class's definition when already known (no search)
     at_line: int | None = Field(None, ge=1)
 
@@ -986,4 +987,4 @@ async def uml_diagram(dev_id: str, body: UmlIn, ctx: AppContext = Depends(requir
     if not parts <= set(PARTS):
         raise bad_request(f"parts are {', '.join(PARTS)}", "INVALID_PARTS")
     at = (norm_rel(body.at_path), body.at_line) if body.at_path and body.at_line else None
-    return await Uml(_files(ctx, dev_id)).diagram(body.root, body.name.strip(), body.path, parts, at)
+    return await Uml(_files(ctx, dev_id)).diagram(body.root, body.name.strip(), body.path, parts, at, body.tests)

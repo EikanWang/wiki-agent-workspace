@@ -149,6 +149,15 @@ export default function WebIde({ dev, completionEnabled, refreshKey, onAsk, thre
       if (c) void c.whenReady().then(() => c.open(m));
     }
   };
+  // clangd's flags come from the workspace settings: restart it when they change
+  const cppFlags = `${dev.settings.include_paths ?? ""}|${dev.settings.compile_commands_dir ?? ""}|${dev.settings.clangd ?? ""}`;
+  const cppFlagsSeen = useRef(cppFlags);
+  useEffect(() => {
+    if (cppFlagsSeen.current === cppFlags) return;
+    cppFlagsSeen.current = cppFlags;
+    if (lsps.current.has("cpp")) restartLsp("cpp");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cppFlags]);
 
   // ---------------------------------------------------------------- models
   const loadModel = useCallback(async (root: string, rel: string): Promise<{ model: M.editor.ITextModel | null; binary: boolean }> => {

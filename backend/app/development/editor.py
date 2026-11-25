@@ -219,6 +219,11 @@ class EditorManager:
         if ccd:
             clangd_args.insert(0, f"--compile-commands-dir={ccd if ccd.startswith('/') else f'{wt}/{ccd}'}")
         settings["clangd.arguments"] = clangd_args
+        from .lsp import include_paths
+
+        extra = include_paths(cfg, wt)
+        if extra:  # used where the compile database has no entry (headers, new files) or there is none
+            settings["clangd.fallbackFlags"] = [f"-I{p}" for p in extra]
         if cfg.get("clangd"):
             settings["clangd.path"] = cfg["clangd"]
         if cfg.get("python"):
