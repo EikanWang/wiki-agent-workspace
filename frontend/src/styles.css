@@ -1733,3 +1733,37 @@ a.ref-path code { text-decoration: underline dotted; }
   --vscode-shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.3);
   --vscode-keybindingLabel-foreground: inherit;
 }
+
+/* PR Development: UML class diagram */
+.uml-modal { width: min(1400px, 96vw); height: min(900px, 92vh); max-width: none; display: flex; flex-direction: column; }
+.uml-modal .modal-head { gap: 8px; }
+.uml-legend { padding: 2px 4px 6px; }
+.uml-canvas { flex: 1; min-height: 0; overflow: auto; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); }
+.uml-svg { display: block; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.uml-box { cursor: pointer; }
+.uml-box rect { fill: var(--card); stroke: light-dark(#7a869a, #8b949e); stroke-width: 1.2; }
+.uml-box.self rect { fill: light-dark(#fff8db, #3a3216); stroke: light-dark(#b08800, #d4a72c); stroke-width: 2; }
+.uml-box.parent rect { fill: light-dark(#eef4ff, #1c2a40); }
+.uml-box.child rect { fill: light-dark(#effaf1, #1b3324); }
+.uml-box.user rect { fill: light-dark(#f6f7f9, #23262b); stroke-dasharray: 4 3; }
+.uml-box.missing rect { stroke-dasharray: 2 3; opacity: 0.7; }
+.uml-box:hover rect { stroke: var(--primary); stroke-width: 2; }
+.uml-box line { stroke: light-dark(#7a869a, #8b949e); }
+.uml-box text { fill: currentColor; font-size: 12px; }
+.uml-title { font-weight: 700; }
+.uml-sub { font-size: 10px !important; opacity: 0.65; }
+.uml-member.method { opacity: 0.95; }
+.uml-member.field { font-style: italic; }
+.uml-edge { fill: none; stroke: light-dark(#5b6475, #9aa4b2); stroke-width: 1.3; }
+.uml-edge.use { stroke-dasharray: 5 4; opacity: 0.75; }
+.uml-tri { fill: var(--bg); stroke: light-dark(#5b6475, #9aa4b2); stroke-width: 1; }
+.uml-open { fill: none; stroke: light-dark(#5b6475, #9aa4b2); stroke-width: 1.3; }
+.webide-nav { display: inline-flex; gap: 2px; }
+.uml-box.other rect { fill: light-dark(#f8f5ff, #2a2338); }
+.uml-expand rect { fill: var(--bg); stroke: var(--primary); stroke-width: 1.2; stroke-dasharray: none !important; }
+.uml-expand text { fill: var(--primary) !important; font-weight: 700; font-size: 13px !important; }
+.uml-expand:hover rect { fill: var(--primary); }
+.uml-expand:hover text { fill: #fff !important; }
+.uml-box.busy rect { stroke: var(--primary); stroke-dasharray: 3 3; }
+.uml-spin { font-size: 11px !important; }
+.uml-loading { color: var(--primary); }

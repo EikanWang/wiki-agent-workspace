@@ -443,6 +443,8 @@ def main() -> None:
     (src / "CMakeLists.txt").write_text("cmake_minimum_required(VERSION 3.16)\nproject(p CXX)\n")
     (src / "pyproject.toml").write_text("[project]\nname = 'p'\n")
     (src / "lib.py").write_text("def add(a, b):\n    return a + b\n")
+    (src / "shapes.py").write_text("class Shape:\n    sides: int = 0\n\n    def area(self):\n        return 0\n\n\nclass Circle(Shape):\n    pass\n\n\n"
+                                   "class Canvas:\n    def draw(self, s: Shape):\n        return s.area()\n\n\nclass Ring(Circle):\n    pass\n")
     (src / "doc.md").write_text("# Design notes\n\nThe add function must be commutative.\n\nSee [the code](lib.py) and [details](#details).\n\n## Details\n\nMore text here.\n")
     (src / "tools").mkdir()
     (src / "tools" / "defs.bzl").write_text("def my_macro(name):\n    pass\n")

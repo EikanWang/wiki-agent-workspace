@@ -111,6 +111,18 @@ async function ensureThreadList(page: Page) {
 
 test.describe.configure({ mode: "serial" });
 
+/** The worktree of the "feature/e2e" workspace (other workspaces' worktrees have the same files). */
+function e2eWorktree(root: string): string {
+  const cp = require("child_process") as typeof import("child_process");
+  return fs.readdirSync(root).map((d) => path.join(root, d)).find((d) => {
+    try {
+      return cp.execFileSync("git", ["-C", d, "rev-parse", "--abbrev-ref", "HEAD"], { encoding: "utf-8" }).trim() === "feature/e2e";
+    } catch {
+      return false;
+    }
+  })!;
+}
+
 test("A3: unauthenticated UI shows login; one login then repeated actions without prompts", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByTestId("login-token")).toBeVisible();
@@ -3349,6 +3361,74 @@ test("a reload (or closing the browser) brings back what was shown: view, PR tab
   await signOut(page);
 });
 
+test("PR Development: view the code of the main branch, Alt+← / Alt+→ between places, a UML class diagram", async ({ page }) => {
+  const src = fs.readFileSync(`/tmp/waw-e2e-devsrc-${E2E_PORT}`, "utf-8").trim();
+  await login(page);
+  await page.getByTestId("activity-development").click();
+  await page.getByTestId("dev-new").click();
+  // View code: no pull request, no new branch
+  await page.getByTestId("dev-mode-view").click();
+  await expect(page.getByTestId("dev-branch")).toHaveCount(0);
+  await page.getByTestId("dev-source").fill(src);
+  await page.getByTestId("dev-create").click();
+  await expect(page.getByTestId("dev-branch-button")).toContainText("viewing main", { timeout: 20000 });
+  await expect(page.getByTestId("webide")).toBeVisible({ timeout: 20000 });
+  // back / forward between files
+  await page.locator('[data-testid="webide-tree-item"][data-path="lib.py"]').click();
+  await expect(page.locator('[data-testid="webide-tab"][data-path="lib.py"]')).toHaveAttribute("aria-selected", "true");
+  await page.locator('[data-testid="webide-tree-item"][data-path="shapes.py"]').click();
+  const shapes = page.locator('[data-testid="webide-tab"][data-path="shapes.py"]');
+  await expect(shapes).toHaveAttribute("aria-selected", "true");
+  await page.locator(".monaco-editor .view-lines").click();
+  await page.keyboard.press("Alt+ArrowLeft");
+  await expect(page.locator('[data-testid="webide-tab"][data-path="lib.py"]')).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByTestId("webide-nav-forward")).toBeEnabled();
+  await page.keyboard.press("Alt+ArrowRight");
+  await expect(shapes).toHaveAttribute("aria-selected", "true");
+  await page.getByTestId("webide-nav-back").click();
+  await expect(page.locator('[data-testid="webide-tab"][data-path="lib.py"]')).toHaveAttribute("aria-selected", "true");
+  await page.getByTestId("webide-nav-forward").click();
+  await expect(shapes).toHaveAttribute("aria-selected", "true");
+  // UML class diagram from the editor's context menu, on "Shape" in `class Circle(Shape):`
+  await page.keyboard.press("Control+Home");
+  for (let i = 0; i < 7; i++) await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Home");
+  for (let i = 0; i < 15; i++) await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("Shift+F10");
+  const item = await page.getByRole("menuitem", { name: /Show UML Class Diagram/ }).boundingBox();
+  await page.mouse.move(item!.x + 20, item!.y + item!.height / 2);
+  await page.waitForTimeout(200);
+  await page.mouse.down();
+  await page.mouse.up();
+  const uml = page.getByTestId("uml-diagram");
+  await expect(uml.getByTestId("uml-self")).toHaveAttribute("data-name", "Shape", { timeout: 20000 });
+  await expect(uml.locator('[data-testid="uml-self"]')).toContainText("area()");
+  await expect(uml.locator('[data-testid="uml-child"][data-name="Circle"]')).toBeVisible();
+  await expect(uml.locator('[data-testid="uml-user"][data-name="Canvas"]')).toBeVisible();
+  // the diagram grows in place: ⊕ on Circle adds its derived class Ring (a grandchild of Shape)
+  await expect(uml.locator('[data-name="Ring"]')).toHaveCount(0);
+  await expect(uml.getByTestId("uml-loading")).toHaveCount(0, { timeout: 20000 });
+  await uml.locator('[data-testid="uml-child"][data-name="Circle"]').getByTestId("uml-expand").click();
+  await expect(uml.locator('[data-testid="uml-child"][data-name="Ring"]')).toBeVisible({ timeout: 20000 });
+  await expect(uml.getByTestId("uml-self")).toHaveAttribute("data-name", "Shape"); // still Shape's diagram
+  await expect(uml.locator('[data-testid="uml-child"][data-name="Circle"]')).toHaveAttribute("data-expanded", "1");
+  // Reset: back to Shape alone; Expand all: every class shown is expanded
+  await uml.getByTestId("uml-reset").click();
+  await expect(uml.locator('[data-testid="uml-child"][data-name="Circle"]')).toBeVisible({ timeout: 20000 });
+  await expect(uml.locator('[data-name="Ring"]')).toHaveCount(0);
+  await expect(uml.getByTestId("uml-loading")).toHaveCount(0, { timeout: 20000 });
+  await uml.getByTestId("uml-expand-all").click();
+  await expect(uml.locator('[data-testid="uml-child"][data-name="Ring"]')).toBeVisible({ timeout: 20000 });
+  await expect(uml.getByTestId("uml-loading")).toHaveCount(0, { timeout: 20000 });
+  // double-click expands too (here: Ring, which has nothing more)
+  await uml.locator('[data-testid="uml-child"][data-name="Ring"]').dblclick();
+  await expect(uml).toBeVisible();
+  // a click opens the source
+  await uml.locator('[data-testid="uml-user"][data-name="Canvas"]').click();
+  await expect(uml).toHaveCount(0);
+  await expect(page.getByTestId("webide-status")).toContainText("Ln 12");
+});
+
 test("PR Development: new branch workspace, the web editor and the VS Code option, the agent with the wiki, build/test, commit", async ({ page }) => {
   const src = fs.readFileSync(`/tmp/waw-e2e-devsrc-${E2E_PORT}`, "utf-8").trim();
   await login(page);
@@ -3371,7 +3451,7 @@ test("PR Development: new branch workspace, the web editor and the VS Code optio
   await expect(page.locator('[data-testid="webide-tab"][data-path="lib.py"] .webide-tab-close')).toHaveAttribute("data-dirty", "1");
   await page.keyboard.press("Control+s");
   await expect(page.locator('[data-testid="webide-tab"][data-path="lib.py"] .webide-tab-close')).toHaveAttribute("data-dirty", "0");
-  const devWt = fs.readdirSync(path.join(src, "..", "worktrees")).map((d) => path.join(src, "..", "worktrees", d)).find((d) => fs.existsSync(path.join(d, "lib.py")))!;
+  const devWt = e2eWorktree(path.join(src, "..", "worktrees"));
   expect(fs.readFileSync(path.join(devWt, "lib.py"), "utf-8")).toContain("EDITED = True");
   // a change on disk (agent, terminal) shows up in a clean tab
   fs.appendFileSync(path.join(devWt, "lib.py"), "FROM_DISK = 1\n");
@@ -3601,7 +3681,7 @@ test("PR Development: chat about any type of file — text, image, binary", asyn
   // a PDF: shown with PDF.js; a page is discussed with its picture
   const src = fs.readFileSync(`/tmp/waw-e2e-devsrc-${E2E_PORT}`, "utf-8").trim();
   const wtRoot = path.join(src, "..", "worktrees");
-  const devWt = fs.readdirSync(wtRoot).map((d) => path.join(wtRoot, d)).find((d) => fs.existsSync(path.join(d, "lib.py")))!;
+  const devWt = e2eWorktree(wtRoot);
   const cp = require("child_process") as typeof import("child_process");
   cp.execFileSync(path.resolve(__dirname, "../../.venv/bin/python"), [path.resolve(__dirname, "../fixtures/make_pdf.py"), path.join(devWt, "spec.pdf"), "Timing of the cache", "Second page"]);
   await page.locator('[data-testid="webide-explorer"] button[title="Refresh"]').click();
@@ -3628,7 +3708,7 @@ test("PR Development: chat about any type of file — text, image, binary", asyn
 
 test("PR Development: Changes view like the wiki's Diff: per-file diffs, side by side, more context, ask about lines, open in editor, commit picked files, a commit's changes", async ({ page }) => {
   const src = fs.readFileSync(`/tmp/waw-e2e-devsrc-${E2E_PORT}`, "utf-8").trim();
-  const devWt = fs.readdirSync(path.join(src, "..", "worktrees")).map((d) => path.join(src, "..", "worktrees", d)).find((d) => fs.existsSync(path.join(d, "lib.py")))!;
+  const devWt = e2eWorktree(path.join(src, "..", "worktrees"));
   const cp = require("child_process") as typeof import("child_process");
   await login(page);
   await page.getByTestId("activity-development").click();

@@ -182,7 +182,7 @@ export default function DevView({ devId, workspaces, sessions, onSessionsChanged
         <span className="branch-anchor">
           {dev.mode === "pr" ? <span className="chip mono" title={`worktree ${dev.worktree_path}`}>{dev.branch}</span> : (
             <button className="chip chip-btn mono" onClick={() => setBranchMenu((v) => !v)} disabled={dev.status !== "ready"}
-              title={`${dev.mode === "folder" ? "folder" : "worktree"} ${dev.worktree_path}\nCreate a branch or switch to another`} data-testid="dev-branch-button">⎇ {dev.branch} ▾</button>
+              title={`${dev.mode === "folder" ? "folder" : "worktree"} ${dev.worktree_path}\nCreate a branch or switch to another`} data-testid="dev-branch-button">⎇ {dev.branch === "HEAD" && dev.base_ref ? `viewing ${dev.base_ref}` : dev.branch} ▾</button>
           )}
           {branchMenu && <BranchMenu dev={dev} onClose={() => setBranchMenu(false)} onDone={(m) => { setBranchMenu(false); void load(); setRefresh((n) => n + 1); setErr(null); if (m) setNote(m); }} />}
         </span>

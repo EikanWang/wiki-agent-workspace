@@ -28,7 +28,7 @@ export default function DevSetupDialog({ info, workspaces, preset, onClose, onCr
   onCreated: (d: DevWorkspace) => void;
 }) {
   const [host, setHost] = useState(() => localStorage.getItem("waw.devHost") || "local");
-  const [mode, setMode] = useState<"branch" | "pr" | "folder">(preset.mode ?? "branch");
+  const [mode, setMode] = useState<"branch" | "view" | "pr" | "folder">(preset.mode ?? "branch");
   const [initGit, setInitGit] = useState(true);
   const [source, setSource] = useState("");
   const [branch, setBranch] = useState("");
@@ -77,9 +77,10 @@ export default function DevSetupDialog({ info, workspaces, preset, onClose, onCr
       if (build.trim()) settings.build_command = build.trim();
       if (test.trim()) settings.test_command = test.trim();
       const d = await post<DevWorkspace>("/dev/workspaces", {
-        host, source_repo: cloning ? "" : source.trim(), mode,
+        host, source_repo: cloning ? "" : source.trim(), mode: mode === "view" ? "branch" : mode, // view: no branch, detached
         clone_url: cloning ? (cloneUrl.trim() || defaultUrl) : undefined, name: name.trim() || undefined,
-        branch: mode !== "pr" ? branch.trim() || undefined : undefined, base: mode === "branch" ? base.trim() || undefined : undefined,
+        branch: mode === "branch" || mode === "folder" ? branch.trim() || undefined : undefined,
+        base: mode === "branch" || mode === "view" ? base.trim() || undefined : undefined,
         init_git: mode === "folder" ? initGit : undefined,
         github_repo: mode === "pr" ? pr!.repo : repo.trim() || undefined, pr_number: mode === "pr" ? pr!.number : undefined,
         wiki_workspace_id: wiki || undefined, settings,
@@ -95,7 +96,7 @@ export default function DevSetupDialog({ info, workspaces, preset, onClose, onCr
     }
   };
 
-  const ready = (cloning ? !!(cloneUrl.trim() || defaultUrl) : !!source.trim()) && (mode === "pr" ? !!pr : mode === "folder" ? true : !!branch.trim());
+  const ready = (cloning ? !!(cloneUrl.trim() || defaultUrl) : !!source.trim()) && (mode === "pr" ? !!pr : mode === "folder" || mode === "view" ? true : !!branch.trim());
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal dev-setup" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="New development workspace" data-testid="dev-setup">
@@ -116,6 +117,8 @@ export default function DevSetupDialog({ info, workspaces, preset, onClose, onCr
           <span className="label">Work on</span>
           <span className="mode-switch" role="tablist">
             <button role="tab" aria-selected={mode === "branch"} className={mode === "branch" ? "active" : ""} onClick={() => setMode("branch")} data-testid="dev-mode-branch">New branch</button>
+            <button role="tab" aria-selected={mode === "view"} className={mode === "view" ? "active" : ""} onClick={() => setMode("view")}
+              title="Read the code of the main branch (or any branch, tag or commit) without a pull request or a new branch; you can create a branch later" data-testid="dev-mode-view">View code</button>
             <button role="tab" aria-selected={mode === "pr"} className={mode === "pr" ? "active" : ""} onClick={() => setMode("pr")} data-testid="dev-mode-pr">Existing pull request</button>
             <button role="tab" aria-selected={mode === "folder"} className={mode === "folder" ? "active" : ""} onClick={() => setMode("folder")} title="A Git checkout or any folder, used as it is" data-testid="dev-mode-folder">Local folder</button>
           </span>
@@ -125,6 +128,13 @@ export default function DevSetupDialog({ info, workspaces, preset, onClose, onCr
             <span className="label">Branch to create there (optional)</span>
             <input value={branch} onChange={(e) => setBranch(e.target.value)} placeholder="keep the current branch; you can create one later" data-testid="dev-branch" />
           </label>
+        ) : mode === "view" ? (
+          <div className="dev-pair">
+            <label className="dev-field grow"><span className="label">Branch, tag or commit to view</span>
+              <input value={base} onChange={(e) => setBase(e.target.value)} placeholder="the default branch (e.g. main), fetched fresh" data-testid="dev-view-ref" /></label>
+            <label className="dev-field grow"><span className="label">GitHub repository</span>
+              <input value={repo} onChange={(e) => setRepo(e.target.value)} placeholder="detected from origin" /></label>
+          </div>
         ) : mode === "pr" ? (
           <label className="dev-field">
             <span className="label">Pull request</span>

@@ -456,6 +456,10 @@ write code with the agent — a new pull request, or changes to an existing one.
   Development** in a PR tab fills this in. Or a *Local folder*: a Git checkout or any folder, used **as it is** — no
   worktree of its own, so its files and branch change (optionally a branch to create there right away; a folder not
   in a Git repository is made one with `git init` unless you untick it). Archiving never deletes that folder.
+  Or *View code*: read the code of the main branch (or any branch, tag or commit you give) with no pull request
+  and no new branch — a worktree of its own, detached at the remote's default branch, fetched first so it is
+  current (the toolbar shows ⎇ *viewing origin/main*). When you want to change something, the branch chip creates a
+  branch from there.
 - **My pull requests** — at the top of the sidebar, above the workspaces: your pull requests (author: the server's `gh`
   login), **grouped by repository**, each group showing its local folder (📁 path · current branch). The groups are
   the repositories you develop here plus any you add — by name (`owner/repo`, **Add**) or from a local checkout
@@ -509,6 +513,17 @@ Each workspace has one of two editors (switch with the **Web editor / VS Code** 
   definition / declaration / type / implementation (`F12`, also into other files), references (`Shift+F12`),
   rename (`F2`), outline (`Ctrl+Shift+O`), format, quick fixes (`Ctrl+.`) and diagnostics. The status-bar item shows
   the server's state; click it to restart. When none is installed it says what to install.
+- **Back / forward**: `Alt+←` goes back to where you were before a jump — another file, go to definition or
+  references, a search hit, a problem, a jump far in the same file — and `Alt+→` forward again (also **← →** at the
+  left of the status bar).
+- **UML class diagram**: right-click a class name → *Show UML Class Diagram* (or `F1`). It shows the class with its
+  members (+ public, # protected, − private), its **parent classes** above (several levels), the classes that
+  **derive from it** below and the classes or files that **use it** on the right (dashed, with the number of uses).
+  The class shows as soon as it is found; its parents, derived classes and users are added as each search finishes
+  (⏳ in the title bar while some are still loading). **⊕** on a class (or a double-click) **expands it in the same
+  diagram** — its members, parents, derived classes and users are added — and **⊕ Expand all** does it for every
+  class shown; **Reset** goes back to the first class. Click a box to open its source; zoom with − / +. It is found by searching the worktree (C++, Python, Java, TypeScript, C#), not by a compiler: base lists
+  spread over many lines, macros and templates can be missed, and every class of the same name counts.
 - `Ctrl+S` saves; a save is refused when the file changed on disk since you opened it (agent, command, Git), and you
   choose to overwrite or reload. Files the agent or a command changes reload by themselves in clean tabs.
 - **Discuss code like a wiki passage**: select code and click **💬 Discuss** next to the selection (or

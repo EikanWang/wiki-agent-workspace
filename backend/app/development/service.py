@@ -433,7 +433,7 @@ class DevService:
                 raise bad_request("an existing pull request needs its repository (owner/name) and number", "INVALID_PR")
         else:
             br = (body.branch or "").strip()
-            if not valid_branch(br):
+            if br and not valid_branch(br):  # no branch: just view the code (detached at the base, e.g. the default branch)
                 raise bad_request("give a valid new branch name (letters, digits, - _ . /)", "INVALID_BRANCH")
             if body.github_repo and not _REPO.match(body.github_repo):
                 raise bad_request("repository must be owner/name", "INVALID_PR")
@@ -450,7 +450,7 @@ class DevService:
         dev_id = new_id()
         name = (body.name or "").strip() or (f"{body.github_repo}#{body.pr_number}" if body.mode == "pr"
                                               else source_abs.rstrip("/").rsplit("/", 1)[-1] or source_abs if body.mode == "folder"
-                                              else body.branch.strip())
+                                              else (body.branch or "").strip() or f"{source_abs.rstrip('/').rsplit('/', 1)[-1]} @ {(body.base or '').strip() or 'default branch'}")
         # the agent conversation: a hidden document of the reference wiki folder (or the primary folder)
         rt = self.ctx.workspaces.get(conv_ws) if self.ctx.workspaces else None
         docs = rt.docs if rt else self.ctx.documents
@@ -459,7 +459,8 @@ class DevService:
         stub = dev_snapshot_path(docs.snapshots_dir, norm)
         assert stub is not None
         stub.parent.mkdir(parents=True, exist_ok=True)
-        what = {"pr": "its Git worktree (existing pull request)", "branch": "its Git worktree (new branch)",
+        what = {"pr": "its Git worktree (existing pull request)", "branch": "its Git worktree (new branch)" if (body.branch or "").strip()
+                else "its Git worktree (viewing the code, no branch yet)",
                 "folder": f"the folder {source_abs}"}[body.mode]
         stub.write_text(f"# {name}\n\nPR Development workspace — the agent works in {what} with the wiki folder as reference.\n",
                         encoding="utf-8")
@@ -536,6 +537,19 @@ class DevService:
             if meta.get("isCrossRepository") and not meta.get("maintainerCanModify"):
                 fields["error"] = ("This PR comes from a fork that does not allow edits by maintainers: you can develop and "
                                    "test here, but pushing to its branch will be refused.")
+        elif not row.branch:  # view the code: a detached worktree at the base, by default the remote's default branch, fetched
+            base, note = await self._view_base(t, src, row.base_ref, "origin" if "origin" in remotes.split() else None)
+            rc, _, err = await t.git(src, ["worktree", "add", "--detach", wt, base], timeout=600)
+            if rc != 0:
+                raise ApiError(400, "WORKTREE_FAILED", f"git worktree add failed: {err.strip()[-400:]}")
+            if not github_repo:
+                rc, url, _ = await t.git(src, ["remote", "get-url", "origin"])
+                github_repo = parse_github_repo(url) if rc == 0 else None
+            remote = (origin_repo.get(github_repo.lower()) if github_repo else None) or ("origin" if "origin" in remotes.split() else None)
+            fields.update(branch="HEAD", base_ref=base, github_repo=github_repo, push_remote=remote, push_branch=None,
+                          **({"error": note} if note else {}))
+            if row.name.endswith("@ default branch"):
+                fields["name"] = f"{row.name.rsplit(' @ ', 1)[0]} @ {base.removeprefix('origin/')}"[:200]
         else:
             base = row.base_ref
             if not base:
@@ -552,6 +566,34 @@ class DevService:
             remote = (origin_repo.get(github_repo.lower()) if github_repo else None) or ("origin" if "origin" in remotes.split() else None)
             fields.update(base_ref=base, github_repo=github_repo, push_remote=remote, push_branch=row.branch)
         await self._finish(dev_id, t, wt, fields)
+
+    async def _view_base(self, t: Target, src: str, base: str | None, remote: str | None) -> tuple[str, str | None]:
+        """Where a view-only workspace starts: `base` (a branch is taken from the remote when it has it), else the
+        remote's default branch; fetched first so it is current. (ref, a note when the fetch failed)."""
+        if not base and remote:
+            rc, out, _ = await t.git(src, ["symbolic-ref", "--quiet", "--short", f"refs/remotes/{remote}/HEAD"])
+            name = out.strip().split("/", 1)[1] if rc == 0 and "/" in out.strip() else None
+            if not name:
+                rc, out, _ = await t.git(src, ["ls-remote", "--symref", remote, "HEAD"], timeout=120)
+                m = re.search(r"ref: refs/heads/(\S+)\s+HEAD", out)
+                name = m.group(1) if m else None
+            if not name:
+                for cand in ("main", "master"):
+                    if (await t.git(src, ["rev-parse", "--verify", "--quiet", f"refs/remotes/{remote}/{cand}"]))[0] == 0:
+                        name = cand
+                        break
+            base = name
+        if not base:
+            _, cur, _ = await t.git(src, ["symbolic-ref", "--quiet", "--short", "HEAD"])
+            return cur.strip() or "HEAD", None
+        branch = base.removeprefix(f"{remote}/") if remote else base
+        if remote and valid_branch(branch):
+            rc, _, err = await t.git(src, ["fetch", "--no-tags", "--quiet", remote, f"+refs/heads/{branch}:refs/remotes/{remote}/{branch}"], timeout=900)
+            if rc == 0:
+                return f"{remote}/{branch}", None
+            if (await t.git(src, ["rev-parse", "--verify", "--quiet", f"refs/remotes/{remote}/{branch}"]))[0] == 0:
+                return f"{remote}/{branch}", f"Could not fetch {branch} from {remote}; showing the last fetched copy: {err.strip()[-200:]}"
+        return base, None
 
     async def _provision_folder(self, dev_id: str, init_git: bool) -> None:
         """Work in the given folder itself: a Git checkout (its top folder), or a folder made a repository (git init).

@@ -1384,3 +1384,86 @@ async def test_clangd_without_compile_commands_gets_include_roots_and_no_false_e
     (wt / "build" / "compile_commands.json").write_text("[]")
     argv, note = await server_command(LocalTarget(), row, "cpp")
     assert argv[0] == str(clangd) and f"--compile-commands-dir={wt}/build" in argv and "--clang-tidy" in argv and note is None
+
+
+async def test_view_code_workspace_is_detached_at_the_fetched_default_branch(running_app, dev_settings, tmp_path, fake_env):
+    h = await running_app(dev_settings)
+    api = h.api
+    src, bare = make_source(tmp_path)
+    git(src, "remote", "set-head", "origin", "main")
+    # main moves on in the remote after the checkout was made: viewing fetches it
+    other = tmp_path / "other"
+    subprocess.run(["git", "clone", "-q", str(bare), str(other)], check=True)
+    git(other, "config", "user.email", "o@e")
+    git(other, "config", "user.name", "O")
+    (other / "new.py").write_text("x = 1\n")
+    git(other, "add", "-A")
+    git(other, "commit", "-q", "-m", "upstream")
+    git(other, "push", "-q", "origin", "main")
+    r = await api.post("/api/v1/dev/workspaces", json={"host": "local", "source_repo": str(src), "mode": "branch"})
+    assert r.status_code == 201, r.text
+    d = await wait_ready(api, r.json()["id"])
+    assert d["status"] == "ready", d
+    assert d["branch"] == "HEAD" and d["base_ref"] == "origin/main" and d["name"] == "src @ main" and not d.get("error")
+    wt = Path(d["worktree_path"])
+    assert (wt / "new.py").exists()  # the fetched main, not the stale local one
+    assert git(wt, "rev-parse", "--abbrev-ref", "HEAD") == "HEAD"  # detached: no branch was created
+    assert "feature" not in git(src, "branch", "--list")
+    # a branch can be made from it later
+    r = await api.post(f"/api/v1/dev/workspaces/{d['id']}/branch", json={"name": "fix/y", "create": True})
+    assert r.status_code == 200, r.text
+    assert git(wt, "rev-parse", "--abbrev-ref", "HEAD") == "fix/y"
+    # or a given branch / tag / commit
+    r = await api.post("/api/v1/dev/workspaces", json={"host": "local", "source_repo": str(src), "mode": "branch", "base": "main"})
+    d2 = await wait_ready(api, r.json()["id"])
+    assert d2["status"] == "ready" and d2["base_ref"] == "origin/main" and d2["branch"] == "HEAD"
+
+
+async def test_uml_class_diagram_parents_children_members_and_users(running_app, dev_settings, tmp_path, fake_env):
+    h = await running_app(dev_settings)
+    api = h.api
+    src, _ = make_source(tmp_path)
+    (src / "shapes.h").write_text(
+        "struct Base { virtual ~Base(); };\n"
+        "class Shape;\n"
+        "class Shape : public Base {\n"
+        " public:\n"
+        "  virtual double area() const = 0;\n"
+        "  int id() const { return id_; }\n"
+        " private:\n"
+        "  int id_ = 0;\n"
+        "};\n"
+        "class Circle final : public Shape {\n public:\n  double area() const override;\n};\n"
+        "template <typename T>\nclass Boxed : public Shape, protected Other<T> {};\n")
+    (src / "draw.cc").write_text('#include "shapes.h"\nclass Canvas {\n  void draw(const Shape& s);\n  Shape* last_;\n};\nvoid free_fn(Shape* s) {}\n')
+    (src / "zoo.py").write_text("class Animal:\n    legs: int = 4\n    def speak(self, loud=False):\n        pass\n    def _secret(self):\n        pass\n\n"
+                               "class Dog(Animal, metaclass=Meta):\n    pass\n\nclass Kennel:\n    def add(self, a: Animal):\n        self.a = a\n")
+    git(src, "add", "-A")
+    git(src, "commit", "-q", "-m", "shapes")
+    d = await new_branch_ws(api, src, None)
+    u = (await api.post(f"/api/v1/dev/workspaces/{d['id']}/uml", json={"name": "Shape", "path": "draw.cc"})).json()
+    c = u["class"]
+    assert (c["path"], c["line"], c["kind"], c["bases"]) == ("shapes.h", 3, "class", ["Base"])  # not the forward declaration
+    assert [m["visibility"] + m["text"] for m in c["members"]] == ["+virtual double area() const", "+int id() const", "-int id_ = 0"]
+    assert [(p["name"], p["depth"], p["path"]) for p in u["parents"]] == [("Base", 1, "shapes.h")]
+    assert sorted(k["name"] for k in u["children"]) == ["Boxed", "Circle"]
+    users = {(x["name"], x["file"]) for x in u["users"]}
+    assert ("Canvas", False) in users and ("draw.cc", True) in users
+    assert not {"Shape", "Circle", "Boxed"} & {x["name"] for x in u["users"] if not x["file"]}
+    a = (await api.post(f"/api/v1/dev/workspaces/{d['id']}/uml", json={"name": "Animal"})).json()
+    assert a["class"]["path"] == "zoo.py" and a["class"]["bases"] == []
+    assert [m["visibility"] + m["text"] for m in a["class"]["members"]] == ["+legs: int", "+speak(loud)", "-_secret()"]
+    assert [k["name"] for k in a["children"]] == ["Dog"]
+    assert [x["name"] for x in a["users"]] == ["Kennel"]
+    dog = (await api.post(f"/api/v1/dev/workspaces/{d['id']}/uml", json={"name": "Dog"})).json()
+    assert dog["class"]["bases"] == ["Animal"] and [p["name"] for p in dog["parents"]] == ["Animal"]  # metaclass= is not a base
+    # piece by piece (the page shows the class first): only the asked parts, from a known definition
+    one = (await api.post(f"/api/v1/dev/workspaces/{d['id']}/uml", json={"name": "Shape", "parts": ["class"]})).json()
+    assert one["class"]["line"] == 3 and len(one["class"]["members"]) == 3 and not {"parents", "children", "users"} & set(one)
+    kids = (await api.post(f"/api/v1/dev/workspaces/{d['id']}/uml", json={"name": "Shape", "parts": ["children"], "at_path": "shapes.h", "at_line": 3})).json()
+    assert sorted(k["name"] for k in kids["children"]) == ["Boxed", "Circle"] and "parents" not in kids and "members" not in kids["class"]
+    ups = (await api.post(f"/api/v1/dev/workspaces/{d['id']}/uml", json={"name": "Shape", "parts": ["parents"], "at_path": "shapes.h", "at_line": 3})).json()
+    assert [p["name"] for p in ups["parents"]] == ["Base"]
+    assert (await api.post(f"/api/v1/dev/workspaces/{d['id']}/uml", json={"name": "Shape", "parts": ["everything"]})).json()["error"]["code"] == "INVALID_PARTS"
+    assert (await api.post(f"/api/v1/dev/workspaces/{d['id']}/uml", json={"name": "Nope"})).json()["class"] is None
+    assert (await api.post(f"/api/v1/dev/workspaces/{d['id']}/uml", json={"name": "a b"})).json()["error"]

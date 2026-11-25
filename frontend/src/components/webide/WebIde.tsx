@@ -5,6 +5,7 @@ import { AgentSession, ApiError, DevWorkspace, Thread, get, post, put, subscribe
 import ModelChoice, { ModelChoiceValue } from "../ModelChoice";
 import { CodeAnchor, EditorFiles, FileRef, FileScope, anchorOf, scopeFiles } from "../DevAgentPanel";
 import { CORE_LSP, LSP_LANGS, LspClient, LspStatus } from "./lsp";
+import UmlDiagram from "./UmlDiagram";
 import { langFor, outline, registerLanguages } from "./languages";
 import MarkdownPreview from "./MarkdownPreview";
 import FileViewer, { viewerKind } from "./FileViewer";
@@ -34,6 +35,9 @@ interface Tab {
 }
 interface Hit { path: string; line: number; text: string }
 type Side = "explorer" | "search" | "problems";
+interface NavLoc { uri: string; line: number; col: number }
+const NAV_MAX = 100;
+const NAV_MIN_LINES = 5; // a cursor move this far (by a jump, not typing) is a place to come back to
 
 const isDark = () => window.matchMedia?.("(prefers-color-scheme: dark)").matches;
 
@@ -177,6 +181,53 @@ export default function WebIde({ dev, completionEnabled, refreshKey, onAsk, thre
     return { model, binary: false };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fileApi, lspFor]);
+  // back / forward through the places jumped between (Alt+← / Alt+→), as in VS Code: file switches, go to definition,
+  // references, search hits, problems — not ordinary cursor moves
+  const [uml, setUml] = useState<{ name: string; root: string; path: string | null } | null>(null);
+  const navBack = useRef<NavLoc[]>([]);
+  const navFwd = useRef<NavLoc[]>([]);
+  const navigating = useRef(false);
+  const [navTick, setNavTick] = useState(0);
+  const here = (): NavLoc | null => {
+    const ed = editorRef.current;
+    const m = ed?.getModel();
+    const p = ed?.getPosition();
+    return m && p ? { uri: m.uri.toString(), line: p.lineNumber, col: p.column } : null;
+  };
+  const recordNav = (loc: NavLoc | null = here()) => {
+    if (navigating.current || !loc) return;
+    const last = navBack.current[navBack.current.length - 1];
+    if (last && last.uri === loc.uri && last.line === loc.line) return;
+    navBack.current = [...navBack.current, loc].slice(-NAV_MAX);
+    navFwd.current = [];
+    setNavTick((n) => n + 1);
+  };
+  const goNav = async (dir: "back" | "fwd") => {
+    const from = dir === "back" ? navBack : navFwd;
+    const to = dir === "back" ? navFwd : navBack;
+    const cur = here();
+    while (from.current.length) {
+      const target = from.current[from.current.length - 1];
+      from.current = from.current.slice(0, -1);
+      const loc = locate(monaco.Uri.parse(target.uri));
+      if (!loc) continue;  // its root is gone
+      if (cur) to.current = [...to.current, cur].slice(-NAV_MAX);
+      navigating.current = true;
+      try {
+        await openRef.current(loc.root, loc.rel, { line: target.line, col: target.col });
+      } finally {
+        navigating.current = false;
+        setNavTick((n) => n + 1);
+      }
+      return;
+    }
+    setNavTick((n) => n + 1);
+  };
+  const goNavRef = useRef(goNav);
+  goNavRef.current = goNav;
+  const recordNavRef = useRef(recordNav);
+  recordNavRef.current = recordNav;
+
   const ensureModelRef = useRef<(u: M.Uri) => Promise<M.editor.ITextModel | null>>(async () => null);
   ensureModelRef.current = async (u: M.Uri) => {
     const existing = monaco.editor.getModel(u);
@@ -195,6 +246,7 @@ export default function WebIde({ dev, completionEnabled, refreshKey, onAsk, thre
     const model = monaco.editor.getModel(monaco.Uri.parse(uri));
     if (!ed) return;
     const cur = ed.getModel();
+    if (cur && (cur.uri.toString() !== uri || (at && Math.abs(at.line - (ed.getPosition()?.lineNumber ?? at.line)) >= NAV_MIN_LINES))) recordNav();
     if (cur && cur.uri.toString() !== uri) views.current.set(cur.uri.toString(), ed.saveViewState());
     if (model && cur !== model) {
       ed.setModel(model);
@@ -487,6 +539,26 @@ export default function WebIde({ dev, completionEnabled, refreshKey, onAsk, thre
       keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.KeyD], run: () => openDiscussRef.current(true) }));
     ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => { const u = activeRef.current; if (u) void saveRef.current(u); });
     ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyP, () => setQuick(true));
+    subs.push(ed.addAction({ id: "waw.uml", label: "Show UML Class Diagram", contextMenuGroupId: "navigation", contextMenuOrder: 100,
+      run: (e) => {
+        const m = e.getModel();
+        const pos = e.getPosition();
+        const w = m && pos ? m.getWordAtPosition(pos) : null;
+        if (!m || !w) return;
+        const loc = locate(m.uri);
+        setUml({ name: w.word, root: loc?.root ?? "wt", path: loc?.root === "wt" ? loc.rel : null });
+      } }));
+    subs.push(ed.addAction({ id: "waw.navBack", label: "Go Back", keybindings: [monaco.KeyMod.Alt | monaco.KeyCode.LeftArrow], run: () => void goNavRef.current("back") }));
+    subs.push(ed.addAction({ id: "waw.navForward", label: "Go Forward", keybindings: [monaco.KeyMod.Alt | monaco.KeyCode.RightArrow], run: () => void goNavRef.current("fwd") }));
+    let lastPos: NavLoc | null = null;
+    subs.push(ed.onDidChangeCursorPosition((e) => {
+      const m = ed.getModel();
+      if (!m) return;
+      const now = { uri: m.uri.toString(), line: e.position.lineNumber, col: e.position.column };
+      // a jump inside the file (go to definition / reference / bracket, Ctrl+G …): remember where it came from
+      if (lastPos && lastPos.uri === now.uri && /jump|navigation/.test(e.source) && Math.abs(lastPos.line - now.line) >= NAV_MIN_LINES) recordNavRef.current(lastPos);
+      lastPos = now;
+    }));
     ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyF, () => { setSide("search"); setSideOpen(true); });
     ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyB, () => setSideOpen((o) => !o));
     const action = (id: string, label: string, kind: string, preset: string | undefined, order: number, keys?: number[]) =>
@@ -861,6 +933,10 @@ export default function WebIde({ dev, completionEnabled, refreshKey, onAsk, thre
         </div>
       </div>
       <div className="webide-status" data-testid="webide-status">
+        <span className="webide-nav" data-tick={navTick}>
+          <button className="webide-status-btn" disabled={!navBack.current.length} onClick={() => void goNav("back")} title="Go back (Alt+←)" aria-label="Go back" data-testid="webide-nav-back">←</button>
+          <button className="webide-status-btn" disabled={!navFwd.current.length} onClick={() => void goNav("fwd")} title="Go forward (Alt+→)" aria-label="Go forward" data-testid="webide-nav-forward">→</button>
+        </span>
         <span title={dev.worktree_path}>⎇ {dev.branch}{Object.keys(gitStatus).length ? ` · ${Object.keys(gitStatus).length} changed` : ""}</span>
         <button className="webide-status-btn" onClick={() => { setSide("problems"); setSideOpen(true); }} title="Problems">✖ {errors} ▲ {warnings}</button>
         <span className="spacer" />
@@ -893,6 +969,8 @@ export default function WebIde({ dev, completionEnabled, refreshKey, onAsk, thre
           title="Discuss the selected code with the agent (Ctrl+Alt+D)" data-testid="webide-discuss-btn">💬 Discuss</button>
       )}
       {discuss && <DiscussComposer box={discuss} files={filesNow()} session={discussSession ? discussSession(discuss.anchor) : null} onCancel={() => { setDiscuss(null); editorRef.current?.focus(); }} onSend={sendDiscuss} />}
+      {uml && <UmlDiagram devId={dev.id} name={uml.name} path={uml.path} onClose={() => { setUml(null); editorRef.current?.focus(); }}
+        onOpen={(path, line) => { setUml(null); void openFile("wt", path, { line }); }} />}
       {quick && <QuickOpen devId={dev.id} roots={shownRoots} onClose={() => { setQuick(false); editorRef.current?.focus(); }} onOpen={(r, p) => { setQuick(false); void openFile(r, p); }} />}
     </div>
   );

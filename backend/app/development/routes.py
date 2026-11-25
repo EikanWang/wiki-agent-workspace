@@ -965,3 +965,25 @@ async def nav_references(dev_id: str, body: NavIn, ctx: AppContext = Depends(req
     from .nav import Nav
 
     return {"locations": await Nav(_files(ctx, dev_id)).references(body.root, body.word, body.language)}
+
+
+class UmlIn(BaseModel):
+    root: str = Field("wt", pattern="^(wt|wiki)$")
+    name: str = Field(min_length=1, max_length=200)
+    path: str | None = Field(None, max_length=4096)  # the file it was asked from: its definition there wins
+    parts: list[str] | None = Field(None, max_length=4)  # class / parents / children / users; default: all
+    at_path: str | None = Field(None, max_length=4096)  # the class's definition when already known (no search)
+    at_line: int | None = Field(None, ge=1)
+
+
+@router.post("/dev/workspaces/{dev_id}/uml")
+async def uml_diagram(dev_id: str, body: UmlIn, ctx: AppContext = Depends(require_auth)):
+    """A UML class diagram around a class: its members, parent classes, derived classes and users (or some of them)."""
+    from .files import norm_rel
+    from .uml import PARTS, Uml
+
+    parts = set(body.parts or PARTS)
+    if not parts <= set(PARTS):
+        raise bad_request(f"parts are {', '.join(PARTS)}", "INVALID_PARTS")
+    at = (norm_rel(body.at_path), body.at_line) if body.at_path and body.at_line else None
+    return await Uml(_files(ctx, dev_id)).diagram(body.root, body.name.strip(), body.path, parts, at)
