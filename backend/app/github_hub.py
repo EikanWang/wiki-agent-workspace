@@ -2912,6 +2912,95 @@ async def pr_file_content(owner: str, repo: str, number: int, path: str = Query(
     return {"path": path, "sha": sha, "lines": lines}
 
 
+def _nav_checkout(ctx: AppContext, repo: str, number: int, sha: str | None) -> tuple[str, str, str | None] | None:
+    """(checkout path, the PR head's ref there, its merge base) when the connected checkout has the PR's head."""
+    from .code_nav import commit_present
+    from .local_repos import get_link, sync_state
+
+    link = get_link(ctx, repo)
+    if link is None:
+        return None
+    st = sync_state(repo, number) or {}
+    if st.get("state") == "done" and (not sha or st.get("sha") == sha):
+        return link["path"], st["ref"], st.get("merge_base")
+    if sha and commit_present(link["path"], sha):
+        return link["path"], sha, st.get("merge_base")
+    return None
+
+
+@router.get("/github/pr/{owner}/{repo}/{number}/definition")
+async def pr_definition(owner: str, repo: str, number: int, symbol: str = Query(..., min_length=1, max_length=200),
+                        path: str | None = Query(None, max_length=4096), auth: tuple[AppContext, str] = Depends(require_owner)):
+    """Where `symbol` (clicked in the diff of `path`) is defined: the whole repository at the PR's head when the
+    connected local checkout has it (else at the merge base for names the PR removed), else the PR's changed files."""
+    from . import code_nav
+
+    ctx, _ = auth
+    _check_names(owner, repo)
+    if not code_nav.IDENT.fullmatch(symbol):
+        raise ApiError(400, "INVALID_SYMBOL", "not an identifier")
+    hit = _pr_cache.get(f"{owner}/{repo}#{number}".lower())
+    data = hit[1] if hit else await asyncio.to_thread(fetch_pr, owner, repo, number, _hooks(ctx)[0], ctx.extra.get("gh_pr_files", _gh_files))
+    sha = data["pr"].get("head_sha")
+    full = f"{owner}/{repo}"
+    co = await asyncio.to_thread(_nav_checkout, ctx, full, number, sha)
+    if co:
+        cpath, ref, mb = co
+        found = await asyncio.to_thread(code_nav.grep_checkout, cpath, ref, symbol)
+        rev = "head"
+        if not found and mb:
+            found, rev = await asyncio.to_thread(code_nav.grep_checkout, cpath, mb, symbol), "base"
+        if found is not None:
+            return {"symbol": symbol, "scope": "repository", "note": None,
+                    "results": [{**r, "rev": rev} for r in code_nav.rank(found, path)]}
+    if not sha:
+        raise ApiError(409, "NO_HEAD", "the PR's head commit is unknown")
+    found = []
+    for f in data["files"][:300]:
+        if f.get("status") == "removed" or f.get("binary_or_large"):
+            continue
+        try:
+            text = await asyncio.to_thread(_file_at, ctx, full, number, sha, f["path"])
+        except Exception as exc:  # noqa: BLE001 — one unreadable file does not stop the search
+            log.info("definition search: %s unreadable: %s", f["path"], exc)
+            continue
+        found += code_nav.definitions_in(f["path"], enumerate(text.split("\n"), 1), symbol)
+    return {"symbol": symbol, "scope": "pr-files", "results": [{**r, "rev": "head"} for r in code_nav.rank(found, path)],
+            "note": f"only the PR's changed files were searched: connect {full} to a local checkout (⎇) to search the whole repository"}
+
+
+@router.get("/github/pr/{owner}/{repo}/{number}/source")
+async def pr_source(owner: str, repo: str, number: int, path: str = Query(..., min_length=1, max_length=4096),
+                    rev: str = Query("head", pattern="^(head|base)$"), auth: tuple[AppContext, str] = Depends(require_owner)):
+    """Any file of the repository at the PR's head (or, with the local checkout, its merge base): for go to definition."""
+    ctx, _ = auth
+    _check_names(owner, repo)
+    if path.startswith("/") or ".." in path.split("/"):
+        raise ApiError(400, "INVALID_PATH", "invalid path")
+    hit = _pr_cache.get(f"{owner}/{repo}#{number}".lower())
+    data = hit[1] if hit else await asyncio.to_thread(fetch_pr, owner, repo, number, _hooks(ctx)[0], ctx.extra.get("gh_pr_files", _gh_files))
+    sha = data["pr"].get("head_sha")
+    full = f"{owner}/{repo}"
+    if rev == "base":
+        co = await asyncio.to_thread(_nav_checkout, ctx, full, number, sha)
+        if not co or not co[2]:
+            raise ApiError(409, "NO_BASE", "the PR's base is only available in a connected local checkout")
+        from .local_repos import git
+
+        code, out, err = await asyncio.to_thread(git, co[0], ["show", f"{co[2]}:{path}"], 60)
+        if code != 0:
+            raise ApiError(404, "FILE_NOT_FOUND", f"{path}: {err[-200:]}")
+        text = out
+    else:
+        if not sha:
+            raise ApiError(409, "NO_HEAD", "the PR's head commit is unknown")
+        text = await asyncio.to_thread(_file_at, ctx, full, number, sha, path)
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    return {"path": path, "rev": rev, "lines": lines}
+
+
 # ---------------------------------------------------------------------- priority: the agent's work
 
 @router.get("/github/priority/status")

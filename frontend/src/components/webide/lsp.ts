@@ -12,6 +12,8 @@ export interface LspStatus {
   message?: string;
   command?: string;
   progress?: string;
+  /** a running server works with limits (e.g. clangd without compile_commands.json) */
+  note?: string;
 }
 
 /** Monaco language ids served by each language server. */
@@ -100,7 +102,7 @@ export class LspClient {
     }
     if (msg.waw) {
       if (msg.waw === "started") {
-        this.setStatus({ command: msg.command });
+        this.setStatus({ command: msg.command, note: msg.note ?? undefined });
         void this.initialize();
       } else if (msg.waw === "unavailable") this.setStatus({ state: "unavailable", message: msg.message });
       else if (msg.waw === "exited") this.setStatus({ state: "exited", message: `the language server exited (${msg.code})${msg.stderr ? `: ${msg.stderr}` : ""}` });

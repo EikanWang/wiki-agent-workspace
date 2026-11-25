@@ -1220,24 +1220,49 @@ class LabelIn(BaseModel):
     label: str = Field("", max_length=200)
 
 
+async def _retitle_opencode(ctx: AppContext, sid: str, title: str, machine: str | None) -> bool:
+    """Rename the session in OpenCode itself (v2's server: `opencode api PATCH /api/session/{id}`), so its TUI and
+    every client show the new title. False when that is not possible (v1, no server, unknown session)."""
+    argv_tail = ["api", "PATCH", f"/api/session/{sid}", "--data", json.dumps({"title": title})]
+    try:
+        if machine:
+            rc, _, _ = await remote._run(ctx, machine, [remote.bin_of(ctx, machine, "opencode"), *argv_tail], timeout=30)
+        else:
+            exe = _bin(ctx, "opencode")
+            if not exe:
+                return False
+            rc, _, _ = await run_capture([exe, *argv_tail], cwd=Path.home(), timeout=30)
+    except (RemoteError, ProviderError, OSError) as exc:
+        log.warning("renaming opencode session %s failed: %s", sid, exc)
+        return False
+    if rc == 0:
+        _oc_cache.clear()
+        remote.forget()
+    return rc == 0
+
+
 @router.put("/monitor/session/{provider}/{sid}/label")
-def rename(provider: str, sid: str, body: LabelIn, machine: str | None = MachineQ, ctx: AppContext = Depends(require_auth_mutating)):
-    """The name the app shows for a session (the agents have no rename command); empty: back to its own title."""
+async def rename(provider: str, sid: str, body: LabelIn, machine: str | None = MachineQ, ctx: AppContext = Depends(require_auth_mutating)):
+    """Rename a session. OpenCode (v2): its own title is changed; otherwise (Codex, Claude Code, OpenCode v1) the
+    name the app shows for it. Empty: back to its own title."""
     if provider not in PROVIDERS:
         raise not_found("unknown provider", "PROVIDER_UNKNOWN")
+    name = body.label.strip()
+    native = bool(name) and provider == "opencode" and await _retitle_opencode(ctx, sid, name, machine)
     key = mkey(provider, sid, machine)
     labels = _labels(ctx)
-    if body.label.strip():
-        labels[key] = body.label.strip()
+    if name and not native:
+        labels[key] = name
     else:
         labels.pop(key, None)
     kv_put(ctx, LABELS_KEY, labels)
-    watched = [{**w, "label": body.label.strip()} if _wkey(w) == key else w for w in _watched(ctx)]
+    watched = [{**w, "label": labels.get(key, "")} if _wkey(w) == key else w for w in _watched(ctx)]
     for w in watched:
         if not w.get("label"):
             w.pop("label", None)
     kv_put(ctx, "monitor_sessions", watched)
-    return {"label": labels.get(key)}
+    _cache.pop(key, None)
+    return {"label": labels.get(key), "title": name if native else None, "native": native}
 
 
 async def _delete_native(ctx: AppContext, provider: str, sid: str, machine: str | None = None) -> None:

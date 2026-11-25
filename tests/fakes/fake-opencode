@@ -91,6 +91,16 @@ def main(argv):
     if argv[:2] == ["session", "list"]:
         print(json.dumps([{"id": s["id"], "title": s["title"], "updated": s["updated"], "created": s["updated"], "directory": s["directory"]} for s in load()]))
         return 0
+    if argv[:2] == ["api", "PATCH"] and not v1():
+        sid = argv[2].rsplit("/", 1)[-1]
+        ss = load()
+        if not any(x["id"] == sid for x in ss):
+            print("HTTP 404 Not Found", file=sys.stderr)
+            return 1
+        title = json.loads(argv[argv.index("--data") + 1])["title"]
+        save([{**x, "title": title} if x["id"] == sid else x for x in ss])
+        print(json.dumps({"id": sid, "title": title}))
+        return 0
     if argv[:1] != ["run"]:
         print("unknown command", file=sys.stderr)
         return 2

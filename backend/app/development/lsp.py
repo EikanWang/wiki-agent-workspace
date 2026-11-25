@@ -76,22 +76,48 @@ async def _which(t: Target, names: list[str], extra_dirs: list[str]) -> str | No
     return out.strip().splitlines()[0] if rc == 0 and out.strip() else None
 
 
+async def _cpp_without_cdb(t: Target, wt: str) -> tuple[str, str]:
+    """No compile_commands.json yet (nothing built): clangd would guess bare flags and flood Problems with false errors
+    ('ATen/Functions.h' not found …). Give it the checkout's usual include roots and silence its diagnostics, through
+    a clangd user config of its own (XDG_CONFIG_HOME). Returns (the XDG dir, the note for the editor)."""
+    parent, name = wt.rstrip("/").rsplit("/", 1)
+    xdg = f"{parent}/.waw-clangd/{name}"
+    script = ('set -e; wt="$1"; d="$2/clangd"; mkdir -p "$d"; inc="-I$wt"; '
+              'for s in aten/src torch/csrc/api/include include src; do [ -d "$wt/$s" ] && inc="$inc, -I$wt/$s"; done; '
+              'printf "CompileFlags:\\n  Add: [-std=c++17, %s]\\nDiagnostics:\\n  Suppress: \\"*\\"\\n  ClangTidy:\\n    Remove: \\"*\\"\\n'
+              '  UnusedIncludes: None\\n  MissingIncludes: None\\n" "$inc" > "$d/config.yaml"')
+    rc, _, err = await t.run(["sh", "-c", script, "sh", wt, xdg], timeout=30)
+    if rc != 0:
+        log.warning("clangd fallback config in %s failed: %s", xdg, err)
+    return xdg, ("No compile_commands.json in this worktree yet (it has not been built), so C/C++ errors are not shown: "
+                 "without the real compile flags and generated headers they would be false. Go to definition, hover and "
+                 "completion still work from the source. Build once (or set the compile_commands.json folder in the "
+                 "workspace settings) and reopen the file for full checking.")
+
+
 async def server_command(t: Target, row: Any, lang: str) -> tuple[list[str] | None, str | None]:
-    """(argv, None) or (None, why not)."""
+    """(argv, None or a note for the editor) or (None, why not)."""
     cfg = settings_of(row)
     custom = _servers.get(lang)
     if custom:  # [development.language_servers] wins
         exe = await _which(t, [custom[0]], [])
         return ([exe, *custom[1:]], None) if exe else (None, f"{custom[0]} (from [development.language_servers]) was not found on {t.label()}")
     if lang == "cpp":
-        exe = cfg.get("clangd") or await _which(t, CLANGD, [])
+        exe = await _which(t, [cfg["clangd"]] if cfg.get("clangd") else CLANGD, [])
         if not exe:
-            return None, HINTS["cpp"]
-        args = [exe, "--background-index", "--header-insertion=never", "--clang-tidy", "--pch-storage=memory", "--log=error"]
+            return None, (f"clangd ({cfg['clangd']}, from the workspace settings) was not found on {t.label()}" if cfg.get("clangd") else HINTS["cpp"])
+        wt = row.worktree_path.rstrip("/")
         ccd = cfg.get("compile_commands_dir")
-        if ccd:
-            args.append(f"--compile-commands-dir={ccd if ccd.startswith('/') else row.worktree_path.rstrip('/') + '/' + ccd}")
-        return args, None
+        dirs = [ccd if ccd.startswith("/") else f"{wt}/{ccd}"] if ccd else []
+        dirs += [d for d in (wt, f"{wt}/build") if d not in dirs]
+        script = "; ".join(f"[ -f {shlex.quote(d)}/compile_commands.json ] && {{ echo {shlex.quote(d)}; exit 0; }}" for d in dirs) + "; exit 1"
+        rc, out, _ = await t.run(["sh", "-c", script], timeout=30)
+        found = out.strip().splitlines()[0] if rc == 0 and out.strip() else None
+        args = [exe, "--background-index", "--header-insertion=never", "--pch-storage=memory", "--log=error"]
+        if found:
+            return [*args, "--clang-tidy", f"--compile-commands-dir={found}"], None
+        xdg, note = await _cpp_without_cdb(t, wt)
+        return ["env", f"XDG_CONFIG_HOME={xdg}", *args, "--enable-config"], note
     if lang == "python":
         if cfg.get("python_lsp"):
             exe = cfg["python_lsp"]
@@ -115,13 +141,19 @@ async def server_command(t: Target, row: Any, lang: str) -> tuple[list[str] | No
                   + ", ".join(a[0] for a in known) + ", or set [development.language_servers] in the config file.")
 
 
+def _shown(argv: list[str]) -> str:
+    """The language server's executable (past an `env VAR=…` prefix)."""
+    rest = argv[1:] if argv[0] == "env" else argv
+    return next((a for a in rest if "=" not in a), argv[0])
+
+
 async def lsp_info(ctx, dev_id: str) -> dict[str, Any]:
     svc = DevService(ctx)
     row, t = svc._ready(dev_id)
     out: dict[str, Any] = {}
     for lang in ("cpp", "python", *KNOWN.keys(), *[k for k in _servers if k not in KNOWN]):
         argv, why = await server_command(t, row, lang)
-        out[lang] = {"available": argv is not None, "command": argv[0] if argv else None, "hint": why}
+        out[lang] = {"available": argv is not None, "command": _shown(argv) if argv else None, "hint": why}
     return out
 
 
@@ -172,7 +204,7 @@ async def lsp_ws(ws: WebSocket, dev_id: str, lang: str):
         await ws.send_text(json.dumps({"waw": "unavailable", "message": f"could not start {argv[0]}: {exc}"}))
         await ws.close(code=4412)
         return
-    await ws.send_text(json.dumps({"waw": "started", "command": argv[0], "host": t.label()}))
+    await ws.send_text(json.dumps({"waw": "started", "command": _shown(argv), "host": t.label(), "note": why}))
     stderr_tail: list[str] = []
 
     async def pump_out() -> None:

@@ -341,6 +341,12 @@ kept while the server runs: after a restart, PRs that had not started yet are no
   - **Viewed** per file, the same as on github.com: ticking folds the file; *changed since viewed* when new
     commits touched it.
   - **Comment on file** writes a pending comment on the whole file.
+  - **Go to definition:** Ctrl-click (⌘-click on a Mac) a name in the code (function, class, macro, type, variable,
+    an operator of `native_functions.yaml` …). A panel opens on the right with the file where it is defined, at that
+    line, or the list of places when there are several. Ctrl/⌘-click in that file goes further, **←** goes back,
+    Esc closes. With the repository connected to a local checkout (⎇) the whole repository at the PR's head is
+    searched (names the PR removed: at its base); without one, only the PR's changed files. It is a text search by
+    definition patterns (Python, C/C++, JS/TS, Go, Rust), not a compiler: overloads and same-named things all show.
   - **Click a line** (drag or shift-click for several, either side) to open a box: **Add review comment** keeps
     it *pending* here (edit/delete it; it survives reloads), **Ask agent** asks the agent about exactly those
     lines (answer in the discussions panel). **Suggest change** inserts the selected new lines as a GitHub
@@ -737,7 +743,10 @@ a terminal or another tool — and tells you when one needs you.
   runs, and a box to **continue it** — the message runs the provider's CLI on that session in its folder
   (`opencode run --session`, `codex exec resume`, `claude -p --resume`). **Open in terminal** opens the provider's own
   interactive UI on the session in a terminal tab — the place to answer permission prompts.
-
+- **Rename** (✎ on a row, or **Rename** on stage): for an OpenCode session it changes OpenCode's own title (through
+  `opencode api PATCH /api/session/<id>`, OpenCode v2 with its background server), so OpenCode and every other client
+  show the new name too. For Codex, Claude Code and OpenCode v1 (no rename command) it sets the name shown in this
+  app; empty goes back to the session's own title.
 Sessions are read where the agents keep them: `opencode session list` / `opencode export`, `$CODEX_HOME/sessions`,
 `$CLAUDE_CONFIG_DIR/projects` (default `~/.claude`). `[agents.claude] bin` sets the Claude Code executable.
 

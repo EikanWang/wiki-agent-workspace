@@ -369,10 +369,13 @@ export default function AgentMonitor({ watched, onWatched, visible, onAlarms, au
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const pick = (list: MonItem[], on: boolean) => setPicked((p) => { const n = new Set(p); for (const i of list) on ? n.add(keyOf(i)) : n.delete(keyOf(i)); return n; });
   const renameItem = async (i: MonItem) => {
-    const name = window.prompt(`Name to show for this ${PROV_LABEL[i.provider]} session (empty: its own title):`, i.label ?? i.title ?? "");
+    const own = i.provider === "opencode";
+    const name = window.prompt(own ? "Rename this OpenCode session (its own title, shown in OpenCode too):"
+      : `Name to show for this ${PROV_LABEL[i.provider]} session (empty: its own title):`, i.label ?? i.title ?? "");
     if (name === null) return;
     try {
-      await put(`/monitor/session/${i.provider}/${encodeURIComponent(i.id)}/label${onMachine(i)}`, { label: name });
+      const r = await put<{ native: boolean }>(`/monitor/session/${i.provider}/${encodeURIComponent(i.id)}/label${onMachine(i)}`, { label: name });
+      if (own && name.trim() && !r.native) setErr("OpenCode could not rename it (v1, or its server is not running): the new name is shown only here.");
       await refresh();
     } catch (e) {
       setErr((e as ApiError).message);
@@ -457,7 +460,7 @@ export default function AgentMonitor({ watched, onWatched, visible, onAlarms, au
                       <input type="checkbox" className="mon-pick" checked={picked.has(keyOf(i))} onChange={() => pick([i], !picked.has(keyOf(i)))} aria-label="Select" data-testid="mon-pick" />
                       <MonCard item={i} compact={!!staged} active={keyOf(i) === stage} onOpen={() => setStage(keyOf(i) === stage ? null : keyOf(i))} />
                       <span className="mon-card-actions">
-                        <button className="icon-btn small" title="Rename (the name shown here)" onClick={() => void renameItem(i)} data-testid="mon-rename">✎</button>
+                        <button className="icon-btn small" title="Rename (OpenCode: its own title; others: the name shown here)" onClick={() => void renameItem(i)} data-testid="mon-rename">✎</button>
                         <button className="icon-btn small" title="Delete this session" onClick={() => void removeItems([i])} data-testid="mon-delete">🗑</button>
                       </span>
                     </div>

@@ -10,6 +10,7 @@ import { loadReviews } from "./ReviewsPanel";
 import { Line, SplitCols, UnifiedCols, buildSplitRows, numColStyle, parseUnified } from "./DiffReview";
 import { DISCARD_REASONS, TeachBox } from "./ReviewLearning";
 import { PASTE_HINT, PictureStrip, picturesOnly, usePictures } from "./Pictures";
+import { defClick } from "./DefinitionPeek";
 
 /** A review thread on GitHub (line or whole-file), with all its comments. */
 export interface GhThread {
@@ -92,7 +93,7 @@ const ago = (iso: string | null) => (iso ? new Date(iso).toLocaleString() : "");
  * several) to write a review comment (published later with the review) or to ask the agent about those lines;
  * existing GitHub threads are shown at their lines and can be replied to.
  */
-export function PrFileDiff({ file, layout, threads, drafts, apiBase, canAsk, collapsedDefault, onChanged, onAsk, onError, onViewed }: {
+export function PrFileDiff({ file, layout, threads, drafts, apiBase, canAsk, collapsedDefault, onChanged, onAsk, onError, onViewed, onDefinition }: {
   file: PrFile;
   layout: "unified" | "split";
   threads: GhThread[];
@@ -104,6 +105,8 @@ export function PrFileDiff({ file, layout, threads, drafts, apiBase, canAsk, col
   onChanged: () => Promise<void>;
   onAsk: (quote: string, label: string, question: string, images?: string[]) => Promise<void>;
   onError: (m: string) => void;
+  /** Ctrl/⌘-click on a name in the code: go to its definition */
+  onDefinition?: (symbol: string, path: string) => void;
 }) {
   const [collapsed, setCollapsed] = useState(collapsedDefault || file.viewed === "VIEWED");
   useEffect(() => { if (file.viewed === "VIEWED") setCollapsed(true); }, [file.viewed]);
@@ -431,7 +434,7 @@ export function PrFileDiff({ file, layout, threads, drafts, apiBase, canAsk, col
         </details>
       )}
       {!collapsed && !file.binary_or_large && layout === "unified" && (
-        <table className="diff-table" data-testid="pr-diff-unified" style={numColStyle(lines)}>
+        <table className="diff-table" data-testid="pr-diff-unified" style={numColStyle(lines)} {...defClick(onDefinition && ((sym) => onDefinition(sym, file.path)))}>
           <UnifiedCols />
           <tbody>
             {lines.map((ln, i) => {
@@ -439,7 +442,7 @@ export function PrFileDiff({ file, layout, threads, drafts, apiBase, canAsk, col
               if (ln.kind === "hunk") return <tr key={i} className="diff-line hunk"><td className="no expander-cell" colSpan={2}>{expanderButtons(expanders.get(i))}</td><td className="code">{ln.raw}</td></tr>;
               return (
                 <Fragment key={i}>
-                  <tr className={`diff-line ${ln.kind} ${ln.expanded ? "expanded" : ""} ${inSel(i) ? "selected" : ""} ${has(ln) ? "has-comments" : ""}`} {...cell(i)} data-testid="pr-diff-row" data-side={side(ln)} data-line={lineNo(ln)} title="Click to comment or ask; drag or shift-click for several lines">
+                  <tr className={`diff-line ${ln.kind} ${ln.expanded ? "expanded" : ""} ${inSel(i) ? "selected" : ""} ${has(ln) ? "has-comments" : ""}`} {...cell(i)} data-testid="pr-diff-row" data-side={side(ln)} data-line={lineNo(ln)} title="Click to comment or ask; drag or shift-click for several lines; Ctrl/⌘-click a name to go to its definition">
                     <td className="no">{ln.oldNo ?? ""}</td>
                     <td className="no">{ln.newNo ?? ""}</td>
                     <td className="code"><span className="marker">{ln.kind === "add" ? "+" : ln.kind === "del" ? "-" : " "}</span>{ln.text || " "}</td>
@@ -453,7 +456,7 @@ export function PrFileDiff({ file, layout, threads, drafts, apiBase, canAsk, col
         </table>
       )}
       {!collapsed && !file.binary_or_large && layout === "split" && (
-        <table className="diff-table split" data-testid="pr-diff-split" style={numColStyle(lines)}>
+        <table className="diff-table split" data-testid="pr-diff-split" style={numColStyle(lines)} {...defClick(onDefinition && ((sym) => onDefinition(sym, file.path)))}>
           <SplitCols />
           <tbody>
             {rows.map((row, ri) => {

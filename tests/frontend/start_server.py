@@ -312,6 +312,7 @@ def add_fake_review_queue(app) -> None:
 
             body_lines = [f"// line {n}" for n in range(1, 41)]
             body_lines[9:13] = ["  load();", "  if (ok)", "    call();", " }"]
+            body_lines[2] = "static void load() {"  # where `load` is defined (go to definition)
             text = "\n".join(body_lines) + "\n"
             return {"size": len(text), "sha": "blob1", "content": _b.b64encode(text.encode()).decode()}
         if method == "GET" and path.startswith("users/"):  # a contributor's public profile (not a change: not recorded)

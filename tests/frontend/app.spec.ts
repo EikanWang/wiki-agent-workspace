@@ -3388,6 +3388,12 @@ test("PR Development: new branch workspace, the web editor and the VS Code optio
   // the agent from the editor's context menu
   await page.locator('[data-testid="webide-tab"][data-path="lib.py"]').click();
   await page.locator(".monaco-editor .view-lines").click({ button: "right" });
+  // the menu has a solid background (it was transparent over the code)
+  const menuBg = await page.getByRole("menuitem", { name: /Agent: Explain this code/ }).evaluate((el) => {
+    const c = getComputedStyle(el.closest(".monaco-scrollable-element")!).backgroundColor;
+    return c === "rgba(0, 0, 0, 0)" ? "transparent" : c;
+  });
+  expect(menuBg).not.toBe("transparent");
   const item = await page.getByRole("menuitem", { name: /Agent: Explain this code/ }).boundingBox();
   await page.mouse.move(item!.x + 20, item!.y + item!.height / 2); // Monaco's menu acts on a real pointer
   await page.waitForTimeout(200);
@@ -4167,6 +4173,26 @@ test("PR diff: copy the file path, expand hidden lines around a change, expand /
   await page.getByTestId("pr-layout-split").click();
   await expect(f.locator(".diff-line.split-row.expanded")).toHaveCount(36);
   await page.getByTestId("pr-layout-unified").click();
+  // go to definition: Ctrl-click a name in the code opens the file where it is defined, at that line
+  const box = await f.locator('.diff-line[data-line="10"] td.code').evaluate((td) => {
+    const t = [...td.childNodes].find((n) => n.nodeType === Node.TEXT_NODE && (n.textContent ?? "").includes("load"))!;
+    const r = document.createRange();
+    const i = t.textContent!.indexOf("load");
+    r.setStart(t, i + 1);
+    r.setEnd(t, i + 2);
+    const b = r.getBoundingClientRect();
+    return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+  });
+  await page.keyboard.down("Control");
+  await page.mouse.click(box.x, box.y);
+  await page.keyboard.up("Control");
+  const peek = page.getByTestId("def-peek");
+  await expect(peek).toContainText("load");
+  await expect(peek.getByTestId("def-source").locator("tr.def-target")).toContainText("static void load() {");
+  await expect(peek).toContainText("c10/xpu/stub.cpp:3");
+  await expect(f.locator(".diff-line.selected")).toHaveCount(0); // the click did not start a line selection
+  await page.keyboard.press("Escape");
+  await expect(peek).toHaveCount(0);
   await page.getByTestId("activity-files").click();
 });
 

@@ -9,6 +9,7 @@ import DeferMenu, { deferLabel } from "./DeferMenu";
 import { usePersistentState, useRestoredScroll } from "../persist";
 import { SelectionAnchor, wholeDocument } from "../textmodel";
 import { GhDraft, GhThread, PrFile, PrFileDiff, SubmitReview } from "./PrDiff";
+import DefinitionPeek, { DefRequest } from "./DefinitionPeek";
 import { refreshLearningSummary } from "./ReviewLearning";
 import { COMPOSER_HINT, composerKeyDown } from "./keys";
 import MentionTextarea from "./MentionTextarea";
@@ -124,6 +125,8 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
   const sidePane = usePane("pr.side", 260, 180, 700);
   const [owner, name] = repo.split("/");
   const apiBase = `/github/pr/${owner}/${name}/${number}`;
+  const [defReq, setDefReq] = useState<DefRequest | null>(null);
+  const closeDef = useCallback(() => setDefReq(null), []);
   const [loadedComments, setLoadedComments] = useState(false);
   const loadComments = async (cached = false) => {
     try {
@@ -514,8 +517,10 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
             <PrFileDiff key={f.path} file={f} layout={layout} threads={threadsFor(f.path)} drafts={draftsFor(f.path)} apiBase={apiBase} canAsk={docReady}
               collapsedDefault={f.unified.split("\n").length > FOLD_LINES && !threadsFor(f.path).length && !draftsFor(f.path).length}
               onChanged={loadComments} onError={(m) => setError(m)} onViewed={(v) => setViewed(f.path, v)}
-              onAsk={(quote, label, question, images) => onSend({ quote, prefix: "", suffix: "", start: 0, end: 0, heading: null, target: { kind: "text", page: null, unit: "page", label } }, question, null, null, images)} />
+              onAsk={(quote, label, question, images) => onSend({ quote, prefix: "", suffix: "", start: 0, end: 0, heading: null, target: { kind: "text", page: null, unit: "page", label } }, question, null, null, images)}
+              onDefinition={(symbol, path) => setDefReq({ symbol, path, at: Date.now() })} />
           ))}
+          <DefinitionPeek key={apiBase} apiBase={apiBase} request={defReq} onClose={closeDef} />
         </div>
       )}
       {sheet && (

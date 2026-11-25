@@ -89,6 +89,7 @@ export default function WebIde({ dev, completionEnabled, refreshKey, onAsk, thre
   const [quick, setQuick] = useState(false);
   const [markersTick, setMarkersTick] = useState(0);
   const [inline, setInline] = useState(() => localStorage.getItem("waw.webide.inline") !== "0");
+  const [noteHidden, setNoteHidden] = useState<Set<string>>(() => new Set());
   const inlineRef = useRef(inline);
   inlineRef.current = inline;
   const [gitStatus, setGitStatus] = useState<Record<string, string>>({});
@@ -881,6 +882,11 @@ export default function WebIde({ dev, completionEnabled, refreshKey, onAsk, thre
       </div>
       {ls && lspLang && CORE_LSP.has(lspLang) && (ls.state === "unavailable" || ls.state === "exited" || ls.state === "error") && activeTab && (
         <div className="webide-lsp-note small" data-testid="webide-lsp-note">{ls.message}</div>
+      )}
+      {ls && lspLang && ls.note && ls.state !== "unavailable" && ls.state !== "exited" && ls.state !== "error" && activeTab && !noteHidden.has(lspLang) && (
+        <div className="webide-lsp-note small" data-testid="webide-lsp-limited">{ls.note}{" "}
+          <button className="link-btn small" onClick={() => setNoteHidden((h) => new Set(h).add(lspLang))}>Hide</button>
+        </div>
       )}
       {selBtn && !discuss && (
         <button className="webide-discuss-btn" style={{ top: selBtn.top, left: selBtn.left }} onMouseDown={(e) => e.preventDefault()} onClick={() => openDiscuss(true)}

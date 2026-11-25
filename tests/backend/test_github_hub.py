@@ -1233,3 +1233,92 @@ async def test_your_review_or_comment_moves_the_pr_to_commented_nothing_new_at_o
     github_hub.note_mine("pytorch", "pytorch", 2, "APPROVED")
     r = (await api.get("/api/v1/github/reviews")).json()
     assert 2 not in cat(r) and r["approved_hidden"] == 1
+
+
+def test_definition_patterns_find_definitions_not_uses():
+    from backend.app import code_nav
+
+    src = ["def gemm(a, b):", "    return gemm(a, b)", "class Gemm:", "GEMM_TILE = 16", "#define GEMM_TILE 16",
+           "at::Tensor xpu_gemm(const at::Tensor& a) {", "at::Tensor xpu_gemm(const at::Tensor& a);", "  return xpu_gemm(a);",
+           "Tensor& XpuOps::xpu_gemm(Tensor& out)", "struct Tile;", "struct Tile {", "- func: xpu_gemm(Tensor self) -> Tensor",
+           "export function render<T>(x: T) {", "  if (render(x)) {"]
+    hits = lambda s: [(r["line"], r["kind"]) for r in code_nav.definitions_in("f", enumerate(src, 1), s)]
+    assert hits("gemm") == [(1, "def")]
+    assert hits("Gemm") == [(3, "class")]
+    assert hits("GEMM_TILE") == [(4, "variable"), (5, "macro")]
+    assert [n for n, _ in hits("xpu_gemm")] == [6, 9, 12]
+    assert hits("Tile") == [(11, "type")]
+    assert hits("render") == [(13, "function")]
+    ranked = code_nav.rank([{"path": p, "line": 1} for p in ("test/test_a.py", "torch/b.py", "torch/xpu/c.py", "torch/xpu/here.py")], "torch/xpu/here.py")
+    assert [r["path"] for r in ranked] == ["torch/xpu/here.py", "torch/xpu/c.py", "torch/b.py", "test/test_a.py"]
+
+
+async def test_go_to_definition_in_the_local_checkout_or_the_prs_files(running_app, tmp_path):
+    import asyncio
+    import subprocess
+
+    from backend.app import github_cache
+
+    def g(cwd, *a):
+        return subprocess.run(["git", *a], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+
+    up = tmp_path / "upstream"
+    (up / "lib").mkdir(parents=True)
+    g(up, "init", "-q", "-b", "main")
+    g(up, "config", "user.email", "t@e")
+    g(up, "config", "user.name", "T")
+    (up / "lib" / "util.py").write_text("def helper(x):\n    return x\n\ndef gone():\n    pass\n")
+    (up / "gemm.py").write_text("from lib.util import helper\n")
+    g(up, "add", "-A")
+    g(up, "commit", "-qm", "base")
+    g(up, "checkout", "-qb", "pr7")
+    (up / "lib" / "util.py").write_text("def helper(x):\n    return x\n")
+    (up / "gemm.py").write_text("from lib.util import helper\n\ndef fast(a):\n    return helper(a)\n")
+    g(up, "commit", "-qam", "the PR")
+    pr_sha = g(up, "rev-parse", "HEAD")
+    g(up, "update-ref", "refs/pull/7/head", pr_sha)
+    g(up, "checkout", "-q", "main")
+    local = tmp_path / "checkout"
+    g(tmp_path, "clone", "-q", str(up), str(local))
+
+    github_hub.reset_cache()
+    h = await running_app()
+    as_github(h, "EikanWang")
+    h.ctx.extra["gh_owner"] = lambda: "EikanWang"
+    detail = fake_pr_detail([])
+
+    def graphql(q, v):
+        r = detail(q, v)
+        if "query PrDetail" in q:
+            r["repository"]["pullRequest"]["commits"]["nodes"][0]["commit"]["oid"] = pr_sha
+        return r
+
+    h.ctx.extra["gh_graphql"] = graphql
+    h.ctx.extra["gh_pr_files"] = lambda o, r, n: [{"filename": "gemm.py", "status": "modified", "additions": 3, "deletions": 0,
+                                                   "patch": "@@ -1 +1,4 @@\n from lib.util import helper\n+\n+def fast(a):\n+    return helper(a)"}]
+    api = h.api
+    base = "/api/v1/github/pr/pytorch/pytorch/7"
+    assert (await api.get(f"{base}/definition", params={"symbol": "a b"})).json()["error"]["code"] == "INVALID_SYMBOL"
+    # no checkout: only the PR's changed files
+    github_cache.file_put(h.ctx, "pytorch/pytorch", pr_sha, "gemm.py", g(up, "show", f"{pr_sha}:gemm.py") + "\n")
+    r = (await api.get(f"{base}/definition", params={"symbol": "fast", "path": "gemm.py"})).json()
+    assert r["scope"] == "pr-files" and [(x["path"], x["line"]) for x in r["results"]] == [("gemm.py", 3)] and "local checkout" in r["note"]
+    assert (await api.get(f"{base}/definition", params={"symbol": "helper"})).json()["results"] == []
+    # with the checkout: the whole repository at the PR's head; a name the PR removed: at the merge base
+    await api.put("/api/v1/github/local-repo", json={"repo": "pytorch/pytorch", "path": str(local), "remote": str(up)})
+    await api.post(f"{base}/local-sync")
+    for _ in range(100):
+        if (await api.get(f"{base}/local-sync")).json()["state"] != "running":
+            break
+        await asyncio.sleep(0.1)
+    r = (await api.get(f"{base}/definition", params={"symbol": "helper", "path": "gemm.py"})).json()
+    assert r["scope"] == "repository" and r["note"] is None
+    assert [(x["path"], x["line"], x["kind"], x["rev"]) for x in r["results"]] == [("lib/util.py", 1, "def", "head")]
+    r = (await api.get(f"{base}/definition", params={"symbol": "gone"})).json()
+    assert [(x["path"], x["line"], x["rev"]) for x in r["results"]] == [("lib/util.py", 4, "base")]
+    # and the file to show it in
+    s = (await api.get(f"{base}/source", params={"path": "lib/util.py"})).json()
+    assert s["lines"] == ["def helper(x):", "    return x"]
+    s = (await api.get(f"{base}/source", params={"path": "lib/util.py", "rev": "base"})).json()
+    assert s["lines"][3] == "def gone():"
+    assert (await api.get(f"{base}/source", params={"path": "../etc/passwd"})).json()["error"]["code"] == "INVALID_PATH"

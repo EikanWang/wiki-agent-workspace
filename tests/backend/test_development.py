@@ -1359,3 +1359,28 @@ async def test_clear_everything_locally(running_app, dev_settings, tmp_path, fak
     assert (await api.delete(f"/api/v1/dev/workspaces/{f['id']}", params={"purge": "true"})).status_code == 200
     assert (src / "lib.py").exists() and (src / ".git").is_dir()
     assert (await api.get(f"/api/v1/dev/workspaces/{f['id']}")).status_code == 404
+
+
+async def test_clangd_without_compile_commands_gets_include_roots_and_no_false_errors(tmp_path):
+    from types import SimpleNamespace
+
+    from backend.app.development.lsp import _shown, server_command
+    from backend.app.development.targets import LocalTarget
+
+    wt = tmp_path / "worktrees" / "pytorch-1"
+    (wt / "aten" / "src").mkdir(parents=True)
+    clangd = tmp_path / "clangd"
+    clangd.write_text("#!/bin/sh\n")
+    clangd.chmod(0o755)
+    row = SimpleNamespace(worktree_path=str(wt), settings_json=json.dumps({"clangd": str(clangd), "compile_commands_dir": "build"}))
+    argv, note = await server_command(LocalTarget(), row, "cpp")
+    xdg = tmp_path / "worktrees" / ".waw-clangd" / "pytorch-1"
+    assert argv[:2] == ["env", f"XDG_CONFIG_HOME={xdg}"] and "--clang-tidy" not in argv and _shown(argv) == str(clangd)
+    assert "No compile_commands.json" in note
+    conf = (xdg / "clangd" / "config.yaml").read_text()
+    assert f"-I{wt}, -I{wt}/aten/src" in conf and 'Suppress: "*"' in conf
+    # once built: the real compile database, full checking
+    (wt / "build").mkdir()
+    (wt / "build" / "compile_commands.json").write_text("[]")
+    argv, note = await server_command(LocalTarget(), row, "cpp")
+    assert argv[0] == str(clangd) and f"--compile-commands-dir={wt}/build" in argv and "--clang-tidy" in argv and note is None

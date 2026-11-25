@@ -207,14 +207,20 @@ async def test_rename_and_delete_sessions(running_app, settings, homes, tmp_path
                    capture_output=True)  # v2 runs in $PWD (as a shell sets it)
     oc = json.loads((fake_env / "opencode_sessions.json").read_text())[-1]["id"]
     await api.put("/api/v1/monitor/watched", json={"sessions": [{"provider": "codex", "id": "cx-del"}, {"provider": "claude", "id": "cl-del"}, {"provider": "opencode", "id": oc}]})
-    # rename: the name shown everywhere (status, discovery)
-    assert (await api.put(f"/api/v1/monitor/session/opencode/{oc}/label", json={"label": "my run"})).json()["label"] == "my run"
+    # rename: OpenCode's own title changes (no app-side label); Codex / Claude Code get the name shown everywhere
+    r = (await api.put(f"/api/v1/monitor/session/opencode/{oc}/label", json={"label": "my run"})).json()
+    assert r == {"label": None, "title": "my run", "native": True}
+    assert next(s for s in json.loads((fake_env / "opencode_sessions.json").read_text()) if s["id"] == oc)["title"] == "my run"
     st = {i["id"]: i for i in (await api.get("/api/v1/monitor/status")).json()["items"]}
-    assert st[oc]["label"] == "my run"
+    assert st[oc]["title"] == "my run" and st[oc]["label"] is None
     d = (await api.get("/api/v1/monitor/discover", params={"folders": str(proj)})).json()["sessions"]
-    assert next(x for x in d if x["id"] == oc)["label"] == "my run"
-    await api.put(f"/api/v1/monitor/session/opencode/{oc}/label", json={"label": ""})
-    assert {i["id"]: i for i in (await api.get("/api/v1/monitor/status")).json()["items"]}[oc]["label"] is None
+    assert next(x for x in d if x["id"] == oc)["title"] == "my run"
+    assert (await api.put("/api/v1/monitor/session/opencode/ses_nope/label", json={"label": "x"})).json()["native"] is False
+    assert (await api.put("/api/v1/monitor/session/codex/cx-del/label", json={"label": "my run"})).json()["label"] == "my run"
+    st = {i["id"]: i for i in (await api.get("/api/v1/monitor/status")).json()["items"]}
+    assert st["cx-del"]["label"] == "my run"
+    await api.put("/api/v1/monitor/session/codex/cx-del/label", json={"label": ""})
+    assert {i["id"]: i for i in (await api.get("/api/v1/monitor/status")).json()["items"]}["cx-del"]["label"] is None
     # delete: each provider's own way; gone from the monitor
     r = (await api.post("/api/v1/monitor/delete", json={"sessions": [{"provider": "codex", "id": "cx-del"}, {"provider": "claude", "id": "cl-del"},
                                                                     {"provider": "opencode", "id": oc}, {"provider": "codex", "id": "nope-1"}]})).json()

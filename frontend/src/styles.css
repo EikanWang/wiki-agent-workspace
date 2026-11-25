@@ -1707,3 +1707,29 @@ a.ref-path code { text-decoration: underline dotted; }
 .insights-repos .list-item.drop-after { box-shadow: inset 0 -2px 0 var(--primary); }
 .insights-discuss-folders { display: flex; flex-direction: column; gap: 3px; padding: 4px 6px; border: 1px dashed var(--border); border-radius: 6px; }
 .insights-discuss-folders .ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+
+/* PR diff: go to definition (Ctrl/⌘-click a name) */
+.def-peek { position: fixed; top: 64px; right: 16px; bottom: 16px; width: min(760px, calc(100vw - 32px)); z-index: 55; display: flex; flex-direction: column; background: var(--card); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3); }
+.def-peek-head { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--border); }
+.def-peek .def-sym { font-family: var(--mono, monospace); }
+.def-peek .def-where { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+.def-list, .def-file { flex: 1; min-height: 0; overflow: auto; }
+.def-hit { display: flex; flex-direction: column; gap: 2px; width: 100%; text-align: left; padding: 6px 10px; border: 0; border-bottom: 1px solid var(--border); background: transparent; cursor: pointer; color: inherit; }
+.def-hit:hover { background: rgba(51, 156, 255, 0.08); }
+.def-hit .def-text { white-space: pre; overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
+.def-src tr.def-target td { background: rgba(255, 200, 0, 0.22); }
+.def-foot { padding: 4px 10px; border-top: 1px solid var(--border); }
+
+/* Monaco draws its context menu in a shadow root next to the editor, where its theme colours (CSS variables) are not
+   defined: it came out transparent over the code. Variables inherit into the shadow root, so give them on its host. */
+.shadow-root-host, .context-view, .monaco-menu-container {
+  --vscode-menu-background: light-dark(#ffffff, #252526);
+  --vscode-menu-foreground: light-dark(#1f1f1f, #cccccc);
+  --vscode-menu-selectionBackground: light-dark(#0060c0, #04395e);
+  --vscode-menu-selectionForeground: #ffffff;
+  --vscode-menu-separatorBackground: light-dark(#d4d4d4, #454545);
+  --vscode-menu-border: light-dark(#c8c8c8, #454545);
+  --vscode-widget-shadow: rgba(0, 0, 0, 0.36);
+  --vscode-shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.3);
+  --vscode-keybindingLabel-foreground: inherit;
+}
