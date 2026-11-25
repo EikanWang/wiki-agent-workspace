@@ -49,6 +49,7 @@ import { ModelChoiceValue } from "./components/ModelChoice";
 import DevView from "./components/DevView";
 import { DevSetupPreset } from "./components/DevSetupDialog";
 import Reader from "./components/Reader";
+import ImageLightbox from "./components/ImageLightbox";
 import DiscussionPanel, { LiveJob, SessionChip, useJobStream } from "./components/DiscussionPanel";
 import SessionPicker from "./components/SessionPicker";
 import TerminalPanel from "./components/TerminalPanel";
@@ -1373,6 +1374,7 @@ export default function App() {
       </nav>
 
       <ConfirmHost />
+      <ImageLightbox />
       {showAddFolder && (
         <AddFolderDialog
           start={(activeWsInfo?.root ?? boot.workspace.root).split("/").slice(0, -1).join("/") || "/"}

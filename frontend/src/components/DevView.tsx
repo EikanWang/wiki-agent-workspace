@@ -7,6 +7,7 @@ import { PrTab, TasksTab } from "./DevTabs";
 import { BenchTab } from "./DevBench";
 import DevChanges, { ChangesAsk } from "./DevChanges";
 import { confirmAction } from "./Confirm";
+import FolderPicker from "./FolderPicker";
 import { removeWorkspaceDialog } from "./DevPanel";
 import { usePersistentState } from "../persist";
 
@@ -323,6 +324,14 @@ function DevSettingsDialog({ dev, workspaces, onClose, onSaved }: { dev: DevWork
   const [args, setArgs] = useState((dev.settings.debug_args ?? []).join(" "));
   const [err, setErr] = useState<string | null>(null);
   const [snap, setSnap] = useState<string | null>(null);
+  const [browseInc, setBrowseInc] = useState(false);
+  const addInclude = (p: string) => {
+    const wt = dev.worktree_path.replace(/\/+$/, "");
+    const rel = p === wt ? "." : p.startsWith(wt + "/") ? p.slice(wt.length + 1) : p;
+    const cur = (s.include_paths ?? "").replace(/\s+$/, "");
+    if (cur.split("\n").some((l) => l.trim() === rel)) return;
+    setS({ ...s, include_paths: cur ? `${cur}\n${rel}` : rel });
+  };
   const field = (k: keyof DevSettings, label: string, ph: string) => (
     <label className="dev-field"><span className="label">{label}</span>
       <input className="mono" value={s[k as string] ?? ""} placeholder={ph} onChange={(e) => setS({ ...s, [k]: e.target.value })} data-testid={`dev-set-${k}`} /></label>
@@ -348,6 +357,10 @@ function DevSettingsDialog({ dev, workspaces, onClose, onSaved }: { dev: DevWork
         <label className="dev-field"><span className="label">C/C++ include folders (one per line, absolute or relative to the worktree)</span>
           <textarea className="mono" rows={3} value={s.include_paths ?? ""} placeholder={"third_party/fmt/include\n/opt/intel/oneapi/compiler/latest/include"}
             onChange={(e) => setS({ ...s, include_paths: e.target.value })} data-testid="dev-set-include_paths" /></label>
+        <div className="row"><button className="btn small" onClick={() => setBrowseInc(true)} data-testid="dev-include-browse">Browse… (add a folder)</button></div>
+        {browseInc && <FolderPicker title="Add a C/C++ include folder" start={dev.worktree_path} machine={dev.host}
+          hint="Folders inside the worktree are added relative to it." confirmLabel="Add this folder"
+          onClose={() => setBrowseInc(false)} onChoose={(p) => { setBrowseInc(false); addInclude(p); }} />}
         <div className="muted small">Added to clangd's compile flags (also when there is a compile_commands.json); the C/C++ language server restarts with them when you save.</div>
         {field("clangd", "clangd executable", "default: clangd on the host's PATH")}
         {field("build_command", "Build command", "cmake --build build")}

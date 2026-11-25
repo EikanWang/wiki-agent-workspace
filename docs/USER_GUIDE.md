@@ -492,7 +492,7 @@ write code with the agent — a new pull request, or changes to an existing one.
 - **Reference wiki** — a folder of this window; the agent reads the whole folder.
 - Optional: name, Python interpreter (a virtual environment's `python`), `compile_commands.json` folder, build and
   test commands. Later, in the workspace's **Settings**: **C/C++ include folders** — one per line, absolute or
-  relative to the worktree (`-I` and `# comments` allowed) — added to clangd's flags in the web editor (also when
+  relative to the worktree (`-I` and `# comments` allowed; **Browse…** picks a folder and adds it, relative when it is inside the worktree) — added to clangd's flags in the web editor (also when
   there is a `compile_commands.json`) and as fallback flags in VS Code; clangd restarts with them when you save. Defaults are detected: CMake (`cmake … -DCMAKE_EXPORT_COMPILE_COMMANDS=ON`, `ctest`), Make, and
   Python projects (`pytest`).
 
@@ -881,7 +881,7 @@ shows its date and time in **UTC+8** (e.g. `2026-11-12 15:03:21 UTC+8`): when yo
 - **Images in answers**: every agent answer (wiki chats, discussions, Insights, Local files and PR Development chats,
   …) shows the images it points at — Markdown images, links or `code` paths to `.png`, `.jpg`, `.gif`, `.webp`,
   `.svg`, … files on the server (absolute paths, or wiki paths) or on the web, and ```` ```svg ```` blocks (drawn, the
-  source folded under them). Click a picture to open it full size in a new tab. A link whose file doesn't load stays
+  source folded under them). Click a picture (PNG, GIF, SVG …) to open it in a dialog in the same window (also in documents and PR text), with zoom, closed with Esc or ×; Ctrl/⌘-click opens it the browser's way. A link whose file doesn't load stays
   a plain link. SVGs are always shown as images, so their scripts never run.
 
 ## Editing a file yourself

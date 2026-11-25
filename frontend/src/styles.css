@@ -1767,3 +1767,10 @@ a.ref-path code { text-decoration: underline dotted; }
 .uml-box.busy rect { stroke: var(--primary); stroke-dasharray: 3 3; }
 .uml-spin { font-size: 11px !important; }
 .uml-loading { color: var(--primary); }
+
+.svg-lightbox { z-index: 200; }
+.svg-lightbox-box { width: min(1200px, 96vw); height: 92vh; }
+.svg-lightbox-box .modal-head { display: flex; align-items: center; gap: 6px; }
+.svg-lightbox-view { flex: 1; overflow: auto; display: flex; align-items: flex-start; justify-content: center; background: #fff; border-radius: 6px; }
+.svg-lightbox-view img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.markdown-body img, a[data-image] img { cursor: zoom-in; }

@@ -3376,6 +3376,13 @@ test("PR Development: view the code of the main branch, Alt+← / Alt+→ betwee
   // C/C++ include folders in the workspace settings: saved and shown again
   await page.getByTestId("dev-settings").click();
   await page.getByTestId("dev-set-include_paths").fill("third_party/fmt/include\n/opt/sdk/include");
+  // Browse… adds a folder; inside the worktree it is added relative to it
+  await page.getByTestId("dev-include-browse").click();
+  await expect(page.getByTestId("folder-picker")).toBeVisible();
+  await page.getByTestId("folder-picker-choose").click();
+  await expect(page.getByTestId("folder-picker")).toHaveCount(0);
+  await expect(page.getByTestId("dev-set-include_paths")).toHaveValue("third_party/fmt/include\n/opt/sdk/include\n.");
+  await page.getByTestId("dev-set-include_paths").fill("third_party/fmt/include\n/opt/sdk/include");
   await page.getByTestId("dev-settings-save").click();
   await expect(page.getByTestId("dev-settings-dialog")).toHaveCount(0);
   await page.getByTestId("dev-settings").click();
@@ -4224,6 +4231,21 @@ test("Agent answers show images: linked PNG / SVG files, Markdown images and ```
   await expect(done.locator("details summary")).toHaveText("SVG source");
   await expect(done.locator('a.msg-image-auto:has(img[src*="none.png"])')).toBeHidden();
   await expect(done.locator(`a[href="${dir}/none.png"]`)).toBeVisible(); // the link itself stays
+  // clicking a picture (SVG, PNG …) opens it in a dialog in this window (no new tab)
+  const pagesBefore = page.context().pages().length;
+  await done.locator('img[src*="chart.svg"]').click();
+  await expect(page.getByTestId("svg-lightbox").locator('img[src*="chart.svg"]')).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("svg-lightbox")).toHaveCount(0);
+  await done.locator('img[src^="data:image/svg+xml"]').click();
+  await expect(page.getByTestId("svg-lightbox").locator('img[src^="data:image/svg+xml"]')).toBeVisible();
+  await page.getByTestId("svg-lightbox-close").click();
+  await expect(page.getByTestId("svg-lightbox")).toHaveCount(0);
+  await done.locator('img[src*="plot.png"]:visible').first().click();
+  await expect(page.getByTestId("svg-lightbox").locator('img[src*="plot.png"]')).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("svg-lightbox")).toHaveCount(0);
+  expect(page.context().pages().length).toBe(pagesBefore);
   const svgRes = await page.request.get(`/api/v1/local/raw?path=${encodeURIComponent(dir + "/chart.svg")}`);
   expect(svgRes.headers()["content-security-policy"]).toContain("sandbox");
   await page.getByTestId("local-chat-close").click();
