@@ -48,9 +48,9 @@ def cmd_setup(args: argparse.Namespace) -> int:
     print(f"Workspace root: {settings.workspace_root}")
     print(f"State directory: {settings.state_dir}")
     print(f"Bind: http://{settings.bind}:{settings.port}")
-    for name in ("opencode", "codex"):
+    for name in ("opencode", "codex", "antigravity"):
         p = settings.providers.get(name, ProviderConfig())
-        exe = shutil.which(p.bin or name)
+        exe = shutil.which(p.bin or {"antigravity": "agy"}.get(name, name))
         print(f"Provider {name}: {'found at ' + exe if exe else 'not found on PATH'}")
     if settings.default_provider:
         print(f"Default provider: {settings.default_provider}")

@@ -127,6 +127,36 @@ async def test_codex_turns_use_configured_sandbox_and_resume(api: Api, fake_env:
     assert (fake_env / "codex_last_sandbox").read_text() == "workspace-write"
 
 
+async def test_antigravity_turns_stream_resume_list_and_models(api: Api, fake_env: Path, workspace: Path):
+    caps = (await api.get("/api/v1/bootstrap")).json()["providers"]["antigravity"]
+    assert caps["available"] and caps["version"] == "1.5.17-fake"
+    models = (await api.get("/api/v1/providers/antigravity/models")).json()
+    assert [m["id"] for m in models["models"]][:2] == ["gemini-fake-high", "gemini-fake-low"]
+    r = await api.post("/api/v1/agent-sessions", json={"provider": "antigravity", "display_name": "ag"})
+    ag = r.json()["id"]
+    doc = await api.open_doc()
+    a = anchor_for(doc["text"], "TorchDynamo")
+    r = await api.post(f"/api/v1/documents/{doc['document_id']}/threads", json={**a, "version_sha256": doc["sha256"], "question": "hi", "session_id": ag})
+    ev = await api.wait_job(r.json()["job_id"])
+    assert ev[-1]["type"] == "completed" and ev[-1]["payload"]["text"] == "echo: hi"
+    assert "hi" in (fake_env / "agy_last_prompt").read_text()
+    calls = [json.loads(line) for line in (fake_env / "agy_calls.log").read_text().splitlines()]
+    assert "--dangerously-skip-permissions" in calls[-1] and "--conversation" not in calls[-1]
+    native = (await api.get(f"/api/v1/agent-sessions/{ag}")).json()["native_id"]
+    assert native
+    # a follow-up resumes the same conversation and can edit the document
+    tid = (await api.threads(doc["document_id"]))["threads"][0]["id"]
+    r = await api.post(f"/api/v1/threads/{tid}/messages", json={"text": "again [[edit:docs/guide.md:::Guide:::Guide2]]"})
+    ev = await api.wait_job(r.json()["job_id"])
+    assert ev[-1]["type"] == "completed" and "Guide2" in (workspace / "docs" / "guide.md").read_text()
+    calls = [json.loads(line) for line in (fake_env / "agy_calls.log").read_text().splitlines()]
+    assert calls[-1][calls[-1].index("--conversation") + 1] == native
+    # its conversations are listed with the others (to link one from the terminal, say)
+    listing = (await api.get("/api/v1/agent-sessions", params={"provider": "antigravity"})).json()
+    assert listing["capabilities"]["antigravity"]["available"]
+    assert native in [p["native_id"] for p in listing["provider_sessions"] if p["provider"] == "antigravity"]
+
+
 async def test_codex_read_only_denial_is_shown_not_claimed_as_edit(running_app, settings, workspace: Path):
     settings.providers["codex"].sandbox = "read-only"
     settings.default_provider = "codex"

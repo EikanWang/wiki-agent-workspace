@@ -1774,3 +1774,15 @@ a.ref-path code { text-decoration: underline dotted; }
 .svg-lightbox-view { flex: 1; overflow: auto; display: flex; align-items: flex-start; justify-content: center; background: #fff; border-radius: 6px; }
 .svg-lightbox-view img { max-width: 100%; max-height: 100%; object-fit: contain; }
 .markdown-body img, a[data-image] img { cursor: zoom-in; }
+
+.sheet-view { display: flex; flex-direction: column; gap: 6px; height: 100%; min-height: 0; padding: 6px; }
+.sheet-bar { display: flex; align-items: center; gap: 8px; }
+.sheet-tabs { display: flex; gap: 2px; overflow-x: auto; flex: 1; }
+.sheet-tab { border: 1px solid var(--border); background: var(--bg-soft, transparent); color: inherit; padding: 3px 10px; border-radius: 6px 6px 0 0; cursor: pointer; white-space: nowrap; font-size: 12px; }
+.sheet-tab.active { background: var(--bg); font-weight: 600; border-bottom-color: var(--bg); }
+.sheet-filter { width: 180px; }
+.sheet-scroll { flex: 1; overflow: auto; min-height: 0; border: 1px solid var(--border); }
+.sheet-table { border-collapse: collapse; font-size: 12px; }
+.sheet-table th, .sheet-table td { border: 1px solid var(--border); padding: 2px 6px; white-space: nowrap; max-width: 360px; overflow: hidden; text-overflow: ellipsis; }
+.sheet-table thead th { position: sticky; top: 0; background: var(--bg-soft, var(--bg)); z-index: 1; }
+.sheet-table tbody th { position: sticky; left: 0; background: var(--bg-soft, var(--bg)); color: var(--muted, #888); font-weight: normal; }

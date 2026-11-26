@@ -167,7 +167,7 @@ The app asks for `openid email` only, reads the email once from Google's userinf
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `default_provider` | auto-detected: `opencode` if on PATH, else `codex`, else empty | Provider used when a document has no session yet. Empty → discussions are disabled with an explanation; reader/terminal still work. |
+| `default_provider` | auto-detected: `opencode` if on PATH, else `codex`, else `antigravity` (`agy`), else empty | Provider used when a document has no session yet. Empty → discussions are disabled with an explanation; reader/terminal still work. |
 | `env_script` | — | A shell script sourced (bash) for every agent process the app starts — turns, model lists, session lists — e.g. one that exports API tokens (`AWS_BEARER_TOKEN_BEDROCK`). Re-read whenever the file changes, so a rotated token applies without a restart. SSH machines get its variables only when they opt in (`forward_env` in `[[development.hosts]]` or the machine's **Environment** in the app). |
 
 ### `[agents.opencode]`
@@ -192,6 +192,19 @@ The app asks for `openid email` only, reads the email once from Google's userinf
 | `extra_args` | `[]` | Appended to every `codex exec`. |
 
 `CODEX_HOME` (environment) is honoured for session listing.
+
+### `[agents.antigravity]` — Google Antigravity CLI (`agy`)
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `true` | Register the adapter. |
+| `bin` | `agy` on PATH | Explicit executable path. |
+| `profile` | — | Passed as `--agent NAME`. |
+| `extra_args` | `[]` | Appended to every app-driven `agy` turn (e.g. `["--sandbox"]`). |
+
+App-driven turns auto-approve tool use (`--dangerously-skip-permissions`) in the workspace; read-only turns (locked
+documents, PR priority) run with `--mode plan`. Log in once by running `agy` in the terminal. `ANTIGRAVITY_HOME`
+(environment, default `~/.gemini/antigravity-cli`) is honoured for session listing.
 
 ## `[development]` — PR Development
 
@@ -359,6 +372,9 @@ extra_args = []
 enabled = true
 sandbox = "workspace-write"
 extra_args = []
+
+[agents.antigravity]
+enabled = true
 ```
 
 ## Running several wikis

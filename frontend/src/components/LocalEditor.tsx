@@ -4,6 +4,7 @@ import type * as M from "monaco-editor";
 import { ApiError, get, post, put } from "../api";
 import { langFor, outline, registerLanguages } from "./webide/languages";
 import { renderMarkdown } from "../markdown";
+import SheetView from "./SheetView";
 
 /**
  * The editor of Local files: tabs over Monaco (VS Code's editor) for any file on the server — syntax highlighting,
@@ -281,7 +282,8 @@ export default function LocalEditor({ openRequest, renamed, onActive, onChat }: 
       {tab?.kind === "image" && (
         <div className="webide-viewer"><div className="image-view"><img src={raw(tab.path)} alt={tab.path} data-testid="local-image" /></div></div>
       )}
-      {tab?.kind === "binary" && (
+      {tab?.kind === "binary" && /\.xls[xm]$/i.test(tab.path) && <SheetView path={tab.path} download={raw(tab.path)} />}
+      {tab?.kind === "binary" && !/\.xls[xm]$/i.test(tab.path) && (
         <div className="webide-empty" data-testid="local-binary">
           <div className="webide-empty-title">{tab.path.split("/").pop()}</div>
           <div className="muted small">{tab.note}</div>

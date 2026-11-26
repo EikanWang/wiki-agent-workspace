@@ -726,3 +726,13 @@ async def test_a_turn_on_an_ssh_host_gets_its_pictures_copied_there(tmp_path, mo
     d = home / ".cache/wiki-agent-workspace/attachments/job1"
     assert out == [d / "0-m-1-0.png", d / "1-page.jpg"]
     assert out[0].read_bytes() == b"\x89PNG one" and out[1].read_bytes() == b"\xff\xd8 two"
+
+
+def test_antigravity_model_and_reasoning_level_are_combined_as_agy_accepts():
+    from backend.app.agents.antigravity import AntigravityAdapter as A
+
+    ms = [{"id": i} for i in ("gemini-4-carbon-low", "gemini-4-carbon-high", "gemini-4-neon-high", "gemini-4-neon-xhigh")]
+    assert A._model_effort("gemini-4-carbon-high", "max", ms) == ("gemini-4-carbon-high", None)  # Carbon has no "max"
+    assert A._model_effort("gemini-4-carbon-high", "low", ms) == ("gemini-4-carbon-low", None)
+    assert A._model_effort("gemini-4-neon-high", "xhigh", ms) == ("gemini-4-neon-xhigh", None)
+    assert A._model_effort(None, "max", ms) == (None, None) and A._model_effort(None, "high", ms) == (None, "high")

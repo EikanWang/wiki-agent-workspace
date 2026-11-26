@@ -228,6 +228,22 @@ def stat(body: StatIn, ctx: AppContext = Depends(require_auth)):
     return {"sha256": out}
 
 
+@router.get("/local/sheet")
+def sheet(path: str = Query(...), ctx: AppContext = Depends(require_auth)):
+    """An .xlsx workbook's sheets as tables of cell values (first 2000 rows / 200 columns of each)."""
+    from .sheets import read_xlsx
+
+    p = _abs(path)
+    if not p.is_file():
+        raise not_found(f"{p} is not a file", "FILE_NOT_FOUND")
+    if p.suffix.lower() not in (".xlsx", ".xlsm"):
+        raise bad_request("only .xlsx / .xlsm workbooks can be shown as tables", "NOT_A_WORKBOOK")
+    try:
+        return {"sheets": read_xlsx(str(p))}
+    except Exception as e:  # noqa: BLE001 - a damaged or unusual workbook
+        raise bad_request(f"could not read the workbook: {e}", "BAD_WORKBOOK") from e
+
+
 @router.get("/local/raw")
 def raw(path: str = Query(...), ctx: AppContext = Depends(require_auth)):
     p = _abs(path)

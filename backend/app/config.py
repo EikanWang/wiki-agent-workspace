@@ -35,7 +35,7 @@ class ProviderConfig:
     # codex only: persistent sandbox used for app-driven turns (DESIGN §8).
     sandbox: str = "workspace-write"
     extra_args: list[str] = field(default_factory=list)
-    profile: str | None = None       # codex --profile / opencode --agent
+    profile: str | None = None       # codex --profile / opencode --agent / agy --agent
 
 
 @dataclass
@@ -364,12 +364,12 @@ def _dev_from(d: dict[str, Any]) -> DevSettings:
 
 
 def detect_default_provider(providers: dict[str, ProviderConfig]) -> str | None:
-    """DESIGN §15: opencode if detected, otherwise codex if detected, otherwise unset."""
-    for name in ("opencode", "codex"):
+    """DESIGN §15: opencode if detected, otherwise codex, otherwise Google Antigravity (agy), otherwise unset."""
+    for name in ("opencode", "codex", "antigravity"):
         p = providers.get(name, ProviderConfig())
         if not p.enabled:
             continue
-        if shutil.which(p.bin or name):
+        if shutil.which(p.bin or {"antigravity": "agy"}.get(name, name)):
             return name
     return None
 
@@ -390,7 +390,7 @@ def load_settings(path: Path | None = None, env: dict[str, str] | None = None) -
     agents = raw.get("agents", {})
 
     providers: dict[str, ProviderConfig] = {}
-    for name in ("opencode", "codex", "claude"):  # claude: only used by the agent monitor (bin)
+    for name in ("opencode", "codex", "antigravity", "claude"):  # claude: only used by the agent monitor (bin)
         providers[name] = _provider_from(agents.get(name, {}) or {})
 
     default_provider = agents.get("default_provider") or None

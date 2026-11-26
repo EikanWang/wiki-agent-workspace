@@ -5805,3 +5805,39 @@ Path(${JSON.stringify(file)}).write_bytes(_minimal_docx(["Intro of the spec.", "
     fs.rmSync(file, { force: true });
   }
 });
+
+test("A direct link http://host/<absolute path> opens the file in Local files; an .xlsx shows as tables", async ({ page }) => {
+  await login(page);
+  const dir = path.join(path.dirname(workspaceDir()), "sheets");
+  fs.mkdirSync(dir, { recursive: true });
+  const book = path.join(dir, "book.xlsx");
+  require("child_process").execFileSync("python3", ["-c",
+    "import sys; sys.path.insert(0, sys.argv[1]); from test_localfs import make_xlsx; from pathlib import Path; make_xlsx(Path(sys.argv[2]))",
+    path.join(__dirname, "..", "backend"), book]);
+  fs.copyFileSync(book, path.join(path.dirname(workspaceDir()), "sheets-keep.xlsx"));
+  await page.goto(book);
+  await expect(page.getByTestId("sheet-view")).toBeVisible({ timeout: 20000 });
+  expect(new URL(page.url()).pathname).toBe("/");
+  await expect(page.getByTestId("sheet-tab")).toHaveText(["Hash", "Empty"]);
+  const table = page.getByTestId("sheet-table");
+  await expect(table.locator("tbody tr").first()).toContainText("Bank");
+  await expect(table.locator("tbody tr").nth(2)).toContainText("42");
+  await page.getByTestId("sheet-filter").fill("slice");
+  await expect(table.locator("tbody tr")).toHaveCount(1);
+  await page.getByTestId("sheet-tab").nth(1).click();
+  await expect(page.getByTestId("sheet-view")).toContainText("This sheet is empty.");
+  fs.rmSync(dir, { recursive: true, force: true });
+  // a workbook inside the wiki folder (file tree, links in answers / documents) opens the same table, not a reader error
+  const inWiki = path.join(workspaceDir(), "docs", "book.xlsx");
+  fs.copyFileSync(path.join(path.dirname(workspaceDir()), "sheets-keep.xlsx"), inWiki);
+  await page.getByTestId("activity-files").click();
+  if (!(await page.getByTestId("tree-refresh").isVisible())) await page.getByTestId("activity-files").click();
+  await page.getByTestId("tree-refresh").click();
+  if ((await page.getByTestId("tree-file-docs/guide.md").count()) === 0) await page.locator(".tree-row.dir", { hasText: "docs" }).locator(".chev").click();
+  await expect(page.getByTestId("tree-file-docs/book.xlsx")).toBeVisible({ timeout: 20000 });
+  await page.getByTestId("tree-file-docs/book.xlsx").click();
+  await expect(page.getByTestId("sheet-view")).toBeVisible({ timeout: 20000 });
+  await expect(page.getByTestId("sheet-tab")).toHaveText(["Hash", "Empty"]);
+  fs.rmSync(inWiki, { force: true });
+  fs.rmSync(path.join(path.dirname(workspaceDir()), "sheets-keep.xlsx"), { force: true });
+});

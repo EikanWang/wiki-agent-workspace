@@ -1,0 +1,81 @@
+#!/usr/bin/env python3
+"""Controllable fake `agy` (Google Antigravity CLI) for tests. Print mode with --input-format/--output-format
+stream-json: reads {"event": "user", "message": {"content": …}} from stdin and emits init / step_update / result.
+Conversations are recorded in $ANTIGRAVITY_HOME/conversation_summaries.db like the real CLI.
+
+Prompt directives: [[fail:msg]] [[edit:rel:::old:::new]] — else echo.
+"""
+import json
+import os
+import re
+import sqlite3
+import sys
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+
+STATE = Path(os.environ.get("FAKE_AGENT_STATE", "/tmp/fake-agent-state"))
+HOME = Path(os.environ.get("ANTIGRAVITY_HOME") or (STATE / "antigravity-home"))  # never the real ~/.gemini
+STATE.mkdir(parents=True, exist_ok=True)
+
+
+def emit(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+
+def record(cid, cwd, title):
+    HOME.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(HOME / "conversation_summaries.db")
+    con.execute("CREATE TABLE IF NOT EXISTS conversation_summaries (conversation_id text PRIMARY KEY, title text NOT NULL DEFAULT '', "
+                "preview text NOT NULL DEFAULT '', workspace_uris text NOT NULL, last_modified_time datetime NOT NULL, "
+                "parent_conversation_id text NOT NULL DEFAULT '')")
+    now = datetime.now(timezone.utc).isoformat(" ")
+    con.execute("INSERT INTO conversation_summaries (conversation_id, title, preview, workspace_uris, last_modified_time) VALUES (?, '', ?, ?, ?) "
+                "ON CONFLICT(conversation_id) DO UPDATE SET last_modified_time = excluded.last_modified_time",
+                (cid, title[:80], json.dumps([f"file://{cwd}"]), now))
+    con.commit()
+    con.close()
+
+
+def main():
+    argv = sys.argv[1:]
+    if argv == ["--version"]:
+        print("1.5.17-fake")
+        return 0
+    if argv[:1] == ["models"]:
+        print("Fetching available models...")
+        print("gemini-fake-high\tGemini Fake (High)")
+        print("gemini-fake-low\tGemini Fake (Low)")
+        return 0
+    with (STATE / "agy_calls.log").open("a") as fh:
+        fh.write(json.dumps(argv) + "\n")
+    msg = json.loads(sys.stdin.readline() or "{}")
+    prompt = ((msg.get("message") or {}).get("content") or "")
+    (STATE / "agy_last_prompt").write_text(prompt)
+    cid = argv[argv.index("--conversation") + 1] if "--conversation" in argv else str(uuid.uuid4())
+    record(cid, os.getcwd(), prompt)
+    emit({"event": "init", "conversation_id": cid, "init": {"cwd": os.getcwd()}})
+    emit({"event": "step_update", "step_update": {"conversation_id": cid, "step_index": 0, "state": "DONE", "step_type": "user_input"}})
+    m = re.search(r"\[\[fail:(.*?)\]\]", prompt)
+    if m:
+        emit({"event": "result", "result": {"conversation_id": cid, "status": "ERROR", "response": "", "error": m.group(1)}})
+        return 1
+    m = re.search(r"\[\[edit:(.*?):::(.*?):::(.*?)\]\]", prompt)
+    if m and "plan" not in argv:
+        p = Path(os.getcwd()) / m.group(1)
+        emit({"event": "step_update", "step_update": {"step_index": 1, "state": "ACTIVE", "step_type": "tool", "tool_name": "replace_file_content",
+                                                      "tool_info": {"name": "replace_file_content", "parameters": {"Path": str(p)}}}})
+        p.write_text(p.read_text().replace(m.group(2), m.group(3), 1))
+        emit({"event": "step_update", "step_update": {"step_index": 1, "state": "DONE", "step_type": "tool", "tool_name": "replace_file_content",
+                                                      "tool_info": {"name": "replace_file_content", "parameters": {"Path": str(p)}}}})
+    user = prompt.split("User message:", 1)[1].split("\n\nInstructions:", 1)[0] if "User message:" in prompt else prompt
+    text = "echo: " + re.sub(r"\[\[.*?\]\]", "", user).strip()
+    for i, part in enumerate((text[: len(text) // 2], text[len(text) // 2:])):
+        emit({"event": "step_update", "step_update": {"step_index": 2, "state": "ACTIVE" if i == 0 else "DONE",
+                                                      "step_type": "agent_response", "text_delta": part}})
+    emit({"event": "result", "result": {"conversation_id": cid, "status": "SUCCESS", "response": text}})
+    return 0
+
+
+sys.exit(main())

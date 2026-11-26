@@ -56,6 +56,7 @@ def make_settings(tmp: Path, workspace: Path, *, default_provider: str | None = 
         providers={
             "opencode": ProviderConfig(bin=str(FAKES / "fake-opencode"), mode=opencode_mode),
             "codex": ProviderConfig(bin=str(FAKES / "fake-codex"), sandbox="workspace-write"),
+            "antigravity": ProviderConfig(bin=str(FAKES / "fake-agy")),
         },
         access_token=TOKEN,
         server_secret="unit-test-server-secret",
@@ -72,6 +73,7 @@ def fake_env(tmp_path, monkeypatch):
     codex_home = tmp_path / "codex-home"
     codex_home.mkdir()
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setenv("ANTIGRAVITY_HOME", str(tmp_path / "antigravity-home"))
     yield state
 
 

@@ -47,6 +47,11 @@ class _Model:
 EXCLUDED_DIRS = {".git", "node_modules", ".codex", ".opencode", "__pycache__"}
 
 
+
+def _workbook(name: str) -> bool:
+    """Excel workbooks open as tables in Local files (not in the reader)."""
+    return name.lower().endswith((".xlsx", ".xlsm"))
+
 def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -197,7 +202,7 @@ class DocumentService:
                         size = None
                 items.append({
                     "path": rel_item, "name": e.name, "type": "file", "kind": kind, "size": size,
-                    "openable": document_format(e.name) != "unsupported" and not broken,
+                    "openable": (document_format(e.name) != "unsupported" or _workbook(e.name)) and not broken,
                     "format": document_format(e.name),
                     "git_status": self._file_status(info, rel_item),
                     "symlink": is_link, "link_target": link_target, "escapes": escapes,
@@ -783,7 +788,7 @@ class DocumentService:
             with open(path, "x", encoding="utf-8") as fh:  # "x": never overwrite, even in a race
                 fh.write(content)
         return {"path": norm, "kind": kind, "format": document_format(path.name) if kind == "file" else None,
-                "openable": kind == "file" and document_format(path.name) != "unsupported"}
+                "openable": kind == "file" and (document_format(path.name) != "unsupported" or _workbook(path.name))}
 
     def write_atomic(self, rel: str, data: bytes) -> str:
         if self.locks is not None:

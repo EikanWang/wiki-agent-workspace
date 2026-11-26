@@ -159,7 +159,11 @@ it to the list; open folders stay there for every browser; ✕ closes one (nothi
 **New file** / **New folder**, a file or folder for **Rename / move** and **Delete**. Files open in tabs in VS Code's
 editor (Monaco): syntax highlighting, find / replace, outline (`Ctrl+Shift+O`), `Ctrl/⌘+S` saves — a file that
 changed on disk in the meantime is never overwritten silently, and clean tabs follow changes on disk. Markdown has
-a preview, images are shown, other binary files can be downloaded.
+a preview, images are shown, Excel workbooks (`.xlsx`, `.xlsm`) are shown as tables — one tab per sheet, a row
+filter, the first 2000 rows × 200 columns, values only (no formulas or formatting) — and other binary files can be
+downloaded. **Direct links:** `http://<server>:<port>/<absolute path>`, e.g.
+`http://10.112.100.55:8765/hw-documents/xe-has/HashingTraining/Specs/CRI/CRI_SOC_HASH.xlsx`, opens that file here
+(after logging in if needed).
 
 **Chat with the agent** about any folder or file, like a wiki folder chat: hover it and click **💬** (or **💬 Chat
 about this file** above an open file). The chat opens to the right of the editor (drag the bar to resize, × closes
@@ -222,7 +226,7 @@ level by hand**, go **back to rules / agent**, or **ask the agent again**. A PR'
   characters, a bigger file in parts, the 60 biggest files; lock / vendored / generated / binary files only named),
   then it decides from the summaries. Summaries are kept until a file's change changes; editing your descriptions
   re-runs only the decisions. Pick the agent and model for the **summaries** and for the **decision** separately
-  (e.g. a cheaper model for summaries). Its turns only read (Codex: read-only sandbox) and its sessions are hidden
+  (e.g. a cheaper model for summaries). Its turns only read (Codex: read-only sandbox; Antigravity: plan mode) and its sessions are hidden
   from the session pickers. **Re-classify all** asks it again for every PR. In a PR tab, **🤖 Agent's view of the
   changes** shows its reason and the summary of each file.
 - **Categories** — the order and names of the three sections.
@@ -606,8 +610,9 @@ reference wiki, and for a PR tab the PR's connected local checkout. Skills are t
 `.opencode/skills`, `.claude/skills`, `.agents/skills` and `.codex/skills`.
 
 - **OpenCode** loads them as its own skills for the turn (`skills.paths` in its configuration for that run).
-- **Codex** has no setting for extra skill folders; the turn's prompt lists them — name, description, path of the
-  `SKILL.md` — the same way Codex lists its own skills, with the instruction to read a matching one first.
+- **Codex** and **Google Antigravity** have no setting for extra skill folders; the turn's prompt lists them — name,
+  description, path of the `SKILL.md` — the same way Codex lists its own skills, with the instruction to read a
+  matching one first.
 - On an **SSH host** they are copied there read-only (`<work_dir>/skills/…`, refreshed when they change) and loaded
   from the copies.
 
@@ -871,12 +876,17 @@ shows its date and time in **UTC+8** (e.g. `2026-11-12 15:03:21 UTC+8`): when yo
 
 ## Agent sessions and models
 
+- **Agents**: OpenCode, Codex and **Google Antigravity** (its `agy` CLI) — each one installed and logged in on the
+  server is offered wherever you pick an agent (**+ New session** buttons, the agent / model menus of the dialogs,
+  PR Development, Local files chat). Antigravity streams its answer as it writes it; its conversations can be linked
+  like the others'.
 - Each document has a default session (top bar). The first question creates one with the default provider;
   **+ New session** makes a fresh one for future discussions; the session dialog can also **link an existing
   provider session** (e.g. the terminal conversation that wrote the page).
 - **Model**: every session has a model and reasoning effort for its future turns — choose them in the session
-  dialog, in the discussion's session box, or in the flat composer. OpenCode lists its real models; for Codex the
-  configured default, profiles and common ids are offered, or type any id. Past answers keep their model.
+  dialog, in the discussion's session box, or in the flat composer. OpenCode and Antigravity list their real models
+  (Antigravity's reasoning levels: low … max); for Codex the configured default, profiles and common ids are offered,
+  or type any id. Past answers keep their model.
 - Jobs on the same session run one after another ("waiting for session"); different sessions run in parallel.
 - **Images in answers**: every agent answer (wiki chats, discussions, Insights, Local files and PR Development chats,
   …) shows the images it points at — Markdown images, links or `code` paths to `.png`, `.jpg`, `.gif`, `.webp`,
@@ -911,7 +921,7 @@ in place of the rendered view.
 
 `🔒` next to a file/folder in the tree, or **Lock** in the top bar (also for a whole folder root). A lock makes the
 path read-only *for the app and app-driven agents*: preview Apply, relink, history deletion and commits are refused;
-the agent is told the path is locked (Codex runs read-only); if a change happens anyway during a turn it is reported
+the agent is told the path is locked (Codex runs read-only, Antigravity in plan mode); if a change happens anyway during a turn it is reported
 as a *lock violation* for you to review. Your terminal is never restricted.
 
 ## Diff review

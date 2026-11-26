@@ -7,6 +7,7 @@ from typing import Any
 
 from ..config import Settings
 from .base import AgentAdapter, Capabilities, ProviderError
+from .antigravity import AntigravityAdapter
 from .codex import CodexAdapter
 from .opencode import OpenCodeCliAdapter, OpenCodeServerAdapter
 
@@ -21,6 +22,9 @@ class ProviderRegistry:
         cx = settings.provider("codex")
         if cx.enabled:
             self.adapters["codex"] = CodexAdapter(cx)
+        ag = settings.provider("antigravity")
+        if ag.enabled:
+            self.adapters["antigravity"] = AntigravityAdapter(ag)
         self._caps: dict[str, Capabilities] = {}
 
     def get(self, name: str) -> AgentAdapter:

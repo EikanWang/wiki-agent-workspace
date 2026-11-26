@@ -302,11 +302,21 @@ export default function App() {
   );
 
   const openSeq = useRef(0); // the latest openDocument call: only its document is shown
+  // folder roots by workspace id: a workbook in a folder opens in Local files (the reader has no spreadsheet view)
+  const wsRoots = useRef<Record<string, string>>({});
+  wsRoots.current = Object.fromEntries([...(boot ? [[boot.workspace.id, boot.workspace.root]] : []), ...workspaces.map((w) => [w.id, w.root])]);
   const openDocument = useCallback(
     async (path: string, keepThread = false, quiet = false): Promise<boolean> => {
       const seq = ++openSeq.current;
       if (isChatPath(path)) {
         openChats({ ws: getWorkspace() ?? "", path });
+        return true;
+      }
+      const root = wsRoots.current[getWorkspace() ?? ""];
+      if (/\.xls[xm]$/i.test(path) && root) {
+        setLocalUsed(true);
+        setView("local");
+        setLocalOpen({ path: `${root.replace(/\/+$/, "")}/${path.replace(/^\/+/, "")}`, at: Date.now() });
         return true;
       }
       if (!keepThread && !confirmLeaveEditor()) return false;
@@ -509,6 +519,18 @@ export default function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [navGo]);
+
+  // a direct link to a file on the server — http://host:port/<absolute path> — opens it in Local files
+  useEffect(() => {
+    if (!authed) return;
+    const p = decodeURIComponent(window.location.pathname);
+    if (p === "/" || p === "/index.html" || p.startsWith("/api/") || p.startsWith("/assets/")) return;
+    window.history.replaceState(null, "", "/" + window.location.search + window.location.hash);
+    setLocalUsed(true);
+    setView("local");
+    setLocalOpen({ path: p.replace(/\/+$/, "") || "/", at: Date.now() });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authed]);
 
   const goToRef = useCallback(async (c: RefCandidate) => {
     setRefPick(null);

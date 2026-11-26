@@ -59,7 +59,7 @@ export default function ModelPicker({ session, onChanged, compact = false }: { s
           </select>
         ) : (
           <span className="stepper">
-            <input value={model} disabled={busy} placeholder={session.provider === "codex" ? "e.g. gpt-5" : "e.g. provider/model"} onChange={(e) => setModel(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void save(model.trim(), variant); }} data-testid="model-input" />
+            <input value={model} disabled={busy} placeholder={session.provider === "codex" ? "e.g. gpt-5" : session.provider === "antigravity" ? "e.g. gemini-3.8-flash-medium" : "e.g. provider/model"} onChange={(e) => setModel(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void save(model.trim(), variant); }} data-testid="model-input" />
             <button className="btn small" disabled={busy} onClick={() => void save(model.trim(), variant)}>Use</button>
             <button className="btn small" disabled={busy} onClick={() => { setCustom(false); setModel(""); void save("", variant); }} title="Back to the provider default">Default</button>
           </span>

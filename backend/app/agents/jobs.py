@@ -249,15 +249,15 @@ class JobManager:
             if locks_svc is not None and doc_path and kind == "turn":
                 lock = locks_svc.covering(doc_path)
             sandbox = self.codex_sandbox if provider == "codex" else None
-            if context.get("_read_only") and provider == "codex":
+            if context.get("_read_only") and provider in ("codex", "antigravity"):
                 sandbox = "read-only"  # e.g. PR priority: the agent only reads
             if lock:
                 prompt = (prompt + "\n\nIMPORTANT: The user has LOCKED this document" + (f" (reason: {lock['reason']})" if lock.get("reason") else "")
                           + ". It is read-only for you: answer the question, but do NOT modify this file or anything under "
                           + (lock["path"] or "the workspace") + ". If asked to edit, explain that the path is locked instead.")
-                if provider == "codex":
+                if provider in ("codex", "antigravity"):
                     sandbox = "read-only"
-                self._emit(job_id, "notice", {"message": f"{doc_path} is locked; the agent runs read-only for this turn" + (" (Codex sandbox read-only)" if provider == "codex" else "")})
+                self._emit(job_id, "notice", {"message": f"{doc_path} is locked; the agent runs read-only for this turn" + (" (Codex sandbox read-only)" if provider == "codex" else " (Antigravity plan mode)" if provider == "antigravity" else "")})
             pre_sha = None
             if lock:
                 try:

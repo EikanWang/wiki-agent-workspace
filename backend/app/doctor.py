@@ -126,9 +126,9 @@ def run_checks(settings: Settings, *, url: str | None = None, quick: bool = Fals
 
     # ---------------------------------------------------------------- agents
     found_any = False
-    for name, label in (("opencode", "OpenCode"), ("codex", "Codex")):
+    for name, label in (("opencode", "OpenCode"), ("codex", "Codex"), ("antigravity", "Google Antigravity (agy)")):
         p = settings.providers.get(name, ProviderConfig())
-        exe = shutil.which(p.bin or name) if p.enabled else None
+        exe = shutil.which(p.bin or {"antigravity": "agy"}.get(name, name)) if p.enabled else None
         found_any = found_any or bool(exe)
         if not p.enabled:
             add("agents", label, "warn", "disabled in the configuration", f"[agents.{name}] enabled = true")
@@ -136,11 +136,12 @@ def run_checks(settings: Settings, *, url: str | None = None, quick: bool = Fals
         ver = _version([exe, "--version"]) if exe and not quick else ""
         add("agents", label, "ok" if exe else "warn", f"{exe}" + (f" ({ver})" if ver else "") if exe else "not found on PATH",
             "curl -fsSL https://opencode.ai/install | bash && opencode auth login" if name == "opencode"
+            else "install the Antigravity CLI (agy), then run `agy` once to sign in" if name == "antigravity"
             else "npm install -g --prefix ~/.local @openai/codex && codex login")
     dp = settings.default_provider
     if dp:
         p = settings.providers.get(dp, ProviderConfig())
-        add("agents", "Default agent", "ok" if shutil.which(p.bin or dp) else "fail", dp,
+        add("agents", "Default agent", "ok" if shutil.which(p.bin or {"antigravity": "agy"}.get(dp, dp)) else "fail", dp,
             f"install {dp}, or set agents.default_provider to an installed one")
     else:
         add("agents", "Default agent", "warn" if found_any else "fail", "not set: discussions and chats are unavailable",

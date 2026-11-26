@@ -205,7 +205,7 @@ class SshTarget(Target):
             raise TargetError(f"cannot write {path} on {self.name}: {err.strip()[:300]}")
 
     def remote_exec(self, cwd: str) -> RemoteExec:
-        return RemoteExec(self.ssh_prefix(), {"opencode": self.host.opencode, "codex": self.host.codex}, cwd,
+        return RemoteExec(self.ssh_prefix(), {"opencode": self.host.opencode, "codex": self.host.codex, "antigravity": "agy"}, cwd,
                           pre=path_prefix(self.host.work_dir))
 
 

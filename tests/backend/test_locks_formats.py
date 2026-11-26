@@ -89,6 +89,22 @@ async def test_codex_turn_on_locked_document_runs_read_only(api: Api, fake_env: 
     assert not any(e["type"] == "lock_violation" for e in ev)
 
 
+async def test_antigravity_turn_on_locked_document_runs_in_plan_mode(api: Api, fake_env: Path, workspace: Path):
+    import json
+
+    r = await api.post("/api/v1/agent-sessions", json={"provider": "antigravity", "display_name": "ag"})
+    ag = r.json()["id"]
+    await api.post("/api/v1/locks", json={"path": "docs/guide.md"})
+    doc = await api.open_doc()
+    a = anchor_for(doc["text"], "TorchDynamo")
+    r = await api.post(f"/api/v1/documents/{doc['document_id']}/threads", json={**a, "version_sha256": doc["sha256"], "question": "edit [[edit:docs/guide.md:::Guide:::X]]", "session_id": ag})
+    ev = await api.wait_job(r.json()["job_id"])
+    call = json.loads((fake_env / "agy_calls.log").read_text().splitlines()[-1])
+    assert call[call.index("--mode") + 1] == "plan" and "--dangerously-skip-permissions" not in call
+    assert ev[-1]["type"] == "completed" and "Guide" in (workspace / "docs" / "guide.md").read_text()
+    assert any(e["type"] == "notice" and "Antigravity plan mode" in e["payload"].get("message", "") for e in ev)
+
+
 async def test_open_text_source_docx_and_pdf(api: Api, workspace: Path):
     (workspace / "src").mkdir()
     (workspace / "src" / "kernel.cpp").write_text("#include <cstdio>\nint main() {\n  printf(\"hi\");\n}\n")

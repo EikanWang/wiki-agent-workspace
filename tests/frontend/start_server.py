@@ -402,6 +402,7 @@ def main() -> None:
     codex_home = tmp / "codex-home"
     codex_home.mkdir()
     os.environ["CODEX_HOME"] = str(codex_home)
+    os.environ["ANTIGRAVITY_HOME"] = str(tmp / "antigravity-home")  # never the real ~/.gemini/antigravity-cli
     ws = tmp / "wiki"
     make_workspace(ws)
     settings = make_settings(tmp, ws)

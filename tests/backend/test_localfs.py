@@ -79,3 +79,34 @@ async def test_local_chat_works_in_the_local_folder(running_app, tmp_path: Path)
     assert (await api.post(f"/api/v1/threads/{tid}/messages", json={"text": "-", "chat_action": "update"})).status_code == 400
     assert (await api.delete(f"/api/v1/chats?path={c['path']}")).status_code == 200  # archived
     assert (await api.get("/api/v1/local/chats", params={"path": str(d / "src" / "main.py")})).json()["chats"] == []
+
+
+def make_xlsx(path: Path) -> None:
+    """A minimal two-sheet workbook: shared and inline strings, numbers, booleans, a gap column and a gap row."""
+    import zipfile
+
+    m = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"'
+    r = 'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"'
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("xl/workbook.xml", f'<workbook {m} {r}><sheets><sheet name="Hash" sheetId="1" r:id="rId1"/>'
+                   f'<sheet name="Empty" sheetId="2" r:id="rId2"/></sheets></workbook>')
+        z.writestr("xl/_rels/workbook.xml.rels", '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                   '<Relationship Id="rId1" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Target="worksheets/sheet2.xml"/></Relationships>')
+        z.writestr("xl/sharedStrings.xml", f'<sst {m}><si><t>Bank</t></si><si><r><t>Sl</t></r><r><t>ice</t></r></si></sst>')
+        z.writestr("xl/worksheets/sheet1.xml", f'<worksheet {m}><sheetData>'
+                   '<row r="1"><c r="A1" t="s"><v>0</v></c><c r="C1" t="s"><v>1</v></c></row>'
+                   '<row r="3"><c r="A3"><v>42</v></c><c r="B3" t="b"><v>1</v></c><c r="C3" t="inlineStr"><is><t>x</t></is></c></row>'
+                   '</sheetData></worksheet>')
+        z.writestr("xl/worksheets/sheet2.xml", f'<worksheet {m}><sheetData/></worksheet>')
+
+
+async def test_local_xlsx_as_tables(api, tmp_path: Path):
+    make_xlsx(tmp_path / "book.xlsx")
+    r = (await api.get("/api/v1/local/sheet", params={"path": str(tmp_path / "book.xlsx")})).json()
+    assert [s["name"] for s in r["sheets"]] == ["Hash", "Empty"]
+    assert r["sheets"][0]["rows"] == [["Bank", "", "Slice"], [], ["42", "TRUE", "x"]]
+    assert r["sheets"][1]["rows"] == []
+    (tmp_path / "a.txt").write_text("x")
+    assert (await api.get("/api/v1/local/sheet", params={"path": str(tmp_path / "a.txt")})).status_code == 400
+    (tmp_path / "bad.xlsx").write_text("not a zip")
+    assert (await api.get("/api/v1/local/sheet", params={"path": str(tmp_path / "bad.xlsx")})).json()["error"]["code"] == "BAD_WORKBOOK"

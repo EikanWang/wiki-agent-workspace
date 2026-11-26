@@ -142,6 +142,7 @@ export default function SessionPicker({
             <select value={manualProvider} onChange={(e) => setManualProvider(e.target.value)}>
               <option value="opencode">opencode</option>
               <option value="codex">codex</option>
+              <option value="antigravity">antigravity</option>
             </select>
             <input value={manualId} onChange={(e) => setManualId(e.target.value)} placeholder="Enter a provider session id" />
             <button className="btn" disabled={busy || !manualId.trim()} onClick={() => void link(manualProvider, manualId.trim())}>Link</button>
