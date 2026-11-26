@@ -362,6 +362,11 @@ test("layout: font settings, foldable/resizable file tree and discussion panel, 
   await page.getByTestId("center-unfold").click();
   await expect(page.getByTestId("layout")).not.toHaveClass(/center-folded/);
   await expect(page.getByTestId("markdown-body")).toBeVisible();
+  // the ‹ › button on the panel's resize bar folds it too
+  await page.locator(".discussion .resizer").hover();
+  await page.getByTestId("panel-fold").click();
+  await expect(page.getByTestId("discussion-panel")).toHaveCount(0);
+  await page.getByTestId("panel-expand").click();
   const panel = page.getByTestId("discussion-panel");
   const p0 = (await panel.boundingBox())!.width;
   const ph = (await page.locator(".discussion .resizer").boundingBox())!;
@@ -3517,10 +3522,23 @@ test("PR Development: view the code of the main branch, Alt+← / Alt+→ betwee
   await page.getByTestId("sequence-close").click();
   // fold the middle (explorer, editor, bottom panel): the agent panel takes the width
   await page.getByTestId("dev-main-toggle").click();
-  await expect(page.getByTestId("webide")).toBeHidden();
+  await expect(page.getByTestId("webide-editor")).toBeHidden();
+  await expect(page.getByTestId("webide-explorer")).toBeVisible();
   await expect(page.getByTestId("dev-view")).toHaveClass(/main-folded/);
+  // no gap: the agent panel starts right after the explorer (and the unfold strip)
+  const exb = (await page.getByTestId("webide-explorer").boundingBox())!, stb = (await page.getByTestId("dev-main-strip").boundingBox())!;
+  expect(stb.x - (exb.x + exb.width)).toBeLessThan(12);
   await page.getByTestId("dev-main-strip").click();
-  await expect(page.getByTestId("webide")).toBeVisible();
+  // the bottom panel sits under the code view only, not under the explorer; its resize bar has a fold button
+  const bx = (await page.locator(".dev-bottom").boundingBox())!, ex = (await page.getByTestId("webide-explorer").boundingBox())!;
+  expect(bx.x).toBeGreaterThanOrEqual(ex.x + ex.width - 1);
+  if ((await page.getByTestId("dev-bottom-splitter").count()) > 0) {
+    await page.getByTestId("dev-bottom-splitter").hover();
+    await page.getByTestId("dev-bottom-fold").click();
+    await expect(page.getByTestId("dev-bottom-splitter")).toHaveCount(0);
+    await page.getByTestId("dev-tab-tasks").click();
+  }
+  await expect(page.getByTestId("webide-editor")).toBeVisible();
   // dependencies of the file, and the impact map of the changes (none here)
   await page.getByTestId("webide-deps").click();
   await expect(page.getByTestId("graph-view")).toHaveAttribute("data-kind", "deps");
@@ -3831,10 +3849,12 @@ test("PR Development: Changes view like the wiki's Diff: per-file diffs, side by
   gitRetry("commit", "-q", "-m", "Pad lib.py");
   fs.writeFileSync(path.join(devWt, "lib.py"), `${lib}${pad.replace("PAD_20 = 20", "PAD_20 = 'changed'")}\n`);
   fs.writeFileSync(path.join(devWt, "notes_e2e.md"), "# notes\n");
-  // the Changes view in the editor area
+  // the Changes view: a "± Changes" tab in the editor, beside the files; the explorer stays
   await page.getByTestId("dev-changes-toggle").click();
-  await expect(page.locator(".dev-changes-main [data-testid=dev-changes]")).toBeVisible();
-  await expect(page.getByTestId("webide")).toBeHidden(); // still mounted, just hidden
+  await expect(page.getByTestId("webide-diff-tab")).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator("[data-testid=webide-diff-view] [data-testid=dev-changes]")).toBeVisible();
+  await expect(page.getByTestId("webide-explorer")).toBeVisible();
+  await expect(page.getByTestId("webide-editor")).toBeHidden();
   const libDiff = page.locator('[data-testid="dev-diff-file"][data-path="lib.py"]');
   await expect(libDiff).toBeVisible({ timeout: 15000 });
   await expect(page.locator('[data-testid="dev-diff-file"][data-path="notes_e2e.md"]')).toContainText("untracked");
@@ -4056,16 +4076,16 @@ test("PR Development: resize the bottom panel; choose a model for a discussion a
   const bottom = page.locator(".dev-bottom");
   const h0 = (await bottom.boundingBox())!.height;
   const sp = (await page.getByTestId("dev-bottom-splitter").boundingBox())!;
-  await page.mouse.move(sp.x + sp.width / 2, sp.y + sp.height / 2);
+  await page.mouse.move(sp.x + 30, sp.y + sp.height / 2); // off the ▾ fold button in the middle
   await page.mouse.down();
-  await page.mouse.move(sp.x + sp.width / 2, sp.y - 120, { steps: 5 });
+  await page.mouse.move(sp.x + 30, sp.y - 120, { steps: 5 });
   await page.mouse.up();
   const h1 = (await bottom.boundingBox())!.height;
   expect(h1).toBeGreaterThan(h0 + 100);
   await page.reload();
   await expect(page.getByTestId("webide")).toBeVisible({ timeout: 20000 });
   expect(Math.abs((await page.locator(".dev-bottom").boundingBox())!.height - h1)).toBeLessThan(3); // kept
-  await page.getByTestId("dev-bottom-splitter").dblclick();
+  await page.getByTestId("dev-bottom-splitter").dblclick({ position: { x: 30, y: 4 } });
   expect(Math.abs((await page.locator(".dev-bottom").boundingBox())!.height - h0)).toBeLessThan(3); // default
   // another model for a new discussion about a file
   await page.getByTestId("dev-view-file").click();
@@ -4984,12 +5004,15 @@ test("layout: panes can be resized by dragging, folded and unfolded, and keep th
   expect(Math.abs((await page.locator(".webide-side").boundingBox())!.width - 260)).toBeLessThan(3);
   await page.getByTestId("dev-agent-splitter").dblclick({ position: { x: 2, y: 10 } });
   // Build & test: the command list beside the output
+  // (the panel is only as wide as the code view: fold the agent panel to give it room)
+  await page.getByTestId("dev-agent-splitter-fold").click();
   await page.getByTestId("dev-tab-tasks").click();
   const tl = page.locator(".dev-tasks-side");
   const t0 = (await tl.boundingBox())!.width;
   await drag("dev-tasks-splitter", 80);
   expect((await tl.boundingBox())!.width).toBeGreaterThan(t0 + 60);
   await page.getByTestId("dev-tasks-splitter").dblclick({ position: { x: 2, y: 10 } });
+  await page.getByTestId("dev-agent-strip").click();
   await page.getByTestId("activity-files").click();
 });
 

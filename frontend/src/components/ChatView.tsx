@@ -246,7 +246,7 @@ export default function ChatView({ doc, folderName, threads, sessions, liveJob, 
             }}
             onShowQuote={(t) => showMessage(t.target?.message_id)}
             docId={null} onRequestReanchor={() => undefined} reanchorArmed={false}
-            onCollapse={() => setSideOpen(false)} resizer={<Resizer side="left" onResize={resizeSide} />}
+            onCollapse={() => setSideOpen(false)} resizer={<Resizer side="left" onResize={resizeSide} onFold={() => setSideOpen(false)} label="side questions panel" />}
             mode={sideMode} onModeChange={setSideMode} />
         </div>
       )}

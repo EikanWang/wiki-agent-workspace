@@ -104,7 +104,7 @@ export function useInsightsDiscussion(repo: string, key: string | null, sessions
           onSelectThread={setActive}
           onAskDocument={(question) => ask({ question })}
           docId={doc?.document_id ?? null} onRequestReanchor={() => undefined} reanchorArmed={false}
-          onCollapse={() => setOpen(false)} resizer={<Resizer side="left" onResize={resize} />}
+          onCollapse={() => setOpen(false)} resizer={<Resizer side="left" onResize={resize} onFold={() => setOpen(false)} label="discussions panel" />}
           mode={mode} onModeChange={setMode} />
       </div>
     );

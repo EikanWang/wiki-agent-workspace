@@ -1811,3 +1811,26 @@ body.uml-dragging, body.uml-dragging .uml-box { cursor: grabbing; user-select: n
 .sequence-canvas .mermaid-diagram > img { max-height: none; }
 .sequence-steps { margin: 10px 0; padding-left: 26px; }
 .sequence-steps li { margin: 2px 0; }
+.dev-view.main-folded .dev-main { flex: none; }
+.dev-view.main-folded .webide-main { display: none; }
+.dev-view.main-folded .webide { flex: none; }
+.dev-view.main-folded .dev-main-strip { border-right: none; border-left: 1px solid var(--border); }
+.resizer .splitter-fold { top: 50%; width: 16px; height: 32px; transform: translateY(-50%); }
+.resizer.right .splitter-fold { right: -4px; }
+.resizer.left .splitter-fold { left: -4px; }
+.resizer:hover .splitter-fold, .dev-bottom-splitter:hover .splitter-fold { opacity: 1; }
+.dev-bottom-splitter .splitter-fold { left: 50%; top: -6px; width: 32px; height: 16px; transform: translateX(-50%); }
+.webide-main { min-height: 0; overflow: hidden; }
+.webide-main > .dev-bottom { flex: none; }
+.dev-bottom-tabs { flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
+.dev-bottom-tabs button { white-space: nowrap; flex: none; }
+.webide:has(.webide-main > .dev-bottom) .webide-lsp-note { bottom: auto; top: 72px; }
+/* the Editor fold: the left column is just the explorer (the status bar / toolbar don't widen it) */
+.dev-view.main-folded .dev-editor, .dev-view.main-folded .webide-body { flex: none; }
+.dev-view.main-folded .webide-status, .dev-view.main-folded .dev-main > :not(.dev-editor) { contain: inline-size; overflow: hidden; }
+.dev-view.main-folded .webide-side, .dev-view.main-folded .webide-activity { flex-shrink: 0; }
+.dev-view.main-folded .dev-side { min-width: 0; overflow: hidden; }
+.dev-view.main-folded .webide-side { max-width: none; }
+.webide-diff { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.webide-diff > * { flex: 1; min-height: 0; }
+.webide-diff-tab .webide-tab-name { font-weight: 600; }

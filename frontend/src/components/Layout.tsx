@@ -1,7 +1,11 @@
 import { useEffect, useRef } from "react";
 
 /** Vertical drag handle for resizing an adjacent panel. Calls onResize with the pointer's x delta. */
-export function Resizer({ onResize, onEnd, side }: { onResize: (dx: number) => void; onEnd?: () => void; side: "left" | "right" }) {
+export function Resizer({ onResize, onEnd, side, onFold, label = "panel", testId }: {
+  onResize: (dx: number) => void; onEnd?: () => void; side: "left" | "right";
+  /** a small ‹ / › button on the bar folds the panel it sizes (like the Splitter's) */
+  onFold?: () => void; label?: string; testId?: string;
+}) {
   const dragging = useRef(false);
   const lastX = useRef(0);
   useEffect(() => {
@@ -33,12 +37,16 @@ export function Resizer({ onResize, onEnd, side }: { onResize: (dx: number) => v
       aria-orientation="vertical"
       title="Drag to resize"
       onPointerDown={(e) => {
+        if ((e.target as HTMLElement).closest(".splitter-fold")) return;
         dragging.current = true;
         lastX.current = e.clientX;
         document.body.classList.add("resizing");
         e.preventDefault();
       }}
-    />
+    >
+      {onFold && <button className="splitter-fold" onClick={onFold} title={`Fold the ${label}`} aria-label={`Fold the ${label}`}
+        data-testid={testId}>{side === "right" ? "‹" : "›"}</button>}
+    </div>
   );
 }
 

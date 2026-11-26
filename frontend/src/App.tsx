@@ -1148,7 +1148,7 @@ export default function App() {
                 preset={devPreset} onPresetUsed={() => setDevPreset(null)} onFold={() => updatePrefs({ listOpen: false })} />
             </div>
           )}
-          {sidebarOpen && listOpen && <Resizer side="right" onResize={resizeSidebar} onEnd={persistPrefs} />}
+          {sidebarOpen && listOpen && <Resizer side="right" onResize={resizeSidebar} onEnd={persistPrefs} onFold={() => updatePrefs({ listOpen: false })} label="side list" testId="sidebar-fold" />}
         </aside>
 
         <section className="center" style={{ display: view === "document" ? undefined : "none" }}>
@@ -1367,7 +1367,7 @@ export default function App() {
             onCollapse={() => updatePrefs({ panelOpen: false, centerFolded: false })}
             centerFolded={centerFolded}
             onFoldCenter={() => updatePrefs({ centerFolded: !centerFolded })}
-            resizer={centerFolded ? undefined : <Resizer side="left" onResize={resizePanel} onEnd={persistPrefs} />}
+            resizer={centerFolded ? undefined : <Resizer side="left" onResize={resizePanel} onEnd={persistPrefs} onFold={() => updatePrefs({ panelOpen: false, centerFolded: false })} label="discussions panel" testId="panel-fold" />}
             mode={prefs.panelMode}
             onModeChange={(m) => updatePrefs({ panelMode: m })}
             onSessionChanged={() => void refreshSessions()}

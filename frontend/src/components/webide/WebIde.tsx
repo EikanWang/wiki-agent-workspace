@@ -51,7 +51,11 @@ interface DiscussBox { anchor: CodeAnchor | null; top: number; left: number; ima
 
 const DISCUSS_KINDS = [["ask", "Ask"], ["explain", "Explain"], ["fix", "Fix"], ["tests", "Write tests"], ["implement", "Implement"]] as const;
 
-export default function WebIde({ dev, completionEnabled, refreshKey, onAsk, threads, reveal, onFiles, onOpenThread, discussSession, onDiff }: {
+export default function WebIde({ dev, completionEnabled, refreshKey, onAsk, threads, reveal, onFiles, onOpenThread, discussSession, onDiff, bottom, diff }: {
+  /** the changes (diff) view, shown as a "± Changes" tab beside the files; `at` changes each time it is asked for */
+  diff?: { view: React.ReactNode; open: boolean; at: number; onClose: () => void };
+  /** shown under the code view only (not under the explorer): PR Development's Terminal / Build & test panel */
+  bottom?: React.ReactNode;
   /** show the changes (diff) of this folder / file of the worktree ("" = all of it) */
   onDiff?: (path: string | null) => void;
   /** the session a new discussion about this file / folder would use (for the model shown as default) */
@@ -75,6 +79,8 @@ export default function WebIde({ dev, completionEnabled, refreshKey, onAsk, thre
   const shownRoots = useMemo(() => (roots?.wt ? { ...roots, wt: { ...roots.wt, name: dev.branch } } : roots), [roots, dev.branch]);
   const rootsRef = useRef<Record<string, Root> | null>(null);
   const [tabs, setTabs] = useState<Tab[]>([]);
+  const [diffActive, setDiffActive] = useState(!!diff?.open);
+  useEffect(() => { setDiffActive(!!diff?.open); }, [diff?.open, diff?.at]);
   const tabsRef = useRef<Tab[]>([]);
   tabsRef.current = tabs;
   const [active, setActive] = useState<string | null>(null);
@@ -256,6 +262,7 @@ export default function WebIde({ dev, completionEnabled, refreshKey, onAsk, thre
   };
 
   const show = useCallback((uri: string, at?: { line: number; col?: number; endLine?: number; endCol?: number }) => {
+    setDiffActive(false);
     const ed = editorRef.current;
     const model = monaco.editor.getModel(monaco.Uri.parse(uri));
     if (!ed) return;
@@ -900,9 +907,16 @@ export default function WebIde({ dev, completionEnabled, refreshKey, onAsk, thre
         <Splitter dir="x" side="before" pane={sidePane} label="side bar" testId="webide-side-splitter" />
         <div className="webide-main">
           <div className="webide-tabs" role="tablist">
+            {diff?.open && (
+              <div role="tab" aria-selected={diffActive} className={`webide-tab webide-diff-tab ${diffActive ? "active" : ""}`} onClick={() => setDiffActive(true)}
+                onAuxClick={(e) => { if (e.button === 1) diff.onClose(); }} title="The changes (diff) of the worktree" data-testid="webide-diff-tab">
+                <span className="webide-tab-name">± Changes</span>
+                <button className="webide-tab-close" onClick={(e) => { e.stopPropagation(); diff.onClose(); }} aria-label="Close the changes">×</button>
+              </div>
+            )}
             {tabs.map((t) => (
-              <div key={t.uri} role="tab" aria-selected={t.uri === active} className={`webide-tab ${t.uri === active ? "active" : ""} ${t.stale ? "stale" : ""}`}
-                onClick={() => show(t.uri)} onAuxClick={(e) => { if (e.button === 1) closeTab(t.uri); }} onContextMenu={(e) => tabMenu.open(e, t.uri)} title={`${t.root === "wt" ? "" : `${roots?.[t.root]?.name}: `}${t.rel}${t.readonly ? " (read-only)" : ""}`} data-testid="webide-tab" data-path={t.rel}>
+              <div key={t.uri} role="tab" aria-selected={t.uri === active && !diffActive} className={`webide-tab ${t.uri === active && !diffActive ? "active" : ""} ${t.stale ? "stale" : ""}`}
+                onClick={() => { setDiffActive(false); show(t.uri); }} onAuxClick={(e) => { if (e.button === 1) closeTab(t.uri); }} onContextMenu={(e) => tabMenu.open(e, t.uri)} title={`${t.root === "wt" ? "" : `${roots?.[t.root]?.name}: `}${t.rel}${t.readonly ? " (read-only)" : ""}`} data-testid="webide-tab" data-path={t.rel}>
                 <span className="webide-tab-name">{t.rel.split("/").pop()}</span>
                 {t.root !== "wt" && <span className="muted small">wiki</span>}
                 {(discussionsOf.get(`${t.root}:${t.rel}`) ?? 0) > 0 && (
@@ -915,7 +929,8 @@ export default function WebIde({ dev, completionEnabled, refreshKey, onAsk, thre
               path={(u) => { const t = tabs.find((x) => x.uri === u); return t ? (t.root === "wt" ? t.rel : `${roots?.[t.root]?.name ?? t.root}: ${t.rel}`) : ""; }}
               onClose={closeTabs} done={tabMenu.done} testId="webide-tab-menu" />
           </div>
-          {activeTab && (
+          {diffActive && diff?.open && <div className="webide-diff" data-testid="webide-diff-view">{diff.view}</div>}
+          {activeTab && !diffActive && (
             <div className="webide-crumbs muted small">
               <span className="webide-crumbs-path" title={activeTab.rel}>
                 <span>{activeTab.root === "wt" ? dev.branch : roots?.[activeTab.root]?.name}</span>
@@ -936,7 +951,7 @@ export default function WebIde({ dev, completionEnabled, refreshKey, onAsk, thre
               <button className="btn small webide-chat-file" onClick={() => chatAbout(activeTab)} title="Chat with the agent about this file (its discussions are in the agent panel's This file view)" data-testid="webide-chat-file">💬 Chat about this file</button>
             </div>
           )}
-          {activeTab?.stale && (
+          {activeTab?.stale && !diffActive && (
             <div className="banner warn small" data-testid="webide-stale">
               {activeTab.stale === "deleted" ? "This file was deleted on disk." : "This file was changed on disk (agent, command or git) while you have unsaved edits."}
               {activeTab.stale === "changed" && <button className="btn small" onClick={() => void reloadFromDisk(activeTab.uri)}>Reload from disk (lose my edits)</button>}
@@ -944,7 +959,7 @@ export default function WebIde({ dev, completionEnabled, refreshKey, onAsk, thre
             </div>
           )}
           {err && <div className="banner warn small" role="alert">{err} <button className="icon-btn small" onClick={() => setErr(null)}>×</button></div>}
-          <div className="webide-editor-area" style={{ display: activeTab?.binary ? "none" : undefined }}>
+          <div className="webide-editor-area" style={{ display: activeTab?.binary || diffActive ? "none" : undefined }}>
             <div className="webide-editor" ref={host} data-testid="webide-editor"
               style={{ display: activeTab && !activeTab.binary && !(isMd(activeTab) && mdOf(activeTab) === "preview") ? undefined : "none" }} />
             {activeTab && isMd(activeTab) && mdOf(activeTab) === "split" && <Splitter dir="x" side="after" pane={{ ...mdPane, folded: false, setFolded: (f) => { if (f) setMdMode((x) => ({ ...x, [activeTab.uri]: "edit" })); } }} label="preview" testId="webide-md-splitter" />}
@@ -965,12 +980,12 @@ export default function WebIde({ dev, completionEnabled, refreshKey, onAsk, thre
               </div>
             )}
           </div>
-          {activeTab?.binary && (
+          {activeTab?.binary && !diffActive && (
             <FileViewer devId={dev.id} root={activeTab.root} rel={activeTab.rel} threads={threads}
               onOpenThread={(id) => onOpenThreadRef.current(id)}
               onDiscuss={(image, label, quote) => chatAbout(activeTab, image, label, quote)} />
           )}
-          {!activeTab && (
+          {!activeTab && !diffActive && (
             <div className="webide-empty">
               <div className="webide-empty-title">{dev.name}</div>
               <div className="muted small">
@@ -979,6 +994,7 @@ export default function WebIde({ dev, completionEnabled, refreshKey, onAsk, thre
               </div>
             </div>
           )}
+          {bottom}
         </div>
       </div>
       <div className="webide-status" data-testid="webide-status">

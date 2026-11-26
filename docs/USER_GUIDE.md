@@ -700,8 +700,10 @@ reference wiki, and for a PR tab the PR's connected local checkout. Skills are t
   since it was last pushed or fetched here. Once the workspace belongs to a pull request, **GitHub ↗** in the toolbar
   and **Open #N on GitHub ↗** under *Share* open it on GitHub in a new tab. The branch's commits are listed at
   the bottom of the panel: click one to see its changes. **Diff** in the toolbar (or **⤢ Expand**) shows all the
-  changes in the editor area; **±** on a file or folder of the explorer shows only its changes ("only <path>" — × for
-  all of them again). **Back to editor** returns the view to the bottom panel.
+  changes in the web editor as a **± Changes** tab beside the open files (the explorer stays; click a file tab to go back
+  to the code, the tab's × closes it); **±** on a file or folder of the explorer shows only its changes ("only <path>" —
+  × for all of them again). **Back to editor** returns the view to the bottom panel. With the VS Code option the
+  changes take the whole editor area, as before.
 - **Pull request** — for new work: title and description (**Draft with agent**, **Verify against wiki first**),
   **Create pull request** (pushes first; draft by default). For a PR: its checks, **Address review comments**, **Fix
   failing CI**, **Verify against wiki**.
@@ -924,10 +926,13 @@ shows its date and time in **UTC+8** (e.g. `2026-11-12 15:03:21 UTC+8`): when yo
   `.svg`, … files on the server (absolute paths, or wiki paths) or on the web, and ```` ```svg ```` blocks (drawn, the
   source folded under them). Click a picture (PNG, GIF, SVG …) to open it in a dialog in the same window (also in documents and PR text), with zoom, closed with Esc or ×; Ctrl/⌘-click opens it the browser's way. A link whose file doesn't load stays
   a plain link. SVGs are always shown as images, so their scripts never run.
+- **Fold buttons on every resize bar**: hover a bar between two panels and a small **‹ / › / ▾** button appears on
+  it; it folds the panel next to it — the side list, the discussions / side-question panels, the agent panel, the
+  explorer, the outline, the PR side column, the command list and PR Development's bottom panel.
 - **Fold the middle column**: in the wiki reader and in a PR review, **⇤** in the discussion panel's header folds
   the document / PR so the discussions take its width; the strip on the left (or **⇥**) brings it back. In PR
-  Development, **Editor** in the toolbar folds the explorer, editor and bottom panel so the agent panel takes the
-  width; the **› Editor** strip brings them back. Both are remembered in this browser.
+  Development, **Editor** in the toolbar folds the editor (the open files, with the Terminal / Build & test panel under them) — the explorer stays — so
+  the agent panel takes the width; the **‹ Editor** strip brings it back. Both are remembered in this browser.
 - **Diagrams in answers**: ```` ```mermaid ```` blocks (sequence, state, flowchart, class … diagrams) are drawn
   wherever Markdown is shown — answers, documents, PR text — with the source folded under them, and open in the same
   dialog. Agents are told they can draw them, so you can ask for example "draw the sequence of `torch.xpu.manual_seed`".

@@ -48,6 +48,7 @@ export default function DevView({ devId, workspaces, sessions, onSessionsChanged
   const mainFolded = mainFoldedRaw && agentOpen;
   // the Changes view in the editor area (true) instead of the bottom panel
   const [changesWide, setChangesWide] = usePersistentState(`dev.changesWide.${devId}`, false);
+  const [diffAt, setDiffAt] = useState(0); // bumped each time the changes are asked for: their tab comes to the front
   // the Changes view shows only this folder / file (the ± of a row in the explorer); null: everything
   const [changesScope, setChangesScope] = usePersistentState<string | null>(`dev.changesScope.${devId}`, null);
   const [branchMenu, setBranchMenu] = useState(false);
@@ -147,8 +148,8 @@ export default function DevView({ devId, workspaces, sessions, onSessionsChanged
     setChangesWide(false);
     setReveal({ anchor: { root: "wt", file: path, start_line: line ?? null, end_line: line ?? null, quote: "" }, at: Date.now() });
   } : undefined;
-  const showDiff = (path: string | null) => { setChangesScope(path); setChangesWide(true); };
-  const showBranchDiff = () => { setChangesScope(null); setChangesMode({ mode: "branch-committed", at: Date.now() }); setChangesWide(true); };
+  const showDiff = (path: string | null) => { setChangesScope(path); setChangesWide(true); setDiffAt(Date.now()); };
+  const showBranchDiff = () => { setChangesScope(null); setChangesMode({ mode: "branch-committed", at: Date.now() }); setChangesWide(true); setDiffAt(Date.now()); };
   const changes = (wide: boolean) => (
     <DevChanges key={dev.id} dev={dev} refreshKey={refresh} onChanged={() => void load()} onAsk={askAbout} onOpenFile={openFile}
       scope={changesScope} onScope={setChangesScope} modeRequest={changesMode}
@@ -178,6 +179,34 @@ export default function DevView({ devId, workspaces, sessions, onSessionsChanged
     }
   };
   const wiki = workspaces.find((w) => w.id === dev.wiki_workspace_id);
+  // the bottom panel (Terminal, Build & test, …): under the code view in the web editor, under the editor area otherwise
+  const bottomPanel = (
+            <div className={`dev-bottom ${bottomOpen ? "" : "closed"}`} style={bottomOpen && bottomHeight ? { height: bottomHeight } : undefined}>
+              {bottomOpen && <BottomSplitter onHeight={setBottomHeight} onFold={() => setBottomOpen(false)} />}
+              <div className="dev-bottom-tabs">
+                {(["terminal", "tasks", "bench", "changes", "pr"] as Bottom[]).map((b) => (
+                  <button key={b} className={bottom === b && bottomOpen ? "active" : ""} onClick={() => { setBottom(b); setBottomOpen(true); }} data-testid={`dev-tab-${b}`}>
+                    {b === "terminal" ? "Terminal" : b === "tasks" ? `Build & test${dev.running_tasks ? ` (${dev.running_tasks})` : ""}` : b === "bench" ? "Benchmarks" : b === "changes" ? "Changes" : dev.pr_number ? `Pull request #${dev.pr_number}` : "Pull request"}
+                  </button>
+                ))}
+                <span className="spacer" />
+                <button className="icon-btn small" onClick={() => setBottomOpen(!bottomOpen)} title={bottomOpen ? "Hide" : "Show"}>{bottomOpen ? "▾" : "▴"}</button>
+              </div>
+              {bottomOpen && (
+                <div className="dev-bottom-body">
+                  <div className="dev-terminal-wrap" style={{ display: bottom === "terminal" ? undefined : "none" }}>
+                    <DevTerminal key={dev.id} dev={dev} visible={bottom === "terminal" && bottomOpen} />
+                  </div>
+                  {bottom === "tasks" && <TasksTab key={dev.id} dev={dev} onAsked={() => setAgentOpen(true)} />}
+                  {bottom === "bench" && <BenchTab key={dev.id} dev={dev} onAsked={() => setAgentOpen(true)} />}
+                  {bottom === "changes" && (changesWide
+                    ? <div className="muted small dev-hint">The changes are shown in the editor area. <button className="link-btn" onClick={() => setChangesWide(false)}>Show them here</button></div>
+                    : changes(false))}
+                  {bottom === "pr" && <PrTab key={dev.id} dev={dev} onAsk={ask} onChanged={() => void load()} onShowDiff={dev.base_ref ? showBranchDiff : undefined} />}
+                </div>
+              )}
+            </div>
+  );
   return (
     <div className={`dev-view ${agentOpen ? "" : "agent-closed"} ${mainFolded ? "main-folded" : ""}`} data-testid="dev-view">
       <div className="dev-toolbar">
@@ -222,7 +251,7 @@ export default function DevView({ devId, workspaces, sessions, onSessionsChanged
         )}
         <button className="btn small" onClick={() => setSettings(true)} data-testid="dev-settings">Settings</button>
         <button className={`btn small toggle ${mainFolded ? "" : "on"}`} onClick={() => { if (!mainFolded) setAgentOpen(true); setMainFoldedRaw(!mainFolded); }} aria-pressed={!mainFolded}
-          title={mainFolded ? "Show the explorer, editor and bottom panel again" : "Fold the explorer, editor and bottom panel: the agent panel takes the whole width"} data-testid="dev-main-toggle">Editor</button>
+          title={mainFolded ? "Show the editor (open files) again" : "Fold the editor (open files): the explorer stays, the agent panel takes the width"} data-testid="dev-main-toggle">Editor</button>
         <button className={`btn small toggle ${agentOpen ? "on" : ""}`} onClick={() => setAgentOpen(!agentOpen)} aria-pressed={agentOpen}>Agent</button>
         <button className="icon-btn" onClick={() => void archive()} title="Archive">⋯</button>
       </div>
@@ -232,17 +261,13 @@ export default function DevView({ devId, workspaces, sessions, onSessionsChanged
       {err && <div className="banner warn small" role="alert">{err}</div>}
       {note && <div className="banner small" data-testid="dev-banner-note">{note} <button className="link-btn" onClick={() => setNote(null)}>ok</button></div>}
       <div className="dev-body">
-        {mainFolded && (
-          <button className="dev-main-strip" onClick={() => setMainFoldedRaw(false)} title="Show the explorer, editor and bottom panel" data-testid="dev-main-strip">
-            <span>›</span><span className="dev-agent-strip-label">Editor</span>
-          </button>
-        )}
-        <div className="dev-main" style={mainFolded ? { display: "none" } : undefined}>
-          {changesWide && dev.status === "ready" && <div className="dev-editor dev-changes-main">{changes(true)}</div>}
-          <div className="dev-editor" style={changesWide && dev.status === "ready" ? { display: "none" } : undefined}>
+        <div className="dev-main">
+          {changesWide && dev.status === "ready" && !web && <div className="dev-editor dev-changes-main">{changes(true)}</div>}
+          <div className="dev-editor" style={changesWide && dev.status === "ready" && !web ? { display: "none" } : undefined}>
             {web && dev.status === "ready" ? (
               <Suspense fallback={<div className="muted dev-hint">Loading the editor…</div>}>
-                <WebIde key={dev.id} dev={dev} completionEnabled={!!info?.completion.enabled} refreshKey={refresh} threads={threads} reveal={reveal} onDiff={showDiff}
+                <WebIde key={dev.id} dev={dev} bottom={bottomPanel}
+                  diff={{ view: changesWide ? changes(true) : null, open: changesWide, at: diffAt, onClose: () => setChangesWide(false) }} completionEnabled={!!info?.completion.enabled} refreshKey={refresh} threads={threads} reveal={reveal} onDiff={showDiff}
                   onFiles={setFiles} onOpenThread={(id) => { setAgentOpen(true); setFocusThread({ id, at: Date.now() }); }}
                   discussSession={(a) => { const sid = a ? fileSessions[`${a.root}:${a.file}`] : undefined; return sid ? sessions.find((x) => x.id === sid) ?? null : null; }}
                   onAsk={async ({ kind, text, context, anchor, threadId, image, modelChoice, images }) => {
@@ -277,34 +302,13 @@ export default function DevView({ devId, workspaces, sessions, onSessionsChanged
               </div>
             )}
           </div>
-          {dev.status === "ready" && (
-            <div className={`dev-bottom ${bottomOpen ? "" : "closed"}`} style={bottomOpen && bottomHeight ? { height: bottomHeight } : undefined}>
-              {bottomOpen && <BottomSplitter onHeight={setBottomHeight} />}
-              <div className="dev-bottom-tabs">
-                {(["terminal", "tasks", "bench", "changes", "pr"] as Bottom[]).map((b) => (
-                  <button key={b} className={bottom === b && bottomOpen ? "active" : ""} onClick={() => { setBottom(b); setBottomOpen(true); }} data-testid={`dev-tab-${b}`}>
-                    {b === "terminal" ? "Terminal" : b === "tasks" ? `Build & test${dev.running_tasks ? ` (${dev.running_tasks})` : ""}` : b === "bench" ? "Benchmarks" : b === "changes" ? "Changes" : dev.pr_number ? `Pull request #${dev.pr_number}` : "Pull request"}
-                  </button>
-                ))}
-                <span className="spacer" />
-                <button className="icon-btn small" onClick={() => setBottomOpen(!bottomOpen)} title={bottomOpen ? "Hide" : "Show"}>{bottomOpen ? "▾" : "▴"}</button>
-              </div>
-              {bottomOpen && (
-                <div className="dev-bottom-body">
-                  <div className="dev-terminal-wrap" style={{ display: bottom === "terminal" ? undefined : "none" }}>
-                    <DevTerminal key={dev.id} dev={dev} visible={bottom === "terminal" && bottomOpen} />
-                  </div>
-                  {bottom === "tasks" && <TasksTab key={dev.id} dev={dev} onAsked={() => setAgentOpen(true)} />}
-                  {bottom === "bench" && <BenchTab key={dev.id} dev={dev} onAsked={() => setAgentOpen(true)} />}
-                  {bottom === "changes" && (changesWide
-                    ? <div className="muted small dev-hint">The changes are shown in the editor area. <button className="link-btn" onClick={() => setChangesWide(false)}>Show them here</button></div>
-                    : changes(false))}
-                  {bottom === "pr" && <PrTab key={dev.id} dev={dev} onAsk={ask} onChanged={() => void load()} onShowDiff={dev.base_ref ? showBranchDiff : undefined} />}
-                </div>
-              )}
-            </div>
-          )}
+          {dev.status === "ready" && !web && bottomPanel}
         </div>
+        {mainFolded && (
+          <button className="dev-main-strip" onClick={() => setMainFoldedRaw(false)} title="Show the editor (open files) again" data-testid="dev-main-strip">
+            <span>‹</span><span className="dev-agent-strip-label">Editor</span>
+          </button>
+        )}
         {dev.status === "ready" && !mainFolded && <Splitter dir="x" side="after" pane={agentPane} label="agent panel" testId="dev-agent-splitter" />}
         {agentOpen && dev.status === "ready" && (
           <aside className="dev-side" style={{ width: agentPane.size }}>
@@ -394,12 +398,13 @@ function DevSettingsDialog({ dev, workspaces, onClose, onSaved }: { dev: DevWork
  * The drag handle above the bottom panel: drag to change its height (kept per browser), double-click for the
  * default. Pointer capture keeps the drag going over the editor (also the VS Code iframe).
  */
-function BottomSplitter({ onHeight }: { onHeight: (h: number | null) => void }) {
+function BottomSplitter({ onHeight, onFold }: { onHeight: (h: number | null) => void; onFold: () => void }) {
   return (
     <div className="dev-bottom-splitter" role="separator" aria-orientation="horizontal" title="Drag to resize · double-click: default height"
       data-testid="dev-bottom-splitter"
-      onDoubleClick={() => onHeight(null)}
+      onDoubleClick={(e) => { if (!(e.target as HTMLElement).closest(".splitter-fold")) onHeight(null); }}
       onPointerDown={(e) => {
+        if ((e.target as HTMLElement).closest(".splitter-fold")) return;
         const panel = (e.currentTarget.parentElement as HTMLElement);
         const main = panel.parentElement as HTMLElement;
         const startY = e.clientY;
@@ -420,7 +425,9 @@ function BottomSplitter({ onHeight }: { onHeight: (h: number | null) => void }) 
         el.addEventListener("pointerup", up);
         el.addEventListener("pointercancel", up);
         e.preventDefault();
-      }} />
+      }}>
+      <button className="splitter-fold" onClick={onFold} title="Fold the bottom panel" aria-label="Fold the bottom panel" data-testid="dev-bottom-fold">▾</button>
+    </div>
   );
 }
 
