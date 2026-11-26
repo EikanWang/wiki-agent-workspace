@@ -7,6 +7,7 @@ import ModelChoice, { ModelChoiceValue } from "../ModelChoice";
 import { CodeAnchor, EditorFiles, FileRef, FileScope, anchorOf, scopeFiles } from "../DevAgentPanel";
 import { CORE_LSP, LSP_LANGS, LspClient, LspStatus } from "./lsp";
 import UmlDiagram from "./UmlDiagram";
+import GraphView, { type GraphReq } from "./GraphView";
 import { langFor, outline, registerLanguages } from "./languages";
 import MarkdownPreview from "./MarkdownPreview";
 import FileViewer, { viewerKind } from "./FileViewer";
@@ -194,6 +195,7 @@ export default function WebIde({ dev, completionEnabled, refreshKey, onAsk, thre
   // back / forward through the places jumped between (Alt+← / Alt+→), as in VS Code: file switches, go to definition,
   // references, search hits, problems — not ordinary cursor moves
   const [uml, setUml] = useState<{ name: string; root: string; path: string | null } | null>(null);
+  const [graph, setGraph] = useState<GraphReq | null>(null);
   const navBack = useRef<NavLoc[]>([]);
   const navFwd = useRef<NavLoc[]>([]);
   const navigating = useRef(false);
@@ -568,6 +570,25 @@ export default function WebIde({ dev, completionEnabled, refreshKey, onAsk, thre
         const loc = locate(m.uri);
         setUml({ name: w.word, root: loc?.root ?? "wt", path: loc?.root === "wt" ? loc.rel : null });
       } }));
+    const wordAt = (e: monaco.editor.ICodeEditor) => {
+      const m = e.getModel();
+      const pos = e.getPosition();
+      const w = m && pos ? m.getWordAtPosition(pos) : null;
+      const loc = m ? locate(m.uri) : null;
+      return m && w ? { word: w.word, path: loc?.root === "wt" ? loc.rel : null, line: m.getLineContent(pos!.lineNumber) } : null;
+    };
+    subs.push(ed.addAction({ id: "waw.calls", label: "Show Call Graph", contextMenuGroupId: "navigation", contextMenuOrder: 101,
+      run: (e) => { const w = wordAt(e); if (w) setGraph({ kind: "calls", name: w.word, path: w.path }); } }));
+    subs.push(ed.addAction({ id: "waw.deps", label: "Show Includes / Imports of This File", contextMenuGroupId: "navigation", contextMenuOrder: 102,
+      run: (e) => { const m = e.getModel(); const loc = m ? locate(m.uri) : null; if (loc?.root === "wt") setGraph({ kind: "deps", path: loc.rel }); } }));
+    subs.push(ed.addAction({ id: "waw.op", label: "Show Operator Path (native_functions.yaml)", contextMenuGroupId: "navigation", contextMenuOrder: 103,
+      run: (e) => {
+        const w = wordAt(e);
+        if (!w) return;
+        // on a `- func: add.Tensor(` line: that overload; else the word (an op or its kernel's name)
+        const m = /func:\s*([\w]+(?:\.\w+)?)\s*\(/.exec(w.line);
+        setGraph({ kind: "op", name: m && m[1].split(".")[0] === w.word ? m[1] : w.word });
+      } }));
     subs.push(ed.addAction({ id: "waw.navBack", label: "Go Back", keybindings: [monaco.KeyMod.Alt | monaco.KeyCode.LeftArrow], run: () => void goNavRef.current("back") }));
     subs.push(ed.addAction({ id: "waw.navForward", label: "Go Forward", keybindings: [monaco.KeyMod.Alt | monaco.KeyCode.RightArrow], run: () => void goNavRef.current("fwd") }));
     let lastPos: NavLoc | null = null;
@@ -907,6 +928,7 @@ export default function WebIde({ dev, completionEnabled, refreshKey, onAsk, thre
                   ))}
                 </span>
               )}
+              {activeTab.root === "wt" && <button className="btn small" onClick={() => setGraph({ kind: "deps", path: activeTab.rel })} title="The files this file includes / imports and the files that include / import it" data-testid="webide-deps">⇄ Dependencies</button>}
               <button className="btn small webide-chat-file" onClick={() => chatAbout(activeTab)} title="Chat with the agent about this file (its discussions are in the agent panel's This file view)" data-testid="webide-chat-file">💬 Chat about this file</button>
             </div>
           )}
@@ -961,6 +983,7 @@ export default function WebIde({ dev, completionEnabled, refreshKey, onAsk, thre
           <button className="webide-status-btn" disabled={!navFwd.current.length} onClick={() => void goNav("fwd")} title="Go forward (Alt+→)" aria-label="Go forward" data-testid="webide-nav-forward">→</button>
         </span>
         <span title={dev.worktree_path}>⎇ {dev.branch}{Object.keys(gitStatus).length ? ` · ${Object.keys(gitStatus).length} changed` : ""}</span>
+        <button className="webide-status-btn" onClick={() => setGraph({ kind: "impact" })} title="Impact map: the changed files, the functions changed in them, what calls those functions and the tests that do" data-testid="webide-impact">⊶ Impact</button>
         <button className="webide-status-btn" onClick={() => { setSide("problems"); setSideOpen(true); }} title="Problems">✖ {errors} ▲ {warnings}</button>
         <span className="spacer" />
         {cursor && activeTab && <span>Ln {cursor.line}, Col {cursor.col}{cursor.sel ? ` (${cursor.sel} selected)` : ""}</span>}
@@ -994,6 +1017,8 @@ export default function WebIde({ dev, completionEnabled, refreshKey, onAsk, thre
       {discuss && <DiscussComposer box={discuss} files={filesNow()} session={discussSession ? discussSession(discuss.anchor) : null} onCancel={() => { setDiscuss(null); editorRef.current?.focus(); }} onSend={sendDiscuss} />}
       {uml && <UmlDiagram devId={dev.id} name={uml.name} path={uml.path} onClose={() => { setUml(null); editorRef.current?.focus(); }}
         onOpen={(path, line) => { setUml(null); void openFile("wt", path, { line }); }} />}
+      {graph && <GraphView devId={dev.id} req={graph} onClose={() => { setGraph(null); editorRef.current?.focus(); }}
+        onOpen={(path, line) => { setGraph(null); void openFile("wt", path, { line }); }} />}
       {quick && <QuickOpen devId={dev.id} roots={shownRoots} onClose={() => { setQuick(false); editorRef.current?.focus(); }} onOpen={(r, p) => { setQuick(false); void openFile(r, p); }} />}
     </div>
   );

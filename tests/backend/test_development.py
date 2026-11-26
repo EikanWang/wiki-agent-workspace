@@ -1485,3 +1485,71 @@ async def test_uml_class_diagram_parents_children_members_and_users(running_app,
     assert (await api.post(f"/api/v1/dev/workspaces/{d['id']}/uml", json={"name": "Shape", "parts": ["everything"]})).json()["error"]["code"] == "INVALID_PARTS"
     assert (await api.post(f"/api/v1/dev/workspaces/{d['id']}/uml", json={"name": "Nope"})).json()["class"] is None
     assert (await api.post(f"/api/v1/dev/workspaces/{d['id']}/uml", json={"name": "a b"})).json()["error"]
+
+
+async def test_graphs_calls_deps_operator_path_and_impact(running_app, dev_settings, tmp_path, fake_env):
+    h = await running_app(dev_settings)
+    api = h.api
+    src, _ = make_source(tmp_path)
+    (src / "math.h").write_text("#pragma once\nint square(int x);\nint twice(int x);\n")
+    (src / "math.cc").write_text('#include "math.h"\n#include <vector>\n\nint twice(int x) {\n  return x * 2;  // square(x) in a comment\n}\n\n'
+                                 'int square(int x) {\n  if (x < 0) {\n    return twice(-x) * x / 2;\n  }\n  return x * x;\n}\n')
+    (src / "app.cc").write_text('#include "math.h"\n\nnamespace app {\nint Calc::run(int v) const {\n  int s = square(v);\n  return s + square(1);\n}\n}\n')
+    (src / "tests").mkdir()
+    (src / "tests" / "math_test.cc").write_text('#include "../math.h"\nvoid test_square() { square(3); }\n')
+    (src / "pkg").mkdir()
+    (src / "pkg" / "__init__.py").write_text("")
+    (src / "pkg" / "util.py").write_text('def helper(x):\n    """helper(x) in a docstring is not a call."""\n    return x\n')
+    (src / "pkg" / "main.py").write_text("from pkg.util import helper\nfrom . import util\nimport os\n\n\ndef go():\n    return helper(1) + len([])\n")
+    (src / "native_functions.yaml").write_text("- func: frob(Tensor self) -> Tensor\n  dispatch:\n    CPU, CUDA: frob_kernel\n\n"
+                                               "- func: frob.out(Tensor self, *, Tensor(a!) out) -> Tensor(a!)\n  dispatch:\n    XPU: frob_xpu\n")
+    (src / "derivatives.yaml").write_text("- name: frob(Tensor self) -> Tensor\n  self: grad\n")
+    (src / "frob.cpp").write_text("Tensor frob_kernel(const Tensor& self) {\n  return self;\n}\n")
+    git(src, "add", "-A")
+    git(src, "commit", "-q", "-m", "graphs")
+    d = await new_branch_ws(api, src, None)
+    g = f"/api/v1/dev/workspaces/{d['id']}/graph"
+
+    def by_col(r, col):
+        return sorted(n["label"] for n in r["nodes"] if n["col"] == col)
+
+    # call graph: callers (test callers hidden unless asked), what it calls (not what a comment mentions)
+    c = (await api.post(g, json={"kind": "calls", "name": "square", "path": "app.cc"})).json()
+    subject = next(n for n in c["nodes"] if n["col"] == 0)
+    assert (subject["path"], subject["line"]) == ("math.cc", 8)  # the definition, not the declaration in math.h
+    assert by_col(c, -1) == ["run"] and by_col(c, 1) == ["twice"]
+    assert next(n for n in c["nodes"] if n["label"] == "run")["count"] == 2
+    assert c["hidden_tests"] == ["test_square"]
+    t = (await api.post(g, json={"kind": "calls", "name": "square", "tests": True, "parts": ["callers"]})).json()
+    assert by_col(t, -1) == ["run", "test_square"] and by_col(t, 1) == []
+    tw = (await api.post(g, json={"kind": "calls", "name": "twice"})).json()
+    assert by_col(tw, -1) == ["square"]
+    py = (await api.post(g, json={"kind": "calls", "name": "go", "path": "pkg/main.py"})).json()
+    assert by_col(py, 1) == ["helper"]  # not the builtin len
+    assert by_col((await api.post(g, json={"kind": "calls", "name": "helper"})).json(), -1) == ["go"]  # not the docstring
+    # includes / imports, both ways
+    dep = (await api.post(g, json={"kind": "deps", "path": "math.h"})).json()
+    assert by_col(dep, -1) == ["app.cc", "math.cc"] and dep["hidden_tests"] == ["math_test.cc"]
+    mc = (await api.post(g, json={"kind": "deps", "path": "math.cc"})).json()
+    assert by_col(mc, 1) == ["math.h"] and any("vector" in n for n in mc["notes"])
+    pm = (await api.post(g, json={"kind": "deps", "path": "pkg/main.py"})).json()
+    assert by_col(pm, 1) == ["__init__.py", "util.py"]
+    assert by_col((await api.post(g, json={"kind": "deps", "path": "pkg/util.py"})).json(), -1) == ["main.py"]
+    # operator path
+    op = (await api.post(g, json={"kind": "op", "name": "frob"})).json()
+    assert by_col(op, 0) == ["frob", "frob.out"] and by_col(op, -1) == ["∂ frob"]
+    k = {n["label"]: n for n in op["nodes"] if n["col"] == 1}
+    assert (k["frob_kernel"]["path"], k["frob_kernel"]["line"]) == ("frob.cpp", 1) and k["frob_xpu"]["kind"] == "missing"
+    assert {e["label"] for e in op["edges"] if e["to"] == "kernel:frob_kernel"} == {"CPU, CUDA"}
+    assert "native_functions.yaml" in (await api.post(g, json={"kind": "op", "name": "nothing_here"})).json()["error"]
+    # impact of the workspace's changes: changed file → changed function → its callers, tests apart
+    wt = Path(d["worktree_path"])
+    (wt / "math.cc").write_text((wt / "math.cc").read_text().replace("return x * 2;", "return x + x;"))
+    im = (await api.post(g, json={"kind": "impact"})).json()
+    assert by_col(im, 0) == ["math.cc"] and by_col(im, 1) == ["twice"] and by_col(im, 2) == ["square"]
+    sq = (await api.post(g, json={"kind": "impact"})).json()
+    assert sq["nodes"] == im["nodes"]
+    (wt / "math.cc").write_text((wt / "math.cc").read_text().replace("return x * x;", "return x * x * 1;"))
+    im2 = (await api.post(g, json={"kind": "impact"})).json()
+    assert by_col(im2, 1) == ["square", "twice"] and by_col(im2, 3) == ["math_test.cc"]
+    assert (await api.post(g, json={"kind": "deps"})).json()["error"]["code"] == "INVALID_PATH"

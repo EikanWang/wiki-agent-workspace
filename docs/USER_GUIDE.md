@@ -537,6 +537,24 @@ Each workspace has one of two editors (switch with the **Web editor / VS Code** 
   classes named like `TestFoo`, `FooTest`, `MockFoo`, `FakeFoo`; the title bar says how many were hidden (hover to see
   which) and **Test classes** shows them (remembered in this browser). Click a box to open its source; zoom with − / +. It is found by searching the worktree (C++, Python, Java, TypeScript, C#), not by a compiler: base lists
   spread over many lines, macros and templates can be missed, and every class of the same name counts.
+- **More diagrams** (any language and any project — C/C++/CUDA/SYCL, Python, Java/Kotlin/C#, JS/TS, Go, Rust — found
+  by searching the worktree like the UML diagram, so macros, overloads and calls through pointers can be missed). Each
+  opens in the same kind of window: drag boxes (**Tidy up** puts them back), click a box to open its source, zoom with
+  − / +, **Tests** shows test code (left out by default), and **Copy Mermaid** copies it as a ```` ```mermaid ```` block
+  to paste into a document or an agent question.
+  - **Call graph**: right-click a function → *Show Call Graph*. Its **callers** on the left (with the number of calls)
+    and **what it calls** on the right (functions defined in the worktree; library calls are listed below the
+    diagram). **⊕** on a caller adds its own callers, on a called function what it calls.
+  - **Includes / imports**: **⇄ Dependencies** above the editor (or right-click → *Show Includes / Imports of This
+    File*): the files that include / import this file on the left, the files it includes / imports on the right;
+    system and third-party headers / modules are listed below.
+  - **Operator path** (PyTorch-style projects, any that has a `native_functions.yaml`): right-click an operator or
+    kernel name, or a `- func:` line → *Show Operator Path*. The operator's overloads in the middle, the kernel of
+    each dispatch key (CPU, CUDA, XPU …) on the right (dashed when not found in this worktree), the autograd formula
+    from `derivatives.yaml`, decompositions and Inductor lowerings on the left, and the backends with no kernel below.
+  - **Impact map**: **⊶ Impact** in the status bar. The changed files (since the base branch, uncommitted changes
+    included), the functions changed in them, what calls those functions and, on the far right, the test files that
+    call them — "what else could this change break?".
 - `Ctrl+S` saves; a save is refused when the file changed on disk since you opened it (agent, command, Git), and you
   choose to overwrite or reload. Files the agent or a command changes reload by themselves in clean tabs.
 - **Discuss code like a wiki passage**: select code and click **💬 Discuss** next to the selection (or
@@ -902,6 +920,9 @@ shows its date and time in **UTC+8** (e.g. `2026-11-12 15:03:21 UTC+8`): when yo
   `.svg`, … files on the server (absolute paths, or wiki paths) or on the web, and ```` ```svg ```` blocks (drawn, the
   source folded under them). Click a picture (PNG, GIF, SVG …) to open it in a dialog in the same window (also in documents and PR text), with zoom, closed with Esc or ×; Ctrl/⌘-click opens it the browser's way. A link whose file doesn't load stays
   a plain link. SVGs are always shown as images, so their scripts never run.
+- **Diagrams in answers**: ```` ```mermaid ```` blocks (sequence, state, flowchart, class … diagrams) are drawn
+  wherever Markdown is shown — answers, documents, PR text — with the source folded under them, and open in the same
+  dialog. Agents are told they can draw them, so you can ask for example "draw the sequence of `torch.xpu.manual_seed`".
 
 ## Editing a file yourself
 

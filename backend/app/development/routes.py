@@ -988,3 +988,39 @@ async def uml_diagram(dev_id: str, body: UmlIn, ctx: AppContext = Depends(requir
         raise bad_request(f"parts are {', '.join(PARTS)}", "INVALID_PARTS")
     at = (norm_rel(body.at_path), body.at_line) if body.at_path and body.at_line else None
     return await Uml(_files(ctx, dev_id)).diagram(body.root, body.name.strip(), body.path, parts, at, body.tests)
+
+
+class GraphIn(BaseModel):
+    kind: str = Field(pattern="^(calls|deps|op|impact)$")
+    root: str = Field("wt", pattern="^(wt|wiki)$")
+    name: str | None = Field(None, max_length=200)  # calls: the function; op: the operator (`add` or `add.Tensor`)
+    path: str | None = Field(None, max_length=4096)  # calls: the file it was asked from; deps: the file
+    parts: list[str] | None = Field(None, max_length=2)  # calls: callers / callees; default: both
+    tests: bool = False  # also tests (left out by default)
+    at_path: str | None = Field(None, max_length=4096)  # calls: the function's definition when already known
+    at_line: int | None = Field(None, ge=1)
+
+
+@router.post("/dev/workspaces/{dev_id}/graph")
+async def graph(dev_id: str, body: GraphIn, ctx: AppContext = Depends(require_auth)):
+    """Diagrams besides the UML one: a call graph, include / import dependencies, a PyTorch operator's path, or the
+    impact of the workspace's changes (see graphs.py)."""
+    from .files import norm_rel
+    from .graphs import Graphs
+
+    g = Graphs(_files(ctx, dev_id))
+    name = (body.name or "").strip()
+    if body.kind == "calls":
+        parts = set(body.parts or ("callers", "callees"))
+        if not parts <= {"callers", "callees"}:
+            raise bad_request("parts are callers, callees", "INVALID_PARTS")
+        at = (norm_rel(body.at_path), body.at_line) if body.at_path and body.at_line else None
+        return await g.calls(body.root, name, body.path, at, body.tests, parts)
+    if body.kind == "deps":
+        if not body.path:
+            raise bad_request("path is required", "INVALID_PATH")
+        return await g.deps(body.root, norm_rel(body.path), body.tests)
+    if body.kind == "op":
+        return await g.op(body.root, name)
+    row = _svc(ctx).get(dev_id)
+    return await g.impact("wt", row.base_ref or "HEAD~1", body.tests)

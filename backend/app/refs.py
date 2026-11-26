@@ -45,6 +45,8 @@ def citation_rules(ctx: AppContext, here: Path | None = None) -> str:
         "several places, link each one. Only use headings, pages and lines you actually saw; never invent them. "
         + (f"This document is {here}. " if here else "")
         + ("Open folders: " + ", ".join(roots) + "." if roots else "")
+        + "\n\nDIAGRAMS: when a sequence, state, flow or structure is easier to see than to read, draw it in a "
+        "```mermaid block (sequenceDiagram, stateDiagram-v2, flowchart, classDiagram); the app draws it."
     )
 
 

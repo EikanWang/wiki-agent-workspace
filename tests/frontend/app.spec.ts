@@ -3474,6 +3474,34 @@ test("PR Development: view the code of the main branch, Alt+← / Alt+→ betwee
   await uml.locator('[data-testid="uml-user"][data-name="Canvas"]').click();
   await expect(uml).toHaveCount(0);
   await expect(page.getByTestId("webide-status")).toContainText("Ln 12");
+  // call graph from the context menu, on "area" in `def area(self):`: Canvas.draw calls it
+  await page.locator(".monaco-editor .view-lines").click();
+  await page.keyboard.press("Control+Home");
+  for (let i = 0; i < 3; i++) await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Home");
+  for (let i = 0; i < 5; i++) await page.keyboard.press("ArrowRight"); // Home: at `def`
+  await page.keyboard.press("Shift+F10");
+  const callItem = await page.getByRole("menuitem", { name: /Show Call Graph/ }).boundingBox();
+  await page.mouse.move(callItem!.x + 20, callItem!.y + callItem!.height / 2);
+  await page.waitForTimeout(200);
+  await page.mouse.down();
+  await page.mouse.up();
+  const cg = page.getByTestId("graph-view");
+  await expect(cg.getByTestId("graph-node-self")).toHaveAttribute("data-name", "area", { timeout: 20000 });
+  await expect(cg.locator('[data-testid="graph-node-parent"][data-name="draw"]')).toBeVisible();
+  await cg.locator('[data-testid="graph-node-parent"][data-name="draw"]').click();
+  await expect(cg).toHaveCount(0);
+  await expect(page.getByTestId("webide-status")).toContainText("Ln 13");
+  // dependencies of the file, and the impact map of the changes (none here)
+  await page.getByTestId("webide-deps").click();
+  await expect(page.getByTestId("graph-view")).toHaveAttribute("data-kind", "deps");
+  await expect(page.getByTestId("graph-node-self")).toHaveAttribute("data-name", "shapes.py", { timeout: 20000 });
+  await page.getByTestId("graph-close").click();
+  await page.getByTestId("webide-impact").click();
+  await expect(page.getByTestId("graph-view")).toHaveAttribute("data-kind", "impact");
+  await expect(page.getByTestId("graph-loading")).toHaveCount(0, { timeout: 20000 });
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("graph-view")).toHaveCount(0);
 });
 
 test("PR Development: new branch workspace, the web editor and the VS Code option, the agent with the wiki, build/test, commit", async ({ page }) => {
@@ -4250,7 +4278,7 @@ test("Agent answers show images: linked PNG / SVG files, Markdown images and ```
   await root.hover();
   await root.getByTestId("local-chat-root").click();
   const svgBlock = '```svg\n<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><circle r="5" cx="5" cy="5"/></svg>\n```';
-  await page.getByTestId("local-chat-first").fill(`The plot: [plot](${dir}/plot.png), the chart \`${dir}/chart.svg\`, inline ![pic](${dir}/plot.png) and a missing [one](${dir}/none.png)\n\n${svgBlock}`);
+  await page.getByTestId("local-chat-first").fill(`The plot: [plot](${dir}/plot.png), the chart \`${dir}/chart.svg\`, inline ![pic](${dir}/plot.png) and a missing [one](${dir}/none.png)\n\n${svgBlock}\n\n\`\`\`mermaid\nsequenceDiagram\n  Alice->>Bob: hello\n\`\`\``);
   await page.getByTestId("local-chat-send").click();
   const done = page.locator('[data-testid="local-chat"] [data-testid="message-agent"][data-status="completed"]');
   await expect(done).toContainText("echo: The plot", { timeout: 20000 });
@@ -4259,8 +4287,8 @@ test("Agent answers show images: linked PNG / SVG files, Markdown images and ```
   const loaded = async (sel: string) => done.locator(sel).evaluate((i: HTMLImageElement) => i.complete && i.naturalWidth > 0);
   await expect.poll(() => loaded(`img[src*="plot.png"]`)).toBe(true);
   await expect.poll(() => loaded(`img[src*="chart.svg"]`)).toBe(true);
-  await expect.poll(() => loaded(`img[src^="data:image/svg+xml"]`)).toBe(true);
-  await expect(done.locator("details summary")).toHaveText("SVG source");
+  await expect.poll(() => loaded(`a[data-image] img[src^="data:image/svg+xml"]`)).toBe(true);
+  await expect(done.locator("details summary").first()).toHaveText("SVG source");
   await expect(done.locator('a.msg-image-auto:has(img[src*="none.png"])')).toBeHidden();
   await expect(done.locator(`a[href="${dir}/none.png"]`)).toBeVisible(); // the link itself stays
   // clicking a picture (SVG, PNG …) opens it in a dialog in this window (no new tab)
@@ -4269,7 +4297,7 @@ test("Agent answers show images: linked PNG / SVG files, Markdown images and ```
   await expect(page.getByTestId("svg-lightbox").locator('img[src*="chart.svg"]')).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("svg-lightbox")).toHaveCount(0);
-  await done.locator('img[src^="data:image/svg+xml"]').click();
+  await done.locator('a[data-image] img[src^="data:image/svg+xml"]').click();
   await expect(page.getByTestId("svg-lightbox").locator('img[src^="data:image/svg+xml"]')).toBeVisible();
   await page.getByTestId("svg-lightbox-close").click();
   await expect(page.getByTestId("svg-lightbox")).toHaveCount(0);
@@ -4278,6 +4306,14 @@ test("Agent answers show images: linked PNG / SVG files, Markdown images and ```
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("svg-lightbox")).toHaveCount(0);
   expect(page.context().pages().length).toBe(pagesBefore);
+  // a ```mermaid block is drawn as a diagram (source folded below), and opens in the dialog too
+  const mer = done.getByTestId("mermaid-diagram");
+  await expect(mer.locator('img[src^="data:image/svg+xml"]')).toBeVisible({ timeout: 20000 });
+  await expect(mer.locator("details summary")).toHaveText("Diagram source");
+  expect(decodeURIComponent((await mer.locator("img").getAttribute("src"))!)).toContain("Alice");
+  await mer.locator("img").click();
+  await expect(page.getByTestId("svg-lightbox")).toBeVisible();
+  await page.keyboard.press("Escape");
   const svgRes = await page.request.get(`/api/v1/local/raw?path=${encodeURIComponent(dir + "/chart.svg")}`);
   expect(svgRes.headers()["content-security-policy"]).toContain("sandbox");
   await page.getByTestId("local-chat-close").click();
