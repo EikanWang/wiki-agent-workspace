@@ -1527,6 +1527,14 @@ async def test_graphs_calls_deps_operator_path_and_impact(running_app, dev_setti
     py = (await api.post(g, json={"kind": "calls", "name": "go", "path": "pkg/main.py"})).json()
     assert by_col(py, 1) == ["helper"]  # not the builtin len
     assert by_col((await api.post(g, json={"kind": "calls", "name": "helper"})).json(), -1) == ["go"]  # not the docstring
+    # sequence: the calls in order, followed down (depth), as a Mermaid sequence diagram
+    sq = (await api.post(g, json={"kind": "sequence", "name": "run", "path": "app.cc"})).json()
+    assert [(x["from"], x["to"], x["depth"]) for x in sq["steps"]] == [("run", "square", 1), ("square", "twice", 2)]
+    assert sq["mermaid"].startswith("sequenceDiagram") and "->>+p1: square()" in sq["mermaid"] and "twice()" in sq["mermaid"]
+    one = (await api.post(g, json={"kind": "sequence", "name": "run", "path": "app.cc", "depth": 1})).json()
+    assert [x["to"] for x in one["steps"]] == ["square"]
+    assert "calls no function" in (await api.post(g, json={"kind": "sequence", "name": "twice"})).json()["notes"][0]
+    assert (await api.post(g, json={"kind": "sequence", "name": "nope_nothing"})).json()["error"]
     # includes / imports, both ways
     dep = (await api.post(g, json={"kind": "deps", "path": "math.h"})).json()
     assert by_col(dep, -1) == ["app.cc", "math.cc"] and dep["hidden_tests"] == ["math_test.cc"]

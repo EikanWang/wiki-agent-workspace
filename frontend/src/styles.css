@@ -1799,3 +1799,15 @@ body.uml-dragging, body.uml-dragging .uml-box { cursor: grabbing; user-select: n
 .markdown-body .mermaid-diagram > details > summary { font-size: 12px; color: var(--muted, #57606a); cursor: pointer; }
 .graph-edge-label { font-size: 10px !important; fill: var(--muted, #57606a) !important; paint-order: stroke; stroke: var(--bg); stroke-width: 3px; }
 .graph-notes { margin: 6px 10px 10px; padding-left: 18px; }
+.layout.center-folded { grid-template-columns: var(--sidebar-width, 260px) 28px minmax(0, 1fr); }
+.layout.center-folded > .center > :not(.center-fold-strip) { display: none !important; }
+.center-fold-strip { flex: 1; width: 28px; border: none; border-right: 1px solid var(--border); background: var(--card); color: var(--muted); cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 8px 0; font-size: 12px; }
+.center-fold-strip:hover { color: var(--fg); background: var(--accent); }
+.center-fold-label { writing-mode: vertical-rl; letter-spacing: 0.05em; max-height: 60vh; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dev-main-strip { flex: none; width: 22px; border: none; border-right: 1px solid var(--border); background: var(--card); color: var(--muted); cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 8px 0; font-size: 12px; }
+.dev-main-strip:hover { color: var(--fg); background: var(--accent); }
+.dev-view.main-folded .dev-side { flex: 1; width: auto !important; max-width: none; }
+.sequence-canvas { padding: 8px 12px; }
+.sequence-canvas .mermaid-diagram > img { max-height: none; }
+.sequence-steps { margin: 10px 0; padding-left: 26px; }
+.sequence-steps li { margin: 2px 0; }

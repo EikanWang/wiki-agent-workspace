@@ -131,6 +131,8 @@ export default function DiscussionPanel({
   docFormat,
   side = false,
   onShowQuote,
+  centerFolded,
+  onFoldCenter,
 }: {
   thread: Thread | null;
   threads: Thread[];
@@ -157,6 +159,9 @@ export default function DiscussionPanel({
   docFormat?: string;
   /** a chat's side questions (each about a part of one of its answers) instead of a document's discussions */
   side?: boolean;
+  /** the middle (document / PR) column is folded: this panel takes its width; onFoldCenter toggles it */
+  centerFolded?: boolean;
+  onFoldCenter?: () => void;
   /** show the part of the chat a side question is about */
   onShowQuote?: (t: Thread) => void;
 }) {
@@ -182,12 +187,16 @@ export default function DiscussionPanel({
     bottomRef.current?.scrollIntoView({ block: "end" });
   }, [thread?.messages.length, liveJob?.text, liveJob?.status]);
 
+  const foldBtn = onFoldCenter ? (
+    <button className="icon-btn" onClick={onFoldCenter} title={centerFolded ? "Show the document / PR again" : "Fold the document / PR: this panel takes its width"}
+      aria-pressed={!!centerFolded} data-testid="center-fold">{centerFolded ? "⇥" : "⇤"}</button>
+  ) : null;
   const modeSwitch = onModeChange ? (
-    <>{!side && <SkillsChip workspace={getWorkspace()} docId={docId} />}<span className="mode-switch" role="tablist" aria-label="Discussion panel mode">
+    <>{foldBtn}{!side && <SkillsChip workspace={getWorkspace()} docId={docId} />}<span className="mode-switch" role="tablist" aria-label="Discussion panel mode">
       <button role="tab" aria-selected={mode === "individual"} className={mode === "individual" ? "active" : ""} onClick={() => onModeChange("individual")} title={side ? "One side question at a time" : "One discussion at a time"} data-testid="mode-individual">Individual</button>
       <button role="tab" aria-selected={mode === "flat"} className={mode === "flat" ? "active" : ""} onClick={() => onModeChange("flat")} title={side ? "All side questions of this chat as one stream" : "All discussions of this document as one stream"} data-testid="mode-flat">Flat</button>
     </span></>
-  ) : null;
+  ) : foldBtn;
 
   if (mode === "flat") {
     return (

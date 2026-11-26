@@ -402,6 +402,96 @@ class Graphs:
         return {"kind": "calls", "title": f"Calls of {name}", "nodes": list(nodes.values()), "edges": edges, "notes": notes,
                 "hidden_tests": sorted(hidden), "center": center}
 
+    # ------------------------------------------------------------------ sequence diagram
+    async def _ordered_calls(self, root: str, root_name: str, path: str, line: int, name: str) -> tuple[list[tuple[str, tuple[str, int], int]], list[str]]:
+        """The functions a function calls, in the order of its body (each once): (name, its definition, line of the call),
+        and the names called that aren't defined in the worktree."""
+        spans = [sp for sp in await self._func_spans(root_name, path) if sp[0] == line]
+        if not spans:
+            return [], []
+        lang = lang_of(path)
+        lines = await self._lines(root_name, path)
+        body = _code_lines(lines[spans[0][0] - 1: spans[0][1]], lang)
+        first = next((i for i, s in enumerate(body) if "{" in s or s.rstrip().endswith(":")), 0)
+        start = first + 1 if lang == "py" else first
+        nested = [sp for sp in await self._func_spans(root_name, path) if spans[0][0] < sp[0] <= spans[0][1]]
+        order: list[tuple[str, int]] = []
+        seen: set[str] = set()
+        for i, s in enumerate(body[start:], spans[0][0] + start):
+            if any(a <= i <= b for a, b, _ in nested):
+                continue  # the body of a function defined inside: it runs when called
+            for m in re.finditer(r"(?<![\w$])([A-Za-z_]\w*)\s*(?:<[^;()]*>)?\s*\(", s):
+                nm = m.group(1)
+                if nm in KEYWORDS or nm == name or nm.isupper() or (lang == "py" and nm in PY_BUILTINS) or nm in seen:
+                    continue
+                recv = re.search(r"(\w*)\s*(\.|->)\s*$", s[: m.start()])
+                if recv and recv.group(1) not in ("self", "this", "cls", "super"):
+                    continue  # a method of some object: its type isn't known without a compiler
+                seen.add(nm)
+                order.append((nm, i))
+        defs = await self.find_defs(root, [nm for nm, _ in order][:120], path, lang)
+        for a, _b, nm in nested:
+            defs[nm] = (path, a)
+        return [(nm, defs[nm], i) for nm, i in order if nm in defs], [nm for nm, _ in order if nm not in defs]
+
+    async def sequence(self, root_name: str, name: str, near: str | None = None, at: tuple[str, int] | None = None,
+                       depth: int = 2, tests: bool = False) -> dict[str, Any]:
+        """What happens when `name` runs: the calls it makes in order, and the calls those make (down to `depth`), as a
+        Mermaid sequence diagram and a list of steps."""
+        if not IDENT.match(name or ""):
+            return {"error": "not a function name"}
+        root = await self.f.root(root_name)
+        fn = at or (await self.find_defs(root, [name], near, lang_of(near or "") if near else None)).get(name)
+        if not fn:
+            return {"error": f"no definition of {name} was found in this worktree"}
+        parts: dict[tuple[str, int], str] = {}
+        labels: list[str] = []
+
+        def pid(loc: tuple[str, int], nm: str) -> str:
+            if loc not in parts:
+                parts[loc] = f"p{len(parts)}"
+                labels.append(f"    participant {parts[loc]} as {nm}<br/><small>{loc[0].rsplit('/', 1)[-1]}</small>")
+            return parts[loc]
+
+        lines_out: list[str] = []
+        steps: list[dict[str, Any]] = []
+        ext_all: list[str] = []
+        hidden: set[str] = set()
+        notes: list[str] = []
+        cap = 60
+
+        async def visit(loc: tuple[str, int], nm: str, level: int, stack: tuple[tuple[str, int], ...]) -> None:
+            calls, ext = await self._ordered_calls(root, root_name, loc[0], loc[1], nm)
+            ext_all.extend(x for x in ext if x not in ext_all)
+            me = pid(loc, nm)
+            for callee, cloc, at_line in calls:
+                if len(steps) >= cap:
+                    return
+                if not tests and is_test(callee, cloc[0]):
+                    hidden.add(callee)
+                    continue
+                them = pid(cloc, callee)
+                steps.append({"from": nm, "to": callee, "path": loc[0], "line": at_line, "to_path": cloc[0], "to_line": cloc[1], "depth": level})
+                deeper = level < depth and cloc not in stack and cloc != loc
+                if deeper:
+                    lines_out.append(f"    {me}->>+{them}: {callee}()")
+                    await visit(cloc, callee, level + 1, (*stack, cloc))
+                    lines_out.append(f"    {them}-->>-{me}: ")
+                else:
+                    lines_out.append(f"    {me}->>{them}: {callee}()")
+
+        await visit(fn, name, 1, (fn,))
+        if len(steps) >= cap:
+            notes.append(f"Only the first {cap} calls are shown; lower the depth to see the start of the story whole.")
+        if ext_all:
+            notes.append("Also called (not defined in this worktree: library, macro or a method of another type): "
+                         f"{', '.join(ext_all[:20])}{'…' if len(ext_all) > 20 else ''}.")
+        if not steps:
+            notes.append(f"{name} calls no function defined in this worktree.")
+        mermaid = "\n".join(["sequenceDiagram", "    autonumber", *labels, *lines_out]) if steps else ""
+        return {"kind": "sequence", "title": f"Sequence of {name}", "subject": {"path": fn[0], "line": fn[1]}, "mermaid": mermaid,
+                "steps": steps, "notes": notes, "hidden_tests": sorted(hidden)}
+
     # ------------------------------------------------------------------ includes / imports
     def _resolve(self, spec: str, kind: str, src: str, files: set[str], by_tail: dict[str, list[str]]) -> str | None:
         here = posixpath.dirname(src)

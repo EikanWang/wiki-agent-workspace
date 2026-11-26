@@ -58,6 +58,8 @@ export interface Prefs {
   sidebarView: "files" | "reviews" | "development" | "local" | "agents" | "terminal" | "insights" | "machines";
   panelOpen: boolean;
   tocOpen: boolean;
+  /** the middle column (document / PR) is folded and the discussion panel takes its width */
+  centerFolded?: boolean;
   /** Discussion panel: one discussion at a time, or all discussions of the document as one stream. */
   panelMode: "individual" | "flat";
   /** Reader interaction: "read" = plain viewer (selection only copies), "discuss" = selection opens the question box. */

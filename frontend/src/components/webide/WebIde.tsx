@@ -8,6 +8,7 @@ import { CodeAnchor, EditorFiles, FileRef, FileScope, anchorOf, scopeFiles } fro
 import { CORE_LSP, LSP_LANGS, LspClient, LspStatus } from "./lsp";
 import UmlDiagram from "./UmlDiagram";
 import GraphView, { type GraphReq } from "./GraphView";
+import SequenceView from "./SequenceView";
 import { langFor, outline, registerLanguages } from "./languages";
 import MarkdownPreview from "./MarkdownPreview";
 import FileViewer, { viewerKind } from "./FileViewer";
@@ -196,6 +197,7 @@ export default function WebIde({ dev, completionEnabled, refreshKey, onAsk, thre
   // references, search hits, problems — not ordinary cursor moves
   const [uml, setUml] = useState<{ name: string; root: string; path: string | null } | null>(null);
   const [graph, setGraph] = useState<GraphReq | null>(null);
+  const [seq, setSeq] = useState<{ name: string; path: string | null } | null>(null);
   const navBack = useRef<NavLoc[]>([]);
   const navFwd = useRef<NavLoc[]>([]);
   const navigating = useRef(false);
@@ -579,6 +581,8 @@ export default function WebIde({ dev, completionEnabled, refreshKey, onAsk, thre
     };
     subs.push(ed.addAction({ id: "waw.calls", label: "Show Call Graph", contextMenuGroupId: "navigation", contextMenuOrder: 101,
       run: (e) => { const w = wordAt(e); if (w) setGraph({ kind: "calls", name: w.word, path: w.path }); } }));
+    subs.push(ed.addAction({ id: "waw.sequence", label: "Show Sequence Diagram", contextMenuGroupId: "navigation", contextMenuOrder: 101.5,
+      run: (e) => { const w = wordAt(e); if (w) setSeq({ name: w.word, path: w.path }); } }));
     subs.push(ed.addAction({ id: "waw.deps", label: "Show Includes / Imports of This File", contextMenuGroupId: "navigation", contextMenuOrder: 102,
       run: (e) => { const m = e.getModel(); const loc = m ? locate(m.uri) : null; if (loc?.root === "wt") setGraph({ kind: "deps", path: loc.rel }); } }));
     subs.push(ed.addAction({ id: "waw.op", label: "Show Operator Path (native_functions.yaml)", contextMenuGroupId: "navigation", contextMenuOrder: 103,
@@ -1017,6 +1021,8 @@ export default function WebIde({ dev, completionEnabled, refreshKey, onAsk, thre
       {discuss && <DiscussComposer box={discuss} files={filesNow()} session={discussSession ? discussSession(discuss.anchor) : null} onCancel={() => { setDiscuss(null); editorRef.current?.focus(); }} onSend={sendDiscuss} />}
       {uml && <UmlDiagram devId={dev.id} name={uml.name} path={uml.path} onClose={() => { setUml(null); editorRef.current?.focus(); }}
         onOpen={(path, line) => { setUml(null); void openFile("wt", path, { line }); }} />}
+      {seq && <SequenceView devId={dev.id} name={seq.name} path={seq.path} onClose={() => { setSeq(null); editorRef.current?.focus(); }}
+        onOpen={(path, line) => { setSeq(null); void openFile("wt", path, { line }); }} />}
       {graph && <GraphView devId={dev.id} req={graph} onClose={() => { setGraph(null); editorRef.current?.focus(); }}
         onOpen={(path, line) => { setGraph(null); void openFile("wt", path, { line }); }} />}
       {quick && <QuickOpen devId={dev.id} roots={shownRoots} onClose={() => { setQuick(false); editorRef.current?.focus(); }} onOpen={(r, p) => { setQuick(false); void openFile(r, p); }} />}

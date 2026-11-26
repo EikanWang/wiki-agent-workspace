@@ -937,6 +937,8 @@ export default function App() {
   // with a PR tab in front, the panel and the session bar belong to the PR's discussion document (once it is open)
   const isPrDoc = !!doc && doc.path.startsWith(".waw-github/");
   const panelDoc = prTab ? (isPrDoc && doc!.path.endsWith(`/${prTab.number}.md`) ? doc : null) : doc;
+  // the middle column folded: the discussion panel takes its width (only when there is a panel to show)
+  const centerFolded = !!prefs.centerFolded && view === "document" && !!panelDoc && panelOpen && !isNarrow;
   const defaultSession = useMemo(() => sessions.find((s) => s.id === doc?.default_session_id), [sessions, doc?.default_session_id]);
 
   if (authed === null) return <div className="loading-screen">Loading…</div>;
@@ -1026,7 +1028,7 @@ export default function App() {
       {boot.settings.watcher_error && <div className="banner warn">{boot.settings.watcher_error}</div>}
       {!watcherReady && <div className="banner">The file watcher is still indexing this workspace; until it finishes, use the ↻ button in the file tree to see new files and changes.</div>}
 
-      <main className={`layout view-${view === "diff" || view === "chats" || view === "development" || view === "local" || view === "agents" || view === "insights" || view === "machines" ? "terminal" : view} ${view === "diff" ? "view-diff" : ""} ${view === "chats" ? "view-chats" : ""} ${view === "document" && !panelDoc ? "no-panel" : ""}`} data-testid="layout">
+      <main className={`layout view-${view === "diff" || view === "chats" || view === "development" || view === "local" || view === "agents" || view === "insights" || view === "machines" ? "terminal" : view} ${view === "diff" ? "view-diff" : ""} ${view === "chats" ? "view-chats" : ""} ${view === "document" && !panelDoc ? "no-panel" : ""} ${centerFolded ? "center-folded" : ""}`} data-testid="layout">
         <aside className={`sidebar with-activity ${listOpen ? "" : "list-folded"}`} data-list={listOpen ? "open" : "folded"}>
           <nav className="activity-bar" aria-label="Sidebar views">
             <ActivityButtons order={orderOf(prefs.activityOrder)} onOrder={(o) => updatePrefs({ activityOrder: o })} buttons={{
@@ -1150,6 +1152,11 @@ export default function App() {
         </aside>
 
         <section className="center" style={{ display: view === "document" ? undefined : "none" }}>
+          {centerFolded && (
+            <button className="center-fold-strip" onClick={() => updatePrefs({ centerFolded: false })} title="Show the document / PR again" data-testid="center-unfold">
+              <span>›</span><span className="center-fold-label">{prTab ? `#${prTab.number}` : doc ? doc.path.split("/").pop() : "Document"}</span>
+            </button>
+          )}
           <DocTabs
             tabs={(workspaces.length ? docTabs.filter((t) => !isChatPath(t.path)).filter((t) => t.ws === PR_TABS || workspaces.some((w) => w.id === t.ws && w.available)) : docTabs).filter((t) => t.ws !== PR_TABS || !!hub?.available)}
             active={prTab ? { ws: PR_TABS, path: `${prTab.repo}#${prTab.number}` } : doc ? { ws: activeWs ?? "", path: doc.path } : null}
@@ -1357,8 +1364,10 @@ export default function App() {
         )}
         {view === "document" && panelDoc && panelOpen && (
           <DiscussionPanel
-            onCollapse={() => updatePrefs({ panelOpen: false })}
-            resizer={<Resizer side="left" onResize={resizePanel} onEnd={persistPrefs} />}
+            onCollapse={() => updatePrefs({ panelOpen: false, centerFolded: false })}
+            centerFolded={centerFolded}
+            onFoldCenter={() => updatePrefs({ centerFolded: !centerFolded })}
+            resizer={centerFolded ? undefined : <Resizer side="left" onResize={resizePanel} onEnd={persistPrefs} />}
             mode={prefs.panelMode}
             onModeChange={(m) => updatePrefs({ panelMode: m })}
             onSessionChanged={() => void refreshSessions()}

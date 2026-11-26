@@ -545,6 +545,10 @@ Each workspace has one of two editors (switch with the **Web editor / VS Code** 
   - **Call graph**: right-click a function → *Show Call Graph*. Its **callers** on the left (with the number of calls)
     and **what it calls** on the right (functions defined in the worktree; library calls are listed below the
     diagram). **⊕** on a caller adds its own callers, on a called function what it calls.
+  - **Sequence diagram**: right-click a function → *Show Sequence Diagram*. The calls it makes in the order of its
+    code, followed down 1–4 levels (**Depth**), drawn as a Mermaid sequence diagram (click it to enlarge), with the
+    steps listed below it — click one to open the line of the call. Calls through pointers, virtual methods and methods
+    of other objects aren't followed; for those, ask an agent to draw the sequence.
   - **Includes / imports**: **⇄ Dependencies** above the editor (or right-click → *Show Includes / Imports of This
     File*): the files that include / import this file on the left, the files it includes / imports on the right;
     system and third-party headers / modules are listed below.
@@ -920,6 +924,10 @@ shows its date and time in **UTC+8** (e.g. `2026-11-12 15:03:21 UTC+8`): when yo
   `.svg`, … files on the server (absolute paths, or wiki paths) or on the web, and ```` ```svg ```` blocks (drawn, the
   source folded under them). Click a picture (PNG, GIF, SVG …) to open it in a dialog in the same window (also in documents and PR text), with zoom, closed with Esc or ×; Ctrl/⌘-click opens it the browser's way. A link whose file doesn't load stays
   a plain link. SVGs are always shown as images, so their scripts never run.
+- **Fold the middle column**: in the wiki reader and in a PR review, **⇤** in the discussion panel's header folds
+  the document / PR so the discussions take its width; the strip on the left (or **⇥**) brings it back. In PR
+  Development, **Editor** in the toolbar folds the explorer, editor and bottom panel so the agent panel takes the
+  width; the **› Editor** strip brings them back. Both are remembered in this browser.
 - **Diagrams in answers**: ```` ```mermaid ```` blocks (sequence, state, flowchart, class … diagrams) are drawn
   wherever Markdown is shown — answers, documents, PR text — with the source folded under them, and open in the same
   dialog. Agents are told they can draw them, so you can ask for example "draw the sequence of `torch.xpu.manual_seed`".

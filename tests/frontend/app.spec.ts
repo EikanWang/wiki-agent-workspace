@@ -353,6 +353,15 @@ test("layout: font settings, foldable/resizable file tree and discussion panel, 
   await page.getByTestId("panel-collapse").click();
   await expect(page.getByTestId("discussion-panel")).toHaveCount(0);
   await page.getByTestId("panel-expand").click();
+  // fold the middle (document) column: the discussion panel takes its width; the strip brings it back
+  const wide0 = (await page.getByTestId("discussion-panel").boundingBox())!.width;
+  await page.getByTestId("center-fold").click();
+  await expect(page.getByTestId("layout")).toHaveClass(/center-folded/);
+  await expect(page.getByTestId("markdown-body")).toBeHidden();
+  await expect.poll(async () => (await page.getByTestId("discussion-panel").boundingBox())!.width).toBeGreaterThan(wide0 + 200);
+  await page.getByTestId("center-unfold").click();
+  await expect(page.getByTestId("layout")).not.toHaveClass(/center-folded/);
+  await expect(page.getByTestId("markdown-body")).toBeVisible();
   const panel = page.getByTestId("discussion-panel");
   const p0 = (await panel.boundingBox())!.width;
   const ph = (await page.locator(".discussion .resizer").boundingBox())!;
@@ -3492,6 +3501,26 @@ test("PR Development: view the code of the main branch, Alt+← / Alt+→ betwee
   await cg.locator('[data-testid="graph-node-parent"][data-name="draw"]').click();
   await expect(cg).toHaveCount(0);
   await expect(page.getByTestId("webide-status")).toContainText("Ln 13");
+  // sequence diagram from the context menu (on "area", which calls nothing of the worktree)
+  await page.locator(".monaco-editor .view-lines").click();
+  await page.keyboard.press("Control+Home");
+  for (let i = 0; i < 3; i++) await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Home");
+  for (let i = 0; i < 5; i++) await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("Shift+F10");
+  const seqItem = await page.getByRole("menuitem", { name: /Show Sequence Diagram/ }).boundingBox();
+  await page.mouse.move(seqItem!.x + 20, seqItem!.y + seqItem!.height / 2);
+  await page.waitForTimeout(200);
+  await page.mouse.down();
+  await page.mouse.up();
+  await expect(page.getByTestId("sequence-view")).toContainText("calls no function", { timeout: 20000 });
+  await page.getByTestId("sequence-close").click();
+  // fold the middle (explorer, editor, bottom panel): the agent panel takes the width
+  await page.getByTestId("dev-main-toggle").click();
+  await expect(page.getByTestId("webide")).toBeHidden();
+  await expect(page.getByTestId("dev-view")).toHaveClass(/main-folded/);
+  await page.getByTestId("dev-main-strip").click();
+  await expect(page.getByTestId("webide")).toBeVisible();
   // dependencies of the file, and the impact map of the changes (none here)
   await page.getByTestId("webide-deps").click();
   await expect(page.getByTestId("graph-view")).toHaveAttribute("data-kind", "deps");

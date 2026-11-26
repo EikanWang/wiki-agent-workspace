@@ -991,7 +991,7 @@ async def uml_diagram(dev_id: str, body: UmlIn, ctx: AppContext = Depends(requir
 
 
 class GraphIn(BaseModel):
-    kind: str = Field(pattern="^(calls|deps|op|impact)$")
+    kind: str = Field(pattern="^(calls|deps|op|impact|sequence)$")
     root: str = Field("wt", pattern="^(wt|wiki)$")
     name: str | None = Field(None, max_length=200)  # calls: the function; op: the operator (`add` or `add.Tensor`)
     path: str | None = Field(None, max_length=4096)  # calls: the file it was asked from; deps: the file
@@ -999,6 +999,7 @@ class GraphIn(BaseModel):
     tests: bool = False  # also tests (left out by default)
     at_path: str | None = Field(None, max_length=4096)  # calls: the function's definition when already known
     at_line: int | None = Field(None, ge=1)
+    depth: int = Field(2, ge=1, le=4)  # sequence: how many levels of calls to follow
 
 
 @router.post("/dev/workspaces/{dev_id}/graph")
@@ -1016,6 +1017,9 @@ async def graph(dev_id: str, body: GraphIn, ctx: AppContext = Depends(require_au
             raise bad_request("parts are callers, callees", "INVALID_PARTS")
         at = (norm_rel(body.at_path), body.at_line) if body.at_path and body.at_line else None
         return await g.calls(body.root, name, body.path, at, body.tests, parts)
+    if body.kind == "sequence":
+        at = (norm_rel(body.at_path), body.at_line) if body.at_path and body.at_line else None
+        return await g.sequence(body.root, name, body.path, at, body.depth, body.tests)
     if body.kind == "deps":
         if not body.path:
             raise bad_request("path is required", "INVALID_PATH")

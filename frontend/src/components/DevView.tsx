@@ -42,7 +42,10 @@ export default function DevView({ devId, workspaces, sessions, onSessionsChanged
   const [bottomHeight, setBottomHeight] = usePersistentState<number | null>(`dev.bottomHeight`, null);
   const agentPane = usePane("dev.agent", 380, 240, 1400);
   const agentOpen = !agentPane.folded;
-  const setAgentOpen = (open: boolean) => agentPane.setFolded(!open);
+  const setAgentOpen = (open: boolean) => { agentPane.setFolded(!open); if (!open) setMainFoldedRaw(false); };
+  // the middle (explorer, editor, bottom panel) folded: the agent panel takes the whole width
+  const [mainFoldedRaw, setMainFoldedRaw] = usePersistentState(`dev.mainFolded`, false);
+  const mainFolded = mainFoldedRaw && agentOpen;
   // the Changes view in the editor area (true) instead of the bottom panel
   const [changesWide, setChangesWide] = usePersistentState(`dev.changesWide.${devId}`, false);
   // the Changes view shows only this folder / file (the ± of a row in the explorer); null: everything
@@ -176,7 +179,7 @@ export default function DevView({ devId, workspaces, sessions, onSessionsChanged
   };
   const wiki = workspaces.find((w) => w.id === dev.wiki_workspace_id);
   return (
-    <div className={`dev-view ${agentOpen ? "" : "agent-closed"}`} data-testid="dev-view">
+    <div className={`dev-view ${agentOpen ? "" : "agent-closed"} ${mainFolded ? "main-folded" : ""}`} data-testid="dev-view">
       <div className="dev-toolbar">
         {projectsFolded && onShowProjects && <button className="icon-btn" onClick={onShowProjects} title="Show the list of workspaces" aria-label="Show the list of workspaces" data-testid="dev-show-projects">»</button>}
         <b className="dev-title" title={dev.worktree_path}>{dev.name}</b>
@@ -218,6 +221,8 @@ export default function DevView({ devId, workspaces, sessions, onSessionsChanged
             title="View all changes (diff) and commit them, in the editor area; ± on a file or folder of the explorer shows only its changes" data-testid="dev-changes-toggle">Diff</button>
         )}
         <button className="btn small" onClick={() => setSettings(true)} data-testid="dev-settings">Settings</button>
+        <button className={`btn small toggle ${mainFolded ? "" : "on"}`} onClick={() => { if (!mainFolded) setAgentOpen(true); setMainFoldedRaw(!mainFolded); }} aria-pressed={!mainFolded}
+          title={mainFolded ? "Show the explorer, editor and bottom panel again" : "Fold the explorer, editor and bottom panel: the agent panel takes the whole width"} data-testid="dev-main-toggle">Editor</button>
         <button className={`btn small toggle ${agentOpen ? "on" : ""}`} onClick={() => setAgentOpen(!agentOpen)} aria-pressed={agentOpen}>Agent</button>
         <button className="icon-btn" onClick={() => void archive()} title="Archive">⋯</button>
       </div>
@@ -227,7 +232,12 @@ export default function DevView({ devId, workspaces, sessions, onSessionsChanged
       {err && <div className="banner warn small" role="alert">{err}</div>}
       {note && <div className="banner small" data-testid="dev-banner-note">{note} <button className="link-btn" onClick={() => setNote(null)}>ok</button></div>}
       <div className="dev-body">
-        <div className="dev-main">
+        {mainFolded && (
+          <button className="dev-main-strip" onClick={() => setMainFoldedRaw(false)} title="Show the explorer, editor and bottom panel" data-testid="dev-main-strip">
+            <span>›</span><span className="dev-agent-strip-label">Editor</span>
+          </button>
+        )}
+        <div className="dev-main" style={mainFolded ? { display: "none" } : undefined}>
           {changesWide && dev.status === "ready" && <div className="dev-editor dev-changes-main">{changes(true)}</div>}
           <div className="dev-editor" style={changesWide && dev.status === "ready" ? { display: "none" } : undefined}>
             {web && dev.status === "ready" ? (
@@ -295,7 +305,7 @@ export default function DevView({ devId, workspaces, sessions, onSessionsChanged
             </div>
           )}
         </div>
-        {dev.status === "ready" && <Splitter dir="x" side="after" pane={agentPane} label="agent panel" testId="dev-agent-splitter" />}
+        {dev.status === "ready" && !mainFolded && <Splitter dir="x" side="after" pane={agentPane} label="agent panel" testId="dev-agent-splitter" />}
         {agentOpen && dev.status === "ready" && (
           <aside className="dev-side" style={{ width: agentPane.size }}>
             <DevAgentPanel dev={dev} sessions={sessions} threads={threads} fileSessions={fileSessions} onReload={loadThreads} onSessionsChanged={onSessionsChanged}
