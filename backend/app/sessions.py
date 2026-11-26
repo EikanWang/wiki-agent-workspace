@@ -105,6 +105,8 @@ class SessionService:
         currently working with), the new session starts on the same model/variant when the provider matches."""
         row = await self._create_for_provider(provider, display_name)
         model, variant = inherited_model(inherit_from, provider)
+        if not (model or variant) and self.ctx.providers is not None:
+            model, variant = self.ctx.providers.default_model(provider)  # the app's default model for new sessions
         if model or variant:
             row = self.set_model(row.id, model, variant)
         return row
@@ -127,6 +129,8 @@ class SessionService:
         provider = choice.provider or (base.provider if base else None) or self.ctx.providers.default_provider()
         if not provider:
             raise ApiError(503, "PROVIDER_UNAVAILABLE", "no default agent provider configured")
+        if not (model or variant) and (base is None or base.provider != provider):
+            model, variant = self.ctx.providers.default_model(provider)  # "default" in a new session: the app's default
         self.ctx.providers.get(provider)
         if base is not None and base.provider == provider and base.model == model and base.variant == variant:
             return base
@@ -217,6 +221,39 @@ class SessionModelIn(BaseModel):
     variant: str | None = None
 
 
+class AgentDefaultsIn(BaseModel):
+    provider: str | None = Field(None, max_length=40)   # None / "": the configuration's default agent
+    model: str | None = Field(None, max_length=200)
+    variant: str | None = Field(None, max_length=40)
+
+
+@router.get("/agent-defaults")
+def get_agent_defaults(ctx: AppContext = Depends(require_auth)):
+    """The default agent and model for new sessions of every agent task (sessions that exist keep theirs)."""
+    assert ctx.providers is not None
+    d = ctx.providers.defaults
+    return {"provider": d.get("provider") or None, "model": d.get("model") or None, "variant": d.get("variant") or None,
+            "effective_provider": ctx.providers.default_provider(), "configured_provider": ctx.settings.default_provider}
+
+
+@router.put("/agent-defaults")
+def put_agent_defaults(body: AgentDefaultsIn, ctx: AppContext = Depends(require_auth_mutating)):
+    assert ctx.providers is not None
+    from .kv import kv_put
+
+    provider = (body.provider or "").strip() or None
+    if provider:
+        try:
+            ctx.providers.get(provider)
+        except ProviderError as exc:
+            raise bad_request(exc.message, exc.code)
+    model, variant = clean_model(body.model, body.variant) if provider else (None, None)
+    value = {"provider": provider, "model": model, "variant": variant}
+    kv_put(ctx, "agent_defaults", value)
+    ctx.providers.defaults = value
+    return get_agent_defaults(ctx)
+
+
 @router.get("/providers/{provider}/models")
 async def list_models(provider: str, ctx: AppContext = Depends(require_auth)):
     assert ctx.providers is not None
@@ -230,6 +267,9 @@ async def list_models(provider: str, ctx: AppContext = Depends(require_auth)):
     if caps.available:
         models, default = await asyncio.gather(adapter.list_models(),
                                                adapter.default_model(ctx.workspace_root or ctx.settings.workspace_root))
+    app_model, app_variant = ctx.providers.default_model(provider)
+    if app_model or app_variant:  # the default chosen in the app wins over the provider's own configuration
+        default = {"model": app_model or default.get("model"), "variant": app_variant or default.get("variant")}
     if default.get("model"):
         # flag the provider's configured default in the list (and offer it even when the list lacks it)
         models = [dict(m, default=True) if m.get("id") == default["model"] else {k: v for k, v in m.items() if k != "default"}

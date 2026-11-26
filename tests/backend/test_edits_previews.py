@@ -189,3 +189,40 @@ async def test_cancelling_a_queued_preview_marks_it_failed_not_pending(api: Api,
         await asyncio.sleep(0.1)
     assert p["status"] == "failed"  # on_complete ran: never stuck in "pending"
     assert (workspace / "docs" / "guide.md").read_text() == doc["text"]
+
+
+async def test_app_default_agent_and_model_for_new_sessions_only(api: Api, fake_env: Path):
+    # a session that exists (and has run) before the default is set keeps its agent and model
+    old = (await api.post("/api/v1/agent-sessions", json={"provider": "opencode", "display_name": "old"})).json()["id"]
+    await api.put(f"/api/v1/agent-sessions/{old}/model", json={"model": "prov/old-model"})
+    doc = await api.open_doc()
+    a = anchor_for(doc["text"], "TorchDynamo")
+    r = await api.post(f"/api/v1/documents/{doc['document_id']}/threads", json={**a, "version_sha256": doc["sha256"], "question": "q1", "session_id": old})
+    assert (await api.wait_job(r.json()["job_id"]))[-1]["type"] == "completed"
+
+    assert (await api.put("/api/v1/agent-defaults", json={"provider": "nope"})).status_code == 400
+    d = (await api.put("/api/v1/agent-defaults", json={"provider": "codex", "model": "gpt-5", "variant": "high"})).json()
+    assert d["provider"] == "codex" and d["effective_provider"] == "codex"
+    assert (await api.get("/api/v1/bootstrap")).json()["default_provider"] == "codex"
+    models = (await api.get("/api/v1/providers/codex/models")).json()
+    assert models["default_model"] == "gpt-5" and models["default_variant"] == "high"
+
+    # a new session of the default agent starts on the default model
+    r = await api.post("/api/v1/agent-sessions", json={"provider": "codex", "display_name": "new"})
+    new = (await api.get(f"/api/v1/agent-sessions/{r.json()['id']}")).json()
+    assert (new["provider"], new["model"], new["variant"]) == ("codex", "gpt-5", "high")
+    # … another agent's new session is left to that agent's own default
+    r = await api.post("/api/v1/agent-sessions", json={"provider": "opencode", "display_name": "oc"})
+    assert (await api.get(f"/api/v1/agent-sessions/{r.json()['id']}")).json()["model"] is None
+    # the old session is unchanged and its discussion goes on with it
+    kept = (await api.get(f"/api/v1/agent-sessions/{old}")).json()
+    assert (kept["provider"], kept["model"]) == ("opencode", "prov/old-model")
+    tid = (await api.threads(doc["document_id"]))["threads"][0]["id"]
+    r = await api.post(f"/api/v1/threads/{tid}/messages", json={"text": "q2"})
+    ev = await api.wait_job(r.json()["job_id"])
+    log = fake_env / "codex_calls.log"
+    assert ev[-1]["type"] == "completed" and not (log.exists() and '["exec"' in log.read_text())  # still OpenCode
+
+    # back to the configuration's default
+    d = (await api.put("/api/v1/agent-defaults", json={"provider": None})).json()
+    assert d["provider"] is None and d["effective_provider"] == "opencode"

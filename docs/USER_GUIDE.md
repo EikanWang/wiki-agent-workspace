@@ -876,6 +876,11 @@ shows its date and time in **UTC+8** (e.g. `2026-11-12 15:03:21 UTC+8`): when yo
 
 ## Agent sessions and models
 
+- **Default agent and model** (account menu → **Default agent and model…**): the agent, model and reasoning level
+  every **new** session starts with — wiki discussions and chats, Local files and PR Development chats, reviews,
+  previews, commit messages, … Sessions that already exist keep their agent and model (and so do the discussions
+  that use them); a question or session can still pick another. *From the configuration* goes back to
+  `agents.default_provider` with each agent's own default model.
 - **Agents**: OpenCode, Codex and **Google Antigravity** (its `agy` CLI) — each one installed and logged in on the
   server is offered wherever you pick an agent (**+ New session** buttons, the agent / model menus of the dialogs,
   PR Development, Local files chat). Antigravity streams its answer as it writes it; its conversations can be linked

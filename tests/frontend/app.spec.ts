@@ -5841,3 +5841,26 @@ test("A direct link http://host/<absolute path> opens the file in Local files; a
   fs.rmSync(inWiki, { force: true });
   fs.rmSync(path.join(path.dirname(workspaceDir()), "sheets-keep.xlsx"), { force: true });
 });
+
+test("Account menu: default agent and model for new sessions", async ({ page }) => {
+  await login(page);
+  await page.getByTestId("account-menu").click();
+  await page.getByTestId("agent-defaults").click();
+  const dlg = page.getByTestId("agent-defaults-dialog");
+  await expect(dlg).toBeVisible();
+  await dlg.getByTestId("agent-defaults-provider").selectOption("codex");
+  await dlg.getByTestId("agent-defaults-model").fill("gpt-5");
+  await dlg.getByTestId("agent-defaults-variant").selectOption("high");
+  await dlg.getByTestId("agent-defaults-save").click();
+  await expect(dlg).toHaveCount(0);
+  const d = await (await page.request.get("/api/v1/agent-defaults")).json();
+  expect([d.provider, d.model, d.variant]).toEqual(["codex", "gpt-5", "high"]);
+  // reopened, it shows what was saved; back to the configuration's default
+  await page.getByTestId("account-menu").click();
+  await page.getByTestId("agent-defaults").click();
+  await expect(dlg.getByTestId("agent-defaults-provider")).toHaveValue("codex");
+  await expect(dlg.getByTestId("agent-defaults-model")).toHaveValue("gpt-5");
+  await dlg.getByTestId("agent-defaults-provider").selectOption("");
+  await dlg.getByTestId("agent-defaults-save").click();
+  expect((await (await page.request.get("/api/v1/agent-defaults")).json()).provider).toBeNull();
+});

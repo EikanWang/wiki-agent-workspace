@@ -167,7 +167,7 @@ The app asks for `openid email` only, reads the email once from Google's userinf
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `default_provider` | auto-detected: `opencode` if on PATH, else `codex`, else `antigravity` (`agy`), else empty | Provider used when a document has no session yet. Empty → discussions are disabled with an explanation; reader/terminal still work. |
+| `default_provider` | auto-detected: `opencode` if on PATH, else `codex`, else `antigravity` (`agy`), else empty | Provider used when a document has no session yet (unless one is chosen in the app: account menu → **Default agent and model…**, stored in the database, which also sets the model of new sessions). Empty → discussions are disabled with an explanation; reader/terminal still work. |
 | `env_script` | — | A shell script sourced (bash) for every agent process the app starts — turns, model lists, session lists — e.g. one that exports API tokens (`AWS_BEARER_TOKEN_BEDROCK`). Re-read whenever the file changes, so a rotated token applies without a restart. SSH machines get its variables only when they opt in (`forward_env` in `[[development.hosts]]` or the machine's **Environment** in the app). |
 
 ### `[agents.opencode]`

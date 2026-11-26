@@ -16,6 +16,12 @@ function models(provider: string): Promise<ModelList> {
 }
 
 let provList: Promise<{ names: string[]; dflt: string | null }> | null = null;
+
+/** After the app's default agent / model changed: model lists and the default agent are read again. */
+export function forgetModelLists() {
+  cache.clear();
+  provList = null;
+}
 function availableProviders() {
   if (!provList) {
     provList = get<{ providers: Record<string, { available: boolean }>; default_provider: string | null }>("/bootstrap")

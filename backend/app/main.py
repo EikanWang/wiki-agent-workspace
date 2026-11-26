@@ -191,6 +191,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     configure_env_script(settings.agent_env_script)
     ctx.providers = ProviderRegistry(settings)
+    from .kv import kv_get
+
+    ctx.providers.defaults = kv_get(ctx, "agent_defaults", {}) or {}
     ctx.jobs = JobManager(db, ctx.providers, bus, primary.root, settings.provider("codex").sandbox)
     ctx.jobs.registry = reg
     ctx.jobs.locks = primary.locks

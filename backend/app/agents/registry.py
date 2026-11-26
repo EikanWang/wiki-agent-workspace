@@ -26,6 +26,8 @@ class ProviderRegistry:
         if ag.enabled:
             self.adapters["antigravity"] = AntigravityAdapter(ag)
         self._caps: dict[str, Capabilities] = {}
+        # set in the app (Account menu → Default agent; kv `agent_defaults`): {provider, model, variant}
+        self.defaults: dict[str, str | None] = {}
 
     def get(self, name: str) -> AgentAdapter:
         a = self.adapters.get(name)
@@ -54,7 +56,16 @@ class ProviderRegistry:
             await self.refresh()
         return {name: c.as_dict() for name, c in self._caps.items()}
 
+    def default_model(self, provider: str) -> tuple[str | None, str | None]:
+        """The default model / reasoning level chosen in the app for new sessions of `provider` (None: the provider's own)."""
+        if self.defaults.get("provider") == provider:
+            return self.defaults.get("model") or None, self.defaults.get("variant") or None
+        return None, None
+
     def default_provider(self) -> str | None:
+        chosen = self.defaults.get("provider")
+        if chosen and chosen in self.adapters:
+            return chosen
         d = self.settings.default_provider
         if d and d in self.adapters:
             return d

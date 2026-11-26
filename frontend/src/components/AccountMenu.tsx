@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ApiError, get } from "../api";
 import { UserIcon } from "./Icons";
+import AgentDefaultsDialog from "./AgentDefaultsDialog";
 
 interface SetupInfo {
   enabled: boolean;
@@ -14,6 +15,7 @@ interface SetupInfo {
 /** Top-right account menu: who is signed in, one-click "Continue with GitHub" setup, Sign out. */
 export default function AccountMenu({ identity, onSignOut, onNotify }: { identity: string | null | undefined; onSignOut: () => void; onNotify: (m: string) => void }) {
   const [open, setOpen] = useState(false);
+  const [agentDefaults, setAgentDefaults] = useState(false);
   const [info, setInfo] = useState<SetupInfo | null>(null);
   const box = useRef<HTMLSpanElement>(null);
   const [via, who] = identity?.includes(":") ? [identity.split(":")[0], identity.slice(identity.indexOf(":") + 1)] : ["token", ""];
@@ -71,10 +73,12 @@ export default function AccountMenu({ identity, onSignOut, onNotify }: { identit
             </div>
           )}
           <div className="ws-menu-sep" />
+          <button className="ws-menu-new" onClick={() => { setOpen(false); setAgentDefaults(true); }} data-testid="agent-defaults" title="The agent and model every new agent session starts with">Default agent and model…</button>
           <a className="ws-menu-new" href="/api/v1/export" download title="Download a backup of the SQLite database and document snapshots" data-testid="backup">Download backup</a>
           <button className="ws-menu-new" onClick={onSignOut} data-testid="sign-out">{provider ? `Sign out ${who}` : "Sign out"}</button>
         </div>
       )}
+      {agentDefaults && <AgentDefaultsDialog onClose={() => setAgentDefaults(false)} />}
     </span>
   );
 }
