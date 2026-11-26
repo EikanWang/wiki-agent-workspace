@@ -1786,3 +1786,11 @@ a.ref-path code { text-decoration: underline dotted; }
 .sheet-table th, .sheet-table td { border: 1px solid var(--border); padding: 2px 6px; white-space: nowrap; max-width: 360px; overflow: hidden; text-overflow: ellipsis; }
 .sheet-table thead th { position: sticky; top: 0; background: var(--bg-soft, var(--bg)); z-index: 1; }
 .sheet-table tbody th { position: sticky; left: 0; background: var(--bg-soft, var(--bg)); color: var(--muted, #888); font-weight: normal; }
+
+.insights-extends { cursor: pointer; text-decoration: underline dotted; color: var(--accent, #2563eb); }
+.insights-extends:hover { text-decoration-style: solid; }
+.insights-first-seen-at { background: color-mix(in srgb, #facc15 35%, transparent); outline: 2px solid #facc15; border-radius: 4px; }
+.insights-first-seen { gap: 8px; padding: 4px 0; }
+
+.uml-box { cursor: grab; }
+body.uml-dragging, body.uml-dragging .uml-box { cursor: grabbing; user-select: none; }

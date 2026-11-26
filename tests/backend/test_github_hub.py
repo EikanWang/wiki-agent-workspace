@@ -700,6 +700,12 @@ def test_review_block_parsing_and_diff_lines():
                                            {"path": "f", "side": "LEFT", "line": 4, "start_line": 9, "body": "bad start"}],
                                           [{"path": "f", "unified": "@@ -3,3 +3,3 @@\n ctx\n-gone\n+new\n tail"}])
     assert drafts[0]["start_line"] == 3 and drafts[0]["line_text"] == " ctx\n+new\n tail" and drafts[1]["start_line"] is None and not bad
+    # files in dot folders (".github/…") keep their dot; "./", "a/" / "b/", ":line" and a checkout's absolute path are understood
+    wf = {"path": ".github/workflows/xpu.yml", "unified": "@@ -1,1 +1,2 @@\n on:\n+  push:"}
+    drafts, bad = github_hub.agent_drafts([{"path": p, "line": 2, "body": "x"} for p in (
+        ".github/workflows/xpu.yml", "./.github/workflows/xpu.yml", "b/.github/workflows/xpu.yml", ".github/workflows/xpu.yml:2",
+        "/home/me/pytorch/.github/workflows/xpu.yml")] + [{"path": "github/workflows/xpu.yml", "line": 2, "body": "y"}], [wf])
+    assert [d["path"] for d in drafts] == [".github/workflows/xpu.yml"] * 5 and bad == ["github/workflows/xpu.yml: not a file of this PR"]
 
 
 async def test_local_checkout_fetches_the_pr_and_is_the_agents_reference(running_app, tmp_path):

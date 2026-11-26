@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import TabCloseMenu, { useTabMenu } from "./TabCloseMenu";
 import monaco from "./webide/monaco";
 import type * as M from "monaco-editor";
 import { ApiError, get, post, put } from "../api";
@@ -146,9 +147,9 @@ export default function LocalEditor({ openRequest, renamed, onActive, onChat }: 
     }
   }, []);
 
-  const close = (p: string) => {
+  const close = (p: string, force = false) => {
     const t = tabsRef.current.find((x) => x.path === p);
-    if (t?.dirty && !window.confirm(`${p} has unsaved changes. Close it anyway?`)) return;
+    if (!force && t?.dirty && !window.confirm(`${p} has unsaved changes. Close it anyway?`)) return;
     const rest = tabsRef.current.filter((x) => x.path !== p);
     tabsRef.current = rest;
     setTabs(rest);
@@ -160,6 +161,14 @@ export default function LocalEditor({ openRequest, renamed, onActive, onChat }: 
       else { ed.current?.setModel(null); setActive(null); }
     }
   };
+
+  const closeMany = (paths: string[], keep: string | null) => {
+    const dirty = tabsRef.current.filter((t) => paths.includes(t.path) && t.dirty);
+    if (dirty.length && !window.confirm(`${dirty.length === 1 ? dirty[0].path + " has" : dirty.length + " files have"} unsaved changes. Close anyway?`)) return;
+    for (const p of paths) close(p, true);
+    if (keep && tabsRef.current.some((t) => t.path === keep)) show(keep);
+  };
+  const tabMenu = useTabMenu();
 
   // editor
   useEffect(() => {
@@ -241,11 +250,13 @@ export default function LocalEditor({ openRequest, renamed, onActive, onChat }: 
       <div className="webide-tabs" role="tablist">
         {tabs.map((t) => (
           <div key={t.path} role="tab" aria-selected={t.path === active} className={`webide-tab ${t.path === active ? "active" : ""} ${t.stale ? "stale" : ""}`}
-            onClick={() => show(t.path)} onAuxClick={(e) => { if (e.button === 1) close(t.path); }} title={t.path} data-testid="local-tab" data-path={t.path}>
+            onClick={() => show(t.path)} onAuxClick={(e) => { if (e.button === 1) close(t.path); }} onContextMenu={(e) => tabMenu.open(e, t.path)} title={t.path} data-testid="local-tab" data-path={t.path}>
             <span className="webide-tab-name">{t.path.split("/").pop()}</span>
             <button className="webide-tab-close" onClick={(e) => { e.stopPropagation(); close(t.path); }} aria-label={`Close ${t.path}`} data-dirty={t.dirty ? "1" : "0"}>{t.dirty ? "●" : "×"}</button>
           </div>
         ))}
+        <TabCloseMenu at={tabMenu.at} keys={tabs.map((t) => t.path)} dirty={(p) => !!tabs.find((t) => t.path === p)?.dirty} path={(p) => p}
+          onClose={closeMany} done={tabMenu.done} testId="local-tab-menu" />
       </div>
       {tab && (
         <div className="webide-crumbs muted small">

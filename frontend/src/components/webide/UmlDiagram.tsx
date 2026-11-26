@@ -123,6 +123,10 @@ export default function UmlDiagram({ devId, name, path, onOpen, onClose }: {
   const hiddenTests = hidden.size;
   const gen = useRef(0); // a new start drops the answers of the previous one
   const clickTimer = useRef<number | null>(null);
+  // boxes dragged to another place (diagram coordinates); their arrows follow
+  const [moved, setMoved] = useState<Map<string, { x: number; y: number }>>(new Map());
+  const drag = useRef<{ id: string; cx: number; cy: number; x: number; y: number; moved: boolean } | null>(null);
+  const dragged = useRef(false);
 
   const upsert = useCallback((id: string, patch: Partial<Node> & { name: string }) => {
     setNodes((m) => {
@@ -176,6 +180,7 @@ export default function UmlDiagram({ devId, name, path, onOpen, onClose }: {
     const g = ++gen.current;
     setNodes(new Map());
     setEdges(new Map());
+    setMoved(new Map());
     setRoot(nm);
     setErr(null);
     setHidden(new Set());
@@ -215,7 +220,31 @@ export default function UmlDiagram({ devId, name, path, onOpen, onClose }: {
     return all.filter((e) => e.kind === "inherit" || !inh.has(`${e.from}>${e.to}`));
   }, [edges, nodes]);
   const lay = useMemo(() => (nodes.size ? layout(nodes, edgeList, root) : null), [nodes, edgeList, root]);
-  const byId = useMemo(() => new Map((lay?.boxes ?? []).map((b) => [b.node.id, b])), [lay]);
+  const boxes = useMemo(() => (lay?.boxes ?? []).map((b) => { const m = moved.get(b.node.id); return m ? { ...b, x: m.x, y: m.y } : b; }), [lay, moved]);
+  const byId = useMemo(() => new Map(boxes.map((b) => [b.node.id, b])), [boxes]);
+  const size = useMemo(() => ({
+    w: Math.max(lay?.w ?? 0, ...boxes.map((b) => b.x + b.w + 20)),
+    h: Math.max(lay?.h ?? 0, ...boxes.map((b) => b.y + b.h + 20)),
+  }), [lay, boxes]);
+  // dragging a box: it follows the pointer (at the current zoom); a drag is not a click
+  useEffect(() => {
+    const move = (e: PointerEvent) => {
+      const d = drag.current;
+      if (!d) return;
+      const dx = (e.clientX - d.cx) / zoom, dy = (e.clientY - d.cy) / zoom;
+      if (!d.moved && Math.hypot(dx, dy) < 4) return;
+      d.moved = true;
+      setMoved((m) => new Map(m).set(d.id, { x: Math.max(0, Math.round(d.x + dx)), y: Math.max(0, Math.round(d.y + dy)) }));
+    };
+    const up = () => {
+      if (drag.current?.moved) { dragged.current = true; window.setTimeout(() => { dragged.current = false; }, 0); }
+      drag.current = null;
+      document.body.classList.remove("uml-dragging");
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    return () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
+  }, [zoom]);
   const rootNode = nodes.get(root);
   // ancestors / descendants of the class the diagram started from (colours)
   const [ups, downs] = useMemo(() => {
@@ -272,6 +301,7 @@ export default function UmlDiagram({ devId, name, path, onOpen, onClose }: {
           </label>
           <button className="btn small" onClick={expandAll} disabled={![...nodes.values()].some(expandable)}
             title="Expand every class shown: add its parents, derived classes and users" data-testid="uml-expand-all">⊕ Expand all</button>
+          {moved.size > 0 && <button className="btn small" onClick={() => setMoved(new Map())} title="Put the boxes you dragged back where the diagram placed them" data-testid="uml-relayout">Tidy up</button>}
           <button className="btn small" onClick={() => void start(root)} disabled={nodes.size <= 1} title="Back to just this class and its surroundings" data-testid="uml-reset">Reset</button>
           <button className="icon-btn small" onClick={() => setZoom((z) => Math.max(0.3, z / 1.2))} title="Zoom out">−</button>
           <span className="muted small">{Math.round(zoom * 100)}%</span>
@@ -279,7 +309,7 @@ export default function UmlDiagram({ devId, name, path, onOpen, onClose }: {
           <button className="icon-btn" onClick={onClose} aria-label="Close" data-testid="uml-close">×</button>
         </div>
         <div className="uml-legend muted small">
-          ▲ inherits from · ⇠ uses · ⊕ (or double-click) expands a class here: its members, parents, derived classes and users
+          ▲ inherits from · ⇠ uses · drag a box to move it (its arrows follow) · ⊕ (or double-click) expands a class here: its members, parents, derived classes and users
           are added to this diagram · click a box to open its source. Found by searching the worktree (no compiler): template /
           macro tricks and base lists spread over many lines can be missed.
         </div>
@@ -287,7 +317,7 @@ export default function UmlDiagram({ devId, name, path, onOpen, onClose }: {
           {err && <div className="error small pad">{err}</div>}
           {rootNode && !rootNode.found && <div className="muted small pad" data-testid="uml-none">No class or struct named <code>{root}</code> was found in this worktree.</div>}
           {lay && rootNode?.found !== false && (
-            <svg width={lay.w * zoom} height={lay.h * zoom} viewBox={`0 0 ${lay.w} ${lay.h}`} className="uml-svg">
+            <svg width={size.w * zoom} height={size.h * zoom} viewBox={`0 0 ${size.w} ${size.h}`} className="uml-svg">
               <defs>
                 <marker id="uml-tri" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="12" markerHeight="12" orient="auto-start-reverse">
                   <path d="M0,0 L12,6 L0,12 z" className="uml-tri" />
@@ -300,13 +330,19 @@ export default function UmlDiagram({ devId, name, path, onOpen, onClose }: {
                 const d = edgePath(e);
                 return d ? <path key={ekey(e)} d={d} className={`uml-edge ${e.kind}`} markerEnd={e.kind === "inherit" ? "url(#uml-tri)" : "url(#uml-open)"} /> : null;
               })}
-              {lay.boxes.map((b) => {
+              {boxes.map((b) => {
                 const n = b.node;
                 const role = n.id === root ? "self" : ups.has(n.id) ? "parent" : downs.has(n.id) ? "child" : n.file || edgeList.some((e) => e.kind === "use" && e.from === n.id) ? "user" : "other";
                 const busy = Object.values(n.parts).includes("loading");
                 return (
                   <g key={n.id} className={`uml-box ${role}${n.found ? "" : " missing"}${n.file ? " file" : ""}${busy ? " busy" : ""}`} transform={`translate(${b.x},${b.y})`}
+                    onPointerDown={(e) => {
+                      if (e.button !== 0 || (e.target as Element).closest(".uml-expand")) return;
+                      drag.current = { id: n.id, cx: e.clientX, cy: e.clientY, x: b.x, y: b.y, moved: false };
+                      document.body.classList.add("uml-dragging");
+                    }}
                     onClick={() => {
+                      if (dragged.current) return;
                       if (clickTimer.current) window.clearTimeout(clickTimer.current);
                       clickTimer.current = window.setTimeout(() => { clickTimer.current = null; if (n.path && n.line) onOpen(n.path, n.line); }, 250);
                     }}

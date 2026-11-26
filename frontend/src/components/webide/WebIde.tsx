@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import TabCloseMenu, { useTabMenu } from "../TabCloseMenu";
 import monaco from "./monaco";
 import type * as M from "monaco-editor";
 import { AgentSession, ApiError, DevWorkspace, Thread, get, post, put, subscribeGlobal } from "../../api";
@@ -293,10 +294,11 @@ export default function WebIde({ dev, completionEnabled, refreshKey, onAsk, thre
   const openRef = useRef(openFile);
   openRef.current = openFile;
 
-  const closeTab = (uri: string) => {
+  const closeTab = (uri: string, force = false) => {
     const t = tabsRef.current.find((x) => x.uri === uri);
-    if (t?.dirty && !window.confirm(`${t.rel} has unsaved changes. Close it anyway?`)) return;
+    if (!force && t?.dirty && !window.confirm(`${t.rel} has unsaved changes. Close it anyway?`)) return;
     const rest = tabsRef.current.filter((x) => x.uri !== uri);
+    tabsRef.current = rest;
     setTabs(rest);
     views.current.delete(uri);
     const model = monaco.editor.getModel(monaco.Uri.parse(uri));
@@ -314,6 +316,15 @@ export default function WebIde({ dev, completionEnabled, refreshKey, onAsk, thre
       }
     }
   };
+
+  // several tabs at once (the tab menu): one question about unsaved changes; the right-clicked tab stays shown
+  const closeTabs = (uris: string[], keep: string | null) => {
+    const dirty = tabsRef.current.filter((t) => uris.includes(t.uri) && t.dirty);
+    if (dirty.length && !window.confirm(`${dirty.length === 1 ? dirty[0].rel + " has" : dirty.length + " files have"} unsaved changes. Close anyway?`)) return;
+    for (const u of uris) closeTab(u, true);
+    if (keep && tabsRef.current.some((t) => t.uri === keep)) show(keep);
+  };
+  const tabMenu = useTabMenu();
 
   const save = useCallback(async (uri: string, overwrite = false): Promise<boolean> => {
     const t = tabsRef.current.find((x) => x.uri === uri);
@@ -866,7 +877,7 @@ export default function WebIde({ dev, completionEnabled, refreshKey, onAsk, thre
           <div className="webide-tabs" role="tablist">
             {tabs.map((t) => (
               <div key={t.uri} role="tab" aria-selected={t.uri === active} className={`webide-tab ${t.uri === active ? "active" : ""} ${t.stale ? "stale" : ""}`}
-                onClick={() => show(t.uri)} onAuxClick={(e) => { if (e.button === 1) closeTab(t.uri); }} title={`${t.root === "wt" ? "" : `${roots?.[t.root]?.name}: `}${t.rel}${t.readonly ? " (read-only)" : ""}`} data-testid="webide-tab" data-path={t.rel}>
+                onClick={() => show(t.uri)} onAuxClick={(e) => { if (e.button === 1) closeTab(t.uri); }} onContextMenu={(e) => tabMenu.open(e, t.uri)} title={`${t.root === "wt" ? "" : `${roots?.[t.root]?.name}: `}${t.rel}${t.readonly ? " (read-only)" : ""}`} data-testid="webide-tab" data-path={t.rel}>
                 <span className="webide-tab-name">{t.rel.split("/").pop()}</span>
                 {t.root !== "wt" && <span className="muted small">wiki</span>}
                 {(discussionsOf.get(`${t.root}:${t.rel}`) ?? 0) > 0 && (
@@ -875,6 +886,9 @@ export default function WebIde({ dev, completionEnabled, refreshKey, onAsk, thre
                 <button className="webide-tab-close" onClick={(e) => { e.stopPropagation(); closeTab(t.uri); }} aria-label={`Close ${t.rel}`} data-dirty={t.dirty ? "1" : "0"}>{t.dirty ? "●" : "×"}</button>
               </div>
             ))}
+            <TabCloseMenu at={tabMenu.at} keys={tabs.map((t) => t.uri)} dirty={(u) => !!tabs.find((t) => t.uri === u)?.dirty}
+              path={(u) => { const t = tabs.find((x) => x.uri === u); return t ? (t.root === "wt" ? t.rel : `${roots?.[t.root]?.name ?? t.root}: ${t.rel}`) : ""; }}
+              onClose={closeTabs} done={tabMenu.done} testId="webide-tab-menu" />
           </div>
           {activeTab && (
             <div className="webide-crumbs muted small">

@@ -519,6 +519,9 @@ Each workspace has one of two editors (switch with the **Web editor / VS Code** 
   definition / declaration / type / implementation (`F12`, also into other files), references (`Shift+F12`),
   rename (`F2`), outline (`Ctrl+Shift+O`), format, quick fixes (`Ctrl+.`) and diagnostics. The status-bar item shows
   the server's state; click it to restart. When none is installed it says what to install.
+- **Tab menu**: right-click a file tab for **Close**, **Close Others**, **Close to the Left / Right**, **Close
+  Saved**, **Close All** and **Copy Path** (one question when unsaved files would close), like the wiki reader's tabs
+  — also in Local files.
 - **Back / forward**: `Alt+←` goes back to where you were before a jump — another file, go to definition or
   references, a search hit, a problem, a jump far in the same file — and `Alt+→` forward again (also **← →** at the
   left of the status bar).
@@ -528,7 +531,8 @@ Each workspace has one of two editors (switch with the **Web editor / VS Code** 
   The class shows as soon as it is found; its parents, derived classes and users are added as each search finishes
   (⏳ in the title bar while some are still loading). **⊕** on a class (or a double-click) **expands it in the same
   diagram** — its members, parents, derived classes and users are added — and **⊕ Expand all** does it for every
-  class shown; **Reset** goes back to the first class. **Test classes are left out by default** — classes and
+  class shown; **Reset** goes back to the first class. **Drag a box** to move it — its arrows follow; **Tidy up** puts
+  the moved boxes back where the diagram placed them. **Test classes are left out by default** — classes and
   files in test folders (`test/`, `tests/`, `testing/` …), test files (`test_*.py`, `*_test.cc`, `*.spec.ts` …) and
   classes named like `TestFoo`, `FooTest`, `MockFoo`, `FakeFoo`; the title bar says how many were hidden (hover to see
   which) and **Test classes** shows them (remembered in this browser). Click a box to open its source; zoom with − / +. It is found by searching the worktree (C++, Python, Java, TypeScript, C#), not by a compiler: base lists
@@ -1019,6 +1023,9 @@ The chart icon in the activity bar. It shows what happened in GitHub repositorie
 - **Repositories** (left): pytorch/pytorch, vllm, transformers, sglang, flashinfer, cutlass, triton by default; add any `owner/repo`.
 - **Summarize**: pick a period (or *Dates…*), the sources (Issues & PRs, Commits, RFCs, XPU highlights), an optional focus preset (*XPU (Intel GPU)*) and free-text focus. The report has fixed sections (Highlights, Changes by area, Issues and PRs, RFCs, XPU watch, Trends, Numbers) with links. Progress shows while it runs; *Continue in chat* opens a wiki chat with the report as material.
 - **How it is built**: one summary of issues and PRs per UTC day (kept in `summary/<owner>/<repo>/`; days without one are fetched from GitHub in one go and made); periods over two weeks are rolled up week by week (finished weeks are cached in `blocks/`); commits come from the connected checkout (⎇ in PR Review) or an app-owned blobless clone in `repos/`, fetched before each report; RFCs are the RFC repositories' issues/PRs plus issues labelled or titled as RFCs (per repository in ⚙).
+- **Where an extension started**: a thing marked ➕ is an extension of something seen before, and its *(extends X)* is a
+  link — click it to open the daily summary of the day X first appeared, scrolled to the line naming it (marked in
+  yellow), with when it was first seen and what it is above; **← Back** returns to what you were reading.
 - **New things, read or unread**: 🆕 counts on reports, days, years and categories are the new things not read yet; click a NEW badge in a report or summary to mark it read, or *Mark all read* there. To mark many at once, tick the box of a whole category (Daily, Weekly …), of a year, or *Select all* at the top of the Reports or Daily list (single items too), then **Mark read** (or **Mark unread**).
 - **Discuss a whole category or year**: hover a category header (Daily, Weekly …) or a year inside it in the Reports list and click **💬**: all its finished reports open together, with their discussions in the panel on the right (**Compare them**, or *Discuss this* on a selection). Up to 40 reports at once; for a larger category, use a year.
 - **Daily** tab: every day's summary; *Make* fills a range now. **XPU highlights** tab: scored items of any dates in two views — **Per day** (like Daily: the days are listed on the left, newest first, and the chosen day's highlights show on the right; items an earlier day already had are marked *seen before*, and *only new each day* hides them — the daily runs' windows overlap) and **All, no duplicates** (each item once with the newest score and "on N days"); *Score now* scores a range.

@@ -835,3 +835,18 @@ async def test_new_things_check():
     # a failed or unreadable answer leaves the text as it was
     ctx.extra["insights_llm"] = lambda task, prompt, as_json: "no json"
     assert (await registry.check(ctx, "acme/proj", text, reg, "a report", "x"))[0] == text
+
+
+async def test_first_seen_finds_the_daily_summary_and_line_an_extension_refers_to(running_app, tmp_path):
+    h, _, _ = await make(running_app, tmp_path, {})
+    d = tmp_path / "insights" / "summary" / "acme" / "proj"
+    d.mkdir(parents=True)
+    (d / "summary_acme_proj_0D_2026-11-01_23-59-59.md").write_text(
+        "Summary of acme/proj from 2026-11-01 00-00-00 to 2026-11-01 23-59-59:\n\n# Kernels\n\n- other work\n- 🆕 **Fused Adam** for XPU lands\n")
+    (d / "summary_acme_proj_0D_2026-11-03_23-59-59.md").write_text(
+        "Summary of acme/proj from 2026-11-03 00-00-00 to 2026-11-03 23-59-59:\n\n- fused adam gets a bf16 path\n")
+    hit = (await h.api.get("/api/v1/insights/repos/acme/proj/first-seen", params={"thing": "`fused-Adam`"})).json()
+    assert hit["first"] == "2026-11-01" and hit["path"].endswith("2026-11-01_23-59-59.md")
+    assert hit["line"] == 5 and "Fused Adam" in hit["text"]
+    assert (await h.api.get("/api/v1/insights/repos/acme/proj/first-seen", params={"thing": "nothing like it"})).status_code == 404
+    assert (await h.api.get("/api/v1/insights/repos/bad/../first-seen", params={"thing": "x"})).status_code in (400, 404)

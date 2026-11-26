@@ -3404,6 +3404,12 @@ test("PR Development: view the code of the main branch, Alt+← / Alt+→ betwee
   await expect(page.locator('[data-testid="webide-tab"][data-path="lib.py"]')).toHaveAttribute("aria-selected", "true");
   await page.getByTestId("webide-nav-forward").click();
   await expect(shapes).toHaveAttribute("aria-selected", "true");
+  // the tab menu (right-click): Close Others keeps just this tab
+  await shapes.click({ button: "right" });
+  await expect(page.getByTestId("webide-tab-menu-close-right")).toBeDisabled();
+  await page.getByTestId("webide-tab-menu-close-others").click();
+  await expect(page.getByTestId("webide-tab")).toHaveCount(1);
+  await expect(shapes).toHaveAttribute("aria-selected", "true");
   // UML class diagram from the editor's context menu, on "Shape" in `class Circle(Shape):`
   await page.keyboard.press("Control+Home");
   for (let i = 0; i < 7; i++) await page.keyboard.press("ArrowDown");
@@ -3444,6 +3450,23 @@ test("PR Development: view the code of the main branch, Alt+← / Alt+→ betwee
   await uml.getByTestId("uml-expand-all").click();
   await expect(uml.locator('[data-testid="uml-child"][data-name="Ring"]')).toBeVisible({ timeout: 20000 });
   await expect(uml.getByTestId("uml-loading")).toHaveCount(0, { timeout: 20000 });
+  // drag a box: it moves, its arrows follow, and the drag does not open its source; Tidy up puts it back
+  const circle = uml.locator('[data-testid="uml-child"][data-name="Circle"]');
+  const before = await circle.getAttribute("transform");
+  const edges = async () => (await uml.locator("path.uml-edge").evaluateAll((ps) => ps.map((p) => p.getAttribute("d")))).join("|");
+  const edgesBefore = await edges();
+  const bb = (await circle.boundingBox())!;
+  await page.mouse.move(bb.x + 20, bb.y + 10);
+  await page.mouse.down();
+  await page.mouse.move(bb.x + 140, bb.y + 90, { steps: 8 });
+  await page.mouse.up();
+  await expect.poll(() => circle.getAttribute("transform")).not.toBe(before);
+  expect(await edges()).not.toBe(edgesBefore);
+  await page.waitForTimeout(400);
+  await expect(uml).toBeVisible();
+  await uml.getByTestId("uml-relayout").click();
+  await expect(circle).toHaveAttribute("transform", before!);
+  await expect(uml.getByTestId("uml-relayout")).toHaveCount(0);
   // double-click expands too (here: Ring, which has nothing more)
   await uml.locator('[data-testid="uml-child"][data-name="Ring"]').dblclick();
   await expect(uml).toBeVisible();
@@ -4144,6 +4167,15 @@ test("Local files: open a folder and a file, edit and save like a file manager; 
   // the tabs come back after a reload; Wiki brings the reader back
   await page.reload();
   await expect(page.locator(`[data-testid="local-tab"][data-path="${dir}/notes.txt"]`)).toBeVisible({ timeout: 15000 });
+  // the tab menu (right-click): Close Others / Close All
+  const readme = page.locator(`[data-testid="local-tab"][data-path="${path.join(workspaceDir(), "README.md")}"]`);
+  await readme.click({ button: "right" });
+  await page.getByTestId("local-tab-menu-close-others").click();
+  await expect(page.getByTestId("local-tab")).toHaveCount(1);
+  await expect(readme).toHaveAttribute("aria-selected", "true");
+  await readme.click({ button: "right" });
+  await page.getByTestId("local-tab-menu-close-all").click();
+  await expect(page.getByTestId("local-tab")).toHaveCount(0);
   await page.locator(`[data-testid="local-root"][data-path="${dir}"]`).hover();
   await page.locator(`[data-testid="local-root"][data-path="${dir}"]`).getByTestId("local-close-root").click();
   await expect(page.locator(`[data-testid="local-root"][data-path="${dir}"]`)).toHaveCount(0);
@@ -5863,4 +5895,22 @@ test("Account menu: default agent and model for new sessions", async ({ page }) 
   await dlg.getByTestId("agent-defaults-provider").selectOption("");
   await dlg.getByTestId("agent-defaults-save").click();
   expect((await (await page.request.get("/api/v1/agent-defaults")).json()).provider).toBeNull();
+});
+
+test("Repo Insights: “(extends …)” opens the daily summary where the thing first appeared, at its line", async ({ page }) => {
+  await login(page);
+  await page.getByTestId("activity-insights").click();
+  await page.locator('[data-testid="insights-repo"][data-repo="pytorch/pytorch"]').click();
+  await page.getByTestId("insights-tab-daily").click();
+  await page.locator('[data-testid="insights-day"][data-day="2026-11-10"]').getByTestId("insights-day-open").click();
+  const ext = page.locator("em.insights-extends", { hasText: "(extends Device mesh)" });
+  await expect(ext).toBeVisible();
+  await ext.click();
+  const bar = page.getByTestId("insights-first-seen");
+  await expect(bar).toContainText("First seen on 2026-11-10");
+  await expect(bar).toContainText("Device mesh");
+  await expect(page.locator(".insights-first-seen-at")).toContainText("Device mesh");
+  await expect(page.locator(".insights-first-seen-at")).not.toContainText("Mesh slicing");
+  await page.getByTestId("insights-first-seen-back").click();
+  await expect(page.getByTestId("insights-first-seen")).toHaveCount(0);
 });

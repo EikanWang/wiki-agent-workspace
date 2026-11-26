@@ -198,6 +198,33 @@ def registry_of(ctx: Any, repo: str, lo: str, hi: str) -> list[dict[str, Any]]:
     return registry.build(days)
 
 
+def first_seen(ctx: Any, repo: str, name: str) -> dict[str, Any] | None:
+    """Where the thing a report marks "(extends name)" first appeared: the registry entry with that name (or that other
+    spelling), the daily summary of its first day, and the first line of that summary naming it (None when the
+    summary words it differently)."""
+    k = store.match_key(name)
+    if not k:
+        return None
+    reg = registry_of(ctx, repo, "0000-00-00", "9999-12-31")
+    entry = next((e for e in reg if store.match_key(e["name"]) == k), None) \
+        or next((e for e in reg if any(store.match_key(a) == k for a in e["aliases"])), None)
+    if entry is None:
+        return None
+    row = store.daily(ctx, repo, entry["first"])
+    if row is None:
+        return None
+    lines = Path(row["path"]).read_text(encoding="utf-8", errors="replace").split("\n")
+    keys = [x for x in {store.match_key(n) for n in [entry["name"], *entry["aliases"], name]} if x]
+    line = None
+    for i, ln in enumerate(lines[1:], 1):  # (the first line is the summary's title)
+        lk = " " + store.match_key(ln) + " "
+        if any(f" {x} " in lk for x in keys):
+            line = i
+            break
+    return {"name": entry["name"], "aliases": entry["aliases"], "what": entry["what"], "first": entry["first"], "last": entry["last"],
+            "days": entry["days"], "path": row["path"], "line": line, "text": lines[line].strip()[:500] if line is not None else None}
+
+
 async def check_new(ctx: Any, repo: str, text: str, lo: str, hi: str, what: str, baseline: str) -> tuple[str, dict[str, Any]]:
     """The model check of the text's new things against the registry of `lo` … `hi` (no check when it fails)."""
     reg = registry_of(ctx, repo, lo, hi)

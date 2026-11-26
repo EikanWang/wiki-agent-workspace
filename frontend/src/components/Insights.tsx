@@ -213,7 +213,38 @@ export default function InsightsView({ repo, onOpenPrReview, sessions = [] }: { 
 }
 
 type Tab = "reports" | "daily" | "highlights" | "chat";
-type Opened = { kind: "report"; id: string } | { kind: "reports"; ids: string[] } | { kind: "file"; path: string };
+/** Where a thing first appeared (what "(extends …)" refers to): the daily summary and the line naming it. */
+interface FirstSeen { name: string; aliases: string[]; what: string; first: string; path: string; line: number | null; text: string | null }
+type Opened = { kind: "report"; id: string } | { kind: "reports"; ids: string[] } | { kind: "file"; path: string; focus?: FirstSeen; back?: Opened };
+
+const EXTENDS = /^\(extends (.+)\)$/;
+
+/** Makes every "(extends X)" of the reports / summaries shown in `box` a link to where X first appeared. */
+function useExtendsLinks(box: React.RefObject<HTMLDivElement | null>, repo: string, onFound: (hit: FirstSeen) => void, onError: (msg: string) => void, shown: unknown) {
+  useEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const tag = () => el.querySelectorAll("em:not(.insights-extends)").forEach((em) => {
+      if (!EXTENDS.test(em.textContent?.trim() ?? "")) return;
+      em.classList.add("insights-extends");
+      em.setAttribute("role", "link");
+      em.setAttribute("title", "Open the daily summary where this first appeared");
+    });
+    tag();
+    const obs = new MutationObserver(tag);
+    obs.observe(el, { childList: true, subtree: true });
+    const onClick = (e: MouseEvent) => {
+      const em = (e.target as HTMLElement).closest?.("em.insights-extends");
+      const m = em?.textContent?.trim().match(EXTENDS);
+      if (!m) return;
+      e.preventDefault();
+      e.stopPropagation();
+      get<FirstSeen>(`/insights/repos/${repo}/first-seen?thing=${encodeURIComponent(m[1])}`).then(onFound).catch((err) => onError((err as ApiError).message));
+    };
+    el.addEventListener("click", onClick, true);
+    return () => { obs.disconnect(); el.removeEventListener("click", onClick, true); };
+  }, [box, repo, onFound, onError, shown]);
+}
 
 function RepoPage({ repo, onOpenPrReview, sessions }: { repo: string; onOpenPrReview?: OpenPr; sessions: AgentSession[] }) {
   const [ov, setOv] = useState<Overview | null>(null);
@@ -223,6 +254,16 @@ function RepoPage({ repo, onOpenPrReview, sessions }: { repo: string; onOpenPrRe
   const [open, setOpen] = useState<Opened | null>(null);
   const [readRev, setReadRev] = useState(0); // bumped by "mark read" on a selection: the open report / summary reloads its marks
   const [refs, setRefs] = useState(false);
+  const mainRef = useRef<HTMLDivElement>(null);
+  const openRef = useRef<Opened | null>(null);
+  openRef.current = open;
+  const [extErr, setExtErr] = useState<string | null>(null);
+  const onFirstSeen = useCallback((hit: FirstSeen) => {
+    setExtErr(null);
+    const cur = openRef.current;
+    setOpen({ kind: "file", path: hit.path, focus: hit, back: cur?.kind === "file" ? cur.back ?? cur : cur ?? undefined });
+  }, []);
+  useExtendsLinks(mainRef, repo, onFirstSeen, setExtErr, `${ov ? 1 : 0}:${tab}`);
   // the discussions of what is open (a finished report, several of them, a daily summary): in a panel on its right
   const done = (id: string) => ov?.reports.find((r) => r.id === id)?.status === "done";
   const discKey = tab === "chat" || tab === "highlights" || !open ? null
@@ -287,10 +328,12 @@ function RepoPage({ repo, onOpenPrReview, sessions }: { repo: string; onOpenPrRe
               {tab === "daily" && <DailyList ov={ov} openPath={open?.kind === "file" ? open.path : null} onOpen={(p) => setOpen({ kind: "file", path: p })} onRan={load}
                 onMarked={() => { setReadRev((n) => n + 1); void load(); }} />}
             </div>
-            <div className="insights-main">
+            <div className="insights-main" ref={mainRef}>
+              {extErr && <div className="banner warn small" data-testid="insights-extends-error">{extErr}</div>}
               {open?.kind === "report" ? <ReportViewer key={`${open.id}:${readRev}`} repo={repo} id={open.id} onDiscuss={disc.ask} onDeleted={() => { setOpen(null); void load(); }} onRead={() => void load()} />
                 : open?.kind === "reports" ? <ReportsViewer repo={repo} ids={open.ids} onDiscuss={disc.ask} onClose={() => setOpen(null)} />
-                : open?.kind === "file" ? <FileViewer key={`${open.path}:${readRev}`} repo={repo} path={open.path} onDiscuss={disc.ask} onRead={() => void load()} />
+                : open?.kind === "file" ? <FileViewer key={`${open.path}:${readRev}:${open.focus?.name ?? ""}`} repo={repo} path={open.path} onDiscuss={disc.ask} onRead={() => void load()}
+                    focus={open.focus} onBack={open.back ? () => setOpen(open.back!) : undefined} />
                 : <div className="muted pad">Choose a report or a day.</div>}
             </div>
             {disc.panel}
@@ -633,18 +676,41 @@ function DiscussFolders({ repo, dirs, onChange }: { repo: string; dirs: string[]
 }
 
 /** A daily summary or a highlights file: select a part of it to discuss it with the agent, or chat about all of it. */
-function FileViewer({ repo, path, onDiscuss, onRead }: { repo: string; path: string; onDiscuss: (b: DiscussBody) => Promise<void>; onRead: () => void }) {
+function FileViewer({ repo, path, onDiscuss, onRead, focus, onBack }: { repo: string; path: string; onDiscuss: (b: DiscussBody) => Promise<void>; onRead: () => void;
+  focus?: FirstSeen; onBack?: () => void }) {
   const [f, setF] = useState<{ text: string; name?: string; repo?: string | null; read_new?: string[]; failed?: boolean } | null>(null);
   const textRef = useRef<HTMLDivElement>(null);
   const [dirs, setDirs] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => { setF(null); void get<{ text: string; name: string; repo: string | null; read_new: string[] }>(`/insights/file?path=${encodeURIComponent(path)}`).then(setF).catch((e) => setF({ text: `(${(e as ApiError).message})`, failed: true })); }, [path]);
+  // opened from "(extends …)": scroll to the first block naming the thing and mark it
+  useEffect(() => {
+    const el = textRef.current;
+    if (!f || !focus || !el) return;
+    const norm = (x: string) => " " + x.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim() + " ";
+    const keys = [focus.name, ...focus.aliases].map((x) => norm(x)).filter((x) => x.trim());
+    const want = focus.text ? norm(focus.text.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")) : null;
+    const blocks = [...el.querySelectorAll<HTMLElement>("li, p, h1, h2, h3, h4, h5, h6, td")];
+    const hit = (want && blocks.find((b) => norm(b.textContent ?? "").includes(want.trim().slice(0, 60))))
+      || blocks.find((b) => keys.some((k) => norm(b.textContent ?? "").includes(k)));
+    if (!hit) return;
+    el.querySelectorAll(".insights-first-seen-at").forEach((x) => x.classList.remove("insights-first-seen-at"));
+    hit.classList.add("insights-first-seen-at");
+    hit.scrollIntoView({ block: "center" });
+  }, [f, focus]);
   if (f === null) return <div className="muted pad">Loading…</div>;
   const [head, ...rest] = f.text.split("\n");
   const chat = onDiscuss;
   return (
     <div className="insights-report" data-testid="insights-file-view">
+      {focus && (
+        <div className="row nowrap small insights-first-seen" data-testid="insights-first-seen">
+          {onBack && <button className="btn small" onClick={onBack} data-testid="insights-first-seen-back">← Back</button>}
+          <span>First seen on <b>{focus.first}</b>: <b>{focus.name}</b>{focus.what ? <span className="muted"> — {focus.what}</span> : null}
+            {focus.line === null && <span className="muted"> (this summary words it differently; it is not marked)</span>}</span>
+        </div>
+      )}
       <div className="row nowrap"><span className="muted small">{head}</span><span className="spacer" />
         {!f.failed && <button className="btn small" disabled={busy} onClick={async () => { setBusy(true); setErr(null); try { await chat({}); } catch (e) { setErr((e as ApiError).message); } finally { setBusy(false); } }}
           title="Ask the agent about all of it: a new discussion in the panel on the right (or select a part of it: Discuss this)" data-testid="insights-file-chat">Ask about all of it</button>}

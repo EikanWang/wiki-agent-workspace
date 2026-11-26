@@ -2130,13 +2130,30 @@ def diff_line_map(unified: str) -> dict[tuple[str, int], str]:
     return out
 
 
+def _draft_path(raw: str, by_path: dict[str, Any]) -> str:
+    """The PR file an agent's comment names: "./x", "/x", "a/x" / "b/x" (diff prefixes) and "x:12" are taken as x;
+    dot folders such as ".github/" are kept (only a "./" prefix is dropped)."""
+    p = raw.strip().strip("`").replace("\\", "/")
+    while p.startswith("./"):
+        p = p[2:]
+    p = p.lstrip("/")
+    if p in by_path:
+        return p
+    for cand in (p[2:] if p[:2] in ("a/", "b/") else None, re.sub(r":\d+(?:-\d+)?$", "", p)):
+        if cand and cand in by_path:
+            return cand
+    # a path given from further up (e.g. the checkout's absolute path): the one PR file it ends with
+    ends = [f for f in by_path if p.endswith("/" + f)]
+    return ends[0] if len(ends) == 1 else p
+
+
 def agent_drafts(items: list[dict[str, Any]], files: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
     """Validated drafts for the agent's comments: on a diff line when possible, else on the file (line in the text)."""
     by_path = {f["path"]: f for f in files}
     out: list[dict[str, Any]] = []
     problems: list[str] = []
     for x in items[:100]:
-        path = str(x.get("path") or "").strip().lstrip("./")
+        path = _draft_path(str(x.get("path") or ""), by_path)
         body = str(x.get("body") or "").strip()
         if not body:
             continue

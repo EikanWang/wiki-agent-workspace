@@ -70,6 +70,15 @@ def repo_overview(owner: str, name: str, ctx: AppContext = Depends(require_auth)
             "jobs": [_public(j) for j in pl.jobs(repo)][-20:]}
 
 
+@router.get("/insights/repos/{owner}/{name}/first-seen")
+def first_seen(owner: str, name: str, thing: str = Query(..., min_length=1, max_length=200), ctx: AppContext = Depends(require_auth)):
+    """The daily summary (and its line) where `thing` — what a report says something extends — first appeared."""
+    hit = pl.first_seen(ctx, _repo(owner, name), thing)
+    if hit is None:
+        raise ApiError(404, "NOT_FOUND", f"“{thing}” is not in the daily summaries of {owner}/{name}")
+    return hit
+
+
 def _under(ctx: AppContext, path: str) -> Path:
     root = st.data_dir(ctx).resolve()
     p = Path(path).resolve()
