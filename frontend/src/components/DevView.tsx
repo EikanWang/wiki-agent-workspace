@@ -266,7 +266,7 @@ export default function DevView({ devId, workspaces, sessions, onSessionsChanged
           <div className="dev-editor" style={changesWide && dev.status === "ready" && !web ? { display: "none" } : undefined}>
             {web && dev.status === "ready" ? (
               <Suspense fallback={<div className="muted dev-hint">Loading the editor…</div>}>
-                <WebIde key={dev.id} dev={dev} bottom={bottomPanel}
+                <WebIde key={dev.id} dev={dev} bottom={bottomPanel} onFoldCode={() => { setAgentOpen(true); setMainFoldedRaw(true); }}
                   diff={{ view: changesWide ? changes(true) : null, open: changesWide, at: diffAt, onClose: () => setChangesWide(false) }} completionEnabled={!!info?.completion.enabled} refreshKey={refresh} threads={threads} reveal={reveal} onDiff={showDiff}
                   onFiles={setFiles} onOpenThread={(id) => { setAgentOpen(true); setFocusThread({ id, at: Date.now() }); }}
                   discussSession={(a) => { const sid = a ? fileSessions[`${a.root}:${a.file}`] : undefined; return sid ? sessions.find((x) => x.id === sid) ?? null : null; }}
@@ -309,7 +309,8 @@ export default function DevView({ devId, workspaces, sessions, onSessionsChanged
             <span>‹</span><span className="dev-agent-strip-label">Editor</span>
           </button>
         )}
-        {dev.status === "ready" && !mainFolded && <Splitter dir="x" side="after" pane={agentPane} label="agent panel" testId="dev-agent-splitter" />}
+        {dev.status === "ready" && !mainFolded && <Splitter dir="x" side="after" pane={agentPane} label="agent panel" testId="dev-agent-splitter"
+          other={web ? { label: "editor (code view)", onFold: () => setMainFoldedRaw(true) } : undefined} />}
         {agentOpen && dev.status === "ready" && (
           <aside className="dev-side" style={{ width: agentPane.size }}>
             <DevAgentPanel dev={dev} sessions={sessions} threads={threads} fileSessions={fileSessions} onReload={loadThreads} onSessionsChanged={onSessionsChanged}

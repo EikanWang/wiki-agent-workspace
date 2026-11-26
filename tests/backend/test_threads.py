@@ -736,3 +736,44 @@ def test_antigravity_model_and_reasoning_level_are_combined_as_agy_accepts():
     assert A._model_effort("gemini-4-carbon-high", "low", ms) == ("gemini-4-carbon-low", None)
     assert A._model_effort("gemini-4-neon-high", "xhigh", ms) == ("gemini-4-neon-xhigh", None)
     assert A._model_effort(None, "max", ms) == (None, None) and A._model_effort(None, "high", ms) == (None, "high")
+
+
+async def test_a_follow_up_in_the_same_agent_conversation_sends_only_the_new_message(running_app, workspace: Path):
+    from backend.app.models import Job
+
+    h = await running_app()
+    api = h.api
+    doc = await api.open_doc()
+    did = doc["document_id"]
+    r1 = await api.post(f"/api/v1/documents/{did}/threads", json={**anchor_for(doc["text"], "TorchDynamo"), "version_sha256": doc["sha256"], "question": "one"})
+    await api.wait_job(r1.json()["job_id"])
+    tid1 = r1.json()["thread_id"]
+
+    def prompt(job_id: str) -> str:
+        with h.ctx.db.read() as s:
+            return s.get(Job, job_id).prompt
+
+    # the same session, nothing else in between, the file unchanged: only the new message
+    r = await api.post(f"/api/v1/threads/{tid1}/messages", json={"text": "and then?"})
+    await api.wait_job(r.json()["job_id"])
+    p = prompt(r.json()["job_id"])
+    assert p.startswith("Follow-up in this same discussion") and p.endswith("and then?")
+    assert "SELECTED_PASSAGE" not in p and "Earlier messages" not in p
+    # another discussion used the shared session in between: the full prompt again
+    r2 = await api.post(f"/api/v1/documents/{did}/threads", json={**anchor_for(doc["text"], "TorchInductor"), "version_sha256": doc["sha256"], "question": "two"})
+    assert r2.json()["session_id"] == r1.json()["session_id"]
+    await api.wait_job(r2.json()["job_id"])
+    r = await api.post(f"/api/v1/threads/{tid1}/messages", json={"text": "back to one"})
+    await api.wait_job(r.json()["job_id"])
+    p = prompt(r.json()["job_id"])
+    assert "SELECTED_PASSAGE" in p and "Earlier messages in this discussion thread" in p
+    # the file changed since: the full prompt (new hash)
+    f = workspace / doc["path"]
+    f.write_text(f.read_text() + "\nA new line.\n")
+    r = await api.post(f"/api/v1/threads/{tid1}/messages", json={"text": "after the edit"})
+    await api.wait_job(r.json()["job_id"])
+    assert "SELECTED_PASSAGE" in prompt(r.json()["job_id"])
+    # a new session (e.g. another model): the full prompt
+    r = await api.post(f"/api/v1/threads/{tid1}/messages", json={"text": "fresh", "session_id": "new"})
+    await api.wait_job(r.json()["job_id"])
+    assert "Earlier messages in this discussion thread" in prompt(r.json()["job_id"])

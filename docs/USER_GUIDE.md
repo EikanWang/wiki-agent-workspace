@@ -921,13 +921,22 @@ shows its date and time in **UTC+8** (e.g. `2026-11-12 15:03:21 UTC+8`): when yo
   (Antigravity's reasoning levels: low … max); for Codex the configured default, profiles and common ids are offered,
   or type any id. Past answers keep their model.
 - Jobs on the same session run one after another ("waiting for session"); different sessions run in parallel.
+- **Follow-ups are short**: the agent keeps its own conversation, so a reply sends only your new message when the
+  agent already has the discussion — its last turn ran in the same session, no other discussion used that session
+  since, and the file is unchanged. Otherwise (another discussion in between, another model or a new session, the
+  file changed) the reply carries the whole context again: the passage, the earlier messages and the rules. PR
+  Development turns, Control Center chats and Repo Insights chats always send the whole context, because each turn
+  carries fresh data (the editor's current file and selection, the latest app or repository data).
 - **Images in answers**: every agent answer (wiki chats, discussions, Insights, Local files and PR Development chats,
   …) shows the images it points at — Markdown images, links or `code` paths to `.png`, `.jpg`, `.gif`, `.webp`,
   `.svg`, … files on the server (absolute paths, or wiki paths) or on the web, and ```` ```svg ```` blocks (drawn, the
   source folded under them). Click a picture (PNG, GIF, SVG …) to open it in a dialog in the same window (also in documents and PR text), with zoom, closed with Esc or ×; Ctrl/⌘-click opens it the browser's way. A link whose file doesn't load stays
   a plain link. SVGs are always shown as images, so their scripts never run.
 - **Fold buttons on every resize bar**: hover a bar between two panels and a small **‹ / › / ▾** button appears on
-  it; it folds the panel next to it — the side list, the discussions / side-question panels, the agent panel, the
+  it; it folds the panel next to it. Where the panel on the other side can be folded too, the bar has a
+  second button pointing the other way (between the document and the discussions, the side list and the document, the explorer and the code, the
+  code and the agent panel, the file editor and the chat in Local files, the conversation and the side column of a
+  PR, the command list and the output in Build & test, the session list and the session in Agents). The panels: the side list, the discussions / side-question panels, the agent panel, the
   explorer, the outline, the PR side column, the command list and PR Development's bottom panel.
 - **Fold the middle column**: in the wiki reader and in a PR review, **⇤** in the discussion panel's header folds
   the document / PR so the discussions take its width; the strip on the left (or **⇥**) brings it back. In PR

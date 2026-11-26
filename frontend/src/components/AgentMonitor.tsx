@@ -1,4 +1,4 @@
-import { Splitter, usePane } from "./Split";
+import { FoldStrip, Splitter, usePane } from "./Split";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AgentSession, ApiError, MachineInfo, WorkspaceInfo, get, post, put } from "../api";
 import ModelChoice from "./ModelChoice";
@@ -328,6 +328,7 @@ export default function AgentMonitor({ watched, onWatched, visible, onAlarms, au
   const [remoteErrs, setRemoteErrs] = useState<RemoteError[]>([]);
   const [stage, setStage] = useState<string | null>(() => localStorage.getItem("waw.mon.stage"));
   const listPane = usePane("mon.list", 220, 140, 900);
+  const [stageFolded, setStageFolded] = useState(false); // the session view folded: the list takes the width
   const [notify, setNotify] = useState(() => localStorage.getItem("waw.mon.notify") === "1");
   const alarmed = useRef<Set<string> | null>(null); // null until the first check: what already needs you then makes no sound
   const [sound, setSound] = useState(savedSound);
@@ -443,7 +444,7 @@ export default function AgentMonitor({ watched, onWatched, visible, onAlarms, au
       {err && <div className="banner warn small" role="alert">{err}</div>}
       {remoteErrs.map((e) => <div key={e.machine} className="banner warn small" data-testid="mon-remote-banner">Sessions on {e.machine} could not be read: {e.error}</div>)}
       {items && items.length === 0 && <div className="muted dev-hint" data-testid="mon-empty">No session to monitor: check folders in the sidebar (their recent sessions are monitored), widen the time window, or add a session by its id.</div>}
-      <div className="mon-body">
+      <div className={`mon-body ${staged && stageFolded && !listPane.folded ? "list-only" : ""}`}>
         {(!staged || !listPane.folded) && <div className={staged ? "mon-list" : "mon-groups"} style={staged ? { width: listPane.size } : undefined}>
           {groups.map(([folder, list]) => {
             const all = list.every((i) => picked.has(keyOf(i)));
@@ -470,8 +471,10 @@ export default function AgentMonitor({ watched, onWatched, visible, onAlarms, au
             );
           })}
         </div>}
-        {staged && <Splitter dir="x" side="before" pane={listPane} label="session list" testId="mon-list-splitter" />}
-        {staged && <SessionStage key={keyOf(staged)} item={staged} onClose={() => setStage(null)} onUnwatch={() => void unwatch(staged)} onChanged={() => void refresh()}
+        {staged && stageFolded && !listPane.folded && <FoldStrip label="Session" side="right" onShow={() => setStageFolded(false)} testId="mon-stage-unfold" />}
+        {staged && !(stageFolded && !listPane.folded) && <Splitter dir="x" side="before" pane={listPane} label="session list" testId="mon-list-splitter"
+          other={{ label: "session view", onFold: () => setStageFolded(true) }} />}
+        {staged && !(stageFolded && !listPane.folded) && <SessionStage key={keyOf(staged)} item={staged} onClose={() => setStage(null)} onUnwatch={() => void unwatch(staged)} onChanged={() => void refresh()}
           onRename={() => void renameItem(staged)} onDelete={() => void removeItems([staged])} />}
       </div>
     </div>

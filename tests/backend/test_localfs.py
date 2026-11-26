@@ -65,7 +65,7 @@ async def test_local_chat_works_in_the_local_folder(running_app, tmp_path: Path)
         prompts, ctxs = [j.prompt for j in jobs], [json.loads(j.context_json) for j in jobs]
     assert all(x["_cwd"] == str(d) for x in ctxs)  # the agent works in the opened Local files folder
     assert "the file `src/main.py`" in prompts[0] and "about their wiki" not in prompts[0]
-    assert "[user] What does it print?" in prompts[1] and "And why?" in prompts[1]
+    assert prompts[1].startswith("Follow-up in this same discussion") and prompts[1].endswith("And why?")
     # a folder outside any opened one: the agent works in it
     other = tmp_path / "elsewhere"
     other.mkdir()

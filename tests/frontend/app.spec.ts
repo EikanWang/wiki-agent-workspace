@@ -362,7 +362,12 @@ test("layout: font settings, foldable/resizable file tree and discussion panel, 
   await page.getByTestId("center-unfold").click();
   await expect(page.getByTestId("layout")).not.toHaveClass(/center-folded/);
   await expect(page.getByTestId("markdown-body")).toBeVisible();
-  // the ‹ › button on the panel's resize bar folds it too
+  // the bar has two buttons: one folds the document (left), one the discussions (right)
+  await page.locator(".discussion .resizer").hover();
+  await page.getByTestId("panel-fold-other").click();
+  await expect(page.getByTestId("layout")).toHaveClass(/center-folded/);
+  await page.getByTestId("center-unfold").click();
+  await expect(page.getByTestId("layout")).not.toHaveClass(/center-folded/);
   await page.locator(".discussion .resizer").hover();
   await page.getByTestId("panel-fold").click();
   await expect(page.getByTestId("discussion-panel")).toHaveCount(0);
@@ -3520,6 +3525,12 @@ test("PR Development: view the code of the main branch, Alt+← / Alt+→ betwee
   await page.mouse.up();
   await expect(page.getByTestId("sequence-view")).toContainText("calls no function", { timeout: 20000 });
   await page.getByTestId("sequence-close").click();
+  // the explorer's bar has a second button that folds the code view (its other side)
+  await page.getByTestId("webide-side-splitter").hover();
+  await page.getByTestId("webide-side-splitter-fold-other").click();
+  await expect(page.getByTestId("dev-view")).toHaveClass(/main-folded/);
+  await page.getByTestId("dev-main-strip").click();
+  await expect(page.getByTestId("webide-editor")).toBeVisible();
   // fold the middle (explorer, editor, bottom panel): the agent panel takes the width
   await page.getByTestId("dev-main-toggle").click();
   await expect(page.getByTestId("webide-editor")).toBeHidden();
@@ -4283,6 +4294,12 @@ test("Local files: chat with the agent about a folder or a file, next to the edi
   const done = page.locator('[data-testid="local-chat"] [data-testid="message-agent"][data-status="completed"]');
   await expect(done).toContainText("echo: What is in this local folder?", { timeout: 20000 });
   await expect(page.getByTestId("chat-scope-label")).toHaveText("Local files");
+  // the chat's bar folds the file editor too: the chat takes the width; the strip brings the editor back
+  await page.getByTestId("local-chat-splitter").hover();
+  await page.getByTestId("local-chat-splitter-fold-other").click();
+  await expect(page.locator(".local-split")).toHaveClass(/editor-folded/);
+  await page.getByTestId("local-editor-unfold").click();
+  await expect(page.locator(".local-split")).not.toHaveClass(/editor-folded/);
   await expect(page.getByTestId("chat-actions")).toHaveCount(0); // nothing to distill into the wiki
   await expect(page.getByTestId("chat-review-changes")).toHaveCount(0);
   await page.getByTestId("chat-input").fill("And src?");
@@ -5012,6 +5029,12 @@ test("layout: panes can be resized by dragging, folded and unfolded, and keep th
   await drag("dev-tasks-splitter", 80);
   expect((await tl.boundingBox())!.width).toBeGreaterThan(t0 + 60);
   await page.getByTestId("dev-tasks-splitter").dblclick({ position: { x: 2, y: 10 } });
+  // its bar folds the output too: the command list takes the width
+  await page.getByTestId("dev-tasks-splitter").hover();
+  await page.getByTestId("dev-tasks-splitter-fold-other").click();
+  await expect(page.locator(".dev-log")).toBeHidden();
+  await page.getByTestId("dev-log-unfold").click();
+  await expect(page.locator(".dev-log")).toBeVisible();
   await page.getByTestId("dev-agent-strip").click();
   await page.getByTestId("activity-files").click();
 });

@@ -1834,3 +1834,19 @@ body.uml-dragging, body.uml-dragging .uml-box { cursor: grabbing; user-select: n
 .webide-diff { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .webide-diff > * { flex: 1; min-height: 0; }
 .webide-diff-tab .webide-tab-name { font-weight: 600; }
+/* two fold buttons on one bar: the first folds the pane its arrow points to, the second the other one */
+.splitter.x .splitter-fold.second, .resizer .splitter-fold.second { transform: translateY(calc(-50% + 36px)); }
+.splitter.y .splitter-fold.second { transform: translateX(calc(-50% + 40px)); }
+.splitter.x:has(.second) .splitter-fold:not(.second), .resizer:has(.second) .splitter-fold:not(.second) { transform: translateY(calc(-50% - 4px)); }
+.fold-strip { flex: none; width: 22px; align-self: stretch; border: none; background: var(--card); color: var(--muted); cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 8px 0; font-size: 12px; }
+.fold-strip.left { border-right: 1px solid var(--border); }
+.fold-strip.right { border-left: 1px solid var(--border); }
+.fold-strip:hover { color: var(--fg); background: var(--accent); }
+.fold-strip-label { writing-mode: vertical-rl; letter-spacing: 0.05em; white-space: nowrap; }
+.local-split.editor-folded > :not(.local-chat-pane):not(.fold-strip) { display: none !important; }
+.local-split.editor-folded > .local-chat-pane { flex: 1; width: auto !important; max-width: none; border-left: none; }
+.dev-tasks.log-folded > .dev-log { display: none; }
+.dev-tasks.log-folded > .dev-tasks-side { flex: 1; width: auto !important; max-width: none; }
+.mon-body.list-only > .mon-list { flex: 1; width: auto !important; max-width: none; }
+.pr-overview-grid.main-folded { grid-template-columns: auto minmax(0, 1fr); }
+.pr-overview-grid.main-folded > .pr-main-col { display: none; }

@@ -51,7 +51,9 @@ interface DiscussBox { anchor: CodeAnchor | null; top: number; left: number; ima
 
 const DISCUSS_KINDS = [["ask", "Ask"], ["explain", "Explain"], ["fix", "Fix"], ["tests", "Write tests"], ["implement", "Implement"]] as const;
 
-export default function WebIde({ dev, completionEnabled, refreshKey, onAsk, threads, reveal, onFiles, onOpenThread, discussSession, onDiff, bottom, diff }: {
+export default function WebIde({ dev, completionEnabled, refreshKey, onAsk, threads, reveal, onFiles, onOpenThread, discussSession, onDiff, bottom, diff, onFoldCode }: {
+  /** fold the code view (the bar between the explorer and the code gets a second fold button) */
+  onFoldCode?: () => void;
   /** the changes (diff) view, shown as a "± Changes" tab beside the files; `at` changes each time it is asked for */
   diff?: { view: React.ReactNode; open: boolean; at: number; onClose: () => void };
   /** shown under the code view only (not under the explorer): PR Development's Terminal / Build & test panel */
@@ -904,7 +906,8 @@ export default function WebIde({ dev, completionEnabled, refreshKey, onAsk, thre
             )}
           </aside>
         )}
-        <Splitter dir="x" side="before" pane={sidePane} label="side bar" testId="webide-side-splitter" />
+        <Splitter dir="x" side="before" pane={sidePane} label="side bar" testId="webide-side-splitter"
+          other={onFoldCode ? { label: "code view", onFold: onFoldCode } : undefined} />
         <div className="webide-main">
           <div className="webide-tabs" role="tablist">
             {diff?.open && (

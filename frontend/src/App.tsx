@@ -40,7 +40,7 @@ import { useGhAutoRefresh } from "./ghRefresh";
 import AgentMonitor, { AgentsPanel, Watch } from "./components/AgentMonitor";
 import LocalPanel from "./components/LocalPanel";
 import LocalChat, { LocalChatTarget } from "./components/LocalChat";
-import { Splitter, usePane } from "./components/Split";
+import { FoldStrip, Splitter, usePane } from "./components/Split";
 import { usePersistentState } from "./persist";
 import { ActivityButtons, orderOf } from "./components/ActivityOrder";
 const LocalEditor = lazy(() => import("./components/LocalEditor"));
@@ -135,6 +135,8 @@ export default function App() {
   const [localUsed, setLocalUsed] = useState(false);
   const [localChat, setLocalChat] = usePersistentState<LocalChatTarget | null>("local.chatTarget", null);
   const localChatPane = usePane("local.chat", 520, 320, 1200);
+  // the file editor folded: the chat takes the width (only while a chat is open)
+  const [localEditorFoldedRaw, setLocalEditorFolded] = usePersistentState("local.editorFolded", false);
   const chatLocal = (path: string, kind: "folder" | "file") => {
     setLocalUsed(true);
     setView("local");
@@ -938,6 +940,7 @@ export default function App() {
   const isPrDoc = !!doc && doc.path.startsWith(".waw-github/");
   const panelDoc = prTab ? (isPrDoc && doc!.path.endsWith(`/${prTab.number}.md`) ? doc : null) : doc;
   // the middle column folded: the discussion panel takes its width (only when there is a panel to show)
+  const localEditorFolded = localEditorFoldedRaw && !!localChat && !localChatPane.folded;
   const centerFolded = !!prefs.centerFolded && view === "document" && !!panelDoc && panelOpen && !isNarrow;
   const defaultSession = useMemo(() => sessions.find((s) => s.id === doc?.default_session_id), [sessions, doc?.default_session_id]);
 
@@ -1148,7 +1151,9 @@ export default function App() {
                 preset={devPreset} onPresetUsed={() => setDevPreset(null)} onFold={() => updatePrefs({ listOpen: false })} />
             </div>
           )}
-          {sidebarOpen && listOpen && <Resizer side="right" onResize={resizeSidebar} onEnd={persistPrefs} onFold={() => updatePrefs({ listOpen: false })} label="side list" testId="sidebar-fold" />}
+          {sidebarOpen && listOpen && <Resizer side="right" onResize={resizeSidebar} onEnd={persistPrefs} onFold={() => updatePrefs({ listOpen: false })} label="side list" testId="sidebar-fold"
+            other={view === "document" && panelDoc && panelOpen && !centerFolded ? { label: "document", onFold: () => updatePrefs({ centerFolded: true }), testId: "sidebar-fold-other" }
+              : view === "local" && localChat && !localChatPane.folded && !localEditorFolded ? { label: "file editor", onFold: () => setLocalEditorFolded(true), testId: "sidebar-fold-other" } : undefined} />}
         </aside>
 
         <section className="center" style={{ display: view === "document" ? undefined : "none" }}>
@@ -1323,13 +1328,15 @@ export default function App() {
 
         <section className="center local-center" style={{ display: view === "local" ? undefined : "none" }}>
           {localUsed && (
-            <div className="local-split">
+            <div className={`local-split ${localEditorFolded ? "editor-folded" : ""}`}>
+              {localEditorFolded && <FoldStrip label="Files" onShow={() => setLocalEditorFolded(false)} testId="local-editor-unfold" />}
               <Suspense fallback={<div className="muted dev-hint">Loading the editor…</div>}>
                 <LocalEditor openRequest={localOpen} renamed={localRenamed} onActive={setLocalActive} onChat={(p) => chatLocal(p, "file")} />
               </Suspense>
               {localChat && (
                 <>
-                  <Splitter dir="x" side="after" pane={localChatPane} label="chat" testId="local-chat-splitter" />
+                  {!localEditorFolded && <Splitter dir="x" side="after" pane={localChatPane} label="chat" testId="local-chat-splitter"
+                    other={{ label: "file editor", onFold: () => setLocalEditorFolded(true) }} />}
                   {!localChatPane.folded && (
                     <div className="local-chat-pane" style={{ width: localChatPane.size }}>
                       <LocalChat key={localChat.path} target={localChat} sessions={sessions} onClose={() => setLocalChat(null)} />
@@ -1367,7 +1374,8 @@ export default function App() {
             onCollapse={() => updatePrefs({ panelOpen: false, centerFolded: false })}
             centerFolded={centerFolded}
             onFoldCenter={() => updatePrefs({ centerFolded: !centerFolded })}
-            resizer={centerFolded ? undefined : <Resizer side="left" onResize={resizePanel} onEnd={persistPrefs} onFold={() => updatePrefs({ panelOpen: false, centerFolded: false })} label="discussions panel" testId="panel-fold" />}
+            resizer={centerFolded ? undefined : <Resizer side="left" onResize={resizePanel} onEnd={persistPrefs} onFold={() => updatePrefs({ panelOpen: false, centerFolded: false })} label="discussions panel" testId="panel-fold"
+              other={{ label: "document", onFold: () => updatePrefs({ centerFolded: true }), testId: "panel-fold-other" }} />}
             mode={prefs.panelMode}
             onModeChange={(m) => updatePrefs({ panelMode: m })}
             onSessionChanged={() => void refreshSessions()}

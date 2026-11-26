@@ -223,7 +223,9 @@ async def test_chat_is_a_hidden_read_only_document_with_its_own_prompt(running_a
         prompts = [j.prompt for j in s.query(Job).order_by(Job.created_at).all()]
     assert "chatting with the user about their wiki" in prompts[0] and str(workspace.resolve()) in prompts[0]
     assert "Document path" not in prompts[0] and "SELECTED_PASSAGE" not in prompts[0]
-    assert "[user] How does TorchDynamo capture graphs?" in prompts[1] and "User message:\n\nAnd AOTAutograd?" in prompts[1]
+    # a follow-up in the same agent conversation: only the new message (the conversation has the rest)
+    assert prompts[1].startswith("Follow-up in this same discussion") and "User message:\n\nAnd AOTAutograd?" in prompts[1]
+    assert "[user] How does TorchDynamo capture graphs?" not in prompts[1]
     # listed with its title and message count, newest first; archived ones leave the list
     c2, _ = await start_chat(api, "Second")
     chats = (await api.get("/api/v1/chats")).json()["chats"]
@@ -296,7 +298,7 @@ async def test_side_questions_about_a_part_of_an_answer_have_their_own_session_a
         prompts = [j.prompt for j in s.query(Job).order_by(Job.created_at).all()]
     assert "side question" in prompts[1] and "[user] What does AOTAutograd do?" in prompts[1] and "> traces forward and backward" in prompts[1]
     assert "User's side question:\n\nWhat is a joint graph?" in prompts[1]
-    assert "> traces forward and backward" in prompts[2] and "[user] What is a joint graph?" in prompts[2]
+    assert prompts[2].startswith("Follow-up in this same discussion") and "And why both at once?" in prompts[2]
     threads = (await api.get(f"/api/v1/documents/{d['document_id']}/threads")).json()["threads"]
     assert [t["id"] for t in threads] == [main, side]
     assert threads[1]["target"]["kind"] == "side" and threads[1]["target"]["of"] == main and threads[1]["anchor"]["quote"] == "traces forward and backward"

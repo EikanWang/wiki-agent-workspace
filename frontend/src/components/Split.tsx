@@ -42,7 +42,11 @@ export function usePane(key: string, def: number, min: number, max: number, defF
  * `side`: which pane it sizes — "before" (left / top) or "after" (right / bottom); dragging toward the other pane
  * makes it bigger.
  */
-export function Splitter({ dir, side, pane, label, testId, className = "", style }: { dir: "x" | "y"; side: "before" | "after"; pane: Pane; label: string; testId?: string; className?: string; style?: React.CSSProperties }) {
+export function Splitter({ dir, side, pane, label, testId, className = "", style, other }: {
+  dir: "x" | "y"; side: "before" | "after"; pane: Pane; label: string; testId?: string; className?: string; style?: React.CSSProperties;
+  /** the pane on the other side of the bar can be folded too: a second button, pointing its way */
+  other?: { label: string; onFold: () => void };
+}) {
   const sign = side === "before" ? 1 : -1;
   const arrow = dir === "x"
     ? (pane.folded === (side === "before") ? "›" : "‹")
@@ -73,6 +77,19 @@ export function Splitter({ dir, side, pane, label, testId, className = "", style
       }}>
       <button className="splitter-fold" onClick={() => pane.setFolded(!pane.folded)} title={pane.folded ? `Show the ${label}` : `Fold the ${label}`}
         aria-label={pane.folded ? `Show the ${label}` : `Fold the ${label}`} data-testid={testId ? `${testId}-fold` : undefined}>{arrow}</button>
+      {other && !pane.folded && (
+        <button className="splitter-fold second" onClick={other.onFold} title={`Fold the ${other.label}`} aria-label={`Fold the ${other.label}`}
+          data-testid={testId ? `${testId}-fold-other` : undefined}>{dir === "x" ? (side === "before" ? "›" : "‹") : (side === "before" ? "▾" : "▴")}</button>
+      )}
     </div>
+  );
+}
+
+/** The thin strip left in place of a folded pane: click it to show the pane again. */
+export function FoldStrip({ label, onShow, side = "left", testId }: { label: string; onShow: () => void; side?: "left" | "right"; testId?: string }) {
+  return (
+    <button className={`fold-strip ${side}`} onClick={onShow} title={`Show the ${label} again`} aria-label={`Show the ${label}`} data-testid={testId}>
+      <span>{side === "left" ? "›" : "‹"}</span><span className="fold-strip-label">{label}</span>
+    </button>
   );
 }

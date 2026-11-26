@@ -1,4 +1,4 @@
-import { Splitter, usePane } from "./Split";
+import { FoldStrip, Splitter, usePane } from "./Split";
 import { ModelChoiceValue } from "./ModelChoice";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { confirmAction } from "./Confirm";
@@ -123,6 +123,8 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
   const [notice, setNotice] = useState<string | null>(null);
   const [refs, setRefs] = useState(false);
   const sidePane = usePane("pr.side", 260, 180, 700);
+  const [mainFoldedRaw, setMainFolded] = useState(false); // the conversation folded: the side column takes the width
+  const mainFolded = mainFoldedRaw && !sidePane.folded;
   const [owner, name] = repo.split("/");
   const apiBase = `/github/pr/${owner}/${name}/${number}`;
   const [defReq, setDefReq] = useState<DefRequest | null>(null);
@@ -412,7 +414,7 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
       {notice && <div className="banner" data-testid="pr-notice">{notice} <a href={`${p.url}/files`} target="_blank" rel="noreferrer">See it on GitHub</a> <button className="icon-btn" onClick={() => setNotice(null)} aria-label="Dismiss">×</button></div>}
       {tab === "overview" ? (
         <div className="pr-body" data-testid="pr-overview" ref={overviewScroll}>
-          <div className={`pr-overview-grid ${sidePane.folded ? "side-folded" : ""}`} style={{ ["--pr-side" as string]: `${sidePane.size}px` }}>
+          <div className={`pr-overview-grid ${sidePane.folded ? "side-folded" : ""} ${mainFolded ? "main-folded" : ""}`} style={{ ["--pr-side" as string]: `${sidePane.size}px` }}>
             <div className="pr-main-col">
               <article className="markdown-body pr-description" dangerouslySetInnerHTML={{ __html: body }} data-testid="pr-description" />
               <section className="pr-conversation" data-testid="pr-conversation">
@@ -464,7 +466,9 @@ export default function PrView({ repo, number, workspaces, docReady, onReady, on
                 </div>
               </section>
             </div>
-            <Splitter dir="x" side="after" pane={sidePane} label="side column" className="pr-side-splitter" testId="pr-side-splitter" />
+            {mainFolded ? <FoldStrip label="Conversation" onShow={() => setMainFolded(false)} testId="pr-main-unfold" />
+              : <Splitter dir="x" side="after" pane={sidePane} label="side column" className="pr-side-splitter" testId="pr-side-splitter"
+                other={{ label: "conversation", onFold: () => setMainFolded(true) }} />}
             {!sidePane.folded && <aside className="pr-side">
               <Contributors apiBase={apiBase} tick={peopleTick} />
               <Reviewers apiBase={apiBase} reviews={p.reviews} requested={p.requested.filter(Boolean) as string[]} onChanged={() => void load(true)} onError={setError} />

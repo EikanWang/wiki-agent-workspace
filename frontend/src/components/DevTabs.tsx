@@ -1,4 +1,4 @@
-import { Splitter, usePane } from "./Split";
+import { FoldStrip, Splitter, usePane } from "./Split";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, DevTaskRun, DevWorkspace, get, post } from "../api";
 import { useJobStream } from "./DiscussionPanel";
@@ -14,6 +14,8 @@ const strip = (s: string) => s.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "").replace(/\
 /** Build / test / custom command runs, their output, and "Fix with the agent" for a failed one. */
 export function TasksTab({ dev, onAsked }: { dev: DevWorkspace; onAsked: () => void }) {
   const tasksPane = usePane("dev.tasks", 300, 180, 900);
+  const [logFoldedRaw, setLogFolded] = useState(false); // the output folded: the command list takes the width
+  const logFolded = logFoldedRaw && !tasksPane.folded;
   const [runs, setRuns] = useState<DevTaskRun[]>([]);
   const [sel, setSel] = useState<string | null>(null);
   const [log, setLog] = useState("");
@@ -66,7 +68,7 @@ export function TasksTab({ dev, onAsked }: { dev: DevWorkspace; onAsked: () => v
   };
   const s = dev.settings;
   return (
-    <div className="dev-tasks" data-testid="dev-tasks">
+    <div className={`dev-tasks ${logFolded ? "log-folded" : ""}`} data-testid="dev-tasks">
       {tasksPane.folded ? null : <div className="dev-tasks-side" style={{ width: tasksPane.size }}>
         <div className="row nowrap">
           <button className="btn small" disabled={!s.build_command} title={s.build_command ?? "No build command: set one in Settings"} onClick={() => void start("build")} data-testid="dev-build">Build</button>
@@ -87,7 +89,9 @@ export function TasksTab({ dev, onAsked }: { dev: DevWorkspace; onAsked: () => v
         </div>
         {err && <div className="error-text small">{err}</div>}
       </div>}
-      <Splitter dir="x" side="before" pane={tasksPane} label="command list" testId="dev-tasks-splitter" />
+      {logFolded ? <FoldStrip label="Output" side="right" onShow={() => setLogFolded(false)} testId="dev-log-unfold" />
+        : <Splitter dir="x" side="before" pane={tasksPane} label="command list" testId="dev-tasks-splitter"
+          other={{ label: "output", onFold: () => setLogFolded(true) }} />}
       <div className="dev-log">
         {cur && (
           <div className="row nowrap dev-log-head">

@@ -155,6 +155,14 @@ def build_prompt(*, question: str, quote: str, document_path: str, sha256: str, 
     return "\n\n".join(parts)
 
 
+def followup_prompt(question: str, doc_path: str) -> str:
+    """A follow-up in the same agent conversation: the document, the passage, the earlier messages and the rules
+    (links, when to edit) are already in it, so only the new message is sent."""
+    return ("Follow-up in this same discussion: what it is about (" + doc_path + " and any selected passage), the earlier "
+            "messages and the instructions — including how to link what you refer to and to change files only when asked — "
+            "still apply.\n\nUser message:\n\n" + question)
+
+
 def image_attachments(docs, doc_path: str) -> list[str]:
     """The image being discussed, attached to the agent's turn (OpenCode --file, Codex --image) so it really sees it."""
     from .textmodel import document_format
@@ -610,12 +618,43 @@ class ThreadService:
                    "attachments": image_attachments(self.docs, doc.path) + thread_attachments(self.docs.snapshots_dir, t),
                    **self._skill_ctx(doc), **dev_extra}
         context["attachments"] = [*context.get("attachments", []), *save_pasted(self.docs.snapshots_dir, thread_id, user_msg_id, pasted)]
+        # (not for PR Development, whose turns carry the editor's current file / selection, nor for chats that add
+        # fresh data every turn: Control Center and Repo Insights)
+        fresh_data = bool(trend) or (is_chat_path(doc.path) and not local and self._chat_scope(doc) != "wiki")
+        if not is_dev_path(doc.path) and not fresh_data and body.chat_action is None and self._continues(thread_id, sess.id, sha):
+            # the agent's own conversation already holds this discussion: send just the new message
+            prompt = followup_prompt(shown if is_chat_path(doc.path) or local or trend else body.text, doc.path)
+            context["followup"] = True
         job_id = self.jobs.enqueue_turn(session_id=sess.id, thread_id=thread_id, prompt=prompt, context=context, agent_message_id=agent_msg_id)
         with self.ctx.db.write() as s:
             m = s.get(Message, agent_msg_id)
             if m:
                 m.job_id = job_id
         return {"message_id": user_msg_id, "job_id": job_id, "session_id": sess.id, "agent_message_id": agent_msg_id}
+
+    def _chat_scope(self, doc: Document) -> str:
+        from .chats import chat_scope
+
+        return chat_scope(self.ctx, self.docs.workspace_id, doc.path)
+
+    def _continues(self, thread_id: str, session_id: str, sha: str | None) -> bool:
+        """This turn continues the agent conversation that already has the discussion in it: the discussion's last turn
+        ran (and completed) in this same session, no other turn used the session since, and the file is unchanged."""
+        with self.ctx.db.read() as s:
+            last = s.query(Job).filter(Job.thread_id == thread_id, Job.kind == "turn").order_by(Job.created_at.desc()).first()
+            if last is None or last.session_id != session_id or last.status != "completed":
+                return False
+            if s.query(Job).filter(Job.session_id == session_id, Job.created_at > last.created_at, Job.id != last.id).count():
+                return False  # another discussion (or a preview…) spoke in this session since
+            sess = s.get(AgentSession, session_id)
+            if sess is None or not sess.native_id:
+                return False
+            ctx_json = last.context_json
+        try:
+            prev = json.loads(ctx_json or "{}")
+        except ValueError:
+            return False
+        return bool(sha) and prev.get("sha256") == sha
 
     async def _dev_prompt(self, doc: Document, question: str, kind: str | None, context: dict[str, Any] | None,
                           prior: list[dict[str, str]] | None) -> tuple[str, dict[str, Any]]:
