@@ -4879,7 +4879,12 @@ test("Repo Insights: the history in the folder, a week's report (daily summaries
   await page.getByTestId("insights-repos-save").click();
   await expect(page.getByTestId("insights-note")).toContainText("Saved");
   const s = await (await page.request.get("/api/v1/insights/settings")).json();
+  // ticking "every day at" saves by itself and stays checked after a reload (no need to scroll to Save repositories)
   const saved = s.repos.find((r: any) => r.repo === "vllm-project/vllm");
+  await expect.poll(async () => (await (await page.request.get("/api/v1/insights/settings")).json()).repos.find((r: any) => r.repo === "vllm-project/vllm").schedule.enabled).toBe(true);
+  await page.reload();
+  await page.getByTestId("insights-settings-open").click();
+  await expect(vllm.getByTestId("insights-schedule")).toBeChecked();
   expect(saved.schedule.enabled).toBe(true);
   expect(saved.reports).toEqual({ week: true, month: true, quarter: false, year: false });
   expect(saved.new_baseline).toEqual({ mode: "before", date: "2026-06-01" });
@@ -4891,6 +4896,17 @@ test("Repo Insights: the history in the folder, a week's report (daily summaries
   await page.getByTestId("activity-files").click();
 });
 
+  // a bad RFC repository is not sent: the edit stays on screen with the reason, and the saved settings keep the rest
+  const rfcRepos = vllm.locator("input.mono");
+  await rfcRepos.fill("nope");
+  await rfcRepos.blur();
+  await page.getByTestId("insights-repos-save").click();
+  await expect(page.getByText('RFC repository "nope": use owner/name')).toBeVisible();
+  await expect(rfcRepos).toHaveValue("nope");
+  await expect(vllm.getByTestId("insights-report-week")).toBeChecked();
+  expect((await (await page.request.get("/api/v1/insights/settings")).json()).repos.find((r: any) => r.repo === "vllm-project/vllm").rfc.repos).toEqual([]);
+  await rfcRepos.fill("");
+  await rfcRepos.blur();
 test("Agents: find sessions in folders, add one by id, alarms, a session on stage, continue it", async ({ page }) => {
   await login(page);
   await openGuide(page);

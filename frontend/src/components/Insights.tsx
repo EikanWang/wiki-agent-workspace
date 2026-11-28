@@ -129,7 +129,7 @@ export function InsightsPanel({ active, onOpen, unread }: { active: string | nul
     if (!s || !r) return;
     try {
       const next = await put<Settings>("/insights/settings", { repos: [...s.repos, { repo: r }] });
-      settingsCache = next;
+      cacheSettings(next);
       setS(next);
       setAdd("");
       onOpen(r);
@@ -145,7 +145,7 @@ export function InsightsPanel({ active, onOpen, unread }: { active: string | nul
     setS({ ...s, repos });
     try {
       const next = await put<Settings>("/insights/settings", { repos });
-      settingsCache = next;
+      cacheSettings(next);
       setS(next);
     } catch (e) {
       setErr((e as ApiError).message);
@@ -1055,14 +1055,37 @@ function ScheduleState() {
   );
 }
 
+const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const REPO_RE = /^[\w.-]+\/[\w.-]+$/;
+/** why the server would refuse these repos (null when it would take them) */
+function reposInvalid(repos: InsightsRepo[]): string | null {
+  for (const r of repos) {
+    if (!TIME_RE.test(r.schedule.time)) return `${r.repo}: time as HH:MM`;
+    const b = r.new_baseline;
+    if (b && (b.mode === "before" || b.mode === "after") && !DATE_RE.test(b.date ?? "")) return `${r.repo}: pick a date for the baseline`;
+    const bad = r.rfc.repos.find((x) => !REPO_RE.test(x));
+    if (bad !== undefined) return `${r.repo}: RFC repository ${JSON.stringify(bad)}: use owner/name`;
+  }
+  return null;
+}
+
 function InsightsSettings() {
   const [s, setS] = useState<Settings | null>(null);
   const [key, setKey] = useState("");
   const [note, setNote] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  useEffect(() => { void loadInsightsSettings().then(setS).catch((e) => setErr((e as ApiError).message)); }, []);
+  const reposRef = useRef<InsightsRepo[] | null>(null);
+  const ownSave = useRef(false);
+  const pending = useRef(0);
+  const [repoGen, setRepoGen] = useState(0);
+  useEffect(() => { void loadInsightsSettings().then((n) => { reposRef.current = n.repos; setS(n); }).catch((e) => setErr((e as ApiError).message)); }, []);
   useEffect(() => {
-    const sync = () => setS(settingsCache);
+    const sync = () => {
+      if (ownSave.current || !settingsCache) return;
+      reposRef.current = settingsCache.repos;
+      setS(settingsCache);
+    };
     window.addEventListener("waw-insights-settings", sync);
     return () => window.removeEventListener("waw-insights-settings", sync);
   }, []);
@@ -1070,23 +1093,45 @@ function InsightsSettings() {
   // unsaved edit elsewhere on the page) is not overwritten by an earlier answer
   const queue = useRef<Promise<unknown>>(Promise.resolve());
   if (!s) return <div className="muted pad">{err ?? "Loading…"}</div>;
-  const save = (patch: Record<string, unknown>) => {
+  // a body made when its turn comes may be null: nothing to send (the repos became invalid while it waited)
+  const save = (patch: Record<string, unknown> | (() => Record<string, unknown> | null)) => {
     setErr(null);
     setNote(null);
+    pending.current += 1;
     const run = queue.current.then(async () => {
+      const body = typeof patch === "function" ? patch() : patch;
       try {
-        const next = await put<Settings>("/insights/settings", patch);
-        cacheSettings(next);
+        if (!body) return;
+        const sentRepos = body.repos as InsightsRepo[] | undefined;
+        const next = await put<Settings>("/insights/settings", body);
+        const staleRepos = sentRepos !== undefined && reposRef.current !== null && reposRef.current !== sentRepos;
+        if ("repos" in body && !staleRepos) reposRef.current = next.repos;
+        ownSave.current = true;
+        try {
+          cacheSettings(staleRepos ? { ...next, repos: reposRef.current! } : next);
+        } finally {
+          ownSave.current = false;
+        }
         setS((prev) => {
           if (!prev) return next;
           const out: Settings = { ...prev, endpoint: next.endpoint };
-          for (const k of Object.keys(patch)) if (k !== "endpoint" && k in next) (out as unknown as Record<string, unknown>)[k] = (next as unknown as Record<string, unknown>)[k];
+          for (const k of Object.keys(body)) {
+            if (k === "endpoint" || !(k in next)) continue;
+            if (k === "repos" && staleRepos) continue;
+            (out as unknown as Record<string, unknown>)[k] = (next as unknown as Record<string, unknown>)[k];
+          }
           return out;
         });
-        setNote("Saved.");
+        if (pending.current === 1) setNote("Saved.");
       } catch (e) {
         setErr((e as ApiError).message);
-        void loadInsightsSettings().then((n) => setS((prev) => (prev ? { ...prev, llm: n.llm } : n))).catch(() => undefined);
+        void loadInsightsSettings().then((n) => {
+          reposRef.current = n.repos;
+          setS((prev) => (prev ? { ...prev, llm: n.llm, repos: n.repos } : n));
+          setRepoGen((g) => g + 1); // the uncontrolled RFC inputs show the reloaded values, not the refused text
+        }).catch(() => undefined);
+      } finally {
+        pending.current -= 1;
       }
     });
     queue.current = run;
@@ -1097,7 +1142,24 @@ function InsightsSettings() {
     setS((prev) => (prev ? { ...prev, llm: { ...prev.llm, [task]: v } } : prev));
     void save({ llm: { [task]: v } });
   };
-  const setRepo = (i: number, patch: Partial<InsightsRepo>) => setS({ ...s, repos: s.repos.map((r, k) => (k === i ? { ...r, ...patch } : r)) });
+  /** queue a save of the latest repos, checked again when its turn comes */
+  const saveRepos = () => {
+    const now = reposRef.current ?? s.repos;
+    if (reposInvalid(now)) return;
+    void save(() => {
+      const cur = reposRef.current ?? now;
+      return reposInvalid(cur) ? null : { repos: cur };
+    });
+  };
+  /** change the repos at once; saved by itself unless persist is false (a time still being typed) */
+  const updateRepos = (fn: (repos: InsightsRepo[]) => InsightsRepo[], persist = true) => {
+    const repos = fn(reposRef.current ?? s.repos);
+    reposRef.current = repos;
+    setS((prev) => (prev ? { ...prev, repos } : prev));
+    if (persist) saveRepos();
+  };
+  const setRepo = (i: number, patch: Partial<InsightsRepo>, persist = true) =>
+    updateRepos((repos) => repos.map((r, k) => (k === i ? { ...r, ...patch } : r)), persist);
   const list = (v: string) => v.split(",").map((x) => x.trim()).filter(Boolean);
   return (
     <div className="insights-view insights-settings" data-testid="insights-settings">
@@ -1135,16 +1197,16 @@ function InsightsSettings() {
       <div className="small strong">Repositories <span className="muted">(daily times in UTC+{s.timezone_offset}; each summarizes the previous UTC day)</span></div>
       <ScheduleState />
       {s.repos.map((r, i) => (
-        <div key={r.repo} className="insights-repo-cfg" data-testid="insights-repo-cfg" data-repo={r.repo}>
+        <div key={`${r.repo}:${repoGen}`} className="insights-repo-cfg" data-testid="insights-repo-cfg" data-repo={r.repo}>
           <div className="row nowrap"><b className="mono">{r.repo}</b><span className="spacer" />
-            <button className="icon-btn small" disabled={i === 0} onClick={() => setS({ ...s, repos: s.repos.map((x, k) => (k === i - 1 ? r : k === i ? s.repos[i - 1] : x)) })} title="Move up (Save repositories to keep the order)" data-testid="insights-repo-up">↑</button>
-            <button className="icon-btn small" disabled={i === s.repos.length - 1} onClick={() => setS({ ...s, repos: s.repos.map((x, k) => (k === i + 1 ? r : k === i ? s.repos[i + 1] : x)) })} title="Move down (Save repositories to keep the order)" data-testid="insights-repo-down">↓</button>
-            <button className="icon-btn small" onClick={() => setS({ ...s, repos: s.repos.filter((_, k) => k !== i) })} title="Remove (its files stay)">×</button></div>
+            <button className="icon-btn small" disabled={i === 0} onClick={() => updateRepos((repos) => repos.map((x, k) => (k === i - 1 ? repos[i] : k === i ? repos[i - 1] : x)))} title="Move up" data-testid="insights-repo-up">↑</button>
+            <button className="icon-btn small" disabled={i === s.repos.length - 1} onClick={() => updateRepos((repos) => repos.map((x, k) => (k === i + 1 ? repos[i] : k === i ? repos[i + 1] : x)))} title="Move down" data-testid="insights-repo-down">↓</button>
+            <button className="icon-btn small" onClick={() => updateRepos((repos) => repos.filter((_, k) => k !== i))} title="Remove (its files stay)">×</button></div>
           <div className="row nowrap small">
             {(["issues", "commits", "rfcs"] as const).map((k) => <label key={k}><input type="checkbox" checked={r.sources[k]} onChange={(e) => setRepo(i, { sources: { ...r.sources, [k]: e.target.checked } })} /> {k}</label>)}
             <label><input type="checkbox" checked={r.highlights} onChange={(e) => setRepo(i, { highlights: e.target.checked })} /> XPU highlights</label>
             <label title="Make the daily summary (and highlights) every day at this time"><input type="checkbox" checked={r.schedule.enabled} onChange={(e) => setRepo(i, { schedule: { ...r.schedule, enabled: e.target.checked } })} data-testid="insights-schedule" /> every day at</label>
-            <input type="time" value={r.schedule.time} onChange={(e) => setRepo(i, { schedule: { ...r.schedule, time: e.target.value } })} />
+            <input type="time" value={r.schedule.time} onChange={(e) => setRepo(i, { schedule: { ...r.schedule, time: e.target.value } }, false)} onBlur={saveRepos} />
           </div>
           <div className="row nowrap small" title="When a week (Mon–Sun) / month / quarter / year has ended, its report is made by itself — after this repository's time of day and its daily summary of the period's last day. Only the latest finished period, once each.">
             reports when a period ends:
@@ -1160,7 +1222,7 @@ function InsightsSettings() {
             titles <input defaultValue={r.rfc.title_patterns.join(", ")} onBlur={(e) => setRepo(i, { rfc: { ...r.rfc, title_patterns: list(e.target.value) } })} /></div>
         </div>
       ))}
-      <button className="btn small primary" onClick={() => void save({ repos: s.repos })} data-testid="insights-repos-save">Save repositories</button>
+      <button className="btn small primary" onClick={() => { const why = reposInvalid(reposRef.current ?? s.repos); if (why) setErr(why); else saveRepos(); }} data-testid="insights-repos-save">Save repositories</button>
 
       <div className="small strong">Focus presets</div>
       {s.presets.map((p, i) => (

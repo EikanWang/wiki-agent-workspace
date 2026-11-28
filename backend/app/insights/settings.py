@@ -119,10 +119,18 @@ def save(ctx: Any, patch: dict[str, Any]) -> dict[str, Any]:
             t = str(((r.get("schedule") or {}).get("time")) or "05:35")
             if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", t):
                 raise ApiError(400, "INVALID_TIME", f"{name}: time as HH:MM")
-            rfc = r.get("rfc") or {}
-            for x in rfc.get("repos") or []:
-                if not REPO.match(str(x)):
-                    raise ApiError(400, "INVALID_REPO", f"RFC repository {x!r}: use owner/name")
+            rfc = r.get("rfc")
+            if isinstance(rfc, dict):
+                for x in rfc.get("repos") or []:
+                    if not REPO.match(str(x)):
+                        raise ApiError(400, "INVALID_REPO", f"RFC repository {x!r}: use owner/name")
+                rfc_clean = {
+                    "repos": [str(x) for x in rfc["repos"] or []][:10] if "repos" in rfc else list(DEFAULT_RFC["repos"]),
+                    "labels": [str(x)[:60] for x in rfc["labels"] or []][:20] if "labels" in rfc else list(DEFAULT_RFC["labels"]),
+                    "title_patterns": [str(x)[:60] for x in rfc["title_patterns"] or []][:20] if "title_patterns" in rfc else list(DEFAULT_RFC["title_patterns"]),
+                }
+            else:
+                rfc_clean = {k: list(v) for k, v in DEFAULT_RFC.items()}
             rep = r.get("reports") or {}
             if not isinstance(rep, dict) or set(rep) - set(REPORT_PERIODS):
                 raise ApiError(400, "INVALID_PERIOD", f"{name}: reports are week, month, quarter, year")
@@ -130,9 +138,7 @@ def save(ctx: Any, patch: dict[str, Any]) -> dict[str, Any]:
                 baseline_of(r["new_baseline"])  # a bad one is refused, not dropped
             repos.append(_repo_defaults({**r, "repo": name, "schedule": {"enabled": bool((r.get("schedule") or {}).get("enabled")), "time": t},
                                          "reports": {p: bool(rep.get(p)) for p in REPORT_PERIODS},
-                                         "rfc": {"repos": [str(x) for x in rfc.get("repos") or []][:10],
-                                                 "labels": [str(x)[:60] for x in rfc.get("labels") or []][:20],
-                                                 "title_patterns": [str(x)[:60] for x in rfc.get("title_patterns") or []][:20]}}))
+                                         "rfc": rfc_clean}))
         cur["repos"] = repos
     if "llm" in patch:
         for t, v in (patch["llm"] or {}).items():

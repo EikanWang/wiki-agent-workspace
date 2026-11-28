@@ -1440,7 +1440,7 @@ body.resizing-h iframe { pointer-events: none; }
 .pr-fresh { white-space: nowrap; }
 .pr-fresh.updated { color: var(--green); }
 /* the settings box scrolls: its parts keep their size (the Priority / Repositories / Cache tabs were squeezed to 0) */
-.reviews-settings > * { flex-shrink: 0; }
+.reviews-settings > *, .insights-settings > * { flex-shrink: 0; }
 /* Repo Insights */
 .insights-panel { display: flex; flex-direction: column; min-height: 0; flex: 1; }
 .insights-repos { flex: 1; overflow: auto; display: flex; flex-direction: column; }

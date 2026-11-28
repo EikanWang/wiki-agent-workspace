@@ -120,6 +120,11 @@ async def test_settings_defaults_validation_and_secrets(running_app, tmp_path):
     h.ctx.extra.pop("insights_llm")
     for bad in ({"repos": [{"repo": "nope"}]}, {"repos": [{"repo": "a/b", "schedule": {"time": "25:00"}}]}, {"data_dir": "rel"}, {"llm": {"daily": {"mode": "x"}}}):
         assert (await api.put("/api/v1/insights/settings", json=bad)).status_code == 400, bad
+    # adding a bare {"repo": "owner/name"} keeps DEFAULT_RFC; explicit empty lists clear it
+    added = (await api.put("/api/v1/insights/settings", json={"repos": [*s["repos"], {"repo": "pytorch/helion"}]})).json()["repos"][-1]
+    assert added["rfc"] == {"repos": [], "labels": ["RFC"], "title_patterns": ["[RFC]", "RFC:"]}
+    cleared = (await api.put("/api/v1/insights/settings", json={"repos": [{"repo": "pytorch/helion", "rfc": {"repos": [], "labels": [], "title_patterns": []}}]})).json()["repos"][0]
+    assert cleared["rfc"] == {"repos": [], "labels": [], "title_patterns": []}
 
 
 async def test_history_is_read_by_its_first_lines(running_app, tmp_path):
