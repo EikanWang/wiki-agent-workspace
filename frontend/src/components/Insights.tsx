@@ -8,6 +8,8 @@ import FolderPicker from "./FolderPicker";
 import MarkdownView from "./MarkdownView";
 import GithubRate from "./GithubRate";
 import ModelChoice, { ModelChoiceValue } from "./ModelChoice";
+import { FoldStrip, Splitter, usePane } from "./Split";
+import { BadgeMode, countOf, setBadgeMode, unreadChanged, useInsightsUnread } from "../insightsUnread";
 import { utc8 } from "../time";
 import { confirmAction } from "./Confirm";
 
@@ -112,7 +114,7 @@ export async function loadInsightsSettings(): Promise<Settings> {
 }
 
 /** Sidebar: the repositories, and the settings. */
-export function InsightsPanel({ active, onOpen }: { active: string | null; onOpen: (repo: string | null) => void }) {
+export function InsightsPanel({ active, onOpen, unread }: { active: string | null; onOpen: (repo: string | null) => void; unread?: ReturnType<typeof useInsightsUnread> }) {
   const [s, setS] = useState<Settings | null>(settingsCache);
   const [add, setAdd] = useState("");
   const [err, setErr] = useState<string | null>(null);
@@ -164,6 +166,15 @@ export function InsightsPanel({ active, onOpen }: { active: string | null; onOpe
   return (
     <div className="insights-panel" data-testid="insights-panel">
       <div className="local-head"><b>Repo Insights</b><span className="spacer" />
+        {unread && (
+          <select className="small insights-badge-mode" value={unread.mode} onChange={(e) => setBadgeMode(e.target.value as BadgeMode)}
+            title="What the red badges count: the new things not read yet in the daily summaries, in the reports, or both" data-testid="insights-badge-mode">
+            <option value="daily+reports">Badge: daily + reports</option>
+            <option value="daily">Badge: daily</option>
+            <option value="reports">Badge: reports</option>
+            <option value="off">Badge: off</option>
+          </select>
+        )}
         <button className={`icon-btn small ${active === null ? "active" : ""}`} onClick={() => onOpen(null)} title="Settings" data-testid="insights-settings-open">⚙</button>
       </div>
       <div className="insights-repos">
@@ -191,6 +202,10 @@ export function InsightsPanel({ active, onOpen }: { active: string | null; onOpe
               setDrag(null); setOver(null);
             }}>
             <span className="insights-repo-name">{r.repo}</span>
+            {unread && countOf(unread.counts[r.repo], unread.mode) > 0 && (
+              <span className="unread-badge" data-testid="insights-repo-unread" title={`${unread.counts[r.repo].daily} unread in daily summaries · ${unread.counts[r.repo].reports} in reports`}>
+                {countOf(unread.counts[r.repo], unread.mode)}</span>
+            )}
             <span className="muted small">{r.schedule.enabled ? `⏰ ${r.schedule.time}` : ""}{r.highlights ? " · XPU" : ""}</span>
           </button>
         ))}
@@ -270,13 +285,16 @@ function RepoPage({ repo, onOpenPrReview, sessions }: { repo: string; onOpenPrRe
     : open.kind === "report" ? (done(open.id) ? `report:${open.id}` : null)
     : open.kind === "reports" ? (open.ids.every(done) ? groupKey(open.ids) : null)
     : `file:${open.path}`;
+  const cols = useColumns();
   const disc = useInsightsDiscussion(repo, discKey, sessions, (body) => (
     open?.kind === "report" ? post<Started>(`/insights/reports/${repo}/${open.id}/chat`, body)
       : open?.kind === "reports" ? post<Started>(`/insights/reports/${repo}/chat`, { ...body, ids: open.ids })
-      : post<Started>("/insights/file/chat", { ...body, path: open?.kind === "file" ? open.path : "" })));
+      : post<Started>("/insights/file/chat", { ...body, path: open?.kind === "file" ? open.path : "" })),
+    { label: "report", onFold: () => cols.setMainFolded(true) });
   const load = useCallback(async () => {
     try {
       setOv(await get<Overview>(`/insights/repos/${repo}`));
+      unreadChanged(); // marks read / new reports: the badges count again
       setErr(null);
     } catch (e) {
       setErr((e as ApiError).message);
@@ -318,8 +336,7 @@ function RepoPage({ repo, onOpenPrReview, sessions }: { repo: string; onOpenPrRe
       {tab !== "chat" && <NewReport repo={repo} cfg={ov.config} onCreated={(id) => { setTab("reports"); setOpen({ kind: "report", id }); void load(); }} />}
       <div className="insights-body">
         {tab === "chat" ? <TrendChat repo={repo} tabs={tabs} sessions={sessions} /> : tab === "highlights" ? <Highlights repo={repo} tabs={tabs} onRan={load} enabled={ov.config.highlights} onOpenPr={onOpenPrReview} sessions={sessions} /> : (
-          <>
-            <div className="insights-list">
+          <Columns cols={cols} mainLabel={tab === "daily" ? "summary" : "report"} panel={disc.panel} panelShown={disc.shown} list={<>
               {tabs}
               {tab === "reports" && <ReportList repo={repo} reports={ov.reports} openId={open?.kind === "report" ? open.id : null} onOpen={(id) => setOpen({ kind: "report", id })}
                 onOpenTogether={(ids) => setOpen({ kind: "reports", ids })}
@@ -327,7 +344,7 @@ function RepoPage({ repo, onOpenPrReview, sessions }: { repo: string; onOpenPrRe
                 onMarked={() => { setReadRev((n) => n + 1); void load(); }} />}
               {tab === "daily" && <DailyList ov={ov} openPath={open?.kind === "file" ? open.path : null} onOpen={(p) => setOpen({ kind: "file", path: p })} onRan={load}
                 onMarked={() => { setReadRev((n) => n + 1); void load(); }} />}
-            </div>
+            </>} main={
             <div className="insights-main" ref={mainRef}>
               {extErr && <div className="banner warn small" data-testid="insights-extends-error">{extErr}</div>}
               {open?.kind === "report" ? <ReportViewer key={`${open.id}:${readRev}`} repo={repo} id={open.id} onDiscuss={disc.ask} onDeleted={() => { setOpen(null); void load(); }} onRead={() => void load()} />
@@ -335,9 +352,7 @@ function RepoPage({ repo, onOpenPrReview, sessions }: { repo: string; onOpenPrRe
                 : open?.kind === "file" ? <FileViewer key={`${open.path}:${readRev}:${open.focus?.name ?? ""}`} repo={repo} path={open.path} onDiscuss={disc.ask} onRead={() => void load()}
                     focus={open.focus} onBack={open.back ? () => setOpen(open.back!) : undefined} />
                 : <div className="muted pad">Choose a report or a day.</div>}
-            </div>
-            {disc.panel}
-          </>
+            </div>} />
         )}
       </div>
     </div>
@@ -943,12 +958,13 @@ function Highlights({ repo, tabs, onRan, enabled, onOpenPr, sessions }: { repo: 
   // discussions about what is shown: the day (per day) or the dates (with the score and "only new" filters), in a
   // panel on the right; those of one day (or of the same dates) are kept together
   const discKey = view === "day" ? (day ? `hl:${day.day}` : null) : `hl:${since}..${until}`;
+  const cols = useColumns();
   const disc = useInsightsDiscussion(repo, discKey, sessions, (body) => post<Started>(`/insights/repos/${repo}/highlights/chat`,
-    { since, until, day: view === "day" ? day?.day : null, min_score: min, only_new: view === "day" && onlyNew, ...body }));
+    { since, until, day: view === "day" ? day?.day : null, min_score: min, only_new: view === "day" && onlyNew, ...body }),
+    { label: "highlights", onFold: () => cols.setMainFolded(true) });
   const chat = disc.ask;
   return (
-    <>
-      <div className="insights-list">
+    <Columns cols={cols} mainLabel="highlights" panel={disc.panel} panelShown={disc.shown} list={<>
         {tabs}
         <div className="insights-items">
           <div className="row nowrap small pad-x">
@@ -973,7 +989,7 @@ function Highlights({ repo, tabs, onRan, enabled, onOpenPr, sessions }: { repo: 
           }} />}
           {view === "flat" && <div className="muted small pad">Each item once, over all the days of these dates.</div>}
         </div>
-      </div>
+      </>} main={
       <div className="insights-main">
         <div className="insights-report" data-testid="insights-highlights">
           <div className="row nowrap small">
@@ -1014,9 +1030,7 @@ function Highlights({ repo, tabs, onRan, enabled, onOpenPr, sessions }: { repo: 
               onAsk={async (part, question) => { await chat({ quote: part.quote, question, dirs }); setDirs([]); }} />
           )}
         </div>
-      </div>
-      {disc.panel}
-    </>
+      </div>} />
   );
 }
 
@@ -1161,5 +1175,30 @@ function InsightsSettings() {
       {note && <div className="small" data-testid="insights-note">{note}</div>}
       {err && <div className="error-text small" role="alert">{err}</div>}
     </div>
+  );
+}
+
+
+/** The list ┃ material ┃ discussions columns of Repo Insights: the list is resizable and foldable, and every bar
+ * can fold the panel on either side of it (like the other pages). */
+function useColumns() {
+  const list = usePane("insights.list", 300, 180, 700);
+  const [mainFolded, setMainFolded] = useState(false);
+  return { list, mainFolded, setMainFolded };
+}
+
+function Columns({ cols, list, main, panel, mainLabel, panelShown }: {
+  cols: ReturnType<typeof useColumns>; list: React.ReactNode; main: React.ReactNode; panel: React.ReactNode; mainLabel: string; panelShown: boolean;
+}) {
+  const mainFolded = cols.mainFolded && (!cols.list.folded || panelShown);
+  return (
+    <>
+      {!cols.list.folded && <div className={`insights-list ${mainFolded && !panelShown ? "wide" : ""}`} style={mainFolded && !panelShown ? undefined : { width: cols.list.size }}>{list}</div>}
+      {!mainFolded && <Splitter dir="x" side="before" pane={cols.list} label="list" testId="insights-list-splitter"
+        other={{ label: mainLabel, onFold: () => cols.setMainFolded(true) }} />}
+      {mainFolded ? <FoldStrip label={mainLabel[0].toUpperCase() + mainLabel.slice(1)} onShow={() => cols.setMainFolded(false)} side={cols.list.folded ? "left" : "right"} testId="insights-main-unfold" />
+        : main}
+      {panel}
+    </>
   );
 }

@@ -70,6 +70,20 @@ def repo_overview(owner: str, name: str, ctx: AppContext = Depends(require_auth)
             "jobs": [_public(j) for j in pl.jobs(repo)][-20:]}
 
 
+@router.get("/insights/unread")
+def unread_counts(ctx: AppContext = Depends(require_auth)):
+    """The unread new things of every repository: in its daily summaries and in its reports (the activity bar's badge
+    and the repository list count either or both)."""
+    out = {}
+    for r in st.load(ctx)["repos"]:
+        repo = r["repo"]
+        read = store.read_new(ctx, repo)
+        daily = sum(store.unread(x["new_names"], read.get(f"f:{x['name']}")) for x in store.index(ctx, repo) if x["daily"])
+        reports = sum(m.get("unread") or 0 for m in pl.reports(ctx, repo) if m.get("status") == "done")
+        out[repo] = {"daily": daily, "reports": reports}
+    return {"repos": out}
+
+
 @router.get("/insights/repos/{owner}/{name}/first-seen")
 def first_seen(owner: str, name: str, thing: str = Query(..., min_length=1, max_length=200), ctx: AppContext = Depends(require_auth)):
     """The daily summary (and its line) where `thing` — what a report says something extends — first appeared."""

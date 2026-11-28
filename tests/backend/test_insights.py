@@ -736,6 +736,11 @@ async def test_new_things_are_marked_remembered_and_counted(running_app, tmp_pat
     await api.put("/api/v1/insights/read-all", json={"repo": "acme/proj", "keys": keys, "read": False})
     ov = (await api.get("/api/v1/insights/repos/acme/proj")).json()
     assert next(r for r in ov["reports"] if r["id"] == rep["id"])["unread"] == 1 and next(r for r in ov["daily"] if r["since"] == DAY)["unread"] == 2
+    # the badge: the unread new things of every repository, in its daily summaries and in its reports
+    await api.put("/api/v1/insights/settings", json={"repos": [{"repo": "acme/proj"}]})
+    u = (await api.get("/api/v1/insights/unread")).json()["repos"]["acme/proj"]
+    assert u == {"daily": sum(r["unread"] for r in ov["daily"]), "reports": sum(r.get("unread") or 0 for r in ov["reports"] if r["status"] == "done")}
+    assert u["daily"] >= 2 and u["reports"] >= 1
     assert (await api.put("/api/v1/insights/read-all", json={"repo": "acme/proj", "keys": ["f:../x"]})).status_code == 400
 
 

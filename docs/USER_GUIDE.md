@@ -936,7 +936,9 @@ shows its date and time in **UTC+8** (e.g. `2026-11-12 15:03:21 UTC+8`): when yo
   it; it folds the panel next to it. Where the panel on the other side can be folded too, the bar has a
   second button pointing the other way (between the document and the discussions, the side list and the document, the explorer and the code, the
   code and the agent panel, the file editor and the chat in Local files, the conversation and the side column of a
-  PR, the command list and the output in Build & test, the session list and the session in Agents). The panels: the side list, the discussions / side-question panels, the agent panel, the
+  PR, the command list and the output in Build & test, the session list and the session in Agents, the list and the report / summary / highlights in Repo Insights —
+  whose list can now also be resized and folded — and the report and its discussions). The buttons appear where the
+  pointer is on the bar, and the bars are a little wider to grab. The panels: the side list, the discussions / side-question panels, the agent panel, the
   explorer, the outline, the PR side column, the command list and PR Development's bottom panel.
 - **Fold the middle column**: in the wiki reader and in a PR review, **⇤** in the discussion panel's header folds
   the document / PR so the discussions take its width; the strip on the left (or **⇥**) brings it back. In PR
@@ -1066,6 +1068,10 @@ The chart icon in the activity bar. It shows what happened in GitHub repositorie
 - **Repositories** (left): pytorch/pytorch, vllm, transformers, sglang, flashinfer, cutlass, triton by default; add any `owner/repo`.
 - **Summarize**: pick a period (or *Dates…*), the sources (Issues & PRs, Commits, RFCs, XPU highlights), an optional focus preset (*XPU (Intel GPU)*) and free-text focus. The report has fixed sections (Highlights, Changes by area, Issues and PRs, RFCs, XPU watch, Trends, Numbers) with links. Progress shows while it runs; *Continue in chat* opens a wiki chat with the report as material.
 - **How it is built**: one summary of issues and PRs per UTC day (kept in `summary/<owner>/<repo>/`; days without one are fetched from GitHub in one go and made); periods over two weeks are rolled up week by week (finished weeks are cached in `blocks/`); commits come from the connected checkout (⎇ in PR Review) or an app-owned blobless clone in `repos/`, fetched before each report; RFCs are the RFC repositories' issues/PRs plus issues labelled or titled as RFCs (per repository in ⚙).
+- **Unread badge**: a red badge on the Repo Insights icon counts the new things (🆕 / ➕) you haven't marked read yet,
+  and each repository in the list shows its own count. **Badge:** at the top of the list chooses what is counted —
+  *daily + reports* (the default), *daily* (daily summaries only), *reports*, or *off*; the choice is kept in this
+  browser. The counts refresh every minute and as soon as you mark something read.
 - **Where an extension started**: a thing marked ➕ is an extension of something seen before, and its *(extends X)* is a
   link — click it to open the daily summary of the day X first appeared, scrolled to the line naming it (marked in
   yellow), with when it was first seen and what it is above; **← Back** returns to what you were reading.

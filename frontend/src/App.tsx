@@ -51,6 +51,7 @@ import { DevSetupPreset } from "./components/DevSetupDialog";
 import Reader from "./components/Reader";
 import ImageLightbox from "./components/ImageLightbox";
 import MermaidBlocks from "./components/MermaidBlocks";
+import { useInsightsUnread } from "./insightsUnread";
 import DiscussionPanel, { LiveJob, SessionChip, useJobStream } from "./components/DiscussionPanel";
 import SessionPicker from "./components/SessionPicker";
 import TerminalPanel from "./components/TerminalPanel";
@@ -146,6 +147,7 @@ export default function App() {
   // Agents dashboard: the monitored sessions
   const [watched, setWatchedState] = useState<Watch[]>([]);
   const [alarms, setAlarms] = useState(0);
+  const insightsUnread = useInsightsUnread(!!authed);
   const [autoVersion, setAutoVersion] = useState(0);
   useEffect(() => {
     if (!authed) return;
@@ -1062,6 +1064,9 @@ export default function App() {
               insights: <button className={sidebarView === "insights" ? "active" : ""} onClick={() => { if (sidebarView === "insights") { updatePrefs({ listOpen: !listOpen }); if (listOpen) return; } updatePrefs({ sidebarView: "insights", listOpen: true }); setView("insights"); }}
                 title="Repo Insights: summaries of what happens in repositories — issues, PRs, commits, RFCs, XPU highlights — over any period" aria-label="Repo Insights" aria-pressed={sidebarView === "insights"} data-testid="activity-insights">
                 <InsightsIcon size={20} />
+                {insightsUnread.total > 0 && <span className="activity-badge unread" data-testid="activity-insights-badge"
+                  title={`${insightsUnread.total} new thing(s) not read yet (${insightsUnread.mode === "daily" ? "daily summaries" : insightsUnread.mode === "reports" ? "reports" : "daily summaries + reports"})`}>
+                  {insightsUnread.total > 99 ? "99+" : insightsUnread.total}</span>}
               </button>,
               machines: <button className={sidebarView === "machines" ? "active" : ""} onClick={() => { if (sidebarView === "machines") { updatePrefs({ listOpen: !listOpen }); if (listOpen) return; } updatePrefs({ sidebarView: "machines", listOpen: true }); setView("machines"); }}
                 title="Machines: this server and SSH machines to work on — connection checks, host keys, keys, what they have" aria-label="Machines" aria-pressed={sidebarView === "machines"} data-testid="activity-machines">
@@ -1130,7 +1135,7 @@ export default function App() {
           )}
           {sidebarView === "insights" && (
             <div className="sidebar-content">
-              <InsightsPanel active={insightsRepo} onOpen={(r) => { setInsightsRepo(r); setView("insights"); }} />
+              <InsightsPanel active={insightsRepo} onOpen={(r) => { setInsightsRepo(r); setView("insights"); }} unread={insightsUnread} />
             </div>
           )}
           {sidebarView === "machines" && (

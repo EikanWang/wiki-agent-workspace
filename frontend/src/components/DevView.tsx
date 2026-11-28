@@ -1,4 +1,4 @@
-import { Splitter, usePane } from "./Split";
+import { Splitter, followPointer, usePane } from "./Split";
 import { Suspense, lazy, useCallback, useEffect, useState } from "react";
 import { AgentSession, ApiError, DevInfo, DevSettings, DevWorkspace, Thread, WorkspaceInfo, del, get, patch, post, subscribeGlobal } from "../api";
 import DevAgentPanel, { CodeAnchor, EditorFiles } from "./DevAgentPanel";
@@ -402,6 +402,7 @@ function DevSettingsDialog({ dev, workspaces, onClose, onSaved }: { dev: DevWork
 function BottomSplitter({ onHeight, onFold }: { onHeight: (h: number | null) => void; onFold: () => void }) {
   return (
     <div className="dev-bottom-splitter" role="separator" aria-orientation="horizontal" title="Drag to resize · double-click: default height"
+      onMouseEnter={(e) => followPointer(e, "y")}
       data-testid="dev-bottom-splitter"
       onDoubleClick={(e) => { if (!(e.target as HTMLElement).closest(".splitter-fold")) onHeight(null); }}
       onPointerDown={(e) => {

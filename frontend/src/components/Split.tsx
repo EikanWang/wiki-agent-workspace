@@ -13,6 +13,15 @@ export interface Pane {
   reset: () => void;
 }
 
+/** The fold buttons sit where the pointer entered the bar (not at its middle), so they are at hand; they stay put
+ * while the pointer moves to them. */
+export function followPointer(e: React.MouseEvent<HTMLElement>, dir: "x" | "y") {
+  if ((e.target as HTMLElement).closest(".splitter-fold")) return;
+  const r = e.currentTarget.getBoundingClientRect();
+  if (dir === "x") e.currentTarget.style.setProperty("--fold-at", `${Math.round(e.clientY - r.top)}px`);
+  else e.currentTarget.style.setProperty("--fold-at", `${Math.round(e.clientX - r.left)}px`);
+}
+
 export function usePane(key: string, def: number, min: number, max: number, defFolded = false): Pane {
   const read = (): { size: number; folded: boolean } => {
     try {
@@ -54,6 +63,7 @@ export function Splitter({ dir, side, pane, label, testId, className = "", style
   return (
     <div className={`splitter ${dir} ${pane.folded ? "folded" : ""} ${className}`} style={style} role="separator" aria-orientation={dir === "x" ? "vertical" : "horizontal"}
       title={`Drag to resize the ${label} · double-click: default size`} data-testid={testId}
+      onMouseEnter={(e) => followPointer(e, dir)}
       onDoubleClick={(e) => { if ((e.target as HTMLElement).closest(".splitter-fold")) return; pane.reset(); }}
       onPointerDown={(e) => {
         if (e.button !== 0 || (e.target as HTMLElement).closest(".splitter-fold")) return;

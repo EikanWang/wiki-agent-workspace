@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { followPointer } from "./Split";
 
 /** Vertical drag handle for resizing an adjacent panel. Calls onResize with the pointer's x delta. */
 export function Resizer({ onResize, onEnd, side, onFold, label = "panel", testId, other }: {
@@ -38,6 +39,7 @@ export function Resizer({ onResize, onEnd, side, onFold, label = "panel", testId
       role="separator"
       aria-orientation="vertical"
       title="Drag to resize"
+      onMouseEnter={(e) => followPointer(e, "x")}
       onPointerDown={(e) => {
         if ((e.target as HTMLElement).closest(".splitter-fold")) return;
         dragging.current = true;

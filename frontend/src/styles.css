@@ -1470,7 +1470,7 @@ body.resizing-h iframe { pointer-events: none; }
 .insights-report { padding: 10px 14px; display: flex; flex-direction: column; gap: 6px; }
 .insights-md { font-size: 14px; }
 .chip.new-vs { background: var(--new-bg); color: var(--new); }
-.chip.new-count { background: var(--new-bg); color: var(--new); font-weight: 600; margin-left: auto; }
+.chip.new-count { background: var(--new-bg); color: var(--new); font-weight: 600; margin-left: auto; align-self: center; flex: none; }
 .waw-new-badge { display: inline-block; margin-right: 5px; padding: 0 5px; border-radius: 4px; background: var(--new); color: var(--bg);
   font-size: 0.72em; font-weight: 700; letter-spacing: 0.04em; line-height: 1.5; vertical-align: 0.12em; }
 .markdown-body li.waw-new, .markdown-body p.waw-new, .markdown-body td.waw-new { background: var(--new-bg); box-shadow: inset 3px 0 0 var(--new);
@@ -1486,7 +1486,7 @@ body.resizing-h iframe { pointer-events: none; }
 .insights-picked { position: sticky; top: 0; z-index: 1; background: var(--bg); border-bottom: 1px solid var(--border); padding-top: 4px; padding-bottom: 4px; gap: 6px; }
 .insights-pick-row { align-items: center; cursor: default; }
 .insights-pick-row > input { flex: none; margin: 0; }
-.insights-pick-open { flex: 1; display: flex; justify-content: space-between; gap: 8px; min-width: 0; border: none; background: none; color: inherit; padding: 0; text-align: left; cursor: pointer; font: inherit; }
+.insights-pick-open { flex: 1; display: flex; justify-content: space-between; align-items: center; gap: 8px; min-width: 0; border: none; background: none; color: inherit; padding: 0; text-align: left; cursor: pointer; font: inherit; }
 .waw-ext-badge { display: inline-block; margin-right: 5px; padding: 0 5px; border-radius: 4px; border: 1px solid var(--new); color: var(--new);
   font-size: 0.72em; font-weight: 700; letter-spacing: 0.04em; vertical-align: 0.1em; line-height: 1.5; }
 .markdown-body li.waw-ext, .markdown-body p.waw-ext, .markdown-body td.waw-ext { box-shadow: inset 2px 0 0 var(--border); padding-left: 8px; }
@@ -1835,9 +1835,6 @@ body.uml-dragging, body.uml-dragging .uml-box { cursor: grabbing; user-select: n
 .webide-diff > * { flex: 1; min-height: 0; }
 .webide-diff-tab .webide-tab-name { font-weight: 600; }
 /* two fold buttons on one bar: the first folds the pane its arrow points to, the second the other one */
-.splitter.x .splitter-fold.second, .resizer .splitter-fold.second { transform: translateY(calc(-50% + 36px)); }
-.splitter.y .splitter-fold.second { transform: translateX(calc(-50% + 40px)); }
-.splitter.x:has(.second) .splitter-fold:not(.second), .resizer:has(.second) .splitter-fold:not(.second) { transform: translateY(calc(-50% - 4px)); }
 .fold-strip { flex: none; width: 22px; align-self: stretch; border: none; background: var(--card); color: var(--muted); cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 8px 0; font-size: 12px; }
 .fold-strip.left { border-right: 1px solid var(--border); }
 .fold-strip.right { border-left: 1px solid var(--border); }
@@ -1850,3 +1847,41 @@ body.uml-dragging, body.uml-dragging .uml-box { cursor: grabbing; user-select: n
 .mon-body.list-only > .mon-list { flex: 1; width: auto !important; max-width: none; }
 .pr-overview-grid.main-folded { grid-template-columns: auto minmax(0, 1fr); }
 .pr-overview-grid.main-folded > .pr-main-col { display: none; }
+/* resize bars: a little wider to grab (an invisible margin widens it further), and the fold buttons follow the
+   pointer along the bar (--fold-at, set on mouse move) instead of sitting at its middle */
+.splitter.x { width: 6px; }
+.splitter.y { height: 6px; }
+.splitter.x::before { content: ""; position: absolute; top: 0; bottom: 0; left: -4px; right: -4px; }
+.splitter.y::before { content: ""; position: absolute; left: 0; right: 0; top: -4px; bottom: -4px; }
+.resizer { width: 12px; }
+.dev-bottom-splitter { height: 12px; top: -6px; }
+.splitter.x .splitter-fold, .resizer .splitter-fold { top: var(--fold-at, 50%); left: -5px; }
+.resizer.right .splitter-fold { left: auto; right: -2px; }
+.resizer.left .splitter-fold { left: -2px; }
+.splitter.y .splitter-fold, .dev-bottom-splitter .splitter-fold { left: var(--fold-at, 50%); }
+.splitter.x .splitter-fold:not(.second), .resizer .splitter-fold:not(.second) { transform: translateY(-100%); }
+.splitter.x .splitter-fold.second, .resizer .splitter-fold.second { transform: translateY(4px); }
+.splitter.x:not(:has(.second)) .splitter-fold, .resizer:not(:has(.second)) .splitter-fold { transform: translateY(-50%); }
+.splitter.y .splitter-fold:not(.second), .dev-bottom-splitter .splitter-fold { transform: translateX(-50%); }
+.splitter.y .splitter-fold.second { transform: translateX(calc(-50% + 40px)); }
+.splitter-fold { z-index: 6; }
+.splitter.y .splitter-fold.second { transform: translateX(calc(-50% + 40px)); }
+.insights-list.wide { flex: 1; width: auto; }
+.insights-body:has(> .insights-list-splitter, > [data-testid="insights-list-splitter"]) { gap: 0; }
+.insights-body > [data-testid="insights-list-splitter"] { margin: 0 4px; }
+/* next to the pointer, never under it (so the bar can still be dragged where the pointer is) */
+.splitter.x .splitter-fold:not(.second), .resizer .splitter-fold:not(.second),
+.splitter.x:not(:has(.second)) .splitter-fold, .resizer:not(:has(.second)) .splitter-fold { transform: translateY(calc(-100% - 10px)); }
+.splitter.x .splitter-fold.second, .resizer .splitter-fold.second { transform: translateY(10px); }
+.splitter.y .splitter-fold:not(.second), .dev-bottom-splitter .splitter-fold { transform: translateX(calc(-100% - 12px)); }
+.splitter.y .splitter-fold.second { transform: translateX(12px); }
+/* the wider bar mostly sits over the edge, so it doesn't cover buttons near the panel's edge */
+.resizer.right { right: 0; }
+/* buttons at the side list's right edge stay clickable above its (wider) resize bar */
+.sidebar-content .icon-btn, .sidebar-content .btn { position: relative; z-index: 6; }
+.resizer.left { left: -4px; }
+.activity-badge.unread { background: var(--red); color: #fff; }
+.unread-badge { margin-left: auto; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--red); color: #fff; font-size: 11px; font-weight: 700; line-height: 18px; text-align: center; flex: none; }
+.insights-badge-mode { font-size: 11px; max-width: 150px; }
+.sidebar-content .tree-actions, .sidebar-content .tree-action { z-index: 6; }
+.sidebar-content .tree-action { position: relative; }

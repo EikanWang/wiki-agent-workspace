@@ -18,7 +18,9 @@ const PENDING = ["queued", "running", "waiting_provider_permission", "waiting_fo
  * the panel, and the material stays in view. `key` names the material (null: nothing to discuss yet); `start` starts a
  * discussion on the server (in the document the material's discussions share).
  */
-export function useInsightsDiscussion(repo: string, key: string | null, sessions: AgentSession[], start: (body: DiscussBody & { discussion: string }) => Promise<Started>) {
+export function useInsightsDiscussion(repo: string, key: string | null, sessions: AgentSession[], start: (body: DiscussBody & { discussion: string }) => Promise<Started>,
+  /** the panel's bar can also fold what is on its left (the report / summary) */
+  foldOther?: { label: string; onFold: () => void }) {
   const [doc, setDoc] = useState<DiscussionDoc | null>(null);
   const docRef = useRef<DiscussionDoc | null>(null);
   docRef.current = doc;
@@ -104,10 +106,11 @@ export function useInsightsDiscussion(repo: string, key: string | null, sessions
           onSelectThread={setActive}
           onAskDocument={(question) => ask({ question })}
           docId={doc?.document_id ?? null} onRequestReanchor={() => undefined} reanchorArmed={false}
-          onCollapse={() => setOpen(false)} resizer={<Resizer side="left" onResize={resize} onFold={() => setOpen(false)} label="discussions panel" />}
+          onCollapse={() => setOpen(false)} resizer={<Resizer side="left" onResize={resize} onFold={() => setOpen(false)} label="discussions panel"
+            other={foldOther ? { ...foldOther, testId: "insights-disc-fold-other" } : undefined} />}
           mode={mode} onModeChange={setMode} />
       </div>
     );
   }
-  return { panel, ask };
+  return { panel, ask, shown: !!key && open };
 }

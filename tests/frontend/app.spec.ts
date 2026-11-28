@@ -109,6 +109,23 @@ async function ensureThreadList(page: Page) {
   if ((await back.count()) > 0) await back.click();
 }
 
+
+/** Drag the side list's resize bar by dx: the list gets wider (any page: wiki, terminals, Repo Insights …). */
+async function dragSideList(page: Page, dx: number) {
+  const list = page.locator(".sidebar");
+  const w0 = (await list.boundingBox())!.width;
+  const b = (await page.locator(".sidebar .resizer.right").boundingBox())!;
+  await page.mouse.move(b.x + b.width / 2, b.y + b.height - 40);
+  await page.mouse.down();
+  await page.mouse.move(b.x + b.width / 2 + dx, b.y + b.height - 40, { steps: 6 });
+  await page.mouse.up();
+  await expect.poll(async () => (await list.boundingBox())!.width).toBeGreaterThan(w0 + dx - 15);
+  await page.mouse.move(b.x + b.width / 2 + dx, b.y + b.height - 40);
+  await page.mouse.down();
+  await page.mouse.move(b.x + b.width / 2, b.y + b.height - 40, { steps: 6 }); // back
+  await page.mouse.up();
+}
+
 test.describe.configure({ mode: "serial" });
 
 /** The worktree of the "feature/e2e" workspace (other workspaces' worktrees have the same files). */
@@ -468,6 +485,7 @@ test("Terminal activity: its own list of terminals (home or a chosen folder), th
   await page.getByTestId("activity-terminal").click();
   await expect(page.getByTestId("terminals-panel")).toBeVisible();
   await expect(page.locator(".terminal-center")).toBeVisible();
+  await dragSideList(page, 80); // the terminal list ┃ the terminal: a resize bar between them
   await expect(page.getByTestId("view-document")).toBeVisible(); // the header's Document / Terminal / Chats / Diff are on every page
   await expect(page.getByTestId("view-terminal")).not.toHaveClass(/active/); // this is the activity's page, not the wiki's terminal
   const n0 = await page.getByTestId("terminals-item").count();
@@ -4513,6 +4531,20 @@ test("Repo Insights: the history in the folder, a week's report (daily summaries
   await expect(page.getByTestId("view-document")).toBeVisible(); // the same header as the wiki's
   await expect(page.getByTestId("view-document")).not.toHaveClass(/active/);
   await expect(page.getByTestId("insights-repo")).toHaveCount(7);
+  await dragSideList(page, 80); // the repository list ┃ the page: a resize bar between them
+  // a red badge counts the new things not read yet (daily summaries + reports by default; configurable)
+  const unread = (await (await page.request.get("/api/v1/insights/unread")).json()).repos as Record<string, { daily: number; reports: number }>;
+  const total = Object.values(unread).reduce((n, u) => n + u.daily + u.reports, 0);
+  const daily = Object.values(unread).reduce((n, u) => n + u.daily, 0);
+  if (total > 0) await expect(page.getByTestId("activity-insights-badge")).toHaveText(total > 99 ? "99+" : String(total));
+  else await expect(page.getByTestId("activity-insights-badge")).toHaveCount(0);
+  await page.getByTestId("insights-badge-mode").selectOption("daily");
+  if (daily > 0) await expect(page.getByTestId("activity-insights-badge")).toHaveText(daily > 99 ? "99+" : String(daily));
+  else await expect(page.getByTestId("activity-insights-badge")).toHaveCount(0);
+  await page.getByTestId("insights-badge-mode").selectOption("off");
+  await expect(page.getByTestId("activity-insights-badge")).toHaveCount(0);
+  await expect(page.getByTestId("insights-repo-unread")).toHaveCount(0);
+  await page.getByTestId("insights-badge-mode").selectOption("daily+reports");
   // the order of the repositories: drag one, Alt+↑ / Alt+↓, or ↑ / ↓ in the settings; it is kept
   const repoOrder = () => page.getByTestId("insights-repo").evaluateAll((els) => els.map((e) => e.getAttribute("data-repo")));
   const order0 = await repoOrder();
@@ -4641,6 +4673,27 @@ test("Repo Insights: the history in the folder, a week's report (daily summaries
   await expect(page.getByTestId("insights-disc").getByTestId("message-user").first()).toContainText("XCCL all-gather");
   await expect(page.getByTestId("insights-highlights")).toBeVisible();
   await expect(page.getByTestId("chats-page")).toBeHidden();
+  // like the other pages: the list's bar folds the highlights (the strip brings them back) or the list itself, and the
+  // discussions' bar folds the highlights too; the buttons come where the pointer is on the bar
+  const bar = page.getByTestId("insights-list-splitter");
+  const bb = (await bar.boundingBox())!;
+  await page.mouse.move(bb.x + bb.width / 2, bb.y + 60);
+  const fb = (await page.getByTestId("insights-list-splitter-fold-other").boundingBox())!;
+  expect(Math.abs(fb.y - (bb.y + 60))).toBeLessThan(40);
+  await page.getByTestId("insights-list-splitter-fold-other").click();
+  await expect(page.getByTestId("insights-highlights")).toBeHidden();
+  await page.getByTestId("insights-main-unfold").click();
+  await expect(page.getByTestId("insights-highlights")).toBeVisible();
+  await page.getByTestId("insights-list-splitter").hover();
+  await page.getByTestId("insights-list-splitter-fold").click();
+  await expect(page.locator(".insights-list")).toHaveCount(0);
+  await page.getByTestId("insights-list-splitter-fold").click();
+  await expect(page.locator(".insights-list")).toBeVisible();
+  await page.locator(".insights-disc .resizer").hover();
+  await page.getByTestId("insights-disc-fold-other").click();
+  await expect(page.getByTestId("insights-highlights")).toBeHidden();
+  await expect(page.getByTestId("insights-disc")).toBeVisible();
+  await page.getByTestId("insights-main-unfold").click();
   await page.getByTestId("insights-hl-view-day").click();
   await page.getByTestId("insights-hl-day").first().click();
   // without GitHub sign-in (no PR Review) the links go to GitHub
@@ -5028,7 +5081,8 @@ test("layout: panes can be resized by dragging, folded and unfolded, and keep th
   const t0 = (await tl.boundingBox())!.width;
   await drag("dev-tasks-splitter", 80);
   expect((await tl.boundingBox())!.width).toBeGreaterThan(t0 + 60);
-  await page.getByTestId("dev-tasks-splitter").dblclick({ position: { x: 2, y: 10 } });
+  // (away from where the pointer entered the bar: the fold buttons are there now)
+  await page.getByTestId("dev-tasks-splitter").dblclick({ position: { x: 2, y: (await page.getByTestId("dev-tasks-splitter").boundingBox())!.height - 6 } });
   // its bar folds the output too: the command list takes the width
   await page.getByTestId("dev-tasks-splitter").hover();
   await page.getByTestId("dev-tasks-splitter-fold-other").click();
