@@ -3,6 +3,10 @@ import { AgentSession, ApiError, ProviderSession, SessionList, get, post, put } 
 import { SessionChip, statusLabel } from "./DiscussionPanel";
 import ModelPicker from "./ModelPicker";
 
+/**
+ * Choose an agent session: a document's default session (`docId`), or — with `onPick` — a session for the caller to
+ * use (an app session, a new one, or a linked provider session such as a terminal conversation).
+ */
 export default function SessionPicker({
   docId,
   defaultSessionId,
@@ -10,13 +14,19 @@ export default function SessionPicker({
   defaultProvider,
   onChanged,
   onClose,
+  onPick,
+  title = "Document session",
+  hint = "New discussions default to the session selected here; existing discussions and their history are unchanged.",
 }: {
-  docId: string;
+  docId?: string;
   defaultSessionId: string | null;
   sessions: AgentSession[];
   defaultProvider: string | null;
   onChanged: () => Promise<void>;
   onClose: () => void;
+  onPick?: (s: AgentSession) => void;
+  title?: string;
+  hint?: string;
 }) {
   const [list, setList] = useState<SessionList | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -34,6 +44,17 @@ export default function SessionPicker({
   useEffect(() => {
     void load();
   }, []);
+
+  // the chosen session: handed to onPick, else made the document's default
+  const choose = async (s: AgentSession) => {
+    if (onPick) {
+      await onChanged();
+      onPick(s);
+      onClose();
+      return;
+    }
+    await setDefault(s.id);
+  };
 
   const setDefault = async (sid: string | null) => {
     setBusy(true);
@@ -55,6 +76,7 @@ export default function SessionPicker({
     try {
       // start on the model of the current session (the backend copies it only when the provider matches)
       const s = await post<AgentSession>("/agent-sessions", { provider, display_name: `Wiki session ${new Date().toLocaleString()}`, inherit_from: defaultSessionId ?? undefined });
+      if (onPick) return await choose(s);
       await put(`/documents/${docId}/default-session`, { session_id: s.id });
       await onChanged();
       onClose();
@@ -71,6 +93,7 @@ export default function SessionPicker({
     setError(null);
     try {
       const s = await post<AgentSession>("/agent-sessions", { provider, native_id: nativeId, display_name: title ?? undefined });
+      if (onPick) return await choose(s);
       await put(`/documents/${docId}/default-session`, { session_id: s.id });
       await onChanged();
       onClose();
@@ -85,18 +108,19 @@ export default function SessionPicker({
   };
 
   const providers = list ? Object.keys(list.capabilities) : [];
+  const known = list?.sessions ?? sessions; // (freshly listed: sessions started since the app loaded are in it)
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()} data-testid="session-picker">
         <div className="modal-head">
-          <span>Document session</span>
+          <span>{title}</span>
           <button className="icon-btn" onClick={onClose}>×</button>
         </div>
-        <div className="muted small">New discussions default to the session selected here; existing discussions and their history are unchanged.</div>
+        <div className="muted small">{hint}</div>
         <section>
           <div className="label">Current</div>
-          <SessionChip session={sessions.find((s) => s.id === defaultSessionId)} />
-          {(() => {
+          <SessionChip session={known.find((s) => s.id === defaultSessionId)} />
+          {!onPick && (() => {
             const cur = sessions.find((s) => s.id === defaultSessionId);
             return cur ? <ModelPicker session={cur} onChanged={() => void onChanged()} /> : <div className="muted small">The model can be chosen once a session exists (it is created on the first question).</div>;
           })()}
@@ -118,13 +142,13 @@ export default function SessionPicker({
         <section>
           <div className="label">Sessions in this app</div>
           <div className="list">
-            {sessions.filter((s) => s.origin !== "preview" && s.origin !== "priority").map((s) => (
-              <button key={s.id} className={`list-item ${s.id === defaultSessionId ? "selected" : ""}`} disabled={busy} onClick={() => void setDefault(s.id)}>
+            {known.filter((s) => s.origin !== "preview" && s.origin !== "priority").map((s) => (
+              <button key={s.id} className={`list-item ${s.id === defaultSessionId ? "selected" : ""}`} disabled={busy} onClick={() => void choose(s)} data-testid="session-pick-app" data-session={s.id}>
                 <span>{s.provider} · {s.display_name ?? "session"}{s.model ? <span className="muted small"> · {s.model}{s.variant ? ` (${s.variant})` : ""}</span> : null}</span>
                 <span className="muted small">{s.native_id ? `#${s.short_id}` : statusLabel(s.status)}{s.status !== "ready" && s.native_id ? ` · ${statusLabel(s.status)}` : ""}</span>
               </button>
             ))}
-            {sessions.length === 0 && <div className="muted small">No sessions yet.</div>}
+            {known.length === 0 && <div className="muted small">No sessions yet.</div>}
           </div>
         </section>
         <section>

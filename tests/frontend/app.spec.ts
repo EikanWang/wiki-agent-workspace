@@ -4390,6 +4390,30 @@ test("Local files: chat with the agent about a folder or a file, next to the edi
   await page.getByTestId("local-chat-file").click();
   await expect(page.getByTestId("local-chat")).toHaveAttribute("data-path", `${dir}/src/main.py`);
   await expect(page.getByTestId("local-chat-new")).toBeVisible();
+  // continue an existing agent session (here: the folder chat's) instead of a new one
+  const sessionOf = async (p: string) => {
+    const c = (await (await page.request.get(`/api/v1/local/chats?path=${encodeURIComponent(p)}`)).json()).chats[0];
+    const t = await (await page.request.get(`/api/v1/documents/${c.document_id}/threads`, { headers: { "X-Workspace": c.workspace_id } })).json();
+    return t.threads[0].last_session_id as string;
+  };
+  const folderSession = await sessionOf(dir);
+  await page.locator('[data-testid="local-chat-new"]').getByTestId("local-chat-session").click();
+  await expect(page.getByTestId("session-picker")).toContainText("Continue an agent session");
+  await page.locator(`[data-testid="session-pick-app"][data-session="${folderSession}"]`).click();
+  await expect(page.getByTestId("session-picker")).toHaveCount(0);
+  await expect(page.getByTestId("local-chat-session-chosen")).toBeVisible();
+  await page.getByTestId("local-chat-first").fill("Same session about main.py?");
+  await page.getByTestId("local-chat-send").click();
+  await expect(done.last()).toContainText("echo: Same session about main.py?", { timeout: 20000 });
+  expect(await sessionOf(`${dir}/src/main.py`)).toBe(folderSession);
+  // in an open chat, 🔗 sends the next message to the chosen session
+  await page.locator(".local-chat-bar").getByTestId("local-chat-session").click();
+  await page.locator(`[data-testid="session-pick-app"][data-session="${folderSession}"]`).click();
+  await expect(page.getByTestId("local-chat-session-next")).toContainText("next message continues");
+  await page.getByTestId("local-chat-session-clear").click();
+  await expect(page.getByTestId("local-chat-session-next")).toHaveCount(0);
+  await page.locator('[data-testid="local-chat-pick"]').selectOption("");
+  await expect(page.getByTestId("local-chat-new")).toBeVisible();
   // the folder's chat is still there; not in the wiki's Chats
   await root.hover();
   await root.getByTestId("local-chat-root").click();

@@ -1359,7 +1359,7 @@ export default function App() {
                     other={{ label: "file editor", onFold: () => setLocalEditorFolded(true) }} />}
                   {!localChatPane.folded && (
                     <div className="local-chat-pane" style={{ width: localChatPane.size }}>
-                      <LocalChat key={localChat.path} target={localChat} sessions={sessions} onClose={() => setLocalChat(null)} />
+                      <LocalChat key={localChat.path} target={localChat} sessions={sessions} onSessionsChanged={refreshSessions} onClose={() => setLocalChat(null)} />
                     </div>
                   )}
                 </>

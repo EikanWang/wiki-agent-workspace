@@ -9,16 +9,22 @@ import { COMPOSER_HINT, composerKeyDown } from "./keys";
 import { usePersistentState } from "../persist";
 import { PASTE_HINT, PictureStrip, picturesOnly, usePictures } from "./Pictures";
 import { utc8 } from "../time";
+import SessionPicker from "./SessionPicker";
 
 export interface LocalChatTarget { path: string; kind: "folder" | "file" }
 interface LocalChatItem { path: string; document_id: string; workspace_id: string; title: string; messages: number; updated_at: string | null }
 
+const sessionLabel = (s: AgentSession) => `${s.provider} · ${s.display_name ?? "session"}${s.short_id ? ` #${s.short_id}` : ""}`;
+
 /**
  * Chat with the agent about a folder or a file of Local files, like a wiki folder chat: the agent works in the opened
  * folder holding it, reads the files to answer and edits them when asked. Shown next to the Local files editor; the
- * chats about this path can be picked at the top (or a new one started).
+ * chats about this path can be picked at the top (or a new one started). An existing agent session (of the app, or a
+ * provider's such as a terminal conversation) can be picked to continue: the chat's next message goes to it.
  */
-export default function LocalChat({ target, sessions, onClose }: { target: LocalChatTarget; sessions: AgentSession[]; onClose: () => void }) {
+export default function LocalChat({ target, sessions, onClose, onSessionsChanged }: {
+  target: LocalChatTarget; sessions: AgentSession[]; onClose: () => void; onSessionsChanged?: () => Promise<void>;
+}) {
   const [chats, setChats] = useState<LocalChatItem[]>([]);
   const [openPath, setOpenPath] = usePersistentState<string | null>(`local.chat.${target.path}`, null);
   const open = chats.find((c) => c.path === openPath) ?? null;
@@ -32,6 +38,8 @@ export default function LocalChat({ target, sessions, onClose }: { target: Local
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const [session, setSession] = useState<AgentSession | null>(null); // the session the next message continues
+  const [picking, setPicking] = useState(false);
   const name = target.path.split("/").pop() || target.path;
 
   const loadList = useCallback(async () => {
@@ -86,11 +94,12 @@ export default function LocalChat({ target, sessions, onClose }: { target: Local
       const c = await post<LocalChatItem>("/local/chats", { path: target.path, title });
       const d = await getIn<OpenDocument>(c.workspace_id, `/documents/open?path=${encodeURIComponent(c.path)}`);
       const r = await post<{ job_id: string }>(`/documents/${d.document_id}/threads`,
-        { ...wholeDocument(), version_sha256: d.sha256, question: q, model_choice: firstModel ?? undefined, images: firstPics.urls },
+        { ...wholeDocument(), version_sha256: d.sha256, question: q, model_choice: firstModel ?? undefined, images: firstPics.urls, session_id: session?.id },
         { idempotencyKey: newIdempotencyKey(), workspace: c.workspace_id });
       setFirst("");
       firstPics.clear();
       setFirstModel(null);
+      setSession(null);
       await loadList();
       setOpenPath(c.path);
       setJobId(r.job_id);
@@ -110,9 +119,16 @@ export default function LocalChat({ target, sessions, onClose }: { target: Local
           {chats.map((c) => <option key={c.path} value={c.path}>{c.title} ({c.messages}{c.updated_at ? ` · ${utc8(c.updated_at, false)}` : ""})</option>)}
         </select>
         <span className="spacer" />
+        {open && doc && <button className="icon-btn small" onClick={() => setPicking(true)} title="Continue in an existing agent session" data-testid="local-chat-session">🔗</button>}
         <button className="icon-btn small" onClick={onClose} title="Close the chat" aria-label="Close the chat" data-testid="local-chat-close">×</button>
       </div>
       {err && <div className="banner warn small" role="alert">{err} <button className="icon-btn small" onClick={() => setErr(null)}>×</button></div>}
+      {open && session && (
+        <div className="banner small" data-testid="local-chat-session-next">
+          <span>The next message continues the session <b>{sessionLabel(session)}</b> (with this conversation so far).</span>
+          <button className="icon-btn small" onClick={() => setSession(null)} title="Keep the chat's own session" data-testid="local-chat-session-clear">×</button>
+        </div>
+      )}
       {!open && (
         <div className="chat-new" data-testid="local-chat-new">
           <h2>Chat about <span className="mono">{name}</span></h2>
@@ -128,7 +144,14 @@ export default function LocalChat({ target, sessions, onClose }: { target: Local
               placeholder={`Ask anything about ${name} (${COMPOSER_HINT}; ${PASTE_HINT})`}
               {...firstPics.handlers} onKeyDown={(e) => composerKeyDown(e, () => void startNew(), setFirst)} data-testid="local-chat-first" />
             <div className="chat-composer-bar">
-              <ModelChoice value={firstModel} onChange={setFirstModel} />
+              <ModelChoice value={firstModel} onChange={setFirstModel} session={session} />
+              {session ? (
+                <span className="chip" title="This chat continues that agent session (it keeps what was discussed there)" data-testid="local-chat-session-chosen">
+                  ↪ {sessionLabel(session)} <button className="chip-btn" onClick={() => setSession(null)} title="Start a new session instead" data-testid="local-chat-session-clear">×</button>
+                </span>
+              ) : (
+                <button className="btn small" onClick={() => setPicking(true)} title="Continue an existing agent session (of this app, or a provider's, e.g. a terminal conversation) instead of starting a new one" data-testid="local-chat-session">Continue a session…</button>
+              )}
               <span className="spacer" />
               <button className="btn primary" disabled={busy || (!first.trim() && !firstPics.pictures.length)} onClick={() => void startNew()} data-testid="local-chat-send">{busy ? "Starting…" : "Send"}</button>
             </div>
@@ -146,12 +169,14 @@ export default function LocalChat({ target, sessions, onClose }: { target: Local
           liveJob={live}
           workspaceId={open.workspace_id}
           onStart={async (q, mc, images) => {
-            const r = await post<{ job_id: string }>(`/documents/${doc.document_id}/threads`, { ...wholeDocument(), version_sha256: doc.sha256, question: q, model_choice: mc ?? undefined, images },
+            const r = await post<{ job_id: string }>(`/documents/${doc.document_id}/threads`, { ...wholeDocument(), version_sha256: doc.sha256, question: q, model_choice: mc ?? undefined, images, session_id: session?.id },
               { idempotencyKey: newIdempotencyKey(), workspace: ws });
+            setSession(null);
             await after(r.job_id);
           }}
           onSend={async (tid, text, mc, images) => {
-            const r = await post<{ job_id: string }>(`/threads/${tid}/messages`, { text, model_choice: mc ?? undefined, images }, { idempotencyKey: newIdempotencyKey() });
+            const r = await post<{ job_id: string }>(`/threads/${tid}/messages`, { text, model_choice: mc ?? undefined, images, session_id: session?.id }, { idempotencyKey: newIdempotencyKey() });
+            setSession(null);
             await after(r.job_id);
           }}
           onAction={async () => undefined}
@@ -182,6 +207,11 @@ export default function LocalChat({ target, sessions, onClose }: { target: Local
           }}
           onWatchSideJob={(j) => setSideJobId(j)}
         />
+      )}
+      {picking && (
+        <SessionPicker title="Continue an agent session" defaultSessionId={session?.id ?? null} sessions={sessions} defaultProvider={null}
+          hint={`Pick the session to continue: ${open ? "the next message of this chat" : "this chat"} goes to it, so the agent keeps what was discussed there — and works on ${name}.`}
+          onChanged={async () => { await onSessionsChanged?.(); }} onPick={(s) => { setSession(s); setErr(null); }} onClose={() => setPicking(false)} />
       )}
     </div>
   );
