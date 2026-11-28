@@ -793,7 +793,7 @@ export default function Reader(props: ReaderProps) {
         {headings.length > 1 && !editing && !layout && (
           <nav className={`toc ${tocOpen ? "" : "collapsed"}`} data-testid="toc" style={tocOpen ? { width: tocPane.size } : undefined}>
             <button className="toc-toggle" onClick={onToggleToc} title={tocOpen ? "Fold outline" : "Unfold outline"} data-testid="toc-toggle">
-              {tocOpen ? "▾ Outline" : "▸"}
+              {tocOpen ? "▾ Outline" : <><span>▸</span><span className="fold-strip-label">Outline</span></>}
             </button>
             {tocOpen &&
               headings.map((h, i) => (

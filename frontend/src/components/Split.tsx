@@ -60,6 +60,17 @@ export function Splitter({ dir, side, pane, label, testId, className = "", style
   const arrow = dir === "x"
     ? (pane.folded === (side === "before") ? "›" : "‹")
     : (pane.folded === (side === "before") ? "▾" : "▴");
+  // folded: the bar becomes a thin strip with the pane's name (not just a hairline), click it to show the pane again
+  if (pane.folded) {
+    return (
+      <div className={`splitter ${dir} folded ${className}`} style={style} data-testid={testId}>
+        <button className="splitter-strip" onClick={() => pane.setFolded(false)} title={`Show the ${label}`} aria-label={`Show the ${label}`}
+          data-testid={testId ? `${testId}-fold` : undefined}>
+          <span>{arrow}</span><span className="fold-strip-label">{label[0].toUpperCase() + label.slice(1)}</span>
+        </button>
+      </div>
+    );
+  }
   return (
     <div className={`splitter ${dir} ${pane.folded ? "folded" : ""} ${className}`} style={style} role="separator" aria-orientation={dir === "x" ? "vertical" : "horizontal"}
       title={`Drag to resize the ${label} · double-click: default size`} data-testid={testId}
@@ -69,7 +80,7 @@ export function Splitter({ dir, side, pane, label, testId, className = "", style
         if (e.button !== 0 || (e.target as HTMLElement).closest(".splitter-fold")) return;
         const el = e.currentTarget;
         const start = dir === "x" ? e.clientX : e.clientY;
-        const startSize = pane.folded ? 0 : pane.size;
+        const startSize = pane.size;
         el.setPointerCapture(e.pointerId);
         document.body.classList.add(dir === "x" ? "resizing-h" : "resizing-v");
         const move = (ev: PointerEvent) => pane.setSize(startSize + sign * ((dir === "x" ? ev.clientX : ev.clientY) - start));
@@ -87,7 +98,7 @@ export function Splitter({ dir, side, pane, label, testId, className = "", style
       }}>
       <button className="splitter-fold" onClick={() => pane.setFolded(!pane.folded)} title={pane.folded ? `Show the ${label}` : `Fold the ${label}`}
         aria-label={pane.folded ? `Show the ${label}` : `Fold the ${label}`} data-testid={testId ? `${testId}-fold` : undefined}>{arrow}</button>
-      {other && !pane.folded && (
+      {other && (
         <button className="splitter-fold second" onClick={other.onFold} title={`Fold the ${other.label}`} aria-label={`Fold the ${other.label}`}
           data-testid={testId ? `${testId}-fold-other` : undefined}>{dir === "x" ? (side === "before" ? "›" : "‹") : (side === "before" ? "▾" : "▴")}</button>
       )}

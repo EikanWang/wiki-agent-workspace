@@ -63,6 +63,11 @@ import { SelectionAnchor, wholeDocument } from "./textmodel";
 import { FONT_STACKS, FontSettings, Prefs, Resizer, loadPrefs, savePrefs } from "./components/Layout";
 
 const ACTIVITY_BAR_PX = 45;
+/** the strip a folded side list (or the hidden sidebar) leaves, to click it open again */
+const FOLD_STRIP_PX = 22;
+const SIDEBAR_VIEW_NAMES: Record<Prefs["sidebarView"], string> = {
+  files: "Wiki", local: "Local files", reviews: "Reviews", development: "PR Development", agents: "Agents", terminal: "Terminal", insights: "Repo Insights", machines: "Machines",
+};
 
 type View = "document" | "terminal" | "diff" | "chats" | "development" | "local" | "agents" | "insights" | "machines";
 
@@ -963,7 +968,7 @@ export default function App() {
         ["--link-hl-color" as string]: prefs.linkHighlightColor,
         ["--link-hl-ms" as string]: String(prefs.linkHighlightMs),
         // the activity bar (Files · PR Review · PR Development) comes on top of the tree's own width
-        ["--sidebar-width" as string]: sidebarOpen ? `${(listOpen ? prefs.sidebarWidth : 0) + ACTIVITY_BAR_PX}px` : "0px",
+        ["--sidebar-width" as string]: sidebarOpen ? `${(listOpen ? prefs.sidebarWidth : FOLD_STRIP_PX) + ACTIVITY_BAR_PX}px` : `${FOLD_STRIP_PX}px`,
         ["--panel-width" as string]: panelOpen ? `${prefs.panelWidth}px` : "36px",
       }}
     >
@@ -1035,6 +1040,11 @@ export default function App() {
 
       <main className={`layout view-${view === "diff" || view === "chats" || view === "development" || view === "local" || view === "agents" || view === "insights" || view === "machines" ? "terminal" : view} ${view === "diff" ? "view-diff" : ""} ${view === "chats" ? "view-chats" : ""} ${view === "document" && !panelDoc ? "no-panel" : ""} ${centerFolded ? "center-folded" : ""}`} data-testid="layout">
         <aside className={`sidebar with-activity ${listOpen ? "" : "list-folded"}`} data-list={listOpen ? "open" : "folded"}>
+          {!sidebarOpen && (
+            <button className="sidebar-strip" onClick={() => setSidebarOpen(() => true)} title="Show the sidebar" aria-label="Show the sidebar" data-testid="sidebar-unhide">
+              <span>›</span><span className="fold-strip-label">Sidebar</span>
+            </button>
+          )}
           <nav className="activity-bar" aria-label="Sidebar views">
             <ActivityButtons order={orderOf(prefs.activityOrder)} onOrder={(o) => updatePrefs({ activityOrder: o })} buttons={{
               files: <button className={sidebarView === "files" ? "active" : ""} onClick={() => { if (sidebarView === "files") { updatePrefs({ listOpen: !listOpen }); if (listOpen) return; } updatePrefs({ sidebarView: "files", listOpen: true }); if (view === "development" || view === "local" || view === "agents" || view === "insights" || view === "machines" || sidebarView === "terminal") setView("document"); }} title="Wiki: read, discuss and edit the wiki folders with the agent" aria-label="Wiki" aria-pressed={sidebarView === "files"} data-testid="activity-files">
@@ -1078,6 +1088,11 @@ export default function App() {
             <button onClick={() => updatePrefs({ listOpen: !listOpen })} title={listOpen ? "Fold the list (folders, projects, pull requests…) — click the current icon to unfold it again" : "Show the list"}
               aria-label={listOpen ? "Fold the list" : "Show the list"} aria-pressed={!listOpen} data-testid="sidebar-list-fold">{listOpen ? "«" : "»"}</button>
           </nav>
+          {sidebarOpen && !listOpen && (
+            <button className="sidebar-strip" onClick={() => updatePrefs({ listOpen: true })} title="Show the list" aria-label="Show the list" data-testid="sidebar-list-unfold">
+              <span>›</span><span className="fold-strip-label">{SIDEBAR_VIEW_NAMES[sidebarView]}</span>
+            </button>
+          )}
           <div className="sidebar-content" style={{ display: sidebarView === "files" ? undefined : "none" }}>
             <FileTree
               workspaces={workspaces.length ? workspaces : [{ id: boot.workspace.id, name: boot.workspace.name, root: boot.workspace.root, primary: true, configured: true, available: true, git: boot.workspace.git, watcher: null }]}

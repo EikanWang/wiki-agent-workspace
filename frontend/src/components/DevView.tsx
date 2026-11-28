@@ -309,7 +309,7 @@ export default function DevView({ devId, workspaces, sessions, onSessionsChanged
             <span>‹</span><span className="dev-agent-strip-label">Editor</span>
           </button>
         )}
-        {dev.status === "ready" && !mainFolded && <Splitter dir="x" side="after" pane={agentPane} label="agent panel" testId="dev-agent-splitter"
+        {dev.status === "ready" && !mainFolded && agentOpen && <Splitter dir="x" side="after" pane={agentPane} label="agent panel" testId="dev-agent-splitter"
           other={web ? { label: "editor (code view)", onFold: () => setMainFoldedRaw(true) } : undefined} />}
         {agentOpen && dev.status === "ready" && (
           <aside className="dev-side" style={{ width: agentPane.size }}>

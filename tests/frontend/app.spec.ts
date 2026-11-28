@@ -364,8 +364,15 @@ test("layout: font settings, foldable/resizable file tree and discussion panel, 
   await page.mouse.move(hb.x + 122, hb.y + 200, { steps: 6 });
   await page.mouse.up();
   await expect.poll(async () => (await sidebar.boundingBox())!.width).toBeGreaterThan(w0 + 100);
+  // hidden, the sidebar leaves a thin strip that shows it again
   await page.getByTestId("toggle-sidebar").click();
-  await expect(sidebar).toBeHidden();
+  await expect(sidebar.locator(".activity-bar")).toBeHidden();
+  await expect(page.getByTestId("sidebar-unhide")).toBeVisible();
+  expect((await sidebar.boundingBox())!.width).toBeLessThan(30);
+  await page.getByTestId("sidebar-unhide").click();
+  await expect(sidebar.locator(".activity-bar")).toBeVisible();
+  await page.getByTestId("toggle-sidebar").click();
+  await expect(sidebar.locator(".activity-bar")).toBeHidden();
   // discussion panel: fold and unfold, resize
   await page.getByTestId("panel-collapse").click();
   await expect(page.getByTestId("discussion-panel")).toHaveCount(0);
@@ -405,11 +412,11 @@ test("layout: font settings, foldable/resizable file tree and discussion panel, 
   await page.reload();
   await expect(page.getByTestId("markdown-body").locator("h1")).toContainText("Guide");
   expect(await page.getByTestId("markdown-body").evaluate((el) => getComputedStyle(el).fontSize)).toBe("19px");
-  await expect(page.locator(".sidebar")).toBeHidden();
+  await expect(page.locator(".sidebar .activity-bar")).toBeHidden();
   await expect(page.getByTestId("toc").locator(".toc-item")).toHaveCount(0);
   expect((await page.getByTestId("discussion-panel").boundingBox())!.width).toBeGreaterThan(p0 + 120);
   await page.getByTestId("toggle-sidebar").click();
-  await expect(page.locator(".sidebar")).toBeVisible();
+  await expect(page.locator(".sidebar .activity-bar")).toBeVisible();
   await page.screenshot({ path: "/tmp/opencode/shot5.png" });
 });
 
@@ -417,7 +424,7 @@ test("folding the file tree and discussion panel enlarges the document area", as
   await login(page);
   await openGuide(page);
   // make sure both side panels are open first (previous test folded them)
-  if ((await page.locator(".sidebar").isHidden())) await page.getByTestId("toggle-sidebar").click();
+  if ((await page.getByTestId("toggle-sidebar").getAttribute("data-state")) !== "open") await page.getByTestId("toggle-sidebar").click();
   if ((await page.getByTestId("panel-expand").count()) > 0) await page.getByTestId("panel-expand").click();
   const body = page.getByTestId("markdown-body");
   const w0 = (await body.boundingBox())!.width;
@@ -426,9 +433,9 @@ test("folding the file tree and discussion panel enlarges the document area", as
   const w1 = (await body.boundingBox())!.width;
   await page.getByTestId("panel-collapse").click();
   await expect.poll(async () => (await body.boundingBox())!.width).toBeGreaterThan(w1 + 150);
-  // nearly the whole viewport is now used by the document (minus outline, paddings, collapsed tab)
+  // nearly the whole viewport is now used by the document (minus outline, paddings, the strips of the folded sidebar and panel)
   const vw = page.viewportSize()!.width;
-  expect((await body.boundingBox())!.width).toBeGreaterThan(vw * 0.75);
+  expect((await body.boundingBox())!.width).toBeGreaterThan(vw * 0.75 - 22);
   await page.screenshot({ path: "/tmp/opencode/shot6.png" });
 });
 
@@ -4687,6 +4694,7 @@ test("Repo Insights: the history in the folder, a week's report (daily summaries
   await page.getByTestId("insights-list-splitter").hover();
   await page.getByTestId("insights-list-splitter-fold").click();
   await expect(page.locator(".insights-list")).toHaveCount(0);
+  await expect(page.getByTestId("insights-list-splitter-fold")).toContainText("List"); // a strip naming it, not a hairline
   await page.getByTestId("insights-list-splitter-fold").click();
   await expect(page.locator(".insights-list")).toBeVisible();
   await page.locator(".insights-disc .resizer").hover();
@@ -4871,7 +4879,12 @@ test("Repo Insights: the history in the folder, a week's report (daily summaries
   for (const t of ["report", "daily"]) await task(t).getByTestId("insights-task-mode").selectOption("api");
   await expect.poll(async () => { const x = (await (await page.request.get("/api/v1/insights/settings")).json()).llm; return `${x.report.mode} ${x.daily.mode}`; }).toBe("api api");
   const vllm = page.locator('[data-testid="insights-repo-cfg"][data-repo="vllm-project/vllm"]');
+  // ticking "every day at" saves by itself and stays checked after a reload (no need to scroll to Save repositories)
   await vllm.getByTestId("insights-schedule").check();
+  await expect.poll(async () => (await (await page.request.get("/api/v1/insights/settings")).json()).repos.find((r: any) => r.repo === "vllm-project/vllm").schedule.enabled).toBe(true);
+  await page.reload();
+  await page.getByTestId("insights-settings-open").click();
+  await expect(vllm.getByTestId("insights-schedule")).toBeChecked();
   await vllm.getByTestId("insights-report-week").check(); // reports made by the scheduler when a period ends
   await vllm.getByTestId("insights-report-month").check();
   await vllm.getByTestId("insights-repo-baseline-mode").selectOption("before"); // what its reports compare new things with
@@ -4879,23 +4892,10 @@ test("Repo Insights: the history in the folder, a week's report (daily summaries
   await page.getByTestId("insights-repos-save").click();
   await expect(page.getByTestId("insights-note")).toContainText("Saved");
   const s = await (await page.request.get("/api/v1/insights/settings")).json();
-  // ticking "every day at" saves by itself and stays checked after a reload (no need to scroll to Save repositories)
   const saved = s.repos.find((r: any) => r.repo === "vllm-project/vllm");
-  await expect.poll(async () => (await (await page.request.get("/api/v1/insights/settings")).json()).repos.find((r: any) => r.repo === "vllm-project/vllm").schedule.enabled).toBe(true);
-  await page.reload();
-  await page.getByTestId("insights-settings-open").click();
-  await expect(vllm.getByTestId("insights-schedule")).toBeChecked();
   expect(saved.schedule.enabled).toBe(true);
   expect(saved.reports).toEqual({ week: true, month: true, quarter: false, year: false });
   expect(saved.new_baseline).toEqual({ mode: "before", date: "2026-06-01" });
-  await vllm.getByTestId("insights-repo-baseline-mode").selectOption("previous");
-  await vllm.getByTestId("insights-report-week").uncheck();
-  await vllm.getByTestId("insights-report-month").uncheck();
-  await vllm.getByTestId("insights-schedule").uncheck();
-  await page.getByTestId("insights-repos-save").click();
-  await page.getByTestId("activity-files").click();
-});
-
   // a bad RFC repository is not sent: the edit stays on screen with the reason, and the saved settings keep the rest
   const rfcRepos = vllm.locator("input.mono");
   await rfcRepos.fill("nope");
@@ -4907,6 +4907,14 @@ test("Repo Insights: the history in the folder, a week's report (daily summaries
   expect((await (await page.request.get("/api/v1/insights/settings")).json()).repos.find((r: any) => r.repo === "vllm-project/vllm").rfc.repos).toEqual([]);
   await rfcRepos.fill("");
   await rfcRepos.blur();
+  await vllm.getByTestId("insights-repo-baseline-mode").selectOption("previous");
+  await vllm.getByTestId("insights-report-week").uncheck();
+  await vllm.getByTestId("insights-report-month").uncheck();
+  await vllm.getByTestId("insights-schedule").uncheck();
+  await page.getByTestId("insights-repos-save").click();
+  await page.getByTestId("activity-files").click();
+});
+
 test("Agents: find sessions in folders, add one by id, alarms, a session on stage, continue it", async ({ page }) => {
   await login(page);
   await openGuide(page);
@@ -5041,7 +5049,8 @@ test("Agents: find sessions in folders, add one by id, alarms, a session on stag
   await page.getByTestId("activity-agents").click();
   await expect(page.getByTestId("agents-panel")).toBeHidden();
   await expect(page.getByTestId("activity-files")).toBeVisible();
-  expect(await width()).toBeLessThan(60);
+  expect(await width()).toBeLessThan(80); // the activity bar and a strip naming the folded list
+  await expect(page.getByTestId("sidebar-list-unfold")).toContainText("Agents");
   await expect(page.getByTestId("agent-monitor")).toBeVisible(); // the main page stays
   await page.getByTestId("activity-agents").click();
   await expect(page.getByTestId("agents-panel")).toBeVisible();
@@ -5075,7 +5084,7 @@ test("layout: panes can be resized by dragging, folded and unfolded, and keep th
   await page.getByTestId("dev-agent-splitter").hover();
   await page.getByTestId("dev-agent-splitter-fold").click();
   await expect(side).toHaveCount(0);
-  await page.getByTestId("dev-agent-splitter-fold").click();
+  await page.getByTestId("dev-agent-strip").click();
   await expect(side).toBeVisible();
   // the editor's side bar (left): narrower by dragging left, kept after a reload
   const ex = page.locator(".webide-side");

@@ -1885,3 +1885,21 @@ body.uml-dragging, body.uml-dragging .uml-box { cursor: grabbing; user-select: n
 .insights-badge-mode { font-size: 11px; max-width: 150px; }
 .sidebar-content .tree-actions, .sidebar-content .tree-action { z-index: 6; }
 .sidebar-content .tree-action { position: relative; }
+/* a folded pane leaves a thin strip with its name (like the folded discussions panel), never a bare hairline */
+.splitter.folded, .splitter.folded:hover, body.resizing-h .splitter.x.folded, body.resizing-v .splitter.y.folded { background: var(--card); cursor: default; }
+.splitter.x.folded { width: 22px; border-left: 1px solid var(--border); border-right: 1px solid var(--border); }
+.splitter.y.folded { height: 22px; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.splitter.folded::before { content: none; }
+.splitter-strip { width: 100%; height: 100%; border: none; background: transparent; color: var(--muted); cursor: pointer; display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 8px 0; }
+.splitter.x .splitter-strip { flex-direction: column; }
+.splitter.y .splitter-strip { justify-content: center; padding: 0 8px; }
+.splitter.y .splitter-strip .fold-strip-label { writing-mode: horizontal-tb; }
+.splitter-strip:hover { color: var(--fg); background: var(--accent); }
+/* the side list folded: a strip next to the activity bar; the whole sidebar hidden: a strip at the left edge */
+.sidebar-strip { flex: none; width: 22px; border: none; border-right: 1px solid var(--border); background: var(--card); color: var(--muted); cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 8px 0; font-size: 12px; }
+.sidebar-strip:hover { color: var(--fg); background: var(--accent); }
+.sidebar-collapsed .sidebar:has(> .sidebar-strip) { visibility: visible; }
+.sidebar-collapsed .sidebar > :not(.sidebar-strip) { display: none !important; }
+/* the folded outline names itself too */
+.toc.collapsed .toc-toggle { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.toc.collapsed .fold-strip-label { writing-mode: vertical-rl; font-weight: 400; }
