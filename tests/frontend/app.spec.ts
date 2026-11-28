@@ -4296,6 +4296,59 @@ test("Local files: open a folder and a file, edit and save like a file manager; 
   await expect(page.getByTestId("view-document")).toBeVisible();
   fs.rmSync(dir, { recursive: true, force: true });
 });
+test("Local files: open a folder on a machine (over ssh), browse, edit and save its files", async ({ page }) => {
+  await login(page);
+  const dir = path.join(path.dirname(workspaceDir()), "localremote");
+  fs.mkdirSync(path.join(dir, "sub"), { recursive: true });
+  fs.writeFileSync(path.join(dir, "notes.txt"), "remote line\n");
+  fs.writeFileSync(path.join(dir, "pic.png"), Buffer.from("89504e470d0a1a0a", "hex"));
+  fs.writeFileSync(path.join(dir, "README.md"), "# Remote readme\n\n![pic](pic.png)\n");
+  await page.getByTestId("activity-local").click();
+  await page.getByTestId("local-open-remote").selectOption("e2e-remote");
+  await expect(page.getByTestId("folder-picker")).toContainText("the file system of e2e-remote");
+  await page.getByTestId("folder-picker-path").fill(dir);
+  await page.getByTestId("folder-picker-path").press("Enter");
+  await expect(page.getByTestId("folder-picker-selected")).toContainText(dir);
+  await page.getByTestId("folder-picker-choose").click();
+  const R = `e2e-remote:${dir}`;
+  const root = page.locator(`[data-testid="local-root"][data-path="${R}"]`);
+  await expect(root).toBeVisible();
+  await expect(root.getByTestId("local-root-machine")).toHaveText("e2e-remote");
+  await expect(root.getByTestId("local-chat-root")).toHaveCount(0); // (no agent chats about folders on machines yet)
+  const notes = page.locator(`[data-testid="local-item"][data-path="${R}/notes.txt"]`);
+  if (!(await notes.isVisible())) await root.click();
+  await expect(page.locator(`[data-testid="local-item"][data-path="${R}/sub"]`)).toBeVisible();
+  await notes.click();
+  const tab = page.locator(`[data-testid="local-tab"][data-path="${R}/notes.txt"]`);
+  await expect(tab).toBeVisible();
+  await expect(page.locator('[data-testid="local-monaco"] .view-lines')).toContainText("remote line");
+  await expect(page.getByTestId("local-chat-file")).toHaveCount(0);
+  await page.locator('[data-testid="local-monaco"] .view-lines').click();
+  await page.keyboard.press("Control+End");
+  await page.keyboard.type("saved over ssh\n");
+  await expect(tab.locator(".webide-tab-close")).toHaveAttribute("data-dirty", "1");
+  await page.keyboard.press("Control+s");
+  await expect(tab.locator(".webide-tab-close")).toHaveAttribute("data-dirty", "0");
+  expect(fs.readFileSync(path.join(dir, "notes.txt"), "utf-8")).toBe("remote line\nsaved over ssh\n");
+  // a change there shows up in the clean tab
+  fs.appendFileSync(path.join(dir, "notes.txt"), "CHANGED_THERE\n");
+  await expect(page.locator('[data-testid="local-monaco"] .view-lines')).toContainText("CHANGED_THERE", { timeout: 15000 });
+  // Markdown preview: its pictures come from the machine too
+  await page.locator(`[data-testid="local-item"][data-path="${R}/README.md"]`).click();
+  await expect(page.getByTestId("local-md-body").locator("h1")).toHaveText("Remote readme");
+  await expect(page.getByTestId("local-md-body").locator("img")).toHaveAttribute("src", `/api/v1/local/raw?path=${encodeURIComponent(`${R}/pic.png`)}`);
+  // a file by its machine:/path; the folder stays open after a reload
+  await page.getByTestId("local-open-file").fill(`${R}/sub/../pic.png`);
+  await page.getByTestId("local-open-file").press("Enter");
+  await expect(page.getByTestId("local-image")).toBeVisible();
+  await page.reload();
+  await expect(root).toBeVisible({ timeout: 15000 });
+  await expect(tab).toBeVisible();
+  await root.hover();
+  await root.getByTestId("local-close-root").click();
+  await expect(root).toHaveCount(0);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
 test("Local files: chat with the agent about a folder or a file, next to the editor", async ({ page }) => {
   await login(page);
   const dir = path.join(path.dirname(workspaceDir()), "localchat");

@@ -6,9 +6,11 @@ import { ApiError, get, post, put } from "../api";
 import { langFor, outline, registerLanguages } from "./webide/languages";
 import { renderMarkdown } from "../markdown";
 import SheetView from "./SheetView";
+import { onMachine, splitLocal } from "../localPath";
 
 /**
- * The editor of Local files: tabs over Monaco (VS Code's editor) for any file on the server — syntax highlighting,
+ * The editor of Local files: tabs over Monaco (VS Code's editor) for any file on the server or on a machine
+ * (`machine:/path`) — syntax highlighting,
  * find/replace, outline (Ctrl+Shift+O), conditional saves (Ctrl+S; a file changed on disk is never overwritten
  * silently), clean tabs follow changes on disk; Markdown with a preview; images shown; other binaries downloadable.
  */
@@ -42,7 +44,15 @@ export default function LocalEditor({ openRequest, renamed, onActive, onChat }: 
   const [cursor, setCursor] = useState<{ line: number; col: number } | null>(null);
   const [mdPreview, setMdPreview] = useState<Record<string, boolean>>({});
   const [mdText, setMdText] = useState("");
-  const uri = (p: string) => monaco.Uri.file(p);
+  // a file on a machine: the machine is the URI's authority (models of the same path on two machines are apart)
+  const uriPaths = useRef(new Map<string, string>());
+  const uri = (p: string) => {
+    const { machine, path } = splitLocal(p);
+    const u = machine ? monaco.Uri.from({ scheme: "file", authority: machine, path }) : monaco.Uri.file(p);
+    uriPaths.current.set(u.toString(), p);
+    return u;
+  };
+  const pathOf = (u: M.Uri) => uriPaths.current.get(u.toString()) ?? u.path;
   const model = (p: string) => monaco.editor.getModel(uri(p));
 
   useEffect(() => onActive(active), [active, onActive]);
@@ -50,7 +60,7 @@ export default function LocalEditor({ openRequest, renamed, onActive, onChat }: 
   const show = useCallback((p: string) => {
     const e = ed.current;
     const cur = e?.getModel();
-    if (e && cur && cur.uri.path !== p) views.current.set(cur.uri.path, e.saveViewState());
+    if (e && cur && pathOf(cur.uri) !== p) views.current.set(pathOf(cur.uri), e.saveViewState());
     const m = model(p);
     if (e && m && cur !== m) {
       e.setModel(m);
@@ -184,7 +194,7 @@ export default function LocalEditor({ openRequest, renamed, onActive, onChat }: 
       e.onDidChangeCursorPosition((ev) => setCursor({ line: ev.position.lineNumber, col: ev.position.column })),
       monaco.languages.registerDocumentSymbolProvider("*", {
         displayName: "local outline",
-        provideDocumentSymbols: (m) => (m.uri.scheme === "file" && tabsRef.current.some((t) => t.path === m.uri.path) ? outline(m.getLanguageId(), m) : undefined),
+        provideDocumentSymbols: (m) => (m.uri.scheme === "file" && tabsRef.current.some((t) => t.path === pathOf(m.uri)) ? outline(m.getLanguageId(), m) : undefined),
       }),
     ];
     const before = (ev: BeforeUnloadEvent) => { if (tabsRef.current.some((t) => t.dirty)) { ev.preventDefault(); ev.returnValue = ""; } };
@@ -223,7 +233,7 @@ export default function LocalEditor({ openRequest, renamed, onActive, onChat }: 
         for (const t of list) {
           const disk = r.sha256[t.path];
           const b = base.current.get(t.path);
-          if (!b || disk === b.sha) continue;
+          if (!b || disk === undefined || disk === b.sha) continue; // (undefined: its machine cannot be reached now)
           if (disk === null) setTabs((ts) => ts.map((x) => (x.path === t.path ? { ...x, stale: "deleted" } : x)));
           else if (!t.dirty) await reload(t.path);
           else setTabs((ts) => ts.map((x) => (x.path === t.path ? { ...x, stale: "changed" } : x)));
@@ -241,7 +251,8 @@ export default function LocalEditor({ openRequest, renamed, onActive, onChat }: 
   const preview = isMd && mdPreview[tab!.path] !== false; // Markdown opens in preview
   const html = useMemo(() => {
     if (!preview || !tab) return "";
-    return renderMarkdown(mdText, tab.path, { imageUrl: (p) => raw("/" + p) });
+    const { machine, path } = splitLocal(tab.path);
+    return renderMarkdown(mdText, path, { imageUrl: (p) => raw(onMachine(machine, "/" + p)) });
   }, [preview, mdText, tab]);
   const showEditor = !!tab && tab.kind === "text" && !preview;
   return (
@@ -269,7 +280,7 @@ export default function LocalEditor({ openRequest, renamed, onActive, onChat }: 
               <button role="tab" className={!preview ? "active" : ""} onClick={() => setMdPreview((x) => ({ ...x, [tab.path]: false }))} data-testid="local-md-edit">Edit</button>
             </span>
           )}
-          {onChat && <button className="btn small" onClick={() => onChat(tab.path)} title="Chat with the agent about this file" data-testid="local-chat-file">💬 Chat about this file</button>}
+          {onChat && !splitLocal(tab.path).machine && <button className="btn small" onClick={() => onChat(tab.path)} title="Chat with the agent about this file" data-testid="local-chat-file">💬 Chat about this file</button>}
           {tab.kind === "text" && <button className="btn small" disabled={!tab.dirty} onClick={() => void save(tab.path)} data-testid="local-save">Save</button>}
         </div>
       )}
@@ -285,7 +296,7 @@ export default function LocalEditor({ openRequest, renamed, onActive, onChat }: 
       {preview && (
         <div className="webide-md-scroll local-md" onClick={(e) => {
           const a = (e.target as HTMLElement).closest("a") as HTMLAnchorElement | null;
-          if (a?.dataset.internal !== undefined) { e.preventDefault(); void openFile("/" + a.dataset.internal); }
+          if (a?.dataset.internal !== undefined) { e.preventDefault(); void openFile(onMachine(splitLocal(tab!.path).machine, "/" + a.dataset.internal)); }
         }}>
           <article className="markdown-body webide-md-body" dangerouslySetInnerHTML={{ __html: html }} data-testid="local-md-body" />
         </div>

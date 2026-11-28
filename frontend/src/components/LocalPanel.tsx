@@ -2,13 +2,15 @@ import { useCallback, useEffect, useState } from "react";
 import { ApiError, get, post, put } from "../api";
 import { NamedFileIcon } from "./FileIcon";
 import FolderPicker from "./FolderPicker";
+import { onMachine, parentOfLocal, splitLocal } from "../localPath";
 
-interface Root { path: string; name: string; exists: boolean }
+interface Root { path: string; name: string; exists: boolean; machine: string | null; error?: string }
 interface Item { name: string; path: string; dir: boolean; size: number; link: boolean }
 
 /**
- * Local files: any folder or file on the server, browsed and edited like a file manager (no wiki features).
- * Open folders stay in the list (server-side); a file can be opened by its path.
+ * Local files: any folder or file on the server — or on a machine of the Machines view (`machine:/path`, over ssh) —
+ * browsed and edited like a file manager (no wiki features). Open folders stay in the list (server-side); a file can
+ * be opened by its path.
  */
 export default function LocalPanel({ activePath, onOpen, onClosedFile, onChat }: {
   activePath: string | null;
@@ -22,7 +24,8 @@ export default function LocalPanel({ activePath, onOpen, onClosedFile, onChat }:
   const [dirs, setDirs] = useState<Record<string, Item[]>>({});
   const [open, setOpen] = useState<Set<string>>(() => new Set(JSON.parse(localStorage.getItem("waw.local.open") || "[]")));
   const [hidden, setHidden] = useState(() => localStorage.getItem("waw.local.hidden") === "1");
-  const [pick, setPick] = useState(false);
+  const [pick, setPick] = useState<string | null>(null); // where a folder is being chosen: "local" or a machine
+  const [machines, setMachines] = useState<string[]>([]);
   const [filePath, setFilePath] = useState("");
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => { localStorage.setItem("waw.local.open", JSON.stringify([...open])); }, [open]);
@@ -37,6 +40,10 @@ export default function LocalPanel({ activePath, onOpen, onClosedFile, onChat }:
       else setErr((e as ApiError).message);
     }
   }, [hidden]);
+  useEffect(() => {
+    void get<{ machines: { name: string; kind: string }[] }>("/machines")
+      .then((r) => setMachines(r.machines.filter((m) => m.kind === "machine" && m.name !== "local").map((m) => m.name))).catch(() => undefined);
+  }, []);
   useEffect(() => {
     void get<{ roots: Root[] }>("/local/roots").then((r) => setRoots(r.roots)).catch((e) => setErr((e as ApiError).message));
   }, []);
@@ -66,7 +73,7 @@ export default function LocalPanel({ activePath, onOpen, onClosedFile, onChat }:
     else { n.add(p); void load(p); }
     return n;
   });
-  const parentOf = (p: string) => p.slice(0, p.lastIndexOf("/")) || "/";
+  const parentOf = parentOfLocal;
   const create = async (dir: string, kind: "file" | "dir") => {
     const name = window.prompt(kind === "file" ? `New file in ${dir}:` : `New folder in ${dir}:`);
     if (!name?.trim()) return;
@@ -82,7 +89,7 @@ export default function LocalPanel({ activePath, onOpen, onClosedFile, onChat }:
     }
   };
   const rename = async (it: Item) => {
-    const to = window.prompt("Rename / move to (absolute path):", it.path);
+    const to = window.prompt(splitLocal(it.path).machine ? "Rename / move to (machine:/absolute/path, on the same machine):" : "Rename / move to (absolute path):", it.path);
     if (!to?.trim() || to.trim() === it.path) return;
     try {
       await post("/local/rename", { path: it.path, new_path: to.trim() });
@@ -115,7 +122,7 @@ export default function LocalPanel({ activePath, onOpen, onClosedFile, onChat }:
           <NamedFileIcon name={it.name} dir={it.dir} link={it.link} open={it.dir && open.has(it.path)} />
           <span className="local-name">{it.name}</span>
           <span className="local-actions">
-            <button className="icon-btn small" title={`Chat with the agent about this ${it.dir ? "folder" : "file"}`} onClick={(e) => { e.stopPropagation(); onChat(it.path, it.dir ? "folder" : "file"); }} data-testid="local-chat-item">💬</button>
+            {!splitLocal(it.path).machine && <button className="icon-btn small" title={`Chat with the agent about this ${it.dir ? "folder" : "file"}`} onClick={(e) => { e.stopPropagation(); onChat(it.path, it.dir ? "folder" : "file"); }} data-testid="local-chat-item">💬</button>}
             {it.dir && <button className="icon-btn small" title="New file" onClick={(e) => { e.stopPropagation(); void create(it.path, "file"); }}>+</button>}
             <button className="icon-btn small" title="Rename / move" onClick={(e) => { e.stopPropagation(); void rename(it); }}>✎</button>
             <button className="icon-btn small" title="Delete" onClick={(e) => { e.stopPropagation(); void remove(it); }} data-testid="local-delete">🗑</button>
@@ -130,29 +137,38 @@ export default function LocalPanel({ activePath, onOpen, onClosedFile, onChat }:
       <div className="local-head">
         <b>Local files</b>
         <span className="spacer" />
-        <button className="icon-btn small" title="Open a folder" onClick={() => setPick(true)} data-testid="local-open-folder">📂</button>
+        <button className="icon-btn small" title="Open a folder of this server" onClick={() => setPick("local")} data-testid="local-open-folder">📂</button>
+        {machines.length > 0 && (
+          <select className="local-machine-pick small" value="" title="Open a folder on a machine (Machines view), over ssh"
+            onChange={(e) => { if (e.target.value) setPick(e.target.value); }} data-testid="local-open-remote">
+            <option value="">🖥</option>
+            {machines.map((m) => <option key={m} value={m}>{m}</option>)}
+          </select>
+        )}
         <button className={`icon-btn small ${hidden ? "on" : ""}`} title={hidden ? "Hide hidden files" : "Show hidden files"} onClick={() => setHidden(!hidden)}>.*</button>
         <button className="icon-btn small" title="Refresh" onClick={refreshAll}>↻</button>
       </div>
       <form className="local-file-open" onSubmit={(e) => { e.preventDefault(); if (filePath.trim()) { onOpen(filePath.trim()); setFilePath(""); } }}>
-        <input value={filePath} onChange={(e) => setFilePath(e.target.value)} placeholder="Open a file: /absolute/path" className="mono" data-testid="local-open-file" />
+        <input value={filePath} onChange={(e) => setFilePath(e.target.value)} placeholder={machines.length ? "Open a file: /path or machine:/path" : "Open a file: /absolute/path"} className="mono" data-testid="local-open-file" />
       </form>
       {err && <div className="error-text small local-pad">{err} <button className="icon-btn small" onClick={() => setErr(null)}>×</button></div>}
       <div className="local-tree">
         {roots?.length === 0 && (
           <div className="muted small local-pad">
-            Browse and edit any folder or file on the server — like a file manager. 💬 on a folder or file chats with the agent about it.
-            <div className="row"><button className="btn small primary" onClick={() => setPick(true)} data-testid="local-open-folder-empty">Open a folder…</button></div>
+            Browse and edit any folder or file on the server — or on one of your machines — like a file manager. 💬 on a folder or file chats with the agent about it.
+            <div className="row"><button className="btn small primary" onClick={() => setPick("local")} data-testid="local-open-folder-empty">Open a folder…</button>
+              {machines.map((m) => <button key={m} className="btn small" onClick={() => setPick(m)} data-testid="local-open-remote-empty" data-machine={m}>Open a folder on {m}…</button>)}</div>
           </div>
         )}
         {roots?.map((r) => (
           <div key={r.path}>
-            <div className="local-row root" onClick={() => toggle(r.path)} title={r.path} data-testid="local-root" data-path={r.path}>
+            <div className="local-row root" onClick={() => toggle(r.path)} title={r.error ? `${r.path}\n${r.error}` : r.path} data-testid="local-root" data-path={r.path}>
               <span className="local-twisty">{open.has(r.path) ? "▾" : "▸"}</span>
               <b className="local-name">{r.name}</b>
-              {!r.exists && <span className="warn small"> missing</span>}
+              {r.machine && <span className="chip local-machine" title={`on the machine ${r.machine} (over ssh)`} data-testid="local-root-machine">{r.machine}</span>}
+              {!r.exists && <span className="warn small" data-testid="local-root-missing"> {r.error ? "unreachable" : "missing"}</span>}
               <span className="local-actions">
-                {r.exists && <button className="icon-btn small" title="Chat with the agent about this folder" onClick={(e) => { e.stopPropagation(); onChat(r.path, "folder"); }} data-testid="local-chat-root">💬</button>}
+                {r.exists && !r.machine && <button className="icon-btn small" title="Chat with the agent about this folder" onClick={(e) => { e.stopPropagation(); onChat(r.path, "folder"); }} data-testid="local-chat-root">💬</button>}
                 <button className="icon-btn small" title="New file" onClick={(e) => { e.stopPropagation(); void create(r.path, "file"); }} data-testid="local-new-file">+</button>
                 <button className="icon-btn small" title="New folder" onClick={(e) => { e.stopPropagation(); void create(r.path, "dir"); }}>⊞</button>
                 <button className="icon-btn small" title="Close this folder (nothing is deleted)" onClick={(e) => { e.stopPropagation(); void saveRoots((roots ?? []).filter((x) => x.path !== r.path).map((x) => x.path)); }} data-testid="local-close-root">✕</button>
@@ -163,8 +179,9 @@ export default function LocalPanel({ activePath, onOpen, onClosedFile, onChat }:
         ))}
       </div>
       {pick && (
-        <FolderPicker title="Open a folder" hint="Browse and edit its files (no wiki features)." confirmLabel="Open this folder"
-          onClose={() => setPick(false)} onChoose={(p) => { setPick(false); void addRoot(p); }} />
+        <FolderPicker title={pick === "local" ? "Open a folder" : `Open a folder on ${pick}`} hint="Browse and edit its files (no wiki features)." confirmLabel="Open this folder"
+          machine={pick === "local" ? undefined : pick}
+          onClose={() => setPick(null)} onChoose={(p) => { const m = pick === "local" ? null : pick; setPick(null); void addRoot(onMachine(m, p)); }} />
       )}
     </div>
   );

@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 
 from .deps import AppContext, require_auth, require_auth_mutating
-from .errors import ApiError, not_found
+from .errors import ApiError, bad_request, not_found
 from .kv import kv_get, kv_put
 
 router = APIRouter()
@@ -57,7 +57,10 @@ def new_local_chat(body: LocalChatIn, ctx: AppContext = Depends(require_auth_mut
     """A new, empty chat about a folder or a file of Local files (its document lives in the primary wiki folder)."""
     from .chats import chat_snapshot_path, new_chat
     from .localfs import _abs
+    from .remotefs import split
 
+    if split(body.path):
+        raise bad_request("chats about a folder or file on another machine are not available yet", "REMOTE_CHAT_UNSUPPORTED")
     p = _abs(body.path)
     if not p.exists():
         raise not_found(f"{p} not found", "FILE_NOT_FOUND")

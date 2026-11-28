@@ -1,12 +1,15 @@
-"""Local files: browse and edit any folder or file on the server like a file manager (no wiki features).
+"""Local files: browse and edit any folder or file on the server — or on a machine of the Machines view — like a file
+manager (no wiki features).
 
-Absolute paths of the server's OS user — the same rights the terminal already gives. The opened folders are kept in
-kv_settings `local_roots`. Writes are conditional on the content hash the editor loaded (409 FILE_CHANGED), written
-atomically, keeping the file's mode.
+Absolute paths of the server's OS user — the same rights the terminal already gives; `<machine>:/path` is a path on
+that machine, reached over ssh as its machine user (remotefs). The opened folders are kept in kv_settings
+`local_roots`. Writes are conditional on the content hash the editor loaded (409 FILE_CHANGED), written atomically,
+keeping the file's mode.
 """
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import os
 import shutil
@@ -16,10 +19,12 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
 from .deps import AppContext, require_auth, require_auth_mutating
 from .errors import ApiError, bad_request, conflict, not_found
 from .kv import kv_get, kv_put
+from .remotefs import MAX_REMOTE_RAW, Remote, gather_roots, split
 
 router = APIRouter()
 MAX_TEXT = 10 * 1024 * 1024
@@ -43,14 +48,33 @@ def _sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _roots(ctx: AppContext) -> list[dict[str, Any]]:
+def _stored(ctx: AppContext) -> list[str]:
     v = kv_get(ctx, KEY, [])
+    return [r for r in v if isinstance(r, str)] if isinstance(v, list) else []
+
+
+async def _roots(ctx: AppContext) -> list[dict[str, Any]]:
+    stored = _stored(ctx)
+    remote = await gather_roots(ctx, stored)
     out = []
-    for r in v if isinstance(v, list) else []:
-        if isinstance(r, str):
+    for r in stored:
+        s = split(r)
+        if s:
+            name = s[1].rstrip("/").rsplit("/", 1)[-1] or s[1]
+            out.append({"path": r, "name": name, "machine": s[0], **remote.get(r, {"exists": False})})
+        else:
             p = Path(r)
-            out.append({"path": r, "name": p.name or r, "exists": p.is_dir()})
+            out.append({"path": r, "name": p.name or r, "machine": None, "exists": p.is_dir()})
     return out
+
+
+async def _where(ctx: AppContext, path: str) -> tuple[Remote | None, str]:
+    """(the machine's file system or None for the server, the absolute path there)."""
+    s = split(path)
+    if s is None:
+        return None, str(_abs(path))
+    fs = Remote(ctx, s[0])
+    return fs, await fs.abs(s[1])
 
 
 class RootsIn(BaseModel):
@@ -58,26 +82,40 @@ class RootsIn(BaseModel):
 
 
 @router.get("/local/roots")
-def get_roots(ctx: AppContext = Depends(require_auth)):
-    return {"roots": _roots(ctx), "home": str(Path.home())}
+async def get_roots(ctx: AppContext = Depends(require_auth)):
+    return {"roots": await _roots(ctx), "home": str(Path.home())}
 
 
 @router.put("/local/roots")
-def put_roots(body: RootsIn, ctx: AppContext = Depends(require_auth_mutating)):
+async def put_roots(body: RootsIn, ctx: AppContext = Depends(require_auth_mutating)):
+    """The opened folders. A folder newly added must be there; the ones kept are not checked again (closing a folder
+    works while a machine is unreachable)."""
+    before = set(_stored(ctx))
     clean: list[str] = []
     for r in body.roots:
-        p = _abs(r)
-        if not p.is_dir():
-            raise not_found(f"{p} is not a folder", "FOLDER_NOT_FOUND")
-        if str(p) not in clean:
-            clean.append(str(p))
+        if r in before:
+            key = r
+        else:
+            fs, p = await _where(ctx, r)
+            key = fs.name(p) if fs else p
+            there = (await fs.dirs_exist([p]))[0] if fs else Path(p).is_dir()
+            if not there:
+                raise not_found(f"{key} is not a folder", "FOLDER_NOT_FOUND")
+        if key not in clean:
+            clean.append(key)
     kv_put(ctx, KEY, clean)
-    return {"roots": _roots(ctx), "home": str(Path.home())}
+    return {"roots": await _roots(ctx), "home": str(Path.home())}
 
 
 @router.get("/local/list")
-def list_dir(path: str = Query(...), hidden: bool = Query(True), ctx: AppContext = Depends(require_auth)):
-    p = _abs(path)
+async def list_dir(path: str = Query(...), hidden: bool = Query(True), ctx: AppContext = Depends(require_auth)):
+    fs, p = await _where(ctx, path)
+    if fs:
+        return await fs.list_dir(p, hidden, MAX_LIST)
+    return await run_in_threadpool(_list_local, Path(p), hidden)
+
+
+def _list_local(p: Path, hidden: bool) -> dict[str, Any]:
     if not p.is_dir():
         raise not_found(f"{p} is not a folder", "FOLDER_NOT_FOUND")
     items: list[dict[str, Any]] = []
@@ -101,19 +139,9 @@ def list_dir(path: str = Query(...), hidden: bool = Query(True), ctx: AppContext
     return {"path": str(p), "parent": str(p.parent) if p.parent != p else None, "items": items, "truncated": len(items) >= MAX_LIST}
 
 
-@router.get("/local/file")
-def read_file(path: str = Query(...), ctx: AppContext = Depends(require_auth)):
-    p = _abs(path)
-    if not p.is_file():
-        raise not_found(f"{p} is not a file", "FILE_NOT_FOUND")
-    size = p.stat().st_size
-    if size > MAX_TEXT:
-        return {"path": str(p), "size": size, "binary": True, "too_large": True, "text": None, "sha256": None,
-                "writable": os.access(p, os.W_OK)}
-    try:
-        data = p.read_bytes()
-    except PermissionError:
-        raise ApiError(403, "PERMISSION_DENIED", f"cannot read {p}")
+def _text_of(path: str, size: int, data: bytes | None, writable: bool) -> dict[str, Any]:
+    if data is None:
+        return {"path": path, "size": size, "binary": True, "too_large": True, "text": None, "sha256": None, "writable": writable}
     text = None
     binary = b"\0" in data[:8000]
     if not binary:
@@ -121,8 +149,29 @@ def read_file(path: str = Query(...), ctx: AppContext = Depends(require_auth)):
             text = data.decode("utf-8")
         except UnicodeDecodeError:
             binary = True
-    return {"path": str(p), "size": size, "binary": binary, "too_large": False, "text": text, "sha256": _sha(data),
-            "writable": os.access(p, os.W_OK)}
+    return {"path": path, "size": size, "binary": binary, "too_large": False, "text": text, "sha256": _sha(data), "writable": writable}
+
+
+@router.get("/local/file")
+async def read_file(path: str = Query(...), ctx: AppContext = Depends(require_auth)):
+    fs, p = await _where(ctx, path)
+    if fs:
+        size, writable, data = await fs.read_bytes(p, MAX_TEXT)
+        return _text_of(fs.name(p), size, data, writable)
+    return await run_in_threadpool(_read_local, Path(p))
+
+
+def _read_local(p: Path) -> dict[str, Any]:
+    if not p.is_file():
+        raise not_found(f"{p} is not a file", "FILE_NOT_FOUND")
+    size = p.stat().st_size
+    if size > MAX_TEXT:
+        return _text_of(str(p), size, None, os.access(p, os.W_OK))
+    try:
+        data = p.read_bytes()
+    except PermissionError:
+        raise ApiError(403, "PERMISSION_DENIED", f"cannot read {p}")
+    return _text_of(str(p), size, data, os.access(p, os.W_OK))
 
 
 class WriteIn(BaseModel):
@@ -133,8 +182,16 @@ class WriteIn(BaseModel):
 
 
 @router.put("/local/file")
-def write_file(body: WriteIn, ctx: AppContext = Depends(require_auth_mutating)):
-    p = _abs(body.path)
+async def write_file(body: WriteIn, ctx: AppContext = Depends(require_auth_mutating)):
+    fs, p = await _where(ctx, body.path)
+    if fs:
+        data = body.text.encode("utf-8")
+        await fs.write(p, data, body.base_sha256, body.create)
+        return {"path": fs.name(p), "sha256": _sha(data), "size": len(data)}
+    return await run_in_threadpool(_write_local, Path(p), body)
+
+
+def _write_local(p: Path, body: WriteIn) -> dict[str, Any]:
     exists = p.is_file()
     if body.create:
         if p.exists():
@@ -167,8 +224,12 @@ class PathIn(BaseModel):
 
 
 @router.post("/local/mkdir")
-def mkdir(body: PathIn, ctx: AppContext = Depends(require_auth_mutating)):
-    p = _abs(body.path)
+async def mkdir(body: PathIn, ctx: AppContext = Depends(require_auth_mutating)):
+    fs, ps = await _where(ctx, body.path)
+    if fs:
+        await fs.mkdir(ps)
+        return {"path": fs.name(ps)}
+    p = Path(ps)
     if p.exists():
         raise conflict("ALREADY_EXISTS", f"{p} already exists")
     try:
@@ -179,9 +240,18 @@ def mkdir(body: PathIn, ctx: AppContext = Depends(require_auth_mutating)):
 
 
 @router.post("/local/rename")
-def rename(body: PathIn, ctx: AppContext = Depends(require_auth_mutating)):
-    a = _abs(body.path)
-    b = _abs(body.new_path or "")
+async def rename(body: PathIn, ctx: AppContext = Depends(require_auth_mutating)):
+    fa, pa = await _where(ctx, body.path)
+    fb, pb = await _where(ctx, body.new_path or "")
+    if (fa.machine if fa else None) != (fb.machine if fb else None):
+        raise bad_request("moving between machines is not possible here: both paths must be on the same machine", "INVALID_PATH")
+    if fa:
+        await fa.rename(pa, pb)
+        return {"path": fa.name(pb)}
+    return await run_in_threadpool(_rename_local, Path(pa), Path(pb))
+
+
+def _rename_local(a: Path, b: Path) -> dict[str, Any]:
     if not a.exists() and not a.is_symlink():
         raise not_found(f"{a} not found", "FILE_NOT_FOUND")
     if b.exists():
@@ -195,8 +265,15 @@ def rename(body: PathIn, ctx: AppContext = Depends(require_auth_mutating)):
 
 
 @router.post("/local/delete")
-def delete(body: PathIn, ctx: AppContext = Depends(require_auth_mutating)):
-    p = _abs(body.path)
+async def delete(body: PathIn, ctx: AppContext = Depends(require_auth_mutating)):
+    fs, ps = await _where(ctx, body.path)
+    if fs:
+        await fs.delete(ps)
+        return {"deleted": fs.name(ps)}
+    return await run_in_threadpool(_delete_local, Path(ps))
+
+
+def _delete_local(p: Path) -> dict[str, Any]:
     if str(p) in ("/", str(Path.home())):
         raise bad_request("refusing to delete this folder", "INVALID_PATH")
     try:
@@ -216,45 +293,89 @@ class StatIn(BaseModel):
 
 
 @router.post("/local/stat")
-def stat(body: StatIn, ctx: AppContext = Depends(require_auth)):
-    """Current content hashes of open files (None = gone or too large): clean tabs follow changes on disk."""
+async def stat(body: StatIn, ctx: AppContext = Depends(require_auth)):
+    """Current content hashes of open files (None = gone or too large): clean tabs follow changes on disk. Files of a
+    machine that cannot be reached now are left out (unknown, not gone)."""
     out: dict[str, str | None] = {}
+    by: dict[str, list[str]] = {}
+    local: list[str] = []
     for x in body.paths:
+        s = split(x)
+        if s:
+            by.setdefault(s[0], []).append(x)
+        else:
+            local.append(x)
+
+    async def one(machine: str, keys: list[str]) -> None:
+        try:
+            fs = Remote(ctx, machine)
+            paths = [await fs.abs(split(k)[1]) for k in keys]  # type: ignore[index]
+            out.update(zip(keys, await fs.shas(paths, MAX_TEXT), strict=True))
+        except ApiError:
+            pass
+
+    await asyncio.gather(*(one(m, ks) for m, ks in by.items()))
+    out.update(await run_in_threadpool(_stat_local, local))
+    return {"sha256": out}
+
+
+def _stat_local(paths: list[str]) -> dict[str, str | None]:
+    out: dict[str, str | None] = {}
+    for x in paths:
         p = _abs(x)
         try:
             out[x] = _sha(p.read_bytes()) if p.is_file() and p.stat().st_size <= MAX_TEXT else None
         except OSError:
             out[x] = None
-    return {"sha256": out}
+    return out
+
+
+async def _bytes_of(ctx: AppContext, path: str, limit: int) -> tuple[str, bytes]:
+    """(file name, content) of a file anywhere (Local files on a machine: fetched over ssh)."""
+    fs, p = await _where(ctx, path)
+    name = p.rstrip("/").rsplit("/", 1)[-1]
+    if fs:
+        size, _, data = await fs.read_bytes(p, limit)
+        if data is None:
+            raise ApiError(413, "FILE_TOO_LARGE", f"{name} is {size} bytes; files of a machine are shown up to {limit} bytes")
+        return name, data
+    lp = Path(p)
+    if not lp.is_file():
+        raise not_found(f"{lp} is not a file", "FILE_NOT_FOUND")
+    if lp.stat().st_size > limit:
+        raise ApiError(413, "FILE_TOO_LARGE", "file too large")
+    return name, await run_in_threadpool(lp.read_bytes)
 
 
 @router.get("/local/sheet")
-def sheet(path: str = Query(...), ctx: AppContext = Depends(require_auth)):
+async def sheet(path: str = Query(...), ctx: AppContext = Depends(require_auth)):
     """An .xlsx workbook's sheets as tables of cell values (first 2000 rows / 200 columns of each)."""
+    import tempfile
+
     from .sheets import read_xlsx
 
-    p = _abs(path)
-    if not p.is_file():
-        raise not_found(f"{p} is not a file", "FILE_NOT_FOUND")
-    if p.suffix.lower() not in (".xlsx", ".xlsm"):
+    if Path(path).suffix.lower() not in (".xlsx", ".xlsm"):
         raise bad_request("only .xlsx / .xlsm workbooks can be shown as tables", "NOT_A_WORKBOOK")
+    _, data = await _bytes_of(ctx, path, MAX_REMOTE_RAW)
+
+    def read() -> list[Any]:
+        with tempfile.NamedTemporaryFile(suffix=Path(path).suffix) as f:
+            f.write(data)
+            f.flush()
+            return read_xlsx(f.name)
     try:
-        return {"sheets": read_xlsx(str(p))}
+        return {"sheets": await run_in_threadpool(read)}
     except Exception as e:  # noqa: BLE001 - a damaged or unusual workbook
         raise bad_request(f"could not read the workbook: {e}", "BAD_WORKBOOK") from e
 
 
 @router.get("/local/raw")
-def raw(path: str = Query(...), ctx: AppContext = Depends(require_auth)):
-    p = _abs(path)
-    if not p.is_file():
-        raise not_found(f"{p} is not a file", "FILE_NOT_FOUND")
-    if p.stat().st_size > MAX_RAW:
-        raise ApiError(413, "FILE_TOO_LARGE", "file too large")
-    ctype = IMAGE_TYPES.get(p.suffix.lower())
+async def raw(path: str = Query(...), ctx: AppContext = Depends(require_auth)):
+    name, data = await _bytes_of(ctx, path, MAX_REMOTE_RAW if split(path) else MAX_RAW)
+    ctype = IMAGE_TYPES.get(Path(name).suffix.lower())
     headers = {"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"}
     if ctype == "image/svg+xml":
         headers["Content-Security-Policy"] = "default-src 'none'; style-src 'unsafe-inline'; sandbox"
     if not ctype:
-        headers["Content-Disposition"] = f'attachment; filename="{p.name}"'
-    return Response(content=p.read_bytes(), media_type=ctype or "application/octet-stream", headers=headers)
+        headers["Content-Disposition"] = f'attachment; filename="{name}"'
+    return Response(content=data, media_type=ctype or "application/octet-stream", headers=headers)
