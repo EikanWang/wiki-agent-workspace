@@ -56,7 +56,28 @@ def _repo_defaults(r: dict[str, Any]) -> dict[str, Any]:
         "reports": {p: bool((r.get("reports") or {}).get(p, False)) for p in REPORT_PERIODS},
         "rfc": {**DEFAULT_RFC, **(r.get("rfc") or {})},
         "new_baseline": _safe_baseline(r.get("new_baseline")),
+        # who does each task for this repository; a task not listed is done as the settings' "Who does each task" says
+        "llm": {t: v for t, v in (r.get("llm") or {}).items() if t in TASKS and isinstance(v, dict)},
     }
+
+
+def _task_model(task: str, v: Any) -> dict[str, Any]:
+    """A valid task model {mode, provider, model, variant} (a bad mode is refused)."""
+    v = v if isinstance(v, dict) else {}
+    mode = v.get("mode", "api")
+    if mode not in ("api", "agent"):
+        raise ApiError(400, "INVALID_MODE", f"{task}: mode is api or agent")
+    return {"mode": mode, **{k: (str(v[k])[:300] if v.get(k) else None) for k in ("provider", "model", "variant")}}
+
+
+def task_cfg(ctx: Any, task: str, repo: str | None = None, s: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Who does the task: the repository's own choice when it has one, otherwise the settings' choice for the task."""
+    s = s or load(ctx)
+    if repo:
+        for r in s["repos"]:
+            if r["repo"].lower() == repo.lower() and task in r["llm"]:
+                return r["llm"][task]
+    return s["llm"].get(task) or {"mode": "api"}
 
 
 def _safe_baseline(b: Any) -> dict[str, Any]:
@@ -136,17 +157,18 @@ def save(ctx: Any, patch: dict[str, Any]) -> dict[str, Any]:
                 raise ApiError(400, "INVALID_PERIOD", f"{name}: reports are week, month, quarter, year")
             if r.get("new_baseline") is not None:
                 baseline_of(r["new_baseline"])  # a bad one is refused, not dropped
+            own = r.get("llm") or {}
+            if not isinstance(own, dict):
+                raise ApiError(400, "INVALID_MODE", f"{name}: llm is an object of task: model")
+            own = {t: _task_model(t, v) for t, v in own.items() if t in TASKS and v is not None}
             repos.append(_repo_defaults({**r, "repo": name, "schedule": {"enabled": bool((r.get("schedule") or {}).get("enabled")), "time": t},
                                          "reports": {p: bool(rep.get(p)) for p in REPORT_PERIODS},
-                                         "rfc": rfc_clean}))
+                                         "rfc": rfc_clean, "llm": own}))
         cur["repos"] = repos
     if "llm" in patch:
         for t, v in (patch["llm"] or {}).items():
             if t in TASKS and isinstance(v, dict):
-                mode = v.get("mode", "api")
-                if mode not in ("api", "agent"):
-                    raise ApiError(400, "INVALID_MODE", "mode is api or agent")
-                cur["llm"][t] = {"mode": mode, **{k: (str(v[k])[:300] if v.get(k) else None) for k in ("provider", "model", "variant")}}
+                cur["llm"][t] = _task_model(t, v)
     if "highlight" in patch:
         h = patch["highlight"] or {}
         cur["highlight"] = {"threshold": max(0, min(100, int(h.get("threshold", cur["highlight"]["threshold"])))),

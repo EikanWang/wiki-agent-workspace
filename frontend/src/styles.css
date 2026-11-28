@@ -1903,3 +1903,5 @@ body.uml-dragging, body.uml-dragging .uml-box { cursor: grabbing; user-select: n
 /* the folded outline names itself too */
 .toc.collapsed .toc-toggle { display: flex; flex-direction: column; align-items: center; gap: 8px; }
 .toc.collapsed .fold-strip-label { writing-mode: vertical-rl; font-weight: 400; }
+.insights-repo-tasks > summary { cursor: pointer; color: var(--fg); }
+.insights-repo-tasks > .row { margin: 3px 0 0 14px; }

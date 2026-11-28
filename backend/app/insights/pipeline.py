@@ -161,7 +161,7 @@ async def day_terms(ctx: Any, repo: str, row: dict[str, Any]) -> list[str]:
     text = store.body(row["path"])
     folder = st.data_dir(ctx) / "terms" / repo
     p = folder / f"{row['since']}.json"
-    raw = await llm.complete(ctx, "terms", prompts.describe(repo) + text[:200_000], as_json=True)
+    raw = await llm.complete(ctx, "terms", prompts.describe(repo) + text[:200_000], as_json=True, repo=repo)
     try:
         got = json.loads(raw[raw.index("{"):raw.rindex("}") + 1]).get("terms") or []
     except (ValueError, AttributeError):
@@ -450,7 +450,7 @@ async def daily_summary(ctx: Any, repo: str, day: str, j: dict[str, Any] | None 
             names, ndays, keys = await baseline_terms(ctx, repo, "0001-01-01", prev, cached_only=True)
             ins = prompts.daily(names, f"everything before {day}", ndays)
             refused: list[int] = []
-            text = await llm.summarize(ctx, "daily", [gh.text_of(it, a, b) for it in items], ins, prompts.COMBINE, skipped=refused)
+            text = await llm.summarize(ctx, "daily", [gh.text_of(it, a, b) for it in items], ins, prompts.COMBINE, skipped=refused, repo=repo)
             text, _ = store.unmark(text, keys)
             if prev:
                 text, chk = await check_new(ctx, repo, text, "0001-01-01", prev, f"the daily summary of {day}", f"everything before {day}")
@@ -567,7 +567,7 @@ async def issue_material(ctx: Any, repo: str, since: str, until: str, j: dict[st
             async def make(w=w, texts=texts, k=k, ins=ins) -> str:
                 step(j, f"week {k} of {total_weeks} ({w[0]} … {w[-1]}): condensing its {len(texts)} daily summaries into one "
                         f"week summary (the report is then written from the week summaries of the whole {since} … {until})")
-                return await llm.summarize(ctx, "rollup", texts, ins, prompts.COMBINE)
+                return await llm.summarize(ctx, "rollup", texts, ins, prompts.COMBINE, repo=repo)
             done = dt.date.fromisoformat(w[-1]) < today()
             text = await (_cached_block(ctx, repo, f"week_{w[0]}_{w[-1]}_{_hash(ins, prompts.COMBINE, *texts)}", make) if done else make())
             week_texts.append((w, text))
@@ -582,7 +582,7 @@ async def issue_material(ctx: Any, repo: str, since: str, until: str, j: dict[st
 
         async def make_m(g=g, texts=texts, gi=gi, ins_m=ins_m) -> str:
             step(j, f"month {gi + 1} of {len(groups)} ({g[0][:7]}): condensing its {len(texts)} week summaries into one month summary")
-            return await llm.summarize(ctx, "rollup", texts, ins_m, prompts.COMBINE)
+            return await llm.summarize(ctx, "rollup", texts, ins_m, prompts.COMBINE, repo=repo)
         done = dt.date.fromisoformat(g[-1]) < today()
         text = await (_cached_block(ctx, repo, f"month_{g[0]}_{g[-1]}_{_hash(ins_m, prompts.COMBINE, *texts)}", make_m) if done else make_m())
         parts.append(f"--- Month {g[0][:7]} ({g[0]} … {g[-1]}) ---\n{text}")
@@ -608,7 +608,7 @@ async def commit_material(ctx: Any, repo: str, since: str, until: str, j: dict[s
 
         async def make(w=w, sub=sub, i=i) -> str:
             step(j, f"commits, week {i + 1} of {len(ws)} ({w[0]} … {w[-1]}): summarizing its {len(sub['commits'])} commits")
-            return await llm.complete(ctx, "commits", prompts.COMMITS.format(repo=repo, since=w[0], until=w[-1]) + cm.text_of(repo, sub))
+            return await llm.complete(ctx, "commits", prompts.COMMITS.format(repo=repo, since=w[0], until=w[-1]) + cm.text_of(repo, sub), repo=repo)
         key = f"commits_{w[0]}_{w[-1]}_{_hash(prompts.COMMITS, *(c[0] for c in rows))}"
         text = await (_cached_block(ctx, repo, key, make) if dt.date.fromisoformat(w[-1]) < today() else make())
         parts.append(f"--- Commits of {w[0]} … {w[-1]} ({len(rows)}) ---\n{text}")
@@ -752,7 +752,7 @@ async def make_report(ctx: Any, meta: dict[str, Any], j: dict[str, Any]) -> dict
         step(j, "writing the report")
         ins = prompts.report(repo, since, until, len(days_of(since, until)), focus, has, note)
         material = ["### Facts\n" + "\n".join(f"- {f}" for f in facts), *sections]
-        text = await llm.summarize(ctx, "report", material, ins, combine=ins + "\n(These are partial reports of the same period: merge them into one.)\n")
+        text = await llm.summarize(ctx, "report", material, ins, combine=ins + "\n(These are partial reports of the same period: merge them into one.)\n", repo=repo)
         text, dropped = store.unmark(text, keys)
         if dropped:
             facts.append(f"Marks of new things removed (already in the baseline): {len(dropped)} — {'; '.join(dropped[:30])}")
@@ -820,7 +820,7 @@ async def highlights(ctx: Any, repo: str, since: str, until: str, j: dict[str, A
             diff = await asyncio.to_thread(gh.diff_of, ctx, repo, it["number"]) if it["kind"] == "pr" else ""
             prompt = f"{prompts.SCORE}\n\n<<<BEGIN>>>\nTitle: {it['title']}\nDescription: {it['body'][:20000]}\nTags: {', '.join(it['labels'])}\nDiff: {diff}\n<<<END>>>\n"
             try:
-                sc = llm.parse_score(await llm.complete(ctx, "highlight", prompt, as_json=True, thinking=True))
+                sc = llm.parse_score(await llm.complete(ctx, "highlight", prompt, as_json=True, thinking=True, repo=repo))
             except ApiError as exc:
                 sc = {"score": -1, "justification": exc.message}
             done += 1
@@ -830,7 +830,7 @@ async def highlights(ctx: Any, repo: str, since: str, until: str, j: dict[str, A
             body = it["body"]
             if body.strip():
                 try:
-                    body = await llm.complete(ctx, "highlight", f"{prompts.BODY}\n<<<BEGIN>>>\n{it['body'][:20000]}\n<<<END>>>")
+                    body = await llm.complete(ctx, "highlight", f"{prompts.BODY}\n<<<BEGIN>>>\n{it['body'][:20000]}\n<<<END>>>", repo=repo)
                 except ApiError:
                     body = it["body"][:500]
             return {"title": it["title"], "url": it["url"], "xpu_relevance_score": sc["score"], "xpu_relevance_justification": sc["justification"],

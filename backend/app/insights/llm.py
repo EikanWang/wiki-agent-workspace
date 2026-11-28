@@ -24,12 +24,13 @@ from . import settings as st
 log = logging.getLogger("waw.insights")
 
 
-async def complete(ctx: Any, task: str, prompt: str, *, as_json: bool = False, thinking: bool = False) -> str:
+async def complete(ctx: Any, task: str, prompt: str, *, as_json: bool = False, thinking: bool = False, repo: str | None = None) -> str:
+    """One answer, by whoever does the task (for `repo`: its own choice when it has one)."""
     fake = ctx.extra.get("insights_llm")
     if fake is not None:
         out = fake(task, prompt, as_json)
         return await out if asyncio.iscoroutine(out) else out
-    cfg = st.load(ctx)["llm"].get(task) or {"mode": "api"}
+    cfg = st.task_cfg(ctx, task, repo)
     if cfg.get("mode") == "agent":
         from ..review_priority import run_turn
 
@@ -95,10 +96,10 @@ def pack(texts: list[str], instruction: str, max_chars: int, sep: str = "\n") ->
     return [sep.join(t for _, t in g) for g in _groups(texts, instruction, max_chars, sep)]
 
 
-def request_chars(ctx: Any, task: str) -> int:
+def request_chars(ctx: Any, task: str, repo: str | None = None) -> int:
     """The characters one request of the task may have: the agent's limit when the task runs on the agent."""
     s = st.load(ctx)
-    agent = (s["llm"].get(task) or {}).get("mode") == "agent"
+    agent = st.task_cfg(ctx, task, repo, s).get("mode") == "agent"
     return int(s["agent_max_chars"]) if agent else int(s["max_chars"])
 
 
@@ -112,7 +113,7 @@ def blocked(exc: ApiError) -> bool:
     return bool(BLOCKED.search(exc.message or ""))
 
 
-async def _kept(ctx: Any, task: str, prompt: str, used: list[Path]) -> str:
+async def _kept(ctx: Any, task: str, prompt: str, used: list[Path], repo: str | None = None) -> str:
     """`complete`, with the answer kept on disk (by the request) until the summary it belongs to is whole: a summary
     that failed at a later part does not pay for the earlier ones again when it is made anew."""
     p = st.data_dir(ctx) / "parts" / (hashlib.sha256(f"{task}\0{prompt}".encode()).hexdigest()[:32] + ".md")
@@ -123,7 +124,7 @@ async def _kept(ctx: Any, task: str, prompt: str, used: list[Path]) -> str:
             return p.read_text(encoding="utf-8")
         except OSError:
             pass
-    out = await complete(ctx, task, prompt)
+    out = await complete(ctx, task, prompt, repo=repo)
     if out.strip():
         p.parent.mkdir(parents=True, exist_ok=True)
         tmp = p.with_name(f".{p.name}.tmp")
@@ -143,12 +144,12 @@ def _drop_old(ctx: Any) -> None:
 
 
 async def summarize(ctx: Any, task: str, texts: list[str], instruction: str, combine: str | None = None,
-                    skipped: list[int] | None = None) -> str:
+                    skipped: list[int] | None = None, repo: str | None = None) -> str:
     """One answer for the material: each part summarized, then (more than one part) combined. With `skipped` (a list
     to fill), a part the provider refuses is halved until the texts it refuses are found: their indexes are added to
     `skipped` and the summary is made without them (at most BLOCK_MAX refused requests; then what is still refused
     is skipped together)."""
-    max_chars = request_chars(ctx, task)
+    max_chars = request_chars(ctx, task, repo)
     groups = _groups(texts, instruction, max_chars)
     if not groups:
         return ""
@@ -159,7 +160,7 @@ async def summarize(ctx: Any, task: str, texts: list[str], instruction: str, com
     async def part(g: list[tuple[int, str]]) -> list[str]:
         nonlocal refused
         try:
-            return [await _kept(ctx, task, f"{instruction}\n\n" + "\n".join(t for _, t in g), used)]
+            return [await _kept(ctx, task, f"{instruction}\n\n" + "\n".join(t for _, t in g), used, repo)]
         except ApiError as exc:
             if skipped is None or not blocked(exc):
                 raise
@@ -178,7 +179,7 @@ async def summarize(ctx: Any, task: str, texts: list[str], instruction: str, com
         if len(packed) >= len(outs):  # cannot shrink any more
             break
         try:
-            outs = [await _kept(ctx, task, f"{combine}\n\n{g}", used) for g in packed]
+            outs = [await _kept(ctx, task, f"{combine}\n\n{g}", used, repo) for g in packed]
         except ApiError as exc:
             if skipped is None or not blocked(exc):
                 raise

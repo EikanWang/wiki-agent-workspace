@@ -153,7 +153,7 @@ async def check(ctx: Any, repo: str, text: str, reg: list[dict[str, Any]], what:
         async with sem:
             for _ in range(2):
                 try:
-                    res = _as_json(await llm.complete(ctx, "check", head + names + "\n\n".join(blocks), as_json=True))["results"]
+                    res = _as_json(await llm.complete(ctx, "check", head + names + "\n\n".join(blocks), as_json=True, repo=repo))["results"]
                     break
                 except (ApiError, ValueError, KeyError, TypeError):
                     res = None

@@ -24,6 +24,8 @@ export interface InsightsRepo {
   reports?: { week: boolean; month: boolean; quarter: boolean; year: boolean };
   rfc: { repos: string[]; labels: string[]; title_patterns: string[] };
   new_baseline?: Baseline;
+  /** who does each task for this repository; a task not listed is done as the settings' "Who does each task" says */
+  llm?: Record<string, TaskModel>;
 }
 export interface Baseline { mode: BaselineMode; date: string | null; label?: string; days?: number }
 type BaselineMode = "previous" | "day" | "week" | "month" | "quarter" | "year" | "before" | "after";
@@ -44,6 +46,47 @@ function BaselinePick({ value, onChange, testid }: { value: Baseline; onChange: 
   );
 }
 interface TaskModel { mode: "api" | "agent"; provider: string | null; model: string | null; variant: string | null }
+const modelValue = (m: TaskModel): ModelChoiceValue | null =>
+  (m.provider || m.model ? { provider: m.provider ?? undefined, model: m.model ?? undefined, variant: m.variant ?? undefined } : null);
+const agentModel = (v: ModelChoiceValue | null): TaskModel => ({ mode: "agent", provider: v?.provider ?? null, model: v?.model ?? null, variant: v?.variant ?? null });
+/** in words: who does a task (for "as in the settings") */
+const whoDoes = (m: TaskModel | undefined, endpointModel: string) =>
+  (!m || m.mode === "api" ? `model endpoint (${endpointModel})` : `the app's agent${m.model ? ` (${[m.provider, m.model, m.variant].filter(Boolean).join(" · ")})` : ""}`);
+
+/** One repository's own "Who does each task": each task as in the settings, or its own endpoint / agent and model. */
+function RepoTasks({ repo, global, endpointModel, onChange }: {
+  repo: InsightsRepo; global: Record<string, TaskModel>; endpointModel: string; onChange: (llm: Record<string, TaskModel>) => void;
+}) {
+  const own = repo.llm ?? {};
+  const n = Object.keys(own).length;
+  const [openAtFirst] = useState(n > 0); // open when it has choices of its own; then as the user leaves it
+  const set = (task: string, m: TaskModel | null) => {
+    const next = { ...own };
+    if (m) next[task] = m;
+    else delete next[task];
+    onChange(next);
+  };
+  return (
+    <details className="insights-repo-tasks small" open={openAtFirst} data-testid="insights-repo-tasks">
+      <summary>Who does each task {n ? <span className="muted">({n} of its own)</span> : <span className="muted">(as in the settings above)</span>}</summary>
+      {Object.keys(global).map((task) => {
+        const m = own[task];
+        return (
+          <div key={task} className="row nowrap small" data-testid="insights-repo-task" data-task={task}>
+            <span className="insights-task-name">{TASK_LABEL[task] ?? task}</span>
+            <select value={m ? m.mode : "default"} data-testid="insights-repo-task-mode"
+              onChange={(e) => { const v = e.target.value; set(task, v === "default" ? null : v === "api" ? { mode: "api", provider: null, model: null, variant: null } : agentModel(global[task]?.mode === "agent" ? modelValue(global[task]) : null)); }}>
+              <option value="default">as in the settings: {whoDoes(global[task], endpointModel)}</option>
+              <option value="api">model endpoint ({endpointModel})</option>
+              <option value="agent">the app's agent</option>
+            </select>
+            {m?.mode === "agent" && <ModelChoice value={modelValue(m)} onChange={(v) => set(task, agentModel(v))} />}
+          </div>
+        );
+      })}
+    </details>
+  );
+}
 interface Settings {
   data_dir: string; timezone_offset: number; repos: InsightsRepo[]; llm: Record<string, TaskModel>;
   highlight: { threshold: number; number_of_ccer: number }; max_chars: number; agent_max_chars: number; concurrency: number;
@@ -1176,7 +1219,7 @@ function InsightsSettings() {
         <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder={s.endpoint.has_key ? "API key set (type to replace)" : "API key"} data-testid="insights-key" />
         <button className="btn small" disabled={!key} onClick={() => void save({ endpoint: { api_key: key } }).then(() => setKey(""))}>Set key</button>
       </div>
-      <div className="small strong">Who does each task</div>
+      <div className="small strong">Who does each task <span className="muted">(each repository below can choose its own)</span></div>
       {Object.entries(s.llm).map(([task, m]) => (
         <div key={task} className="row nowrap small" data-testid="insights-task" data-task={task}>
           <span className="insights-task-name">{TASK_LABEL[task] ?? task}</span>
@@ -1184,8 +1227,7 @@ function InsightsSettings() {
             <option value="api">model endpoint ({s.endpoint.model})</option>
             <option value="agent">the app's agent</option>
           </select>
-          {m.mode === "agent" && <ModelChoice value={m.provider || m.model ? { provider: m.provider ?? undefined, model: m.model ?? undefined, variant: m.variant ?? undefined } : null}
-            onChange={(v: ModelChoiceValue | null) => setTask(task, { mode: "agent", provider: v?.provider ?? null, model: v?.model ?? null, variant: v?.variant ?? null })} />}
+          {m.mode === "agent" && <ModelChoice value={modelValue(m)} onChange={(v: ModelChoiceValue | null) => setTask(task, agentModel(v))} />}
         </div>
       ))}
       <div className="row nowrap small">XPU highlight threshold <input type="number" className="insights-num" defaultValue={s.highlight.threshold} onBlur={(e) => void save({ highlight: { ...s.highlight, threshold: Number(e.target.value) } })} />
@@ -1220,6 +1262,7 @@ function InsightsSettings() {
           <div className="row nowrap small">RFCs: repos <input className="mono" defaultValue={r.rfc.repos.join(", ")} onBlur={(e) => setRepo(i, { rfc: { ...r.rfc, repos: list(e.target.value) } })} />
             labels <input defaultValue={r.rfc.labels.join(", ")} onBlur={(e) => setRepo(i, { rfc: { ...r.rfc, labels: list(e.target.value) } })} />
             titles <input defaultValue={r.rfc.title_patterns.join(", ")} onBlur={(e) => setRepo(i, { rfc: { ...r.rfc, title_patterns: list(e.target.value) } })} /></div>
+          <RepoTasks repo={r} global={s.llm} endpointModel={s.endpoint.model} onChange={(llm) => setRepo(i, { llm })} />
         </div>
       ))}
       <button className="btn small primary" onClick={() => { const why = reposInvalid(reposRef.current ?? s.repos); if (why) setErr(why); else saveRepos(); }} data-testid="insights-repos-save">Save repositories</button>

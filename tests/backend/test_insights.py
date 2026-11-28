@@ -127,6 +127,44 @@ async def test_settings_defaults_validation_and_secrets(running_app, tmp_path):
     assert cleared["rfc"] == {"repos": [], "labels": [], "title_patterns": []}
 
 
+async def test_each_repository_can_choose_who_does_each_task(running_app, tmp_path, monkeypatch):
+    h, _, _ = await make(running_app, tmp_path, {})
+    api = h.api
+    from backend.app import review_priority
+    from backend.app.insights import llm
+    s = (await api.put("/api/v1/insights/settings", json={"endpoint": {"api_key": "sk-x"}})).json()
+    assert all(r["llm"] == {} for r in s["repos"])  # nothing of their own: as the settings say
+    own = {"daily": {"mode": "agent", "provider": "codex", "model": "gpt-x", "variant": "high"}, "report": {"mode": "api"}, "nope": {"mode": "agent"}}
+    repos = [{**r, "llm": own} if r["repo"] == "vllm-project/vllm" else r for r in s["repos"]]
+    s = (await api.put("/api/v1/insights/settings", json={"repos": repos, "llm": {"report": {"mode": "agent", "provider": "opencode"}}})).json()
+    vllm = next(r for r in s["repos"] if r["repo"] == "vllm-project/vllm")
+    assert vllm["llm"] == {"daily": {"mode": "agent", "provider": "codex", "model": "gpt-x", "variant": "high"},
+                           "report": {"mode": "api", "provider": None, "model": None, "variant": None}}  # unknown tasks dropped
+    # the repository's own choice wins; other tasks and other repositories follow the settings
+    assert st.task_cfg(h.ctx, "daily", "vllm-project/VLLM")["provider"] == "codex"
+    assert st.task_cfg(h.ctx, "report", "vllm-project/vllm")["mode"] == "api"
+    assert st.task_cfg(h.ctx, "report", "pytorch/pytorch")["mode"] == "agent" and st.task_cfg(h.ctx, "daily", "pytorch/pytorch")["mode"] == "api"
+    assert st.task_cfg(h.ctx, "daily")["mode"] == "api"
+    assert llm.request_chars(h.ctx, "daily", "vllm-project/vllm") == 400_000 and llm.request_chars(h.ctx, "daily", "pytorch/pytorch") == 1_500_000
+    turns = []
+
+    async def fake_turn(ctx, choice, prompt, title):
+        turns.append((choice["provider"], choice["model"], choice["variant"], title))
+        return "by the agent"
+    monkeypatch.setattr(review_priority, "run_turn", fake_turn)
+    monkeypatch.delitem(h.ctx.extra, "insights_llm", raising=False)  # the real routing, not the tests' stand-in
+    assert await llm.complete(h.ctx, "daily", "p", repo="vllm-project/vllm") == "by the agent"
+    assert turns == [("codex", "gpt-x", "high", "Insights: daily")]
+    # a bad choice is refused, not dropped
+    bad = [{**r, "llm": {"daily": {"mode": "x"}}} if r["repo"] == "vllm-project/vllm" else r for r in s["repos"]]
+    assert (await api.put("/api/v1/insights/settings", json={"repos": bad})).status_code == 400
+    # back to the settings' choice: the task is no longer listed
+    repos = [{**r, "llm": {}} if r["repo"] == "vllm-project/vllm" else r for r in s["repos"]]
+    s = (await api.put("/api/v1/insights/settings", json={"repos": repos})).json()
+    assert next(r for r in s["repos"] if r["repo"] == "vllm-project/vllm")["llm"] == {}
+    assert st.task_cfg(h.ctx, "daily", "vllm-project/vllm")["mode"] == "api"
+
+
 async def test_history_is_read_by_its_first_lines(running_app, tmp_path):
     h, _, _ = await make(running_app, tmp_path, {})
     d = tmp_path / "insights" / "summary" / "acme" / "proj"

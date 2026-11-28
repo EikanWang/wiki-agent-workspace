@@ -4907,6 +4907,23 @@ test("Repo Insights: the history in the folder, a week's report (daily summaries
   expect((await (await page.request.get("/api/v1/insights/settings")).json()).repos.find((r: any) => r.repo === "vllm-project/vllm").rfc.repos).toEqual([]);
   await rfcRepos.fill("");
   await rfcRepos.blur();
+  // a repository can have its own "who does each task": the agent for its daily summaries, the others as in the settings
+  const vllmTasks = vllm.getByTestId("insights-repo-tasks");
+  await vllmTasks.locator("summary").click();
+  const vllmDaily = vllmTasks.locator('[data-testid="insights-repo-task"][data-task="daily"]');
+  await expect(vllmDaily.getByTestId("insights-repo-task-mode")).toHaveValue("default");
+  await expect(vllmDaily.getByTestId("insights-repo-task-mode").locator("option").first()).toContainText("as in the settings: model endpoint");
+  await vllmDaily.getByTestId("insights-repo-task-mode").selectOption("agent");
+  const ownOf = async () => (await (await page.request.get("/api/v1/insights/settings")).json()).repos.find((r: any) => r.repo === "vllm-project/vllm").llm;
+  await expect.poll(async () => (await ownOf()).daily?.mode).toBe("agent");
+  await vllmDaily.getByTestId("model-choice-provider").selectOption("codex");
+  await expect.poll(async () => (await ownOf()).daily?.provider).toBe("codex");
+  expect(Object.keys(await ownOf())).toEqual(["daily"]);
+  // other repositories keep the settings' choice
+  expect((await (await page.request.get("/api/v1/insights/settings")).json()).repos.filter((r: any) => r.repo !== "vllm-project/vllm").every((r: any) => Object.keys(r.llm).length === 0)).toBe(true);
+  await expect(vllmTasks.locator("summary")).toContainText("1 of its own");
+  await vllmDaily.getByTestId("insights-repo-task-mode").selectOption("default");
+  await expect.poll(async () => Object.keys(await ownOf())).toEqual([]);
   await vllm.getByTestId("insights-repo-baseline-mode").selectOption("previous");
   await vllm.getByTestId("insights-report-week").uncheck();
   await vllm.getByTestId("insights-report-month").uncheck();
